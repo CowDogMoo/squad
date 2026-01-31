@@ -41,7 +41,7 @@ import (
 var (
 	runAgent             string
 	runAgentsDir         string
-	runRepo              string
+	runWorkingDir        string
 	runAPIKey            string
 	runBaseURL           string
 	runOrg               string
@@ -75,7 +75,7 @@ var runCmd = &cobra.Command{
 			return err
 		}
 
-		repoPath, err := resolveRepo(runRepo)
+		workingDir, err := resolveWorkingDir(runWorkingDir)
 		if err != nil {
 			return err
 		}
@@ -85,7 +85,7 @@ var runCmd = &cobra.Command{
 			return err
 		}
 
-		bundle, err := buildAgentBundle(agentsDir, runAgent, prompt, repoPath)
+		bundle, bundleWorkingDir, err := buildAgentBundle(agentsDir, runAgent, prompt, workingDir)
 		if err != nil {
 			return err
 		}
@@ -145,7 +145,7 @@ var runCmd = &cobra.Command{
 			fullPrompt = injectSystemOverride(fullPrompt, runSystem)
 		}
 
-		response, err := llms.GenerateFromSinglePrompt(cmd.Context(), llm, fullPrompt, callOpts...)
+		response, err := runWithTools(cmd.Context(), llm, fullPrompt, bundleWorkingDir, callOpts...)
 		if err != nil {
 			return fmt.Errorf("model call failed: %w", err)
 		}
@@ -175,7 +175,7 @@ var runCmd = &cobra.Command{
 func init() {
 	runCmd.Flags().StringVar(&runAgent, "agent", "", "Agent name (e.g. go-cobra)")
 	runCmd.Flags().StringVar(&runAgentsDir, "agents-dir", "", "Agents directory (default: ./agents, then ~/.config/squad/agents)")
-	runCmd.Flags().StringVar(&runRepo, "repo", "", "Repo path (default: current working directory)")
+	runCmd.Flags().StringVar(&runWorkingDir, "working-dir", "", "Working directory (default: current working directory)")
 	runCmd.Flags().StringVar(&runAPIKey, "api-key", "", "API key (overrides env/config)")
 	runCmd.Flags().StringVar(&runBaseURL, "base-url", "", "Base URL override for provider")
 	runCmd.Flags().StringVar(&runOrg, "organization", "", "Organization ID (OpenAI-compatible)")
@@ -219,11 +219,11 @@ func readPrompt(cmd *cobra.Command, args []string) (string, error) {
 	return prompt, nil
 }
 
-func resolveRepo(repo string) (string, error) {
-	if repo == "" {
+func resolveWorkingDir(dir string) (string, error) {
+	if dir == "" {
 		return os.Getwd()
 	}
-	return filepath.Abs(repo)
+	return filepath.Abs(dir)
 }
 
 func resolveAgentsDir(explicit string) (string, error) {
@@ -242,29 +242,29 @@ func resolveAgentsDir(explicit string) (string, error) {
 	return filepath.Join(home, ".config", "squad", "agents"), nil
 }
 
-func buildAgentBundle(agentsDir, agentName, prompt, repoPath string) ([]byte, error) {
+func buildAgentBundle(agentsDir, agentName, prompt, workingDir string) ([]byte, string, error) {
 	agentPath := filepath.Join(agentsDir, agentName)
 	manifestPath := filepath.Join(agentPath, "agent.yaml")
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read agent manifest: %w", err)
+		return nil, "", fmt.Errorf("failed to read agent manifest: %w", err)
 	}
 
 	var manifest agentManifest
 	if err := yaml.Unmarshal(manifestData, &manifest); err != nil {
-		return nil, fmt.Errorf("failed to parse agent manifest: %w", err)
+		return nil, "", fmt.Errorf("failed to parse agent manifest: %w", err)
 	}
 
 	entryPath := filepath.Join(agentPath, manifest.EntryPoint)
 	systemData, err := os.ReadFile(entryPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read system prompt: %w", err)
+		return nil, "", fmt.Errorf("failed to read system prompt: %w", err)
 	}
 
 	wrapperPath := filepath.Join(agentPath, manifest.Wrapper)
 	wrapperData, err := os.ReadFile(wrapperPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read agent wrapper: %w", err)
+		return nil, "", fmt.Errorf("failed to read agent wrapper: %w", err)
 	}
 
 	var refs []string
@@ -275,7 +275,7 @@ func buildAgentBundle(agentsDir, agentName, prompt, repoPath string) ([]byte, er
 		refPath := filepath.Join(agentPath, ref)
 		refData, err := os.ReadFile(refPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read reference %s: %w", ref, err)
+			return nil, "", fmt.Errorf("failed to read reference %s: %w", ref, err)
 		}
 		refs = append(refs, fmt.Sprintf("## Reference: %s\n\n%s\n", ref, strings.TrimSpace(string(refData))))
 	}
@@ -283,7 +283,7 @@ func buildAgentBundle(agentsDir, agentName, prompt, repoPath string) ([]byte, er
 	var buf bytes.Buffer
 	buf.WriteString("# Squad Agent Bundle\n\n")
 	buf.WriteString(fmt.Sprintf("Agent: %s (%s)\n", manifest.Name, manifest.Version))
-	buf.WriteString(fmt.Sprintf("Repo: %s\n\n", repoPath))
+	buf.WriteString(fmt.Sprintf("Working Directory: %s\n\n", workingDir))
 	buf.WriteString("## Agent Wrapper\n\n")
 	buf.Write(wrapperData)
 	buf.WriteString("\n\n## System Prompt\n\n")
@@ -301,7 +301,7 @@ func buildAgentBundle(agentsDir, agentName, prompt, repoPath string) ([]byte, er
 	buf.WriteString(prompt)
 	buf.WriteString("\n")
 
-	return buf.Bytes(), nil
+	return buf.Bytes(), workingDir, nil
 }
 
 func buildLLM(provider, model string, cfg *config.Config) (llms.Model, error) {
