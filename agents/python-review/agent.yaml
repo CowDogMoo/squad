@@ -1,0 +1,7 @@
+name: python-review
+version: 0.1.0
+description: Review Python code for correctness, performance, and maintainability, and apply fixes.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/python-review-criteria.md

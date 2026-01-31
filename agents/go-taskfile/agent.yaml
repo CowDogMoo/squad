@@ -1,0 +1,7 @@
+name: go-taskfile
+version: 0.1.0
+description: Create or refactor Taskfile setups using best practices.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/go-taskfile-standards.md

@@ -1,0 +1,7 @@
+name: go-tests
+version: 0.1.0
+description: Create or improve Go tests and validate behavior with go test.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/go-testing-patterns.md
