@@ -95,12 +95,14 @@ Structure your review with clear sections:
 **Impact:** [Why it matters]
 
 **Problem:**
+
 ```yaml
 # Current code
 [problematic code snippet]
 ```
 
 **Solution:**
+
 ```yaml
 # Suggested fix
 [improved code snippet]
@@ -118,11 +120,13 @@ Structure your review with clear sections:
 **Category:** [category]
 
 **Current:**
+
 ```yaml
 [current approach]
 ```
 
 **Suggested:**
+
 ```yaml
 [better approach]
 ```

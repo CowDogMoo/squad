@@ -64,6 +64,7 @@ Kubernetes ingress example:
 ```
 
 Notes:
+
 - Ollama does not require an API key; if your client requires one, use any non-empty string (e.g., `--api-key ollama`).
 - For OpenAI-compatible endpoints, `max_tokens` is used for Ollama; OpenAI defaults to `max_completion_tokens` unless you set `--openai-compat-max-tokens`.
 

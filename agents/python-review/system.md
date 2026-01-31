@@ -87,12 +87,14 @@ Structure your review with clear sections:
 **Impact:** [Why it matters]
 
 **Problem:**
+
 ```python
 # Current code
 [problematic code snippet]
 ```
 
 **Solution:**
+
 ```python
 # Suggested fix
 [improved code snippet]
@@ -110,11 +112,13 @@ Structure your review with clear sections:
 **Category:** [category]
 
 **Current:**
+
 ```python
 [current approach]
 ```
 
 **Suggested:**
+
 ```python
 [better approach]
 ```

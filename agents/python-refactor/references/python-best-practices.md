@@ -56,6 +56,7 @@ Refactoring should never alter behavior:
 Deep nesting reduces readability. Use guard clauses to handle edge cases first.
 
 **Anti-pattern:**
+
 ```python
 def get_user(user_id: int) -> User | None:
     if user_id is not None:
@@ -75,6 +76,7 @@ def get_user(user_id: int) -> User | None:
 ```
 
 **Idiomatic:**
+
 ```python
 def get_user(user_id: int) -> User | None:
     if user_id is None or user_id <= 0:
@@ -97,6 +99,7 @@ def get_user(user_id: int) -> User | None:
 Declare variables close to where they're used.
 
 **Anti-pattern:**
+
 ```python
 def process_data() -> str:
     data = None
@@ -115,6 +118,7 @@ def process_data() -> str:
 ```
 
 **Idiomatic:**
+
 ```python
 def process_data() -> str:
     data = load_data()
@@ -135,6 +139,7 @@ def process_data() -> str:
 Named constants make code self-documenting.
 
 **Anti-pattern:**
+
 ```python
 def validate_password(password: str) -> bool:
     if len(password) < 8:
@@ -145,6 +150,7 @@ def validate_password(password: str) -> bool:
 ```
 
 **Idiomatic:**
+
 ```python
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 128
@@ -164,6 +170,7 @@ def validate_password(password: str) -> bool:
 Python's truthiness rules make code more readable.
 
 **Anti-pattern:**
+
 ```python
 if len(items) > 0:
     process(items)
@@ -176,6 +183,7 @@ if enabled == True:
 ```
 
 **Idiomatic:**
+
 ```python
 if items:
     process(items)
@@ -194,6 +202,7 @@ if enabled:
 Prefer built-in string methods over slicing.
 
 **Anti-pattern:**
+
 ```python
 if filename[-3:] == ".py":
     pass
@@ -203,6 +212,7 @@ if text[:5] == "http:":
 ```
 
 **Idiomatic:**
+
 ```python
 if filename.endswith(".py"):
     pass
@@ -222,6 +232,7 @@ if text.startswith("http:"):
 Never use bare `except:` or catch `Exception` without re-raising.
 
 **Anti-pattern:**
+
 ```python
 try:
     data = fetch_data()
@@ -232,6 +243,7 @@ except:
 ```
 
 **Idiomatic:**
+
 ```python
 try:
     data = fetch_data()
@@ -250,6 +262,7 @@ except ValueError as e:
 Context managers ensure proper cleanup.
 
 **Anti-pattern:**
+
 ```python
 def read_file(path: str) -> str:
     f = open(path)
@@ -259,6 +272,7 @@ def read_file(path: str) -> str:
 ```
 
 **Idiomatic:**
+
 ```python
 def read_file(path: str) -> str:
     with open(path) as f:
@@ -272,6 +286,7 @@ def read_file(path: str) -> str:
 Preserve the error chain when re-raising.
 
 **Anti-pattern:**
+
 ```python
 try:
     config = load_config(path)
@@ -280,6 +295,7 @@ except FileNotFoundError:
 ```
 
 **Idiomatic:**
+
 ```python
 try:
     config = load_config(path)
@@ -294,6 +310,7 @@ except FileNotFoundError as e:
 Only wrap the code that can raise the expected exception.
 
 **Anti-pattern:**
+
 ```python
 try:
     data = fetch_data()
@@ -305,6 +322,7 @@ except ConnectionError:
 ```
 
 **Idiomatic:**
+
 ```python
 try:
     data = fetch_data()
@@ -328,6 +346,7 @@ notify_users(result)
 List comprehensions are more readable and faster than loops for simple transformations.
 
 **Anti-pattern:**
+
 ```python
 squares = []
 for x in numbers:
@@ -335,6 +354,7 @@ for x in numbers:
 ```
 
 **Idiomatic:**
+
 ```python
 squares = [x ** 2 for x in numbers]
 ```
@@ -346,6 +366,7 @@ squares = [x ** 2 for x in numbers]
 If a comprehension has multiple `for` clauses or complex filters, use explicit loops.
 
 **Anti-pattern:**
+
 ```python
 result = [
     transform(x, y)
@@ -358,6 +379,7 @@ result = [
 ```
 
 **Idiomatic:**
+
 ```python
 result = []
 for outer in data:
@@ -376,6 +398,7 @@ for outer in data:
 Generators save memory by yielding items one at a time.
 
 **Anti-pattern:**
+
 ```python
 def read_large_file(path: str) -> list[str]:
     with open(path) as f:
@@ -383,6 +406,7 @@ def read_large_file(path: str) -> list[str]:
 ```
 
 **Idiomatic:**
+
 ```python
 def read_large_file(path: str) -> Iterator[str]:
     with open(path) as f:
@@ -397,6 +421,7 @@ def read_large_file(path: str) -> Iterator[str]:
 Mutable defaults are shared across calls.
 
 **Anti-pattern:**
+
 ```python
 def append_to(item, target=[]):  # Bug!
     target.append(item)
@@ -404,6 +429,7 @@ def append_to(item, target=[]):  # Bug!
 ```
 
 **Idiomatic:**
+
 ```python
 def append_to(item, target=None):
     if target is None:
@@ -419,6 +445,7 @@ def append_to(item, target=None):
 Leverage dict methods for cleaner code.
 
 **Anti-pattern:**
+
 ```python
 if key in d:
     value = d[key]
@@ -431,6 +458,7 @@ d[key].append(item)
 ```
 
 **Idiomatic:**
+
 ```python
 value = d.get(key, default)
 
@@ -444,6 +472,7 @@ d.setdefault(key, []).append(item)
 Don't manually track indices.
 
 **Anti-pattern:**
+
 ```python
 for i in range(len(items)):
     item = items[i]
@@ -451,6 +480,7 @@ for i in range(len(items)):
 ```
 
 **Idiomatic:**
+
 ```python
 for i, item in enumerate(items):
     process(i, item)
@@ -463,12 +493,14 @@ for i, item in enumerate(items):
 Iterate over multiple sequences together.
 
 **Anti-pattern:**
+
 ```python
 for i in range(len(names)):
     print(f"{names[i]}: {scores[i]}")
 ```
 
 **Idiomatic:**
+
 ```python
 for name, score in zip(names, scores):
     print(f"{name}: {score}")
@@ -485,6 +517,7 @@ for name, score in zip(names, scores):
 Type hints improve code clarity and enable static analysis.
 
 **Anti-pattern:**
+
 ```python
 def get_user(user_id):
     """Get a user by ID."""
@@ -492,6 +525,7 @@ def get_user(user_id):
 ```
 
 **Idiomatic:**
+
 ```python
 def get_user(user_id: int) -> User | None:
     """Get a user by ID."""
@@ -505,6 +539,7 @@ def get_user(user_id: int) -> User | None:
 Functions should do one thing well.
 
 **Anti-pattern:**
+
 ```python
 def process_user(user_id: int) -> None:
     user = fetch_user(user_id)
@@ -515,6 +550,7 @@ def process_user(user_id: int) -> None:
 ```
 
 **Idiomatic:**
+
 ```python
 def process_user(user_id: int) -> None:
     user = fetch_user(user_id)
@@ -534,6 +570,7 @@ def notify_user_update(user: User) -> None:
 Prevent positional argument confusion with keyword-only arguments.
 
 **Anti-pattern:**
+
 ```python
 def connect(host, port, timeout, use_ssl):
     pass
@@ -542,6 +579,7 @@ connect("localhost", 8080, 30, True)  # What is True?
 ```
 
 **Idiomatic:**
+
 ```python
 def connect(host: str, port: int, *, timeout: int = 30, use_ssl: bool = False):
     pass
@@ -556,6 +594,7 @@ connect("localhost", 8080, use_ssl=True)
 Avoid storing results in variables just to return them.
 
 **Anti-pattern:**
+
 ```python
 def get_status(user: User) -> str:
     if user.is_admin:
@@ -568,6 +607,7 @@ def get_status(user: User) -> str:
 ```
 
 **Idiomatic:**
+
 ```python
 def get_status(user: User) -> str:
     if user.is_admin:
@@ -588,6 +628,7 @@ def get_status(user: User) -> str:
 Dataclasses reduce boilerplate for simple classes.
 
 **Anti-pattern:**
+
 ```python
 class User:
     def __init__(self, id: int, name: str, email: str):
@@ -605,6 +646,7 @@ class User:
 ```
 
 **Idiomatic:**
+
 ```python
 from dataclasses import dataclass
 
@@ -622,6 +664,7 @@ class User:
 Properties provide a clean interface for computed values.
 
 **Anti-pattern:**
+
 ```python
 class Circle:
     def __init__(self, radius: float):
@@ -632,6 +675,7 @@ class Circle:
 ```
 
 **Idiomatic:**
+
 ```python
 class Circle:
     def __init__(self, radius: float):
@@ -659,6 +703,7 @@ class Circle:
 Protocols define interfaces without inheritance.
 
 **Anti-pattern:**
+
 ```python
 from abc import ABC, abstractmethod
 
@@ -673,6 +718,7 @@ class MyFile(Readable):  # Must inherit
 ```
 
 **Idiomatic:**
+
 ```python
 from typing import Protocol
 
@@ -694,6 +740,7 @@ def process(source: Readable) -> None:  # MyFile is compatible
 `__slots__` reduces memory usage for many instances.
 
 **Anti-pattern:**
+
 ```python
 class Point:
     def __init__(self, x: float, y: float):
@@ -702,6 +749,7 @@ class Point:
 ```
 
 **Idiomatic (for memory-critical cases):**
+
 ```python
 class Point:
     __slots__ = ('x', 'y')
@@ -722,12 +770,14 @@ class Point:
 f-strings are the fastest and most readable option.
 
 **Anti-pattern:**
+
 ```python
 message = "User %s logged in at %s" % (user.name, timestamp)
 message = "User {} logged in at {}".format(user.name, timestamp)
 ```
 
 **Idiomatic:**
+
 ```python
 message = f"User {user.name} logged in at {timestamp}"
 ```
@@ -739,6 +789,7 @@ message = f"User {user.name} logged in at {timestamp}"
 String concatenation in loops creates many intermediate strings.
 
 **Anti-pattern:**
+
 ```python
 def build_report(items: list[str]) -> str:
     report = ""
@@ -748,6 +799,7 @@ def build_report(items: list[str]) -> str:
 ```
 
 **Idiomatic:**
+
 ```python
 def build_report(items: list[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
@@ -760,6 +812,7 @@ def build_report(items: list[str]) -> str:
 Built-in functions are clearer and often faster.
 
 **Anti-pattern:**
+
 ```python
 def has_valid_item(items: list[Item]) -> bool:
     for item in items:
@@ -769,6 +822,7 @@ def has_valid_item(items: list[Item]) -> bool:
 ```
 
 **Idiomatic:**
+
 ```python
 def has_valid_item(items: list[Item]) -> bool:
     return any(item.is_valid for item in items)
@@ -781,6 +835,7 @@ def has_valid_item(items: list[Item]) -> bool:
 defaultdict eliminates key existence checks.
 
 **Anti-pattern:**
+
 ```python
 groups = {}
 for item in items:
@@ -790,6 +845,7 @@ for item in items:
 ```
 
 **Idiomatic:**
+
 ```python
 from collections import defaultdict
 
@@ -805,6 +861,7 @@ for item in items:
 Counter simplifies counting.
 
 **Anti-pattern:**
+
 ```python
 counts = {}
 for item in items:
@@ -815,6 +872,7 @@ for item in items:
 ```
 
 **Idiomatic:**
+
 ```python
 from collections import Counter
 
@@ -832,6 +890,7 @@ counts = Counter(items)
 Decorators separate cross-cutting logic from business logic.
 
 **Anti-pattern:**
+
 ```python
 def get_user(user_id: int) -> User:
     start = time.perf_counter()
@@ -843,6 +902,7 @@ def get_user(user_id: int) -> User:
 ```
 
 **Idiomatic:**
+
 ```python
 import functools
 
@@ -869,6 +929,7 @@ def get_user(user_id: int) -> User:
 contextlib simplifies context manager creation.
 
 **Anti-pattern:**
+
 ```python
 class Timer:
     def __init__(self, name: str):
@@ -884,6 +945,7 @@ class Timer:
 ```
 
 **Idiomatic:**
+
 ```python
 from contextlib import contextmanager
 
@@ -904,6 +966,7 @@ def timer(name: str):
 Cache expensive function results.
 
 **Anti-pattern:**
+
 ```python
 _cache = {}
 
@@ -916,6 +979,7 @@ def expensive_computation(n: int) -> int:
 ```
 
 **Idiomatic:**
+
 ```python
 from functools import lru_cache
 
@@ -935,6 +999,7 @@ def expensive_computation(n: int) -> int:
 Python 3.10+ supports `|` for unions.
 
 **Anti-pattern:**
+
 ```python
 from typing import Optional, Union
 
@@ -946,6 +1011,7 @@ def process(value: Union[str, int]) -> None:
 ```
 
 **Idiomatic:**
+
 ```python
 def get_user(user_id: int) -> User | None:
     pass
@@ -961,12 +1027,14 @@ def process(value: str | int) -> None:
 TypeVar enables generic functions.
 
 **Anti-pattern:**
+
 ```python
 def first(items: list) -> Any:
     return items[0] if items else None
 ```
 
 **Idiomatic:**
+
 ```python
 from typing import TypeVar
 from collections.abc import Sequence
@@ -984,6 +1052,7 @@ def first(items: Sequence[T]) -> T | None:
 Type aliases improve readability for complex types.
 
 **Anti-pattern:**
+
 ```python
 def process(
     handlers: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]]
@@ -992,6 +1061,7 @@ def process(
 ```
 
 **Idiomatic:**
+
 ```python
 from typing import TypeAlias
 
@@ -1013,6 +1083,7 @@ def process(handlers: dict[str, Handler]) -> None:
 Google-style docstrings are clean and widely supported.
 
 **Anti-pattern:**
+
 ```python
 def get_user(user_id, include_inactive=False):
     """Get user by id. Returns None if not found."""
@@ -1020,6 +1091,7 @@ def get_user(user_id, include_inactive=False):
 ```
 
 **Idiomatic:**
+
 ```python
 def get_user(
     user_id: int,
@@ -1057,6 +1129,7 @@ def get_user(
 Comments should explain reasoning, not restate code.
 
 **Anti-pattern:**
+
 ```python
 # Increment counter by 1
 counter += 1
@@ -1067,6 +1140,7 @@ if user.is_active:
 ```
 
 **Idiomatic:**
+
 ```python
 # Rate limit: max 100 requests per minute per user
 counter += 1

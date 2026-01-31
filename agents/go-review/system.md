@@ -84,12 +84,14 @@ Structure your review with clear sections:
 **Impact:** [Why it matters]
 
 **Problem:**
+
 ```go
 // Current code
 [problematic code snippet]
 ```
 
 **Solution:**
+
 ```go
 // Suggested fix
 [improved code snippet]
@@ -107,11 +109,13 @@ Structure your review with clear sections:
 **Category:** [category]
 
 **Current:**
+
 ```go
 [current approach]
 ```
 
 **Suggested:**
+
 ```go
 [better approach]
 ```

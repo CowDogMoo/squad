@@ -5,6 +5,7 @@ A comprehensive fabric pattern for refactoring Python code to be more idiomatic,
 ## Pattern Structure
 
 This pattern includes:
+
 - **`system.md`** - The refactoring framework and prompt engineering for LLM
 - **`python-best-practices.md`** - Comprehensive reference document with detailed patterns (source of truth)
 - **`filter.sh`** - Post-processing to clean up output formatting
@@ -18,6 +19,7 @@ The pattern is designed with **separation of concerns**: the `python-best-practi
 ## Style Guide References
 
 This pattern incorporates guidelines from:
+
 - **[PEP 8](https://peps.python.org/pep-0008/)** - Python's official style guide
 - **[PEP 20](https://peps.python.org/pep-0020/)** - The Zen of Python
 - **[Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)** - Google's enterprise Python standards
@@ -25,6 +27,7 @@ This pattern incorporates guidelines from:
 ## Purpose
 
 This pattern helps you:
+
 - **Identify anti-patterns** in Python code (deep nesting, mutable defaults, poor error handling, etc.)
 - **Apply idiomatic patterns** following official Python guidelines
 - **Improve code quality** without changing behavior
@@ -132,16 +135,19 @@ done
 The pattern generates output with:
 
 ### Refactored Code
+
 - Complete, runnable Python code
 - All improvements applied
 - Proper formatting (ruff/black-compatible)
 
 ### Changes Made
+
 - Numbered list of changes
 - Explanation of why each change was made
 - Reference to pattern from knowledge base
 
 ### Notes
+
 - Important assumptions made
 - Potential follow-up improvements
 - Behavior-preserving guarantees
@@ -247,6 +253,7 @@ def read_file(path: str) -> str:
 ### When to Use This Pattern
 
 **Good use cases:**
+
 - Refactoring legacy Python code
 - Code review preparation
 - Learning idiomatic Python patterns
@@ -254,6 +261,7 @@ def read_file(path: str) -> str:
 - Pre-commit code improvements
 
 **Not ideal for:**
+
 - Large-scale architectural changes
 - Adding new functionality
 - Performance-critical optimizations (use profiling instead)
@@ -261,6 +269,7 @@ def read_file(path: str) -> str:
 ### Preserving Functionality
 
 The pattern is designed to:
+
 - Never change the public API
 - Maintain exact behavior
 - Preserve backwards compatibility
@@ -269,6 +278,7 @@ The pattern is designed to:
 ### Iterative Refactoring
 
 For large files, consider:
+
 1. Refactor one function at a time
 2. Review and test each change
 3. Commit incrementally
@@ -287,6 +297,7 @@ To add or modify refactoring patterns, edit the `python-best-practices.md` file:
 ### Adjusting Output Format
 
 To modify the output structure, edit the `# OUTPUT FORMAT` section in `system.md`:
+
 - Add new sections
 - Change formatting
 - Adjust detail level
@@ -296,6 +307,7 @@ To modify the output structure, edit the `# OUTPUT FORMAT` section in `system.md
 ### Issue: Pattern changes too much
 
 **Solution:** The pattern tries to be comprehensive. For targeted changes, provide specific instructions:
+
 ```bash
 echo "# Only fix error handling\n$(cat myfile.py)" | fabric --pattern python-refactor
 ```
@@ -303,6 +315,7 @@ echo "# Only fix error handling\n$(cat myfile.py)" | fabric --pattern python-ref
 ### Issue: Output doesn't pass linting
 
 **Solution:** Run ruff or black on the output:
+
 ```bash
 cat myfile.py | fabric --pattern python-refactor | ruff format -
 ```

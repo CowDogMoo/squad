@@ -1,3 +1,4 @@
+---
 name: go-cobra
 version: 0.1.0
 description: Build or refactor Go CLIs using Cobra + Viper best practices.

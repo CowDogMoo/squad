@@ -1,3 +1,4 @@
+---
 name: python-refactor
 version: 0.1.0
 description: Refactor Python code to clean, idiomatic Python while preserving behavior.

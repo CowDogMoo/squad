@@ -15,7 +15,8 @@ If you skip tests, say why.
 # OUTPUT REQUIREMENTS (MANDATORY)
 
 Provide actionable output. Include **at least one** of:
-- A unified diff block (```diff ... ```), OR
+
+- A unified diff block (```diff ...```), OR
 - A "Files Touched" section with concrete file paths and exact change descriptions, OR
 - A "No changes" section explaining why no changes are needed.
 

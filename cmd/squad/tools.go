@@ -17,7 +17,7 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
-const maxToolIterations = 24
+const maxToolIterations = 100
 const maxToolOutput = 64 * 1024
 
 type toolHandler struct {
@@ -390,53 +390,65 @@ func grepTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 			return "", err
 		}
 
-		var matches []string
-		visit := func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if info.IsDir() {
-				return nil
-			}
-			file, err := os.Open(path)
-			if err != nil {
-				return nil
-			}
-			defer file.Close()
-			rel, err := filepath.Rel(workingDir, path)
-			if err != nil {
-				rel = path
-			}
-			scanner := bufio.NewScanner(file)
-			lineNum := 1
-			for scanner.Scan() {
-				line := scanner.Text()
-				if re.MatchString(line) {
-					matches = append(matches, fmt.Sprintf("%s:%d:%s", filepath.ToSlash(rel), lineNum, line))
-				}
-				lineNum++
-			}
-			return nil
-		}
-
-		info, err := os.Stat(resolved)
+		matches, err := grepSearchPath(workingDir, resolved, re)
 		if err != nil {
 			return "", err
-		}
-		if info.IsDir() {
-			if err := filepath.Walk(resolved, visit); err != nil {
-				return "", err
-			}
-		} else {
-			if err := visit(resolved, info, nil); err != nil {
-				return "", err
-			}
 		}
 
 		if len(matches) == 0 {
 			return "no matches", nil
 		}
 		return strings.Join(matches, "\n"), nil
+	}
+}
+
+func grepSearchPath(workingDir, resolved string, re *regexp.Regexp) ([]string, error) {
+	var matches []string
+	visit := grepVisitFile(workingDir, re, &matches)
+
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		if err := filepath.Walk(resolved, visit); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := visit(resolved, info, nil); err != nil {
+			return nil, err
+		}
+	}
+	return matches, nil
+}
+
+func grepVisitFile(workingDir string, re *regexp.Regexp, matches *[]string) filepath.WalkFunc {
+	return func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return nil
+		}
+		defer file.Close()
+		rel, err := filepath.Rel(workingDir, path)
+		if err != nil {
+			rel = path
+		}
+		scanner := bufio.NewScanner(file)
+		lineNum := 1
+		for scanner.Scan() {
+			line := scanner.Text()
+			if re.MatchString(line) {
+				*matches = append(*matches, fmt.Sprintf("%s:%d:%s", filepath.ToSlash(rel), lineNum, line))
+			}
+			lineNum++
+		}
+		return nil
 	}
 }
 

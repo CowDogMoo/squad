@@ -56,6 +56,7 @@ Key principles from Rob Pike's Go Proverbs:
 Deep nesting reduces readability. Use guard clauses to handle edge cases first.
 
 **Anti-pattern:**
+
 ```go
 func GetUser(id int) (*User, error) {
     if id > 0 {
@@ -76,6 +77,7 @@ func GetUser(id int) (*User, error) {
 ```
 
 **Idiomatic:**
+
 ```go
 func GetUser(id int) (*User, error) {
     if id <= 0 {
@@ -102,6 +104,7 @@ func GetUser(id int) (*User, error) {
 Declare variables close to where they're used.
 
 **Anti-pattern:**
+
 ```go
 func ProcessData() error {
     var data []byte
@@ -123,6 +126,7 @@ func ProcessData() error {
 ```
 
 **Idiomatic:**
+
 ```go
 func ProcessData() error {
     data, err := loadData()
@@ -146,6 +150,7 @@ func ProcessData() error {
 Named constants make code self-documenting.
 
 **Anti-pattern:**
+
 ```go
 func ValidateInput(s string) error {
     if len(s) > 100 {
@@ -159,6 +164,7 @@ func ValidateInput(s string) error {
 ```
 
 **Idiomatic:**
+
 ```go
 const (
     MinInputLength = 5
@@ -187,6 +193,7 @@ func ValidateInput(s string) error {
 Wrap errors with context using `fmt.Errorf` and `%w`.
 
 **Anti-pattern:**
+
 ```go
 func ProcessFile(path string) error {
     data, err := os.ReadFile(path)
@@ -199,6 +206,7 @@ func ProcessFile(path string) error {
 ```
 
 **Idiomatic:**
+
 ```go
 func ProcessFile(path string) error {
     data, err := os.ReadFile(path)
@@ -217,6 +225,7 @@ func ProcessFile(path string) error {
 Don't log and return the same error - handle it once at the appropriate level.
 
 **Anti-pattern:**
+
 ```go
 func DoSomething() error {
     err := operation()
@@ -229,6 +238,7 @@ func DoSomething() error {
 ```
 
 **Idiomatic:**
+
 ```go
 // Either log it (at the top level)
 func main() {
@@ -253,11 +263,13 @@ func DoSomething() error {
 Unchecked type assertions can panic.
 
 **Anti-pattern:**
+
 ```go
 val := x.(string) // panics if x is not a string
 ```
 
 **Idiomatic:**
+
 ```go
 val, ok := x.(string)
 if !ok {
@@ -276,6 +288,7 @@ if !ok {
 Never launch goroutines without a way to stop them.
 
 **Anti-pattern:**
+
 ```go
 func StartWorker() {
     go func() {
@@ -288,6 +301,7 @@ func StartWorker() {
 ```
 
 **Idiomatic:**
+
 ```go
 func StartWorker(ctx context.Context) {
     go func() {
@@ -313,6 +327,7 @@ func StartWorker(ctx context.Context) {
 Replace manual WaitGroup + error handling with errgroup.
 
 **Anti-pattern:**
+
 ```go
 func FetchAll(ids []int) ([]*User, error) {
     var wg sync.WaitGroup
@@ -339,6 +354,7 @@ func FetchAll(ids []int) ([]*User, error) {
 ```
 
 **Idiomatic:**
+
 ```go
 func FetchAll(ctx context.Context, ids []int) ([]*User, error) {
     g, ctx := errgroup.WithContext(ctx)
@@ -374,6 +390,7 @@ func FetchAll(ctx context.Context, ids []int) ([]*User, error) {
 Always use defer to ensure resources are released.
 
 **Anti-pattern:**
+
 ```go
 func ProcessFile(path string) error {
     file, err := os.Open(path)
@@ -394,6 +411,7 @@ func ProcessFile(path string) error {
 ```
 
 **Idiomatic:**
+
 ```go
 func ProcessFile(path string) error {
     file, err := os.Open(path)
@@ -418,6 +436,7 @@ func ProcessFile(path string) error {
 Prevent callers from modifying internal state.
 
 **Anti-pattern:**
+
 ```go
 func ProcessItems(items []Item) []Item {
     for i := range items {
@@ -428,6 +447,7 @@ func ProcessItems(items []Item) []Item {
 ```
 
 **Idiomatic:**
+
 ```go
 func ProcessItems(items []Item) []Item {
     // Copy to prevent modifying caller's slice
@@ -452,6 +472,7 @@ func ProcessItems(items []Item) []Item {
 Avoid repeated allocations during append.
 
 **Anti-pattern:**
+
 ```go
 func ProcessItems(items []Item) []Result {
     var results []Result
@@ -463,6 +484,7 @@ func ProcessItems(items []Item) []Result {
 ```
 
 **Idiomatic:**
+
 ```go
 func ProcessItems(items []Item) []Result {
     results := make([]Result, 0, len(items))
@@ -480,6 +502,7 @@ func ProcessItems(items []Item) []Result {
 String concatenation with `+` creates new strings each time.
 
 **Anti-pattern:**
+
 ```go
 func BuildMessage(parts []string) string {
     msg := ""
@@ -491,6 +514,7 @@ func BuildMessage(parts []string) string {
 ```
 
 **Idiomatic:**
+
 ```go
 func BuildMessage(parts []string) string {
     var builder strings.Builder
@@ -511,6 +535,7 @@ func BuildMessage(parts []string) string {
 strconv is faster than fmt.Sprintf for simple conversions.
 
 **Anti-pattern:**
+
 ```go
 func FormatID(id int) string {
     return fmt.Sprintf("%d", id)
@@ -518,6 +543,7 @@ func FormatID(id int) string {
 ```
 
 **Idiomatic:**
+
 ```go
 func FormatID(id int) string {
     return strconv.Itoa(id)
@@ -531,6 +557,7 @@ func FormatID(id int) string {
 Type safety prevents unit confusion.
 
 **Anti-pattern:**
+
 ```go
 func WaitForTask(seconds int) {
     time.Sleep(time.Duration(seconds) * time.Second)
@@ -538,6 +565,7 @@ func WaitForTask(seconds int) {
 ```
 
 **Idiomatic:**
+
 ```go
 func WaitForTask(d time.Duration) {
     time.Sleep(d)
@@ -555,6 +583,7 @@ func WaitForTask(d time.Duration) {
 Dependency injection makes code testable and explicit.
 
 **Anti-pattern:**
+
 ```go
 var db *sql.DB
 
@@ -568,6 +597,7 @@ func GetUser(id int) (*User, error) {
 ```
 
 **Idiomatic:**
+
 ```go
 type UserService struct {
     db *sql.DB
@@ -589,6 +619,7 @@ func (s *UserService) GetUser(id int) (*User, error) {
 Flexible configuration without breaking changes.
 
 **Anti-pattern:**
+
 ```go
 func NewServer(host string, port int, timeout time.Duration, maxConns int) *Server {
     return &Server{
@@ -601,6 +632,7 @@ func NewServer(host string, port int, timeout time.Duration, maxConns int) *Serv
 ```
 
 **Idiomatic:**
+
 ```go
 type Server struct {
     host     string
@@ -648,6 +680,7 @@ func NewServer(host string, opts ...Option) *Server {
 Interfaces belong where they're used, not where they're implemented.
 
 **Anti-pattern:**
+
 ```go
 // In database package
 type UserRepository interface {
@@ -662,6 +695,7 @@ func (r *PostgresRepo) GetUser(id int) (*User, error) {
 ```
 
 **Idiomatic:**
+
 ```go
 // In service package (consumer)
 type UserRepository interface {
@@ -698,12 +732,14 @@ var _ http.Handler = (*MyHandler)(nil)
 If one method uses a pointer receiver, all methods should.
 
 **Anti-pattern:**
+
 ```go
 func (u User) Name() string { return u.name }
 func (u *User) SetName(name string) { u.name = name }
 ```
 
 **Idiomatic:**
+
 ```go
 func (u *User) Name() string { return u.name }
 func (u *User) SetName(name string) { u.name = name }
@@ -720,12 +756,14 @@ func (u *User) SetName(name string) { u.name = name }
 Follow Go's documentation conventions.
 
 **Anti-pattern:**
+
 ```go
 // gets a user
 func GetUser(id int) (*User, error) {
 ```
 
 **Idiomatic:**
+
 ```go
 // GetUser returns the user with the given ID or returns an error
 // if the user doesn't exist.
@@ -733,6 +771,7 @@ func GetUser(id int) (*User, error) {
 ```
 
 **Rules:**
+
 - Start with the declared name
 - Use complete sentences
 - Explain what, not how

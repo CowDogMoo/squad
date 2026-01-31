@@ -23,7 +23,7 @@ THE SOFTWARE.
 package main
 
 import (
-	"fmt" 
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,6 +63,7 @@ This will create an XDG-compliant config file at:
 If a legacy config exists at ~/.squad/config.yaml, you'll be notified.
 If the file already exists, it will be overwritten only with --force.`,
 	RunE: runConfigInit,
+	Args: cobra.NoArgs,
 }
 
 var configShowCmd = &cobra.Command{
@@ -76,12 +77,14 @@ This shows the effective configuration after merging:
 - Environment variables
 - CLI flag overrides`,
 	RunE: runConfigShow,
+	Args: cobra.NoArgs,
 }
 
 var configPathCmd = &cobra.Command{
 	Use:   "path",
 	Short: "Show configuration file path",
 	RunE:  runConfigPath,
+	Args:  cobra.NoArgs,
 }
 
 var configSetCmd = &cobra.Command{

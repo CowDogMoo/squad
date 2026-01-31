@@ -35,6 +35,7 @@ Prefer clear, explicit code over magic or implicit behavior that requires deep u
 Choose straightforward solutions. If something is hard to explain, it's probably too complex.
 
 **Constructive Feedback**
+
 - Be educational, not critical
 - Explain the "why" behind suggestions
 - Provide concrete examples with code
@@ -83,6 +84,7 @@ from myproject.models import User
 ```
 
 **Rules:**
+
 - One import per line for regular imports
 - Multiple items OK for `from x import y, z`
 - Absolute imports preferred over relative imports
@@ -107,11 +109,13 @@ from myproject.models import User
 | Private | `__double_underscore` | `__name_mangled` |
 
 **Google Style Additions:**
+
 - Avoid single-character names except for counters (`i`, `j`, `k`) and exceptions (`e`)
 - Don't encode type information in names: `names` not `names_list`
 - Avoid dashes in module names
 
 **Good:**
+
 ```python
 def calculate_total_price(items: list[Item]) -> float:
     pass
@@ -124,6 +128,7 @@ class UserRepository:
 ```
 
 **Bad:**
+
 ```python
 def CalcTotalPrice(itemsList):  # Wrong case, type in name
     pass
@@ -135,6 +140,7 @@ class user_repository:  # Should be CapWords
 ### Whitespace Rules (PEP 8)
 
 **Good:**
+
 ```python
 spam(ham[1], {eggs: 2})
 x = 1
@@ -146,6 +152,7 @@ def complex(real, imag=0.0):
 ```
 
 **Bad:**
+
 ```python
 spam( ham[ 1 ], { eggs: 2 } )  # Extra whitespace
 x             = 1  # Aligned equals
@@ -158,6 +165,7 @@ def complex(real, imag = 0.0):  # Space around = in default
 ### Line Continuation
 
 **Preferred - implicit continuation:**
+
 ```python
 # Aligned with opening delimiter
 result = function_name(arg_one, arg_two,
@@ -192,6 +200,7 @@ income = (gross_wages
 ### Exception Patterns
 
 **Good:**
+
 ```python
 try:
     value = collection[key]
@@ -200,6 +209,7 @@ except KeyError as e:
 ```
 
 **Bad:**
+
 ```python
 try:
     # Too much code in try block
@@ -213,6 +223,7 @@ except:  # Bare except - catches everything including SystemExit
 ### Resource Cleanup
 
 **Use context managers:**
+
 ```python
 # Good
 with open(filename) as f:
@@ -224,6 +235,7 @@ with open(input_file) as fin, open(output_file, 'w') as fout:
 ```
 
 **Custom cleanup:**
+
 ```python
 # Good - contextlib for cleanup
 from contextlib import contextmanager
@@ -240,6 +252,7 @@ def managed_resource():
 ### Exception Design
 
 **Good:**
+
 ```python
 class ValidationError(Exception):
     """Raised when validation fails."""
@@ -250,6 +263,7 @@ class ValidationError(Exception):
 ```
 
 **Raising exceptions:**
+
 ```python
 # Good - specific exception with context
 if not user.is_active:
@@ -271,7 +285,7 @@ except FileNotFoundError as e:
 | Check | Severity | Rationale |
 |-------|----------|-----------|
 | Annotate public APIs | HIGH | Documentation and tooling |
-| Use `X | None` not `Optional[X]` (3.10+) | LOW | Modern syntax |
+| Use `X \| None` not `Optional[X]` (3.10+) | LOW | Modern syntax |
 | Annotate complex functions | MEDIUM | Clarity |
 | Import types correctly | MEDIUM | Avoid runtime overhead |
 
@@ -327,11 +341,13 @@ def first_or_none(items: Sequence[T]) -> T | None:
 ### Comprehensions (Google Style)
 
 **Rules:**
+
 - Use for simple transformations
 - Avoid multiple `for` clauses or complex filter expressions
 - Keep readable - if hard to understand, use a loop
 
 **Good:**
+
 ```python
 # Simple comprehension
 squares = [x * x for x in numbers]
@@ -344,6 +360,7 @@ user_map = {u.id: u for u in users}
 ```
 
 **Bad:**
+
 ```python
 # Too complex - use explicit loop
 result = [
@@ -368,6 +385,7 @@ first_match = next((x for x in items if predicate(x)), None)
 ### Mutability Concerns
 
 **Critical - mutable default arguments:**
+
 ```python
 # Bad - shared mutable default
 def append_to(item, target=[]):  # Bug!
@@ -383,6 +401,7 @@ def append_to(item, target=None):
 ```
 
 **Defensive copying:**
+
 ```python
 class DataHolder:
     def __init__(self, items: list[str]) -> None:
@@ -400,11 +419,13 @@ class DataHolder:
 ### Function Guidelines
 
 **Google Style - keep functions small and focused:**
+
 - Prefer functions under 40 lines
 - Single responsibility principle
 - Limit parameters (consider dataclass/dict for many args)
 
 **Good:**
+
 ```python
 def calculate_order_total(
     items: list[OrderItem],
@@ -465,6 +486,7 @@ class UserService:
 ### Properties (Google Style)
 
 Use properties when:
+
 - Access is cheap and straightforward
 - No side effects expected
 - Behavior is obvious from the name
@@ -497,6 +519,7 @@ class Circle:
 ### Early Returns
 
 **Good:**
+
 ```python
 def process_user(user: User | None) -> Result:
     if user is None:
@@ -513,6 +536,7 @@ def process_user(user: User | None) -> Result:
 ```
 
 **Bad - deep nesting:**
+
 ```python
 def process_user(user: User | None) -> Result:
     if user is not None:
@@ -530,6 +554,7 @@ def process_user(user: User | None) -> Result:
 ### Boolean Checks (PEP 8, Google Style)
 
 **Good:**
+
 ```python
 # Use truthiness for sequences
 if items:  # Not: if len(items) > 0
@@ -643,6 +668,7 @@ def copy_data(source: Readable, dest: Writable) -> int:
 | `+` in loop | Slow | Avoid |
 
 **Good:**
+
 ```python
 # f-strings for formatting
 message = f"User {user.name} logged in at {timestamp}"
@@ -656,6 +682,7 @@ logger.debug("Processing user %s", user_id)
 ```
 
 **Bad:**
+
 ```python
 # String concatenation in loop
 result = ""
@@ -753,6 +780,7 @@ if __name__ == '__main__':
 | Prefix internal globals with `_` | MEDIUM | Clear intent |
 
 **Good:**
+
 ```python
 # Constants are fine
 MAX_CONNECTIONS = 100
@@ -875,6 +903,7 @@ def process_username(username: str) -> str:
 ### SQL Queries
 
 **Good:**
+
 ```python
 # Parameterized query
 cursor.execute(
@@ -887,6 +916,7 @@ user = session.query(User).filter(User.id == user_id).first()
 ```
 
 **Bad:**
+
 ```python
 # SQL injection vulnerability!
 cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
@@ -896,6 +926,7 @@ cursor.execute("SELECT * FROM users WHERE name = '%s'" % name)
 ### Subprocess Security
 
 **Good:**
+
 ```python
 # shell=False with list arguments
 subprocess.run(["git", "status"], check=True)
@@ -910,6 +941,7 @@ result = subprocess.run(
 ```
 
 **Bad:**
+
 ```python
 # Command injection vulnerability!
 subprocess.run(f"git clone {url}", shell=True)
@@ -934,6 +966,7 @@ api_key = secrets_file.read_text().strip()
 ```
 
 **Bad:**
+
 ```python
 # Hardcoded secrets
 API_KEY = "sk-1234567890abcdef"  # Never do this!
@@ -1023,6 +1056,7 @@ class TestUserService:
 ### CRITICAL
 
 Issues that affect correctness, security, or cause crashes:
+
 - SQL injection vulnerabilities
 - Command injection vulnerabilities
 - Bare `except:` clauses
@@ -1033,6 +1067,7 @@ Issues that affect correctness, security, or cause crashes:
 ### HIGH
 
 Significant issues affecting reliability or maintainability:
+
 - Missing type annotations on public APIs
 - Poor error handling
 - Resource leaks (unclosed files, connections)
@@ -1042,6 +1077,7 @@ Significant issues affecting reliability or maintainability:
 ### MEDIUM
 
 Best practice violations:
+
 - PEP 8 style violations
 - Google Style Guide violations
 - Missing docstrings
@@ -1052,6 +1088,7 @@ Best practice violations:
 ### LOW
 
 Minor improvements:
+
 - Import ordering
 - Whitespace issues
 - Comment quality
@@ -1061,6 +1098,7 @@ Minor improvements:
 ### INFO
 
 Suggestions for optimization:
+
 - Performance improvements
 - Alternative patterns
 - Tooling recommendations

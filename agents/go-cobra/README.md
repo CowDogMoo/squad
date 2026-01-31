@@ -5,6 +5,7 @@ An agent for reviewing Go CLI applications built with Cobra and Viper against in
 ## Agent Structure
 
 This agent includes:
+
 - **`agent.yaml`** - Minimal manifest for metadata and references
 - **`agent.md`** - Agent-mode wrapper instructions
 - **`system.md`** - The review framework and prompt
@@ -16,6 +17,7 @@ The agent is designed with **separation of concerns**: the `cobra-viper-best-pra
 ## Purpose
 
 This agent helps you:
+
 - **Review CLI code quality** against established Cobra/Viper best practices
 - **Identify issues** with severity classification (Critical, High, Medium, Low, Info)
 - **Provide constructive feedback** with specific examples and fixes
@@ -132,24 +134,29 @@ echo "CLI code review passed!"
 The agent generates a structured markdown report with:
 
 ### Summary
+
 - 2-3 sentence overview of CLI code quality
 - Main concerns highlighted
 
 ### Critical Issues
+
 - Must-fix items affecting correctness or safety
 - Code snippets showing problem and solution
 - Clear explanation with references to criteria
 
 ### Improvements
+
 - Non-critical enhancements
 - Best practice suggestions
 - Pattern recommendations
 
 ### Positive Observations
+
 - Good practices already implemented
 - Recognition of well-written code
 
 ### Recommendations
+
 - General suggestions for improvement
 - Tooling recommendations
 
@@ -179,6 +186,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 ```
 
 **Solution:**
+
 ```go
 func runServe(cmd *cobra.Command, args []string) error {
     port := v.GetInt("server.port")
@@ -203,6 +211,7 @@ from Viper after binding flags per cobra-viper-best-practices.md.
 No completion command available.
 
 **Suggested:**
+
 ```go
 var completionCmd = &cobra.Command{
     Use:   "completion [bash|zsh|fish|powershell]",
@@ -227,6 +236,7 @@ in production CLIs per Production Readiness guidelines.
 
 - Add a version command with build info
 - Consider using functional options for complex configuration
+
 ```
 
 ## Customization
@@ -264,6 +274,7 @@ Edit the `# OUTPUT FORMAT` section in `system.md` to customize the report struct
 ### Issue: Too many findings
 
 **Solution:** Focus on critical and high severity issues first:
+
 ```bash
 cat cmd/root.go | squad run --agent go-cobra | grep -A 20 "## Critical Issues"
 ```
@@ -271,6 +282,7 @@ cat cmd/root.go | squad run --agent go-cobra | grep -A 20 "## Critical Issues"
 ### Issue: Missing context in review
 
 **Solution:** Provide more code context. The agent works best with complete command files rather than snippets. Consider reviewing multiple files together:
+
 ```bash
 cat cmd/*.go | squad run --agent go-cobra
 ```

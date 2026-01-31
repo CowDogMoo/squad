@@ -30,7 +30,7 @@ update_copyright() {
     local temp_file
     temp_file=$(mktemp)
     echo "${copyright_header}" > "${temp_file}"
-    echo "" >> "${temp_file}"  # Add an empty line after the header
+    echo "" >> "${temp_file}" # Add an empty line after the header
     sed '/^\/\*/,/^\*\//d' "$file" | sed '/./,$!d' >> "${temp_file}"
     mv "${temp_file}" "${file}"
 }

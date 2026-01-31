@@ -26,12 +26,12 @@ echo "Running Prettier on staged files..."
 # List all staged files, filter for the desired extensions, and run Prettier
 git diff --cached --name-only --diff-filter=d \
                                               | grep -E '\.(json|ya?ml)$' \
-                            | xargs -I {} prettier --write {}
+                           | xargs -I {} prettier --write {}
 
 # Add the files back to staging area as Prettier may have modified them
 git diff --name-only --diff-filter=d \
                                      | grep -E '\.(json|ya?ml)$' \
-                            | xargs git add
+                           | xargs git add
 
 echo "Prettier formatting completed."
 

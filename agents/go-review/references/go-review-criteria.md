@@ -32,6 +32,7 @@ Go's coding conventions embody "simplicity beats complexity." Clarity and mainta
 Don't communicate by sharing memory; use channels to coordinate goroutines.
 
 **Constructive Feedback**
+
 - Be educational, not critical
 - Explain the "why" behind suggestions
 - Provide concrete examples with code
@@ -74,6 +75,7 @@ import (
 ### Naming Conventions
 
 **Good:**
+
 ```go
 fetchUser        // short, clear verb
 userID           // acronyms capitalized
@@ -81,6 +83,7 @@ httpClient       // well-known abbreviation
 ```
 
 **Bad:**
+
 ```go
 getUserDataFromDatabase  // too verbose
 user_id                  // underscores not idiomatic
@@ -112,6 +115,7 @@ HTTPclient               // inconsistent capitalization
 ### Error Wrapping (Go 1.13+)
 
 **Good:**
+
 ```go
 if err != nil {
     return fmt.Errorf("failed to fetch user %d: %w", id, err)
@@ -119,6 +123,7 @@ if err != nil {
 ```
 
 **Bad:**
+
 ```go
 if err != nil {
     return errors.New("failed to fetch user")  // loses context
@@ -128,6 +133,7 @@ if err != nil {
 ### Type Assertions
 
 **Always check second value:**
+
 ```go
 val, ok := x.(Type)
 if !ok {
@@ -136,6 +142,7 @@ if !ok {
 ```
 
 **Never:**
+
 ```go
 val := x.(Type)  // panics if wrong type
 ```
@@ -156,6 +163,7 @@ val := x.(Type)  // panics if wrong type
 ### Worker Pool Pattern
 
 **Good:**
+
 ```go
 func worker(ctx context.Context, jobs <-chan Task, results chan<- Result) {
     for {
@@ -175,12 +183,14 @@ func worker(ctx context.Context, jobs <-chan Task, results chan<- Result) {
 ### Context Usage
 
 **Good:**
+
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 ```
 
 **Bad:**
+
 ```go
 ctx := context.Background()  // no timeout, no cancellation
 ```
@@ -188,6 +198,7 @@ ctx := context.Background()  // no timeout, no cancellation
 ### Error Groups
 
 **Good:**
+
 ```go
 g, ctx := errgroup.WithContext(ctx)
 g.Go(func() error { return task1(ctx) })
@@ -210,6 +221,7 @@ if err := g.Wait(); err != nil {
 ### Slice/Map Boundaries
 
 **Good - copy at boundaries:**
+
 ```go
 func processItems(items []Item) {
     localItems := make([]Item, len(items))
@@ -221,6 +233,7 @@ func processItems(items []Item) {
 ### Resource Cleanup
 
 **Always use defer:**
+
 ```go
 file, err := os.Open(filename)
 if err != nil {
@@ -232,6 +245,7 @@ defer file.Close()
 ### Zero Values
 
 Zero values should be meaningful:
+
 ```go
 var mu sync.Mutex      // Ready to use
 var buf bytes.Buffer   // Ready to use
@@ -241,6 +255,7 @@ var count int          // Zero is valid
 ### Preallocation
 
 **Good:**
+
 ```go
 items := make([]Item, 0, expectedSize)
 cache := make(map[string]Value, expectedSize)
@@ -277,6 +292,7 @@ var _ http.Handler = (*MyHandler)(nil)
 ### Early Returns
 
 **Good:**
+
 ```go
 if err != nil {
     return err
@@ -285,6 +301,7 @@ if err != nil {
 ```
 
 **Bad - deep nesting:**
+
 ```go
 if err == nil {
     if result != nil {
@@ -303,6 +320,7 @@ if err == nil {
 ### Type Switches
 
 **Good:**
+
 ```go
 switch v := x.(type) {
 case int:
@@ -458,11 +476,13 @@ func ProcessInput(input string) error {
 ### SQL Queries
 
 **Good:**
+
 ```go
 db.Query("SELECT * FROM users WHERE id = $1", userID)
 ```
 
 **Bad:**
+
 ```go
 db.Query("SELECT * FROM users WHERE id = " + userID)  // SQL injection!
 ```
@@ -530,6 +550,7 @@ func TestGetUser(t *testing.T) {
 ### CRITICAL
 
 Issues that affect correctness, security, or cause crashes:
+
 - Ignored errors
 - Goroutine leaks
 - Race conditions
@@ -539,6 +560,7 @@ Issues that affect correctness, security, or cause crashes:
 ### HIGH
 
 Significant issues affecting reliability or maintainability:
+
 - Poor error handling
 - Missing context propagation
 - Resource leaks
@@ -548,6 +570,7 @@ Significant issues affecting reliability or maintainability:
 ### MEDIUM
 
 Best practice violations:
+
 - Missing documentation
 - Inconsistent naming
 - Non-idiomatic patterns
@@ -557,6 +580,7 @@ Best practice violations:
 ### LOW
 
 Minor improvements:
+
 - Naming convention tweaks
 - Code organization
 - Additional documentation
@@ -565,6 +589,7 @@ Minor improvements:
 ### INFO
 
 Suggestions for optimization:
+
 - Advanced patterns
 - Performance tuning
 - Tooling recommendations

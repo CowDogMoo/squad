@@ -73,7 +73,8 @@ When asked to only review (without applying fixes):
 # OUTPUT FORMAT
 
 **CRITICAL**: You MUST include one of the following:
-- A unified diff block showing changes made (```diff ... ```)
+
+- A unified diff block showing changes made (```diff ...```)
 - A "Files Touched" section listing exact file paths and changes made
 - A "No changes" section if no changes are needed or if only reviewing
 
