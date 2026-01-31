@@ -6,9 +6,7 @@ coverage.out
 dist/
 
 # Generated binaries (local development)
-wg
-/warpgate
-warpgate-linux
+/squad
 *.exe
 *.dll
 *.so
@@ -44,4 +42,3 @@ TODO
 *.test
 test-results/
 testdata/tmp/
-warpgate-test
