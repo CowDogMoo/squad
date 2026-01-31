@@ -112,11 +112,17 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	if err := v.BindPFlag("log.format", cmd.Root().PersistentFlags().Lookup("log-format")); err != nil {
 		return fmt.Errorf("failed to bind log-format flag: %w", err)
 	}
+	if err := v.BindPFlag("quiet", cmd.Root().PersistentFlags().Lookup("quiet")); err != nil {
+		return fmt.Errorf("failed to bind quiet flag: %w", err)
+	}
+	if err := v.BindPFlag("verbose", cmd.Root().PersistentFlags().Lookup("verbose")); err != nil {
+		return fmt.Errorf("failed to bind verbose flag: %w", err)
+	}
 
 	logLevel := v.GetString("log.level")
 	logFormat := v.GetString("log.format")
-	quiet, _ := cmd.Flags().GetBool("quiet")
-	verbose, _ := cmd.Flags().GetBool("verbose")
+	quiet := v.GetBool("quiet")
+	verbose := v.GetBool("verbose")
 
 	if err := logging.Initialize(logLevel, logFormat, quiet, verbose); err != nil {
 		return fmt.Errorf("failed to initialize logging: %w", err)

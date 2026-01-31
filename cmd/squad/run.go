@@ -37,6 +37,7 @@ import (
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/spf13/cobra"
 	"github.com/tmc/langchaingo/llms"
+	"github.com/tmc/langchaingo/llms/anthropic"
 	"github.com/tmc/langchaingo/llms/openai"
 	"gopkg.in/yaml.v3"
 )
@@ -332,6 +333,8 @@ func buildLLM(provider, model string, cfg *config.Config) (llms.Model, error) {
 	switch provider {
 	case "openai", "", "ollama":
 		return buildOpenAICompatLLM(provider, model, cfg)
+	case "anthropic":
+		return buildAnthropicLLM(model, cfg)
 	default:
 		return nil, fmt.Errorf("provider not implemented: %s", provider)
 	}
@@ -377,6 +380,25 @@ func buildOpenAICompatLLM(provider, model string, cfg *config.Config) (llms.Mode
 	}
 
 	return openai.New(opts...)
+}
+
+func buildAnthropicLLM(model string, cfg *config.Config) (llms.Model, error) {
+	opts := []anthropic.Option{}
+	if model != "" {
+		opts = append(opts, anthropic.WithModel(model))
+	}
+
+	token := pickString(runAPIKey, cfg.Provider.Token)
+	if token != "" {
+		opts = append(opts, anthropic.WithToken(token))
+	}
+
+	baseURL := pickString(runBaseURL, cfg.Provider.BaseURL)
+	if baseURL != "" {
+		opts = append(opts, anthropic.WithBaseURL(baseURL))
+	}
+
+	return anthropic.New(opts...)
 }
 
 func normalizeProvider(provider string) string {
