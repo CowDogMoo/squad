@@ -1,0 +1,121 @@
+---
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+version: "3"
+
+vars:
+  # Provider configuration
+  PROVIDER: '{{.PROVIDER | default "ollama"}}'
+  BASE_URL: '{{.BASE_URL | default "https://ollama.techvomit.xyz/v1"}}'
+  MODEL: '{{.MODEL | default "qwen2.5-coder:3b-instruct"}}'
+  API_KEY: '{{.API_KEY | default "ollama"}}'
+
+  # Agent configuration
+  AGENT: '{{.AGENT | default "go-cobra"}}'
+  WORKING_DIR: '{{.WORKING_DIR | default "."}}'
+  OUT: '{{.OUT | default "/tmp/squad-response.txt"}}'
+
+tasks:
+  default:
+    desc: List all available tasks
+    silent: true
+    cmds:
+      - task --list --sort none
+
+  build:
+    desc: Build the squad binary
+    cmds:
+      - go build -o squad ./cmd/squad/
+
+  run:
+    desc: "Run an agent with a prompt (usage: task run PROMPT='your prompt here')"
+    silent: true
+    vars:
+      PROMPT: '{{.PROMPT | default ""}}'
+    preconditions:
+      - sh: test -n "{{.PROMPT}}"
+        msg: "PROMPT is required. Usage: task run PROMPT='your prompt here'"
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "{{.PROMPT}}" \
+          --agent {{.AGENT}} \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          --base-url {{.BASE_URL}} \
+          --model {{.MODEL}} \
+          --out {{.OUT}}
+
+  run:review-cobra:
+    desc: Run the go-cobra agent to review and fix Cobra/Viper best practices
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Search cmd/squad/*.go for these specific issues and fix them using Edit tool:
+        1. Find any cmd.Flags().Get* calls that should use Viper instead
+        2. Find any cobra.Command without Args validators
+        3. Find any flags without descriptions (empty string after flag name)
+        4. Add missing error wrapping with fmt.Errorf and %w
+
+        List each file you modify and what you changed." \
+          --agent {{.AGENT}} \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          --base-url {{.BASE_URL}} \
+          --model {{.MODEL}} \
+          --out {{.OUT}}
+
+  run:review-cobra:gpt:
+    desc: Review Cobra/Viper best practices using OpenAI GPT
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Review this repo for Cobra/Viper best practices. Apply fixes and describe changes. After making any edits, run 'go build ./...' to verify the code compiles and fix any errors." \
+          --agent go-cobra \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key "$(op item get Openai --fields dreadnode-api-key --reveal)" \
+          --provider openai \
+          --model {{.GPT_MODEL}} \
+          --out {{.OUT}}
+      - echo "Verifying build..."
+      - go build ./...
+    vars:
+      GPT_MODEL: '{{.GPT_MODEL | default "gpt-4o-mini"}}'
+
+  run:review-cobra:ollama:
+    desc: Review Cobra/Viper best practices using Ollama
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Review this repo for Cobra/Viper best practices. Apply fixes and describe changes. After making any edits, run 'go build ./...' to verify the code compiles and fix any errors." \
+          --agent go-cobra \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key ollama \
+          --provider ollama \
+          --base-url {{.BASE_URL}} \
+          --model {{.OLLAMA_MODEL}} \
+          --out {{.OUT}}
+      - echo "Verifying build..."
+      - go build ./...
+    vars:
+      OLLAMA_MODEL: '{{.OLLAMA_MODEL | default "qwen2.5-coder:3b-instruct"}}'
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v ./...
+
+  lint:
+    desc: Run linters
+    cmds:
+      - golangci-lint run ./...
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -f squad
+      - rm -f /tmp/squad-*.txt
