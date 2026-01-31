@@ -24,11 +24,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
@@ -59,6 +62,8 @@ var (
 	runPrintBundle       bool
 	runDryRun            bool
 	runRequireActionable bool
+	runApply             bool
+	runApplyFallback     bool
 )
 
 var runCmd = &cobra.Command{
@@ -114,7 +119,7 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("config not available in context")
 		}
 
-		provider := pickString(runProvider, cfg.Provider.Default)
+		provider := normalizeProvider(pickString(runProvider, cfg.Provider.Default))
 		model := pickString(runModel, cfg.Model.Default)
 		temperature := pickFloat(runTemperature, cfg.Model.Temperature)
 		maxTokens := pickInt(runMaxTokens, cfg.Model.MaxTokens)
@@ -128,16 +133,17 @@ var runCmd = &cobra.Command{
 			llms.WithTemperature(temperature),
 		}
 
-		if provider == "openai" {
-			if maxTokens > 0 {
-				if runOpenAICompatMax || cfg.Provider.OpenAICompatMaxTokens {
+		if maxTokens > 0 {
+			if isOpenAICompatProvider(provider) {
+				useLegacy := provider != "openai" || runOpenAICompatMax || cfg.Provider.OpenAICompatMaxTokens
+				if useLegacy {
 					callOpts = append(callOpts, llms.WithMaxTokens(maxTokens), openai.WithLegacyMaxTokensField())
 				} else {
 					callOpts = append(callOpts, openai.WithMaxCompletionTokens(maxTokens))
 				}
+			} else {
+				callOpts = append(callOpts, llms.WithMaxTokens(maxTokens))
 			}
-		} else if maxTokens > 0 {
-			callOpts = append(callOpts, llms.WithMaxTokens(maxTokens))
 		}
 
 		fullPrompt := string(bundle)
@@ -145,15 +151,30 @@ var runCmd = &cobra.Command{
 			fullPrompt = injectSystemOverride(fullPrompt, runSystem)
 		}
 
+		logging.InfoContext(cmd.Context(), "model call started (provider=%s model=%s)", provider, model)
+		modelStart := time.Now()
 		response, err := runWithTools(cmd.Context(), llm, fullPrompt, bundleWorkingDir, callOpts...)
 		if err != nil {
 			return fmt.Errorf("model call failed: %w", err)
 		}
+		logging.InfoContext(cmd.Context(), "model call finished in %s (response-bytes=%d)", time.Since(modelStart).Round(time.Millisecond), len(response))
 
 		if runRequireActionable {
 			if err := validateActionableResponse(response); err != nil {
 				return err
 			}
+		}
+
+		if runApply {
+			diff, err := extractUnifiedDiff(response)
+			if err != nil {
+				return err
+			}
+			logging.InfoContext(cmd.Context(), "applying diff (%d bytes)", len(diff))
+			if err := applyUnifiedDiff(cmd.Context(), workingDir, diff); err != nil {
+				return err
+			}
+			logging.InfoContext(cmd.Context(), "diff applied to %s", workingDir)
 		}
 
 		if runPrint || runOutput == "" {
@@ -193,6 +214,8 @@ func init() {
 	runCmd.Flags().BoolVar(&runPrintBundle, "print-bundle", false, "Print agent bundle to stdout")
 	runCmd.Flags().BoolVar(&runDryRun, "dry-run", false, "Build bundle and exit without calling the model")
 	runCmd.Flags().BoolVar(&runRequireActionable, "require-actionable", true, "Require actionable output (diff/files/no changes)")
+	runCmd.Flags().BoolVar(&runApply, "apply", false, "Apply unified diff from the response to the working directory")
+	runCmd.Flags().BoolVar(&runApplyFallback, "apply-fallback", false, "Fallback to patch(1) if git apply fails (may create .rej/.orig)")
 }
 
 type agentManifest struct {
@@ -305,23 +328,38 @@ func buildAgentBundle(agentsDir, agentName, prompt, workingDir string) ([]byte, 
 }
 
 func buildLLM(provider, model string, cfg *config.Config) (llms.Model, error) {
+	provider = normalizeProvider(provider)
 	switch provider {
-	case "openai", "":
-		opts := []openai.Option{}
-		if model != "" {
-			opts = append(opts, openai.WithModel(model))
-		}
+	case "openai", "", "ollama":
+		return buildOpenAICompatLLM(provider, model, cfg)
+	default:
+		return nil, fmt.Errorf("provider not implemented: %s", provider)
+	}
+}
 
-		baseURL := pickString(runBaseURL, cfg.Provider.BaseURL)
-		if baseURL != "" {
-			opts = append(opts, openai.WithBaseURL(baseURL))
-		}
+func buildOpenAICompatLLM(provider, model string, cfg *config.Config) (llms.Model, error) {
+	opts := []openai.Option{}
+	if model != "" {
+		opts = append(opts, openai.WithModel(model))
+	}
 
-		token := pickString(runAPIKey, cfg.Provider.Token)
-		if token != "" {
-			opts = append(opts, openai.WithToken(token))
-		}
+	baseURL := pickString(runBaseURL, cfg.Provider.BaseURL)
+	if baseURL == "" && provider == "ollama" {
+		baseURL = "http://localhost:11434/v1"
+	}
+	if baseURL != "" {
+		opts = append(opts, openai.WithBaseURL(baseURL))
+	}
 
+	token := pickString(runAPIKey, cfg.Provider.Token)
+	if token == "" && provider == "ollama" {
+		token = "ollama"
+	}
+	if token != "" {
+		opts = append(opts, openai.WithToken(token))
+	}
+
+	if provider == "openai" || provider == "" {
 		org := pickString(runOrg, cfg.Provider.Organization)
 		if org != "" {
 			opts = append(opts, openai.WithOrganization(org))
@@ -336,11 +374,17 @@ func buildLLM(provider, model string, cfg *config.Config) (llms.Model, error) {
 		if apiType == "azure" {
 			opts = append(opts, openai.WithAPIType(openai.APITypeAzure))
 		}
-
-		return openai.New(opts...)
-	default:
-		return nil, fmt.Errorf("provider not implemented: %s", provider)
 	}
+
+	return openai.New(opts...)
+}
+
+func normalizeProvider(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func isOpenAICompatProvider(provider string) bool {
+	return provider == "" || provider == "openai" || provider == "ollama"
 }
 
 func pickString(value, fallback string) string {
@@ -385,4 +429,98 @@ func validateActionableResponse(response string) error {
 		return nil
 	}
 	return fmt.Errorf("response is not actionable: missing diff, files touched, or no changes section (disable with --require-actionable=false)")
+}
+
+func extractUnifiedDiff(response string) (string, error) {
+	const fence = "```diff"
+	const altFence = "```patch"
+	const endFence = "```"
+	var blocks []string
+	for {
+		start := strings.Index(response, fence)
+		useFence := fence
+		if start == -1 {
+			start = strings.Index(response, altFence)
+			useFence = altFence
+		}
+		if start == -1 {
+			break
+		}
+		response = response[start+len(useFence):]
+		end := strings.Index(response, endFence)
+		if end == -1 {
+			block := strings.TrimSpace(response)
+			if block != "" {
+				blocks = append(blocks, block)
+			}
+			break
+		}
+		block := strings.TrimSpace(response[:end])
+		if block != "" {
+			blocks = append(blocks, block)
+		}
+		response = response[end+len(endFence):]
+	}
+	if len(blocks) == 0 {
+		return "", fmt.Errorf("apply requires a unified diff block (```diff ... ```)")
+	}
+	diff := strings.Join(blocks, "\n")
+	if !looksLikeDiff(diff) {
+		return "", fmt.Errorf("diff block does not look like a unified diff (missing diff headers)")
+	}
+	return diff, nil
+}
+
+func applyUnifiedDiff(ctx context.Context, workingDir, diff string) error {
+	if strings.TrimSpace(diff) == "" {
+		return fmt.Errorf("diff content is empty")
+	}
+
+	gitErr := applyWithGit(ctx, workingDir, diff)
+	if gitErr == nil {
+		return nil
+	}
+
+	if !runApplyFallback {
+		return fmt.Errorf("failed to apply diff with git: %v", gitErr)
+	}
+
+	patchErr := applyWithPatch(ctx, workingDir, diff)
+	if patchErr == nil {
+		return nil
+	}
+
+	return fmt.Errorf("failed to apply diff with git or patch: %v; %v", gitErr, patchErr)
+}
+
+func looksLikeDiff(diff string) bool {
+	if strings.Contains(diff, "diff --git ") {
+		return true
+	}
+	if strings.Contains(diff, "--- a/") && strings.Contains(diff, "+++ b/") {
+		return true
+	}
+	return false
+}
+
+func applyWithGit(ctx context.Context, workingDir, diff string) error {
+	cmd := exec.CommandContext(ctx, "git", "apply", "--whitespace=nowarn", "--recount", "-")
+	cmd.Dir = workingDir
+	cmd.Stdin = strings.NewReader(diff)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git apply failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func applyWithPatch(ctx context.Context, workingDir, diff string) error {
+	cmd := exec.CommandContext(ctx, "patch", "-p1")
+	cmd.Dir = workingDir
+	cmd.Stdin = strings.NewReader(diff)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("patch failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

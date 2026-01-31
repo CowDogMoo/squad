@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/cowdogmoo/squad/logging"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -36,6 +37,7 @@ func runWithTools(ctx context.Context, llm llms.Model, prompt, workingDir string
 	}
 
 	for i := 0; i < maxToolIterations; i++ {
+		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxToolIterations)
 		response, err := llm.GenerateContent(ctx, messages, callOpts...)
 		if err != nil {
 			return "", err
@@ -46,16 +48,24 @@ func runWithTools(ctx context.Context, llm llms.Model, prompt, workingDir string
 
 		choice := response.Choices[0]
 		if len(choice.ToolCalls) == 0 {
+			logging.InfoContext(ctx, "model returned final response (no tool calls)")
 			return choice.Content, nil
 		}
 
+		toolNames := make([]string, 0, len(choice.ToolCalls))
 		toolCallParts := make([]llms.ContentPart, 0, len(choice.ToolCalls))
 		for _, toolCall := range choice.ToolCalls {
+			if toolCall.FunctionCall != nil && toolCall.FunctionCall.Name != "" {
+				toolNames = append(toolNames, toolCall.FunctionCall.Name)
+			}
 			toolCallParts = append(toolCallParts, llms.ToolCall{
 				ID:           toolCall.ID,
 				Type:         toolCall.Type,
 				FunctionCall: toolCall.FunctionCall,
 			})
+		}
+		if len(toolNames) > 0 {
+			logging.InfoContext(ctx, "tool calls requested: %s", strings.Join(toolNames, ", "))
 		}
 		messages = append(messages, llms.MessageContent{
 			Role:  llms.ChatMessageTypeAI,

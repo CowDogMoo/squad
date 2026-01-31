@@ -1,22 +1,21 @@
-# Go Cobra Pattern
+# Go Cobra Agent
 
-A comprehensive fabric pattern for reviewing Go CLI applications built with Cobra and Viper against industry best practices and idiomatic patterns. This pattern analyzes CLI code and provides constructive, actionable feedback with severity-based findings.
+An agent for reviewing Go CLI applications built with Cobra and Viper against industry best practices and idiomatic patterns. The agent analyzes CLI code and provides constructive, actionable feedback with severity-based findings.
 
-## Pattern Structure
+## Agent Structure
 
-This pattern includes:
-- **`system.md`** - The review framework and prompt engineering for LLM
-- **`cobra-viper-best-practices.md`** - Comprehensive reference document with detailed criteria (source of truth)
-- **`filter.sh`** - Post-processing to clean up output formatting
+This agent includes:
+- **`agent.yaml`** - Minimal manifest for metadata and references
+- **`agent.md`** - Agent-mode wrapper instructions
+- **`system.md`** - The review framework and prompt
+- **`references/cobra-viper-best-practices.md`** - Comprehensive reference document with detailed criteria (source of truth)
 - **`README.md`** - This documentation
-- **`test-cli-issues.go`** - Sample CLI code with various issues for testing
-- **`test-pattern.sh`** - Automated testing script
 
-The pattern is designed with **separation of concerns**: the `cobra-viper-best-practices.md` contains the comprehensive knowledge base (what to look for), while `system.md` contains the review framework (how to analyze and report). This makes the pattern easier to maintain and customize.
+The agent is designed with **separation of concerns**: the `cobra-viper-best-practices.md` contains the comprehensive knowledge base (what to look for), while `system.md` contains the review framework (how to analyze and report). This keeps the agent maintainable and easy to customize.
 
 ## Purpose
 
-This pattern helps you:
+This agent helps you:
 - **Review CLI code quality** against established Cobra/Viper best practices
 - **Identify issues** with severity classification (Critical, High, Medium, Low, Info)
 - **Provide constructive feedback** with specific examples and fixes
@@ -47,24 +46,6 @@ This pattern helps you:
 9. **Shell Completions** - Static, dynamic, flag completions
 10. **Production Readiness** - Version, graceful shutdown, secrets
 
-## Installation
-
-This pattern is part of the fabric-patterns-hub. Ensure you have fabric installed:
-
-```bash
-# Install fabric if you haven't already
-pip install fabric-ai
-
-# Add this patterns repository to fabric
-fabric --add-pattern-source /path/to/fabric-patterns-hub/patterns
-```
-
-Or use it directly by pointing to the pattern directory:
-
-```bash
-fabric --pattern /path/to/fabric-patterns-hub/patterns/go-cobra
-```
-
 ## Usage
 
 ### Single File Review
@@ -72,7 +53,7 @@ fabric --pattern /path/to/fabric-patterns-hub/patterns/go-cobra
 Review a single Go CLI file:
 
 ```bash
-cat cmd/root.go | fabric --pattern go-cobra > review.md
+cat cmd/root.go | squad run --agent go-cobra > review.md
 ```
 
 ### Review from Clipboard
@@ -80,7 +61,7 @@ cat cmd/root.go | fabric --pattern go-cobra > review.md
 Review code from clipboard (macOS):
 
 ```bash
-pbpaste | fabric --pattern go-cobra
+pbpaste | squad run --agent go-cobra
 ```
 
 ### Review Multiple Command Files
@@ -88,7 +69,7 @@ pbpaste | fabric --pattern go-cobra
 Review all command files in a project:
 
 ```bash
-cat cmd/*.go | fabric --pattern go-cobra > review.md
+cat cmd/*.go | squad run --agent go-cobra > review.md
 ```
 
 ### Review Pull Request Changes
@@ -98,7 +79,7 @@ Review changed CLI files in a PR:
 ```bash
 git diff main...HEAD --name-only | grep 'cmd/.*\.go$' | while read file; do
   echo "## Review: $file"
-  cat "$file" | fabric --pattern go-cobra
+  cat "$file" | squad run --agent go-cobra
   echo ""
 done > pr-review.md
 ```
@@ -114,7 +95,7 @@ Use as a pre-commit hook for CLI code review:
 staged_files=$(git diff --cached --name-only | grep 'cmd/.*\.go$')
 if [ -n "$staged_files" ]; then
   for file in $staged_files; do
-    review=$(cat "$file" | fabric --pattern go-cobra)
+    review=$(cat "$file" | squad run --agent go-cobra)
     if echo "$review" | grep -q "CRITICAL"; then
       echo "Critical issues found in $file:"
       echo "$review" | grep -A 10 "CRITICAL"
@@ -134,7 +115,7 @@ Use in your CI pipeline:
 
 for file in $(git diff --name-only HEAD~1 | grep 'cmd/.*\.go$'); do
   echo "Reviewing $file..."
-  REVIEW=$(cat "$file" | fabric --pattern go-cobra)
+  REVIEW=$(cat "$file" | squad run --agent go-cobra)
 
   if echo "$REVIEW" | grep -q "## Critical Issues"; then
     echo "Critical issues found in $file!"
@@ -148,7 +129,7 @@ echo "CLI code review passed!"
 
 ## Output Format
 
-The pattern generates a structured markdown report with:
+The agent generates a structured markdown report with:
 
 ### Summary
 - 2-3 sentence overview of CLI code quality
@@ -284,30 +265,29 @@ Edit the `# OUTPUT FORMAT` section in `system.md` to customize the report struct
 
 **Solution:** Focus on critical and high severity issues first:
 ```bash
-cat cmd/root.go | fabric --pattern go-cobra | grep -A 20 "## Critical Issues"
+cat cmd/root.go | squad run --agent go-cobra | grep -A 20 "## Critical Issues"
 ```
 
 ### Issue: Missing context in review
 
-**Solution:** Provide more code context. The pattern works best with complete command files rather than snippets. Consider reviewing multiple files together:
+**Solution:** Provide more code context. The agent works best with complete command files rather than snippets. Consider reviewing multiple files together:
 ```bash
-cat cmd/*.go | fabric --pattern go-cobra
+cat cmd/*.go | squad run --agent go-cobra
 ```
 
 ### Issue: Review seems incomplete
 
 **Solution:** Ensure the full file is being passed. Large codebases may need to be reviewed in sections.
 
-## Related Patterns
+## Related Agents
 
 - **go-review** - General Go code review (non-CLI specific)
 - **go-refactor** - Transform code (action, not analysis)
 - **go-tests** - Generate tests for Go code
-- **go-doc-comments** - Generate documentation comments
 
 ## References
 
-### Pattern Documentation
+### Agent Documentation
 
 - **`cobra-viper-best-practices.md`** - Comprehensive best practices reference
 
@@ -325,10 +305,10 @@ Contributions are welcome! If you have ideas for improving review criteria or ad
 
 ## License
 
-This pattern is part of the fabric-patterns-hub and follows the same license as the parent repository.
+See `LICENSE` at the repository root.
 
 ---
 
 **Version:** 1.0.0
-**Last Updated:** 2026-01-13
-**Maintainer:** fabric-patterns-hub contributors
+**Last Updated:** 2026-01-31
+**Maintainer:** squad contributors
