@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/tmc/langchaingo/llms"
@@ -38,7 +39,9 @@ func runWithTools(ctx context.Context, llm llms.Model, prompt, workingDir string
 
 	for i := 0; i < maxToolIterations; i++ {
 		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxToolIterations)
+		iterStart := time.Now()
 		response, err := llm.GenerateContent(ctx, messages, callOpts...)
+		iterDuration := time.Since(iterStart)
 		if err != nil {
 			return "", err
 		}
@@ -48,9 +51,10 @@ func runWithTools(ctx context.Context, llm llms.Model, prompt, workingDir string
 
 		choice := response.Choices[0]
 		if len(choice.ToolCalls) == 0 {
-			logging.InfoContext(ctx, "model returned final response (no tool calls)")
+			logging.InfoContext(ctx, "model returned final response in %s (no tool calls)", iterDuration.Round(time.Millisecond))
 			return choice.Content, nil
 		}
+		logging.DebugContext(ctx, "model responded in %s with %d tool call(s)", iterDuration.Round(time.Millisecond), len(choice.ToolCalls))
 
 		toolNames := make([]string, 0, len(choice.ToolCalls))
 		toolCallParts := make([]llms.ContentPart, 0, len(choice.ToolCalls))
@@ -80,14 +84,20 @@ func runWithTools(ctx context.Context, llm llms.Model, prompt, workingDir string
 				toolResponse.Content = "tool call missing function definition"
 			} else if handler, ok := handlers[toolCall.FunctionCall.Name]; ok {
 				toolResponse.Name = toolCall.FunctionCall.Name
+				logging.DebugContext(ctx, "tool %s args: %s", toolCall.FunctionCall.Name, truncateString(toolCall.FunctionCall.Arguments, 200))
+				toolStart := time.Now()
 				output, err := handler.call(ctx, []byte(toolCall.FunctionCall.Arguments))
+				toolDuration := time.Since(toolStart)
 				if err != nil {
 					toolResponse.Content = fmt.Sprintf("error: %v", err)
+					logging.DebugContext(ctx, "tool %s failed in %s: %v", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), err)
 				} else {
 					toolResponse.Content = output
+					logging.DebugContext(ctx, "tool %s completed in %s (output-bytes=%d)", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), len(output))
 				}
 			} else {
 				toolResponse.Content = fmt.Sprintf("unknown tool: %s", toolCall.FunctionCall.Name)
+				logging.DebugContext(ctx, "unknown tool requested: %s", toolCall.FunctionCall.Name)
 			}
 
 			messages = append(messages, llms.MessageContent{
@@ -557,4 +567,11 @@ func globToRegex(pattern string) (string, error) {
 	}
 	buf.WriteString("$")
 	return buf.String(), nil
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
