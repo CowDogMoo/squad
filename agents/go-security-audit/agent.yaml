@@ -1,0 +1,7 @@
+name: go-security-audit
+version: 0.1.0
+description: Audit Go code for security issues and apply fixes.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/golang-security-guide.md

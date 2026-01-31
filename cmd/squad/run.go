@@ -1,0 +1,388 @@
+/*
+Copyright © 2026 Jayson Grace <jayson.e.grace@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+*/
+
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/cowdogmoo/squad/config"
+	"github.com/cowdogmoo/squad/logging"
+	"github.com/spf13/cobra"
+	"github.com/tmc/langchaingo/llms"
+	"github.com/tmc/langchaingo/llms/openai"
+	"gopkg.in/yaml.v3"
+)
+
+var (
+	runAgent             string
+	runAgentsDir         string
+	runRepo              string
+	runAPIKey            string
+	runBaseURL           string
+	runOrg               string
+	runAPIVersion        string
+	runAPIType           string
+	runOpenAICompatMax   bool
+	runProvider          string
+	runModel             string
+	runTemperature       float64
+	runMaxTokens         int
+	runSystem            string
+	runOutput            string
+	runPrint             bool
+	runBundleOut         string
+	runPrintBundle       bool
+	runDryRun            bool
+	runRequireActionable bool
+)
+
+var runCmd = &cobra.Command{
+	Use:   "run [prompt]",
+	Short: "Run an agent workflow",
+	Args:  cobra.ArbitraryArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if runAgent == "" {
+			return fmt.Errorf("--agent is required")
+		}
+
+		prompt, err := readPrompt(cmd, args)
+		if err != nil {
+			return err
+		}
+
+		repoPath, err := resolveRepo(runRepo)
+		if err != nil {
+			return err
+		}
+
+		agentsDir, err := resolveAgentsDir(runAgentsDir)
+		if err != nil {
+			return err
+		}
+
+		bundle, err := buildAgentBundle(agentsDir, runAgent, prompt, repoPath)
+		if err != nil {
+			return err
+		}
+
+		logging.InfoContext(cmd.Context(), "agent bundle ready (agent=%s provider=%s model=%s)", runAgent, runProvider, runModel)
+
+		if runPrintBundle {
+			if _, err := io.Copy(cmd.OutOrStdout(), bytes.NewReader(bundle)); err != nil {
+				return err
+			}
+		}
+
+		if runBundleOut != "" {
+			if err := os.WriteFile(runBundleOut, bundle, 0o644); err != nil {
+				return fmt.Errorf("failed to write bundle: %w", err)
+			}
+			logging.InfoContext(cmd.Context(), "bundle written to %s", runBundleOut)
+		}
+
+		if runDryRun {
+			return nil
+		}
+
+		cfg := configFromContext(cmd)
+		if cfg == nil {
+			return fmt.Errorf("config not available in context")
+		}
+
+		provider := pickString(runProvider, cfg.Provider.Default)
+		model := pickString(runModel, cfg.Model.Default)
+		temperature := pickFloat(runTemperature, cfg.Model.Temperature)
+		maxTokens := pickInt(runMaxTokens, cfg.Model.MaxTokens)
+
+		llm, err := buildLLM(provider, model, cfg)
+		if err != nil {
+			return err
+		}
+
+		callOpts := []llms.CallOption{
+			llms.WithTemperature(temperature),
+		}
+
+		if provider == "openai" {
+			if maxTokens > 0 {
+				if runOpenAICompatMax || cfg.Provider.OpenAICompatMaxTokens {
+					callOpts = append(callOpts, llms.WithMaxTokens(maxTokens), openai.WithLegacyMaxTokensField())
+				} else {
+					callOpts = append(callOpts, openai.WithMaxCompletionTokens(maxTokens))
+				}
+			}
+		} else if maxTokens > 0 {
+			callOpts = append(callOpts, llms.WithMaxTokens(maxTokens))
+		}
+
+		fullPrompt := string(bundle)
+		if runSystem != "" {
+			fullPrompt = injectSystemOverride(fullPrompt, runSystem)
+		}
+
+		response, err := llms.GenerateFromSinglePrompt(cmd.Context(), llm, fullPrompt, callOpts...)
+		if err != nil {
+			return fmt.Errorf("model call failed: %w", err)
+		}
+
+		if runRequireActionable {
+			if err := validateActionableResponse(response); err != nil {
+				return err
+			}
+		}
+
+		if runPrint || runOutput == "" {
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), response); err != nil {
+				return err
+			}
+		}
+
+		if runOutput != "" {
+			if err := os.WriteFile(runOutput, []byte(response), 0o644); err != nil {
+				return fmt.Errorf("failed to write response: %w", err)
+			}
+			logging.InfoContext(cmd.Context(), "response written to %s", runOutput)
+		}
+		return nil
+	},
+}
+
+func init() {
+	runCmd.Flags().StringVar(&runAgent, "agent", "", "Agent name (e.g. go-cobra)")
+	runCmd.Flags().StringVar(&runAgentsDir, "agents-dir", "", "Agents directory (default: ./agents, then ~/.config/squad/agents)")
+	runCmd.Flags().StringVar(&runRepo, "repo", "", "Repo path (default: current working directory)")
+	runCmd.Flags().StringVar(&runAPIKey, "api-key", "", "API key (overrides env/config)")
+	runCmd.Flags().StringVar(&runBaseURL, "base-url", "", "Base URL override for provider")
+	runCmd.Flags().StringVar(&runOrg, "organization", "", "Organization ID (OpenAI-compatible)")
+	runCmd.Flags().StringVar(&runAPIVersion, "api-version", "", "API version (Azure/OpenAI-compatible)")
+	runCmd.Flags().StringVar(&runAPIType, "api-type", "", "API type (openai or azure)")
+	runCmd.Flags().BoolVar(&runOpenAICompatMax, "openai-compat-max-tokens", false, "Use max_tokens for OpenAI-compatible endpoints")
+	runCmd.Flags().StringVar(&runProvider, "provider", "", "Model provider (openai, anthropic, gemini, ollama, etc)")
+	runCmd.Flags().StringVar(&runModel, "model", "", "Model name")
+	runCmd.Flags().Float64Var(&runTemperature, "temperature", -1, "Sampling temperature (default from config)")
+	runCmd.Flags().IntVar(&runMaxTokens, "max-tokens", -1, "Max output tokens (default from config)")
+	runCmd.Flags().StringVar(&runSystem, "system", "", "System prompt override")
+	runCmd.Flags().StringVar(&runOutput, "out", "", "Write response to a file")
+	runCmd.Flags().BoolVar(&runPrint, "print", true, "Print response to stdout")
+	runCmd.Flags().StringVar(&runBundleOut, "bundle-out", "", "Write agent bundle to a file")
+	runCmd.Flags().BoolVar(&runPrintBundle, "print-bundle", false, "Print agent bundle to stdout")
+	runCmd.Flags().BoolVar(&runDryRun, "dry-run", false, "Build bundle and exit without calling the model")
+	runCmd.Flags().BoolVar(&runRequireActionable, "require-actionable", true, "Require actionable output (diff/files/no changes)")
+}
+
+type agentManifest struct {
+	Name       string   `yaml:"name"`
+	Version    string   `yaml:"version"`
+	EntryPoint string   `yaml:"entrypoint"`
+	Wrapper    string   `yaml:"wrapper"`
+	References []string `yaml:"references"`
+}
+
+func readPrompt(cmd *cobra.Command, args []string) (string, error) {
+	if len(args) > 0 {
+		return strings.Join(args, " "), nil
+	}
+
+	input, err := io.ReadAll(cmd.InOrStdin())
+	if err != nil {
+		return "", fmt.Errorf("failed to read stdin: %w", err)
+	}
+	prompt := strings.TrimSpace(string(input))
+	if prompt == "" {
+		return "", fmt.Errorf("prompt is required (pass args or pipe stdin)")
+	}
+	return prompt, nil
+}
+
+func resolveRepo(repo string) (string, error) {
+	if repo == "" {
+		return os.Getwd()
+	}
+	return filepath.Abs(repo)
+}
+
+func resolveAgentsDir(explicit string) (string, error) {
+	if explicit != "" {
+		return filepath.Abs(explicit)
+	}
+
+	if stat, err := os.Stat("agents"); err == nil && stat.IsDir() {
+		return filepath.Abs("agents")
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve agents dir: %w", err)
+	}
+	return filepath.Join(home, ".config", "squad", "agents"), nil
+}
+
+func buildAgentBundle(agentsDir, agentName, prompt, repoPath string) ([]byte, error) {
+	agentPath := filepath.Join(agentsDir, agentName)
+	manifestPath := filepath.Join(agentPath, "agent.yaml")
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read agent manifest: %w", err)
+	}
+
+	var manifest agentManifest
+	if err := yaml.Unmarshal(manifestData, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse agent manifest: %w", err)
+	}
+
+	entryPath := filepath.Join(agentPath, manifest.EntryPoint)
+	systemData, err := os.ReadFile(entryPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read system prompt: %w", err)
+	}
+
+	wrapperPath := filepath.Join(agentPath, manifest.Wrapper)
+	wrapperData, err := os.ReadFile(wrapperPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read agent wrapper: %w", err)
+	}
+
+	var refs []string
+	for _, ref := range manifest.References {
+		if strings.TrimSpace(ref) == "" {
+			continue
+		}
+		refPath := filepath.Join(agentPath, ref)
+		refData, err := os.ReadFile(refPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read reference %s: %w", ref, err)
+		}
+		refs = append(refs, fmt.Sprintf("## Reference: %s\n\n%s\n", ref, strings.TrimSpace(string(refData))))
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("# Squad Agent Bundle\n\n")
+	buf.WriteString(fmt.Sprintf("Agent: %s (%s)\n", manifest.Name, manifest.Version))
+	buf.WriteString(fmt.Sprintf("Repo: %s\n\n", repoPath))
+	buf.WriteString("## Agent Wrapper\n\n")
+	buf.Write(wrapperData)
+	buf.WriteString("\n\n## System Prompt\n\n")
+	buf.Write(systemData)
+
+	if len(refs) > 0 {
+		buf.WriteString("\n\n## References\n\n")
+		for _, ref := range refs {
+			buf.WriteString(ref)
+			buf.WriteString("\n")
+		}
+	}
+
+	buf.WriteString("\n\n## User Request\n\n")
+	buf.WriteString(prompt)
+	buf.WriteString("\n")
+
+	return buf.Bytes(), nil
+}
+
+func buildLLM(provider, model string, cfg *config.Config) (llms.Model, error) {
+	switch provider {
+	case "openai", "":
+		opts := []openai.Option{}
+		if model != "" {
+			opts = append(opts, openai.WithModel(model))
+		}
+
+		baseURL := pickString(runBaseURL, cfg.Provider.BaseURL)
+		if baseURL != "" {
+			opts = append(opts, openai.WithBaseURL(baseURL))
+		}
+
+		token := pickString(runAPIKey, cfg.Provider.Token)
+		if token != "" {
+			opts = append(opts, openai.WithToken(token))
+		}
+
+		org := pickString(runOrg, cfg.Provider.Organization)
+		if org != "" {
+			opts = append(opts, openai.WithOrganization(org))
+		}
+
+		apiVersion := pickString(runAPIVersion, cfg.Provider.APIVersion)
+		if apiVersion != "" {
+			opts = append(opts, openai.WithAPIVersion(apiVersion))
+		}
+
+		apiType := strings.ToLower(pickString(runAPIType, cfg.Provider.APIType))
+		if apiType == "azure" {
+			opts = append(opts, openai.WithAPIType(openai.APITypeAzure))
+		}
+
+		return openai.New(opts...)
+	default:
+		return nil, fmt.Errorf("provider not implemented: %s", provider)
+	}
+}
+
+func pickString(value, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
+}
+
+func pickFloat(value, fallback float64) float64 {
+	if value >= 0 {
+		return value
+	}
+	return fallback
+}
+
+func pickInt(value, fallback int) int {
+	if value >= 0 {
+		return value
+	}
+	return fallback
+}
+
+func injectSystemOverride(bundle, system string) string {
+	injection := "\n\n## System Override\n\n" + strings.TrimSpace(system) + "\n"
+	needle := "\n\n## User Request\n\n"
+	if strings.Contains(bundle, needle) {
+		return strings.Replace(bundle, needle, injection+needle, 1)
+	}
+	return bundle + injection
+}
+
+func validateActionableResponse(response string) error {
+	lower := strings.ToLower(response)
+	if strings.Contains(response, "```diff") {
+		return nil
+	}
+	if strings.Contains(lower, "files touched") {
+		return nil
+	}
+	if strings.Contains(lower, "no changes") {
+		return nil
+	}
+	return fmt.Errorf("response is not actionable: missing diff, files touched, or no changes section (disable with --require-actionable=false)")
+}

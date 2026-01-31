@@ -1,0 +1,7 @@
+name: python-tests
+version: 0.1.0
+description: Create or improve Python tests and validate behavior with pytest or unittest.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/python-testing-patterns.md
