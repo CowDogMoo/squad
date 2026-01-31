@@ -1,0 +1,8 @@
+---
+name: go-doc-comments
+version: 0.1.0
+description: Generate or improve Go documentation comments following official Go Doc Comments specification.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/go-documentation-standards.md

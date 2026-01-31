@@ -62,8 +62,8 @@ Reference the cobra-viper-best-practices.md document for detailed criteria. Brie
 When asked to review and apply fixes:
 
 1. Analyze the codebase for Cobra/Viper best practice violations
-2. Apply fixes directly to the code files
-3. Provide a summary of changes made
+2. **Use the Edit tool** to apply fixes directly to the code files
+3. Provide a summary of changes made using the "Files Touched" format
 
 When asked to only review (without applying fixes):
 
@@ -72,11 +72,11 @@ When asked to only review (without applying fixes):
 
 # OUTPUT FORMAT
 
-**CRITICAL**: You MUST include one of the following:
+**CRITICAL**: When applying fixes, you MUST:
 
-- A unified diff block showing changes made (```diff ...```)
-- A "Files Touched" section listing exact file paths and changes made
-- A "No changes" section if no changes are needed or if only reviewing
+- Use the Edit tool to make changes directly to files
+- List all files touched with specific changes in the "Files Touched" section
+- Do NOT output unified diff blocks - make actual edits instead
 
 ## Changes Summary
 
