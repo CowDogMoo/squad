@@ -92,7 +92,7 @@ var runCmd = &cobra.Command{
 			return err
 		}
 
-		bundle, bundleWorkingDir, err := buildAgentBundle(agentsDir, runAgent, prompt, workingDir)
+		bundle, err := buildAgentBundle(agentsDir, runAgent, prompt, workingDir)
 		if err != nil {
 			return err
 		}
@@ -100,13 +100,13 @@ var runCmd = &cobra.Command{
 		logging.InfoContext(cmd.Context(), "agent bundle ready (agent=%s provider=%s model=%s)", runAgent, runProvider, runModel)
 
 		if runPrintBundle {
-			if _, err := io.Copy(cmd.OutOrStdout(), bytes.NewReader(bundle)); err != nil {
+			if _, err := io.Copy(cmd.OutOrStdout(), bytes.NewReader(bundle.Combined)); err != nil {
 				return err
 			}
 		}
 
 		if runBundleOut != "" {
-			if err := os.WriteFile(runBundleOut, bundle, 0o644); err != nil {
+			if err := os.WriteFile(runBundleOut, bundle.Combined, 0o644); err != nil {
 				return fmt.Errorf("failed to write bundle: %w", err)
 			}
 			logging.InfoContext(cmd.Context(), "bundle written to %s", runBundleOut)
@@ -148,14 +148,14 @@ var runCmd = &cobra.Command{
 			}
 		}
 
-		fullPrompt := string(bundle)
+		systemPrompt := bundle.System
 		if runSystem != "" {
-			fullPrompt = injectSystemOverride(fullPrompt, runSystem)
+			systemPrompt += "\n\n## System Override\n\n" + strings.TrimSpace(runSystem) + "\n"
 		}
 
 		logging.InfoContext(cmd.Context(), "model call started (provider=%s model=%s)", provider, model)
 		modelStart := time.Now()
-		response, err := runWithTools(cmd.Context(), llm, fullPrompt, bundleWorkingDir, callOpts...)
+		response, err := runWithTools(cmd.Context(), llm, systemPrompt, bundle.User, bundle.WorkDir, callOpts...)
 		if err != nil {
 			return fmt.Errorf("model call failed: %w", err)
 		}
@@ -229,6 +229,13 @@ type agentManifest struct {
 	References []string `yaml:"references"`
 }
 
+type agentBundle struct {
+	System   string // wrapper + system prompt + references
+	User     string // user request only
+	Combined []byte // concatenated for --print-bundle/--bundle-out
+	WorkDir  string
+}
+
 func readPrompt(cmd *cobra.Command, args []string) (string, error) {
 	if len(args) > 0 {
 		return strings.Join(args, " "), nil
@@ -268,29 +275,29 @@ func resolveAgentsDir(explicit string) (string, error) {
 	return filepath.Join(home, ".config", "squad", "agents"), nil
 }
 
-func buildAgentBundle(agentsDir, agentName, prompt, workingDir string) ([]byte, string, error) {
+func buildAgentBundle(agentsDir, agentName, prompt, workingDir string) (*agentBundle, error) {
 	agentPath := filepath.Join(agentsDir, agentName)
 	manifestPath := filepath.Join(agentPath, "agent.yaml")
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to read agent manifest: %w", err)
+		return nil, fmt.Errorf("failed to read agent manifest: %w", err)
 	}
 
 	var manifest agentManifest
 	if err := yaml.Unmarshal(manifestData, &manifest); err != nil {
-		return nil, "", fmt.Errorf("failed to parse agent manifest: %w", err)
+		return nil, fmt.Errorf("failed to parse agent manifest: %w", err)
 	}
 
 	entryPath := filepath.Join(agentPath, manifest.EntryPoint)
 	systemData, err := os.ReadFile(entryPath)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to read system prompt: %w", err)
+		return nil, fmt.Errorf("failed to read system prompt: %w", err)
 	}
 
 	wrapperPath := filepath.Join(agentPath, manifest.Wrapper)
 	wrapperData, err := os.ReadFile(wrapperPath)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to read agent wrapper: %w", err)
+		return nil, fmt.Errorf("failed to read agent wrapper: %w", err)
 	}
 
 	var refs []string
@@ -301,33 +308,42 @@ func buildAgentBundle(agentsDir, agentName, prompt, workingDir string) ([]byte, 
 		refPath := filepath.Join(agentPath, ref)
 		refData, err := os.ReadFile(refPath)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to read reference %s: %w", ref, err)
+			return nil, fmt.Errorf("failed to read reference %s: %w", ref, err)
 		}
 		refs = append(refs, fmt.Sprintf("## Reference: %s\n\n%s\n", ref, strings.TrimSpace(string(refData))))
 	}
 
-	var buf bytes.Buffer
-	buf.WriteString("# Squad Agent Bundle\n\n")
-	buf.WriteString(fmt.Sprintf("Agent: %s (%s)\n", manifest.Name, manifest.Version))
-	buf.WriteString(fmt.Sprintf("Working Directory: %s\n\n", workingDir))
-	buf.WriteString("## Agent Wrapper\n\n")
-	buf.Write(wrapperData)
-	buf.WriteString("\n\n## System Prompt\n\n")
-	buf.Write(systemData)
+	// Build the system message content (wrapper + system prompt + references).
+	var sys bytes.Buffer
+	sys.WriteString("# Squad Agent Bundle\n\n")
+	sys.WriteString(fmt.Sprintf("Agent: %s (%s)\n", manifest.Name, manifest.Version))
+	sys.WriteString(fmt.Sprintf("Working Directory: %s\n\n", workingDir))
+	sys.WriteString("## Agent Wrapper\n\n")
+	sys.Write(wrapperData)
+	sys.WriteString("\n\n## System Prompt\n\n")
+	sys.Write(systemData)
 
 	if len(refs) > 0 {
-		buf.WriteString("\n\n## References\n\n")
+		sys.WriteString("\n\n## References\n\n")
 		for _, ref := range refs {
-			buf.WriteString(ref)
-			buf.WriteString("\n")
+			sys.WriteString(ref)
+			sys.WriteString("\n")
 		}
 	}
 
-	buf.WriteString("\n\n## User Request\n\n")
-	buf.WriteString(prompt)
-	buf.WriteString("\n")
+	// Build the combined output for --print-bundle/--bundle-out.
+	var combined bytes.Buffer
+	combined.Write(sys.Bytes())
+	combined.WriteString("\n\n## User Request\n\n")
+	combined.WriteString(prompt)
+	combined.WriteString("\n")
 
-	return buf.Bytes(), workingDir, nil
+	return &agentBundle{
+		System:   sys.String(),
+		User:     prompt,
+		Combined: combined.Bytes(),
+		WorkDir:  workingDir,
+	}, nil
 }
 
 func buildLLM(provider, model string, cfg *config.Config) (llms.Model, error) {
@@ -435,15 +451,6 @@ func pickInt(value, fallback int) int {
 		return value
 	}
 	return fallback
-}
-
-func injectSystemOverride(bundle, system string) string {
-	injection := "\n\n## System Override\n\n" + strings.TrimSpace(system) + "\n"
-	needle := "\n\n## User Request\n\n"
-	if strings.Contains(bundle, needle) {
-		return strings.Replace(bundle, needle, injection+needle, 1)
-	}
-	return bundle + injection
 }
 
 func validateActionableResponse(response string) error {

@@ -26,16 +26,11 @@ type toolHandler struct {
 	call func(ctx context.Context, rawArgs []byte) (string, error)
 }
 
-func runWithTools(ctx context.Context, llm llms.Model, prompt, workingDir string, callOpts ...llms.CallOption) (string, error) {
+func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, callOpts ...llms.CallOption) (string, error) {
 	handlers, toolDefs := buildToolHandlers(workingDir)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
-	messages := []llms.MessageContent{
-		{
-			Role:  llms.ChatMessageTypeHuman,
-			Parts: []llms.ContentPart{llms.TextPart(prompt)},
-		},
-	}
+	messages := buildInitialMessages(systemPrompt, userPrompt)
 
 	for i := 0; i < maxToolIterations; i++ {
 		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxToolIterations)
@@ -59,58 +54,90 @@ func runWithTools(ctx context.Context, llm llms.Model, prompt, workingDir string
 		}
 		logging.DebugContext(ctx, "model responded in %s with %d tool call(s)", iterDuration.Round(time.Millisecond), len(choice.ToolCalls))
 
-		toolNames := make([]string, 0, len(choice.ToolCalls))
-		toolCallParts := make([]llms.ContentPart, 0, len(choice.ToolCalls))
-		for _, toolCall := range choice.ToolCalls {
-			if toolCall.FunctionCall != nil && toolCall.FunctionCall.Name != "" {
-				toolNames = append(toolNames, toolCall.FunctionCall.Name)
-			}
-			toolCallParts = append(toolCallParts, llms.ToolCall{
-				ID:           toolCall.ID,
-				Type:         toolCall.Type,
-				FunctionCall: toolCall.FunctionCall,
-			})
-		}
-		if len(toolNames) > 0 {
-			logging.InfoContext(ctx, "tool calls requested: %s", strings.Join(toolNames, ", "))
-		}
-		messages = append(messages, llms.MessageContent{
-			Role:  llms.ChatMessageTypeAI,
-			Parts: toolCallParts,
-		})
-
-		for _, toolCall := range choice.ToolCalls {
-			toolResponse := llms.ToolCallResponse{
-				ToolCallID: toolCall.ID,
-			}
-			if toolCall.FunctionCall == nil {
-				toolResponse.Content = "tool call missing function definition"
-			} else if handler, ok := handlers[toolCall.FunctionCall.Name]; ok {
-				toolResponse.Name = toolCall.FunctionCall.Name
-				logging.DebugContext(ctx, "tool %s args: %s", toolCall.FunctionCall.Name, truncateString(toolCall.FunctionCall.Arguments, 200))
-				toolStart := time.Now()
-				output, err := handler.call(ctx, []byte(toolCall.FunctionCall.Arguments))
-				toolDuration := time.Since(toolStart)
-				if err != nil {
-					toolResponse.Content = fmt.Sprintf("error: %v", err)
-					logging.DebugContext(ctx, "tool %s failed in %s: %v", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), err)
-				} else {
-					toolResponse.Content = output
-					logging.DebugContext(ctx, "tool %s completed in %s (output-bytes=%d)", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), len(output))
-				}
-			} else {
-				toolResponse.Content = fmt.Sprintf("unknown tool: %s", toolCall.FunctionCall.Name)
-				logging.DebugContext(ctx, "unknown tool requested: %s", toolCall.FunctionCall.Name)
-			}
-
-			messages = append(messages, llms.MessageContent{
-				Role:  llms.ChatMessageTypeTool,
-				Parts: []llms.ContentPart{toolResponse},
-			})
-		}
+		messages = appendToolCallMessage(messages, choice.ToolCalls, ctx)
+		messages = executeToolCalls(ctx, messages, choice.ToolCalls, handlers)
 	}
 
 	return "", fmt.Errorf("tool loop exceeded %d iterations", maxToolIterations)
+}
+
+func buildInitialMessages(systemPrompt, userPrompt string) []llms.MessageContent {
+	messages := []llms.MessageContent{}
+	if systemPrompt != "" {
+		messages = append(messages, llms.MessageContent{
+			Role:  llms.ChatMessageTypeSystem,
+			Parts: []llms.ContentPart{llms.TextPart(systemPrompt)},
+		})
+	}
+	messages = append(messages, llms.MessageContent{
+		Role:  llms.ChatMessageTypeHuman,
+		Parts: []llms.ContentPart{llms.TextPart(userPrompt)},
+	})
+	return messages
+}
+
+func appendToolCallMessage(messages []llms.MessageContent, toolCalls []llms.ToolCall, ctx context.Context) []llms.MessageContent {
+	toolNames := make([]string, 0, len(toolCalls))
+	toolCallParts := make([]llms.ContentPart, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		if toolCall.FunctionCall != nil && toolCall.FunctionCall.Name != "" {
+			toolNames = append(toolNames, toolCall.FunctionCall.Name)
+		}
+		toolCallParts = append(toolCallParts, llms.ToolCall{
+			ID:           toolCall.ID,
+			Type:         toolCall.Type,
+			FunctionCall: toolCall.FunctionCall,
+		})
+	}
+	if len(toolNames) > 0 {
+		logging.InfoContext(ctx, "tool calls requested: %s", strings.Join(toolNames, ", "))
+	}
+	return append(messages, llms.MessageContent{
+		Role:  llms.ChatMessageTypeAI,
+		Parts: toolCallParts,
+	})
+}
+
+func executeToolCalls(ctx context.Context, messages []llms.MessageContent, toolCalls []llms.ToolCall, handlers map[string]toolHandler) []llms.MessageContent {
+	for _, toolCall := range toolCalls {
+		toolResponse := executeToolCall(ctx, toolCall, handlers)
+		messages = append(messages, llms.MessageContent{
+			Role:  llms.ChatMessageTypeTool,
+			Parts: []llms.ContentPart{toolResponse},
+		})
+	}
+	return messages
+}
+
+func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[string]toolHandler) llms.ToolCallResponse {
+	toolResponse := llms.ToolCallResponse{
+		ToolCallID: toolCall.ID,
+	}
+	if toolCall.FunctionCall == nil {
+		toolResponse.Content = "tool call missing function definition"
+		return toolResponse
+	}
+
+	handler, ok := handlers[toolCall.FunctionCall.Name]
+	if !ok {
+		toolResponse.Content = fmt.Sprintf("unknown tool: %s", toolCall.FunctionCall.Name)
+		logging.DebugContext(ctx, "unknown tool requested: %s", toolCall.FunctionCall.Name)
+		return toolResponse
+	}
+
+	toolResponse.Name = toolCall.FunctionCall.Name
+	logging.DebugContext(ctx, "tool %s args: %s", toolCall.FunctionCall.Name, truncateString(toolCall.FunctionCall.Arguments, 200))
+	toolStart := time.Now()
+	output, err := handler.call(ctx, []byte(toolCall.FunctionCall.Arguments))
+	toolDuration := time.Since(toolStart)
+	if err != nil {
+		toolResponse.Content = fmt.Sprintf("error: %v", err)
+		logging.DebugContext(ctx, "tool %s failed in %s: %v", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), err)
+	} else {
+		toolResponse.Content = output
+		logging.DebugContext(ctx, "tool %s completed in %s (output-bytes=%d)", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), len(output))
+	}
+	return toolResponse
 }
 
 func buildToolHandlers(workingDir string) (map[string]toolHandler, []llms.Tool) {
@@ -293,10 +320,10 @@ func writeTool(workingDir string) func(ctx context.Context, rawArgs []byte) (str
 
 func editTool(workingDir string) func(ctx context.Context, rawArgs []byte) (string, error) {
 	type args struct {
-		Path       string `json:"path"`
-		Old        string `json:"old"`
-		New        string `json:"new"`
-		ReplaceAll bool   `json:"replace_all"`
+		Path       string   `json:"path"`
+		Old        string   `json:"old"`
+		New        string   `json:"new"`
+		ReplaceAll flexBool `json:"replace_all"`
 	}
 	return func(_ context.Context, rawArgs []byte) (string, error) {
 		var payload args
@@ -317,7 +344,7 @@ func editTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		}
 		var updated string
 		replaced := 1
-		if payload.ReplaceAll {
+		if bool(payload.ReplaceAll) {
 			replaced = strings.Count(content, payload.Old)
 			updated = strings.ReplaceAll(content, payload.Old, payload.New)
 		} else {
@@ -489,6 +516,31 @@ func bashTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		}
 		return string(limitOutput(buf.Bytes())), nil
 	}
+}
+
+// flexBool unmarshals both JSON booleans and string representations
+// ("true"/"false") that LLMs sometimes produce for boolean fields.
+type flexBool bool
+
+func (b *flexBool) UnmarshalJSON(data []byte) error {
+	// Try bool first.
+	var v bool
+	if err := json.Unmarshal(data, &v); err == nil {
+		*b = flexBool(v)
+		return nil
+	}
+	// Fall back to string.
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("replace_all must be bool or string, got %s", string(data))
+	}
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "true", "1", "yes":
+		*b = true
+	default:
+		*b = false
+	}
+	return nil
 }
 
 func resolvePath(workingDir, input string) (string, error) {

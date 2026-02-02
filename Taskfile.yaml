@@ -6,7 +6,7 @@ vars:
   # Provider configuration
   PROVIDER: '{{.PROVIDER | default "ollama"}}'
   BASE_URL: '{{.BASE_URL | default "http://localhost:11434"}}'
-  MODEL: '{{.MODEL | default "qwen3-coder:30b"}}'
+  MODEL: '{{.MODEL | default "llama3.3:70b"}}'
   API_KEY: '{{.API_KEY | default "ollama"}}'
 
   # Agent configuration
@@ -67,43 +67,22 @@ tasks:
           --model {{.MODEL}} \
           --out {{.OUT}}
 
-  run:review-cobra:gpt:
-    desc: Review Cobra/Viper best practices using OpenAI GPT
+  run:go-review:
+    desc: Run the go-review agent to review Go code quality
     silent: true
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Review this repo for Cobra/Viper best practices. Apply fixes and describe changes. After making any edits, run 'go build ./...' to verify the code compiles and fix any errors." \
-          --agent go-cobra \
+          "Review cmd/squad/tools.go for Go best practices. Use Read to inspect the file, then provide a structured review. If you find issues, use the Edit tool to fix them. Run 'go build ./...' after edits to verify." \
+          --agent go-review \
           --working-dir {{.WORKING_DIR}} \
-          --api-key "$(op item get Openai --fields dreadnode-api-key --reveal)" \
-          --provider openai \
-          --model {{.GPT_MODEL}} \
-          --out {{.OUT}}
-      - echo "Verifying build..."
-      - go build ./...
-    vars:
-      GPT_MODEL: '{{.GPT_MODEL | default "gpt-4o-mini"}}'
-
-  run:review-cobra:ollama:
-    desc: Review Cobra/Viper best practices using Ollama
-    silent: true
-    cmds:
-      - |
-        go run ./cmd/squad run -v \
-          "Review this repo for Cobra/Viper best practices. Apply fixes and describe changes. After making any edits, run 'go build ./...' to verify the code compiles and fix any errors." \
-          --agent go-cobra \
-          --working-dir {{.WORKING_DIR}} \
-          --api-key ollama \
-          --provider ollama \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
           --base-url {{.BASE_URL}} \
-          --model {{.OLLAMA_MODEL}} \
-          --out {{.OUT}} \
+          --model {{.MODEL}} \
+          --out /tmp/squad-go-review.txt \
           --require-actionable=false
-      - echo "Verifying build..."
-      - go build ./...
-    vars:
-      OLLAMA_MODEL: '{{.OLLAMA_MODEL | default "qwen3-coder:30b"}}'
+      - echo "Review written to /tmp/squad-go-review.txt"
 
   test:
     desc: Run tests
