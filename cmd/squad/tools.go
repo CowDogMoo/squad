@@ -50,6 +50,9 @@ func runWithTools(ctx context.Context, llm llms.Model, prompt, workingDir string
 		}
 
 		choice := response.Choices[0]
+		if gi := choice.GenerationInfo; gi != nil {
+			logging.DebugContext(ctx, "generation info: %v", gi)
+		}
 		if len(choice.ToolCalls) == 0 {
 			logging.InfoContext(ctx, "model returned final response in %s (no tool calls)", iterDuration.Round(time.Millisecond))
 			return choice.Content, nil

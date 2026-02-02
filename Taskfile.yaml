@@ -5,8 +5,8 @@ version: "3"
 vars:
   # Provider configuration
   PROVIDER: '{{.PROVIDER | default "ollama"}}'
-  BASE_URL: '{{.BASE_URL | default "https://ollama.techvomit.xyz/v1"}}'
-  MODEL: '{{.MODEL | default "qwen2.5-coder:3b-instruct"}}'
+  BASE_URL: '{{.BASE_URL | default "http://localhost:11434"}}'
+  MODEL: '{{.MODEL | default "qwen3-coder:30b"}}'
   API_KEY: '{{.API_KEY | default "ollama"}}'
 
   # Agent configuration
@@ -98,11 +98,12 @@ tasks:
           --provider ollama \
           --base-url {{.BASE_URL}} \
           --model {{.OLLAMA_MODEL}} \
-          --out {{.OUT}}
+          --out {{.OUT}} \
+          --require-actionable=false
       - echo "Verifying build..."
       - go build ./...
     vars:
-      OLLAMA_MODEL: '{{.OLLAMA_MODEL | default "qwen2.5-coder:3b-instruct"}}'
+      OLLAMA_MODEL: '{{.OLLAMA_MODEL | default "qwen3-coder:30b"}}'
 
   test:
     desc: Run tests

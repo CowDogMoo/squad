@@ -65,6 +65,7 @@ var (
 	runRequireActionable bool
 	runApply             bool
 	runApplyFallback     bool
+	runNumCtx            int
 )
 
 var runCmd = &cobra.Command{
@@ -217,6 +218,7 @@ func init() {
 	runCmd.Flags().BoolVar(&runRequireActionable, "require-actionable", true, "Require actionable output (diff/files/no changes)")
 	runCmd.Flags().BoolVar(&runApply, "apply", false, "Apply unified diff from the response to the working directory")
 	runCmd.Flags().BoolVar(&runApplyFallback, "apply-fallback", false, "Fallback to patch(1) if git apply fails (may create .rej/.orig)")
+	runCmd.Flags().IntVar(&runNumCtx, "num-ctx", 32768, "Context window size for Ollama models")
 }
 
 type agentManifest struct {
@@ -331,7 +333,9 @@ func buildAgentBundle(agentsDir, agentName, prompt, workingDir string) ([]byte, 
 func buildLLM(provider, model string, cfg *config.Config) (llms.Model, error) {
 	provider = normalizeProvider(provider)
 	switch provider {
-	case "openai", "", "ollama":
+	case "ollama":
+		return buildNativeOllamaLLM(model, cfg), nil
+	case "openai", "":
 		return buildOpenAICompatLLM(provider, model, cfg)
 	case "anthropic":
 		return buildAnthropicLLM(model, cfg)
@@ -347,17 +351,11 @@ func buildOpenAICompatLLM(provider, model string, cfg *config.Config) (llms.Mode
 	}
 
 	baseURL := pickString(runBaseURL, cfg.Provider.BaseURL)
-	if baseURL == "" && provider == "ollama" {
-		baseURL = "http://localhost:11434/v1"
-	}
 	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))
 	}
 
 	token := pickString(runAPIKey, cfg.Provider.Token)
-	if token == "" && provider == "ollama" {
-		token = "ollama"
-	}
 	if token != "" {
 		opts = append(opts, openai.WithToken(token))
 	}
@@ -405,8 +403,17 @@ func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
 }
 
+func buildNativeOllamaLLM(model string, cfg *config.Config) llms.Model {
+	baseURL := pickString(runBaseURL, cfg.Provider.BaseURL)
+	if baseURL == "" {
+		baseURL = "http://localhost:11434"
+	}
+	numCtx := pickInt(runNumCtx, 32768)
+	return newOllamaLLM(baseURL, model, numCtx)
+}
+
 func isOpenAICompatProvider(provider string) bool {
-	return provider == "" || provider == "openai" || provider == "ollama"
+	return provider == "" || provider == "openai"
 }
 
 func pickString(value, fallback string) string {
