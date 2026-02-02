@@ -47,7 +47,10 @@ func (o *ollamaLLM) GenerateContent(ctx context.Context, messages []llms.Message
 		opt(&opts)
 	}
 
-	chatMsgs := convertMessages(messages)
+	chatMsgs, err := convertMessages(messages)
+	if err != nil {
+		return nil, err
+	}
 	tools := convertTools(opts.Tools)
 
 	reqBody := ollamaChatRequest{
@@ -143,7 +146,7 @@ type ollamaChatResponse struct {
 
 // --- Conversion helpers ---
 
-func convertMessages(messages []llms.MessageContent) []ollamaMessage {
+func convertMessages(messages []llms.MessageContent) ([]ollamaMessage, error) {
 	out := make([]ollamaMessage, 0, len(messages))
 	for _, mc := range messages {
 		msg := ollamaMessage{Role: lcRoleToOllama(mc.Role)}
@@ -153,9 +156,11 @@ func convertMessages(messages []llms.MessageContent) []ollamaMessage {
 			case llms.TextContent:
 				msg.Content = pt.Text
 			case llms.ToolCall:
-				var args map[string]any
 				if pt.FunctionCall != nil {
-					_ = json.Unmarshal([]byte(pt.FunctionCall.Arguments), &args)
+					var args map[string]any
+					if err := json.Unmarshal([]byte(pt.FunctionCall.Arguments), &args); err != nil {
+						return nil, fmt.Errorf("failed to unmarshal tool call %q arguments: %w", pt.FunctionCall.Name, err)
+					}
 					msg.ToolCalls = append(msg.ToolCalls, ollamaToolCall{
 						Function: ollamaFunctionCall{
 							Name:      pt.FunctionCall.Name,
@@ -164,14 +169,13 @@ func convertMessages(messages []llms.MessageContent) []ollamaMessage {
 					})
 				}
 			case llms.ToolCallResponse:
-				// Ollama expects tool results as role=tool messages with content
 				msg.Role = "tool"
 				msg.Content = pt.Content
 			}
 		}
 		out = append(out, msg)
 	}
-	return out
+	return out, nil
 }
 
 func convertTools(tools []llms.Tool) []ollamaTool {
