@@ -16,7 +16,7 @@
 
 ## Introduction
 
-Go is designed with security in mind, featuring built-in memory safety, garbage collection, and strong typing. However, vulnerabilities can still occur through improper use of language features, dependencies, or external integrations. In 2025, there have been 9 vulnerabilities in Go with an average score of 6.5 out of ten.
+Go is designed with security in mind, featuring built-in memory safety, garbage collection, and strong typing. However, vulnerabilities can still occur through improper use of language features, dependencies, or external integrations. In 2026, there have been 9 vulnerabilities in Go with an average score of 6.5 out of ten.
 
 ### Key Security Principles
 
@@ -885,7 +885,6 @@ grpcServer := grpc.NewServer(
 **Resources:**
 
 - [Protovalidate for gRPC and Go](https://protovalidate.com/quickstart/grpc-go/)
-- [Know your inputs or gRPC request validation](https://medium.com/swlh/know-your-inputs-or-grpc-request-validation-8eb29a0ebc31)
 - [Learning Protocol Buffers: Validations](https://mariocarrion.com/2023/11/13/learning-grpc-protobuf-validation.html)
 
 ### 4. Rate Limiting
@@ -1382,7 +1381,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v4
         with:
-          go-version: '1.21'
+          go-version: "1.21"
       - name: Run govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -1519,7 +1518,6 @@ jobs:
 
 - [Awesome Golang Security](https://github.com/guardrailsio/awesome-golang-security)
 - [Go Security Cheatsheet - Snyk](https://snyk.io/blog/go-security-cheatsheet-for-go-developers/)
-- [Secure Coding in Go: OWASP Top 10](https://www.hitechtrends.com/2025/05/25/secure-coding-in-go-owasp-top-10-exploits-and-fixes/)
 
 ---
 

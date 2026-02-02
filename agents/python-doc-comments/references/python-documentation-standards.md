@@ -20,14 +20,14 @@ A comprehensive guide to Python documentation following PEP 8, PEP 257, and mode
 
 ### The Golden Rules
 
-| Principle | Description |
-|-----------|-------------|
-| Triple double quotes | Always use `"""` for docstrings |
-| Complete sentences | Proper capitalization and punctuation |
-| Explain "why" | Code shows "what", comments explain "why" |
-| User focus | Document for users, not implementation |
-| Synchronize | Outdated comments are worse than none |
-| Use sparingly | Prefer clear code over excessive comments |
+| Principle            | Description                               |
+| -------------------- | ----------------------------------------- |
+| Triple double quotes | Always use `"""` for docstrings           |
+| Complete sentences   | Proper capitalization and punctuation     |
+| Explain "why"        | Code shows "what", comments explain "why" |
+| User focus           | Document for users, not implementation    |
+| Synchronize          | Outdated comments are worse than none     |
+| Use sparingly        | Prefer clear code over excessive comments |
 
 ### Philosophy
 
@@ -139,12 +139,12 @@ def fetch_bigtable_rows(big_table, keys, other_silly_variable=None):
 
 **Sections:**
 
-| Section | Purpose |
-|---------|---------|
-| Args | List each parameter with description |
+| Section | Purpose                                |
+| ------- | -------------------------------------- |
+| Args    | List each parameter with description   |
 | Returns | Describe the return value and its type |
-| Yields | For generators |
-| Raises | Document exceptions that may be raised |
+| Yields  | For generators                         |
+| Raises  | Document exceptions that may be raised |
 
 ### Class Docstrings
 
@@ -347,12 +347,12 @@ def process(items: list[str], config: dict[str, str | int] | None = None) -> lis
 
 ### Key Points
 
-| Aspect | Description |
-|--------|-------------|
-| Static analysis | Used by mypy, pyright, IDEs |
-| Documentation | Human-readable, stays in code |
-| Runtime | Type hints don't enforce at runtime |
-| Combination | Use both type hints AND docstrings |
+| Aspect          | Description                         |
+| --------------- | ----------------------------------- |
+| Static analysis | Used by mypy, pyright, IDEs         |
+| Documentation   | Human-readable, stays in code       |
+| Runtime         | Type hints don't enforce at runtime |
+| Combination     | Use both type hints AND docstrings  |
 
 ---
 
@@ -362,19 +362,19 @@ Standardized annotations that flag code requiring attention.
 
 ### Common Tags
 
-| Tag | Purpose | Example |
-|-----|---------|---------|
-| `TODO` | Pending tasks | `# TODO: Add input validation` |
-| `FIXME` | Code needing fixes | `# FIXME: Memory leak in loop` |
-| `XXX` | Synonym for FIXME | `# XXX: This breaks with unicode` |
-| `BUG` | Known defects | `# BUG: Tracked as JIRA-456` |
-| `HACK` | Temporary workarounds | `# HACK: Works around API bug` |
-| `NOTE` | Important clarifications | `# NOTE: Requires Python 3.8+` |
+| Tag     | Purpose                  | Example                           |
+| ------- | ------------------------ | --------------------------------- |
+| `TODO`  | Pending tasks            | `# TODO: Add input validation`    |
+| `FIXME` | Code needing fixes       | `# FIXME: Memory leak in loop`    |
+| `XXX`   | Synonym for FIXME        | `# XXX: This breaks with unicode` |
+| `BUG`   | Known defects            | `# BUG: Tracked as JIRA-456`      |
+| `HACK`  | Temporary workarounds    | `# HACK: Works around API bug`    |
+| `NOTE`  | Important clarifications | `# NOTE: Requires Python 3.8+`    |
 
 ### Format with Metadata
 
 ```python
-# TODO: Refactor this function. <JD d:2025-01-15 p:2>
+# TODO: Refactor this function. <JD d:2026-01-15 p:2>
 def legacy_code():
     pass
 
@@ -648,13 +648,13 @@ def process_user(user: User) -> bool:
 
 ### Recommended Tools
 
-| Tool | Purpose |
-|------|---------|
-| [black](https://github.com/psf/black) | Code formatting |
-| [isort](https://github.com/PyCQA/isort) | Import sorting |
-| [mypy](https://github.com/python/mypy) | Type checking |
-| [pylint](https://github.com/pylint-dev/pylint) | Linting |
-| [flake8](https://github.com/PyCQA/flake8) | Style checking |
+| Tool                                              | Purpose            |
+| ------------------------------------------------- | ------------------ |
+| [black](https://github.com/psf/black)             | Code formatting    |
+| [isort](https://github.com/PyCQA/isort)           | Import sorting     |
+| [mypy](https://github.com/python/mypy)            | Type checking      |
+| [pylint](https://github.com/pylint-dev/pylint)    | Linting            |
+| [flake8](https://github.com/PyCQA/flake8)         | Style checking     |
 | [pydocstyle](https://github.com/PyCQA/pydocstyle) | Docstring checking |
 
 ### pyproject.toml Configuration
@@ -675,11 +675,11 @@ convention = "google"
 
 ### Documentation Generators
 
-| Tool | Description |
-|------|-------------|
+| Tool                                  | Description              |
+| ------------------------------------- | ------------------------ |
 | [Sphinx](https://www.sphinx-doc.org/) | Full documentation suite |
-| [MkDocs](https://www.mkdocs.org/) | Markdown-based docs |
-| [pdoc](https://pdoc.dev/) | Auto-generated API docs |
+| [MkDocs](https://www.mkdocs.org/)     | Markdown-based docs      |
+| [pdoc](https://pdoc.dev/)             | Auto-generated API docs  |
 
 ---
 
@@ -736,4 +736,4 @@ convention = "google"
 
 ---
 
-*Last updated: 2026-01-11*
+_Last updated: 2026-01-11_

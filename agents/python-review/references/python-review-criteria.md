@@ -55,14 +55,14 @@ Choose straightforward solutions. If something is hard to explain, it's probably
 
 ### PEP 8 Mandatory Checks
 
-| Check | Severity | Reference |
-|-------|----------|-----------|
-| 4 spaces per indentation level | HIGH | PEP 8 |
-| Maximum 79 characters per line | MEDIUM | PEP 8 |
-| Maximum 72 characters for docstrings/comments | LOW | PEP 8 |
-| Two blank lines around top-level definitions | MEDIUM | PEP 8 |
-| One blank line between methods | MEDIUM | PEP 8 |
-| No trailing whitespace | LOW | PEP 8 |
+| Check                                         | Severity | Reference |
+| --------------------------------------------- | -------- | --------- |
+| 4 spaces per indentation level                | HIGH     | PEP 8     |
+| Maximum 79 characters per line                | MEDIUM   | PEP 8     |
+| Maximum 72 characters for docstrings/comments | LOW      | PEP 8     |
+| Two blank lines around top-level definitions  | MEDIUM   | PEP 8     |
+| One blank line between methods                | MEDIUM   | PEP 8     |
+| No trailing whitespace                        | LOW      | PEP 8     |
 
 ### Import Organization
 
@@ -95,18 +95,18 @@ from myproject.models import User
 
 **PEP 8 Naming:**
 
-| Type | Convention | Example |
-|------|------------|---------|
-| Modules | `lowercase_underscore` | `user_service.py` |
-| Packages | `lowercase` | `mypackage` |
-| Classes | `CapWords` | `UserService` |
-| Exceptions | `CapWords` + `Error` suffix | `ValidationError` |
-| Functions | `lowercase_underscore` | `get_user()` |
-| Methods | `lowercase_underscore` | `calculate_total()` |
-| Constants | `UPPER_CASE_UNDERSCORE` | `MAX_RETRIES` |
-| Variables | `lowercase_underscore` | `user_count` |
-| Protected | `_single_underscore` | `_internal_value` |
-| Private | `__double_underscore` | `__name_mangled` |
+| Type       | Convention                  | Example             |
+| ---------- | --------------------------- | ------------------- |
+| Modules    | `lowercase_underscore`      | `user_service.py`   |
+| Packages   | `lowercase`                 | `mypackage`         |
+| Classes    | `CapWords`                  | `UserService`       |
+| Exceptions | `CapWords` + `Error` suffix | `ValidationError`   |
+| Functions  | `lowercase_underscore`      | `get_user()`        |
+| Methods    | `lowercase_underscore`      | `calculate_total()` |
+| Constants  | `UPPER_CASE_UNDERSCORE`     | `MAX_RETRIES`       |
+| Variables  | `lowercase_underscore`      | `user_count`        |
+| Protected  | `_single_underscore`        | `_internal_value`   |
+| Private    | `__double_underscore`       | `__name_mangled`    |
 
 **Google Style Additions:**
 
@@ -189,13 +189,13 @@ income = (gross_wages
 
 ### Critical Rules
 
-| Rule | Severity | Reference |
-|------|----------|-----------|
-| Never use bare `except:` | CRITICAL | PEP 8, Google |
-| Catch specific exceptions | HIGH | Google Style |
-| Minimize code in try block | HIGH | Google Style |
-| Use `finally` for cleanup | MEDIUM | Google Style |
-| Use `raise X from Y` for chaining | MEDIUM | PEP 8 |
+| Rule                              | Severity | Reference     |
+| --------------------------------- | -------- | ------------- |
+| Never use bare `except:`          | CRITICAL | PEP 8, Google |
+| Catch specific exceptions         | HIGH     | Google Style  |
+| Minimize code in try block        | HIGH     | Google Style  |
+| Use `finally` for cleanup         | MEDIUM   | Google Style  |
+| Use `raise X from Y` for chaining | MEDIUM   | PEP 8         |
 
 ### Exception Patterns
 
@@ -282,12 +282,12 @@ except FileNotFoundError as e:
 
 ### Guidelines (Google Style, PEP 484)
 
-| Check | Severity | Rationale |
-|-------|----------|-----------|
-| Annotate public APIs | HIGH | Documentation and tooling |
-| Use `X \| None` not `Optional[X]` (3.10+) | LOW | Modern syntax |
-| Annotate complex functions | MEDIUM | Clarity |
-| Import types correctly | MEDIUM | Avoid runtime overhead |
+| Check                                     | Severity | Rationale                 |
+| ----------------------------------------- | -------- | ------------------------- |
+| Annotate public APIs                      | HIGH     | Documentation and tooling |
+| Use `X \| None` not `Optional[X]` (3.10+) | LOW      | Modern syntax             |
+| Annotate complex functions                | MEDIUM   | Clarity                   |
+| Import types correctly                    | MEDIUM   | Avoid runtime overhead    |
 
 ### Basic Annotations
 
@@ -660,12 +660,12 @@ def copy_data(source: Readable, dest: Writable) -> int:
 
 ### String Operations
 
-| Pattern | Performance | Use Case |
-|---------|-------------|----------|
-| f-strings | Fastest | Simple formatting |
-| `str.join()` | Fast | Multiple concatenations |
-| `%` formatting | Medium | Logging with deferred evaluation |
-| `+` in loop | Slow | Avoid |
+| Pattern        | Performance | Use Case                         |
+| -------------- | ----------- | -------------------------------- |
+| f-strings      | Fastest     | Simple formatting                |
+| `str.join()`   | Fast        | Multiple concatenations          |
+| `%` formatting | Medium      | Logging with deferred evaluation |
+| `+` in loop    | Slow        | Avoid                            |
 
 **Good:**
 
@@ -773,11 +773,11 @@ if __name__ == '__main__':
 
 ### Global Variables
 
-| Check | Severity | Rationale |
-|-------|----------|-----------|
-| Avoid mutable global state | HIGH | Testing difficulty |
-| Constants are acceptable | LOW | Immutable values |
-| Prefix internal globals with `_` | MEDIUM | Clear intent |
+| Check                            | Severity | Rationale          |
+| -------------------------------- | -------- | ------------------ |
+| Avoid mutable global state       | HIGH     | Testing difficulty |
+| Constants are acceptable         | LOW      | Immutable values   |
+| Prefix internal globals with `_` | MEDIUM   | Clear intent       |
 
 **Good:**
 
@@ -864,12 +864,12 @@ class UserRepository:
 
 ### Comment Quality
 
-| Rule | Severity |
-|------|----------|
-| Document "why", not "what" | MEDIUM |
-| Keep comments updated | HIGH |
-| No commented-out code | LOW |
-| Use TODO format: `# TODO(username): description` | LOW |
+| Rule                                             | Severity |
+| ------------------------------------------------ | -------- |
+| Document "why", not "what"                       | MEDIUM   |
+| Keep comments updated                            | HIGH     |
+| No commented-out code                            | LOW      |
+| Use TODO format: `# TODO(username): description` | LOW      |
 
 ---
 
@@ -877,13 +877,13 @@ class UserRepository:
 
 ### Critical Checks
 
-| Check | Severity | Impact |
-|-------|----------|--------|
-| Input validation | CRITICAL | Injection attacks |
-| SQL parameterization | CRITICAL | SQL injection |
-| Subprocess shell=False | CRITICAL | Command injection |
-| Secret management | CRITICAL | Credential exposure |
-| HTTPS verification | HIGH | MITM attacks |
+| Check                  | Severity | Impact              |
+| ---------------------- | -------- | ------------------- |
+| Input validation       | CRITICAL | Injection attacks   |
+| SQL parameterization   | CRITICAL | SQL injection       |
+| Subprocess shell=False | CRITICAL | Command injection   |
+| Secret management      | CRITICAL | Credential exposure |
+| HTTPS verification     | HIGH     | MITM attacks        |
 
 ### Input Validation
 
@@ -978,22 +978,22 @@ API_KEY = "sk-1234567890abcdef"  # Never do this!
 
 ### Coverage Expectations
 
-| Type | Target | Priority |
-|------|--------|----------|
-| Unit tests | 80%+ | HIGH |
-| Integration tests | Critical paths | MEDIUM |
-| Property tests | Edge cases | LOW |
+| Type              | Target         | Priority |
+| ----------------- | -------------- | -------- |
+| Unit tests        | 80%+           | HIGH     |
+| Integration tests | Critical paths | MEDIUM   |
+| Property tests    | Edge cases     | LOW      |
 
-### Testing Tools (2025)
+### Testing Tools (2026)
 
-| Tool | Use Case |
-|------|----------|
-| `pytest` | Primary test framework |
-| `pytest-cov` | Coverage reporting |
-| `pytest-mock` | Mocking support |
-| `hypothesis` | Property-based testing |
-| `mypy` | Static type checking |
-| `ruff` | Linting and formatting |
+| Tool          | Use Case               |
+| ------------- | ---------------------- |
+| `pytest`      | Primary test framework |
+| `pytest-cov`  | Coverage reporting     |
+| `pytest-mock` | Mocking support        |
+| `hypothesis`  | Property-based testing |
+| `mypy`        | Static type checking   |
+| `ruff`        | Linting and formatting |
 
 ### Test Quality
 
@@ -1142,4 +1142,4 @@ Suggestions for optimization:
 
 ---
 
-*Last updated: 2026-01-18*
+_Last updated: 2026-01-18_

@@ -46,13 +46,13 @@ Don't communicate by sharing memory; use channels to coordinate goroutines.
 
 ### Mandatory Checks
 
-| Check | Severity | Rationale |
-|-------|----------|-----------|
-| Code formatted with gofmt | HIGH | Non-negotiable Go standard |
-| Imports organized with goimports | MEDIUM | Standard library → third-party → local |
-| MixedCaps naming (never underscores) | MEDIUM | Go naming convention |
-| Short, meaningful names | LOW | Readability |
-| Package names lowercase, concise | MEDIUM | Avoid util, common, helpers |
+| Check                                | Severity | Rationale                              |
+| ------------------------------------ | -------- | -------------------------------------- |
+| Code formatted with gofmt            | HIGH     | Non-negotiable Go standard             |
+| Imports organized with goimports     | MEDIUM   | Standard library → third-party → local |
+| MixedCaps naming (never underscores) | MEDIUM   | Go naming convention                   |
+| Short, meaningful names              | LOW      | Readability                            |
+| Package names lowercase, concise     | MEDIUM   | Avoid util, common, helpers            |
 
 ### Import Organization
 
@@ -106,11 +106,11 @@ HTTPclient               // inconsistent capitalization
 
 ### Critical Rules
 
-| Rule | Severity | Example |
-|------|----------|---------|
-| Never ignore errors with `_` | CRITICAL | `_ = file.Close()` |
-| Handle errors once at source | HIGH | Don't log and return |
-| Return errors as last value | MEDIUM | `func X() (T, error)` |
+| Rule                         | Severity | Example               |
+| ---------------------------- | -------- | --------------------- |
+| Never ignore errors with `_` | CRITICAL | `_ = file.Close()`    |
+| Handle errors once at source | HIGH     | Don't log and return  |
+| Return errors as last value  | MEDIUM   | `func X() (T, error)` |
 
 ### Error Wrapping (Go 1.13+)
 
@@ -153,12 +153,12 @@ val := x.(Type)  // panics if wrong type
 
 ### Critical Checks
 
-| Check | Severity | Impact |
-|-------|----------|--------|
-| Goroutines have clear exit conditions | CRITICAL | Prevents leaks |
-| No goroutines in init() | HIGH | Startup unpredictability |
-| Context.Context for lifecycle | HIGH | Graceful shutdown |
-| No fire-and-forget goroutines | HIGH | Resource leaks |
+| Check                                 | Severity | Impact                   |
+| ------------------------------------- | -------- | ------------------------ |
+| Goroutines have clear exit conditions | CRITICAL | Prevents leaks           |
+| No goroutines in init()               | HIGH     | Startup unpredictability |
+| Context.Context for lifecycle         | HIGH     | Graceful shutdown        |
+| No fire-and-forget goroutines         | HIGH     | Resource leaks           |
 
 ### Worker Pool Pattern
 
@@ -267,11 +267,11 @@ cache := make(map[string]Value, expectedSize)
 
 ### Critical Checks
 
-| Check | Severity | Rationale |
-|-------|----------|-----------|
-| No pointers to interfaces | HIGH | Almost never needed |
-| Interfaces in consumer packages | MEDIUM | Loose coupling |
-| Consistent receiver types | MEDIUM | Method set clarity |
+| Check                           | Severity | Rationale           |
+| ------------------------------- | -------- | ------------------- |
+| No pointers to interfaces       | HIGH     | Almost never needed |
+| Interfaces in consumer packages | MEDIUM   | Loose coupling      |
+| Consistent receiver types       | MEDIUM   | Method set clarity  |
 
 ### Compile-Time Interface Verification
 
@@ -382,12 +382,12 @@ func NewServer(opts ...Option) *Server {
 
 ### String Operations
 
-| Pattern | Performance | Use Case |
-|---------|-------------|----------|
-| `strconv.Itoa()` | Fast | int to string |
-| `fmt.Sprintf()` | Slower | Complex formatting |
-| `strings.Builder` | Fast | Multiple concatenations |
-| `+` operator | Slow | Avoid in loops |
+| Pattern           | Performance | Use Case                |
+| ----------------- | ----------- | ----------------------- |
+| `strconv.Itoa()`  | Fast        | int to string           |
+| `fmt.Sprintf()`   | Slower      | Complex formatting      |
+| `strings.Builder` | Fast        | Multiple concatenations |
+| `+` operator      | Slow        | Avoid in loops          |
 
 ### Time Handling
 
@@ -401,11 +401,11 @@ func NewServer(opts ...Option) *Server {
 
 ### Checks
 
-| Check | Severity | Rationale |
-|-------|----------|-----------|
-| Small, focused packages | MEDIUM | Single responsibility |
-| Avoid generic names | MEDIUM | util, common, helpers |
-| Limited global variables | HIGH | Testing difficulty |
+| Check                    | Severity | Rationale             |
+| ------------------------ | -------- | --------------------- |
+| Small, focused packages  | MEDIUM   | Single responsibility |
+| Avoid generic names      | MEDIUM   | util, common, helpers |
+| Limited global variables | HIGH     | Testing difficulty    |
 
 ### Good Package Names
 
@@ -439,12 +439,12 @@ func (s *UserService) GetByID(ctx context.Context, id string) (*User, error)
 
 ### Comment Quality
 
-| Rule | Severity |
-|------|----------|
-| Complete sentences starting with declared name | MEDIUM |
-| Focus on what/why for users | LOW |
-| Document concurrency safety | MEDIUM |
-| No blank line between comment and declaration | LOW |
+| Rule                                           | Severity |
+| ---------------------------------------------- | -------- |
+| Complete sentences starting with declared name | MEDIUM   |
+| Focus on what/why for users                    | LOW      |
+| Document concurrency safety                    | MEDIUM   |
+| No blank line between comment and declaration  | LOW      |
 
 ---
 
@@ -452,13 +452,13 @@ func (s *UserService) GetByID(ctx context.Context, id string) (*User, error)
 
 ### Critical Checks
 
-| Check | Severity | Impact |
-|-------|----------|--------|
-| Input validation | CRITICAL | Injection attacks |
-| SQL parameterization | CRITICAL | SQL injection |
-| Secret management | CRITICAL | Credential exposure |
-| TLS configuration | HIGH | Data in transit |
-| Crypto usage | HIGH | Weak algorithms |
+| Check                | Severity | Impact              |
+| -------------------- | -------- | ------------------- |
+| Input validation     | CRITICAL | Injection attacks   |
+| SQL parameterization | CRITICAL | SQL injection       |
+| Secret management    | CRITICAL | Credential exposure |
+| TLS configuration    | HIGH     | Data in transit     |
+| Crypto usage         | HIGH     | Weak algorithms     |
 
 ### Input Validation
 
@@ -493,19 +493,19 @@ db.Query("SELECT * FROM users WHERE id = " + userID)  // SQL injection!
 
 ### Coverage Expectations
 
-| Type | Target | Priority |
-|------|--------|----------|
-| Unit tests | 70%+ | HIGH |
-| Integration tests | Critical paths | MEDIUM |
-| Benchmark tests | Hot paths | LOW |
+| Type              | Target         | Priority |
+| ----------------- | -------------- | -------- |
+| Unit tests        | 70%+           | HIGH     |
+| Integration tests | Critical paths | MEDIUM   |
+| Benchmark tests   | Hot paths      | LOW      |
 
-### Testing Tools (2025)
+### Testing Tools (2026)
 
-| Tool | Adoption | Use Case |
-|------|----------|----------|
-| `testing` (stdlib) | Most common | Built-in testing package |
-| [testify](https://github.com/stretchr/testify) | 27% | Assertions and mocking |
-| [gomock](https://github.com/uber-go/mock) | 21% | Enterprise mock generation |
+| Tool                                           | Adoption    | Use Case                   |
+| ---------------------------------------------- | ----------- | -------------------------- |
+| `testing` (stdlib)                             | Most common | Built-in testing package   |
+| [testify](https://github.com/stretchr/testify) | 27%         | Assertions and mocking     |
+| [gomock](https://github.com/uber-go/mock)      | 21%         | Enterprise mock generation |
 
 ### Test Quality
 
@@ -632,4 +632,4 @@ Suggestions for optimization:
 
 ---
 
-*Last updated: 2026-01-10*
+_Last updated: 2026-01-10_

@@ -1185,7 +1185,7 @@ These patterns have tradeoffs:
 
 ---
 
-## Modern Python Ecosystem (2025)
+## Modern Python Ecosystem (2026)
 
 ### Import Organization
 
@@ -1207,22 +1207,22 @@ from myproject.utils import helper
 
 ### Development Tools
 
-| Tool | Purpose |
-|------|---------|
-| `ruff` | Fast linter and formatter (replaces flake8, isort, black) |
-| `mypy` | Static type checking |
-| `pytest` | Testing framework |
-| `uv` | Fast package management |
+| Tool     | Purpose                                                   |
+| -------- | --------------------------------------------------------- |
+| `ruff`   | Fast linter and formatter (replaces flake8, isort, black) |
+| `mypy`   | Static type checking                                      |
+| `pytest` | Testing framework                                         |
+| `uv`     | Fast package management                                   |
 
 ### Common Libraries
 
-| Category | Library | Notes |
-|----------|---------|-------|
-| HTTP | `httpx` | Modern async-capable HTTP client |
-| CLI | `typer` | Type-hint based CLI framework |
-| Data | `pydantic` | Data validation using type hints |
-| Async | `asyncio` | Standard async framework |
-| Web | `FastAPI` | Modern async web framework |
+| Category | Library    | Notes                            |
+| -------- | ---------- | -------------------------------- |
+| HTTP     | `httpx`    | Modern async-capable HTTP client |
+| CLI      | `typer`    | Type-hint based CLI framework    |
+| Data     | `pydantic` | Data validation using type hints |
+| Async    | `asyncio`  | Standard async framework         |
+| Web      | `FastAPI`  | Modern async web framework       |
 
 ---
 
@@ -1256,4 +1256,4 @@ When refactoring Python code, check for:
 
 ---
 
-*Last updated: 2026-01-19*
+_Last updated: 2026-01-19_

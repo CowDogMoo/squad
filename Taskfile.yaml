@@ -6,7 +6,7 @@ vars:
   # Provider configuration
   PROVIDER: '{{.PROVIDER | default "ollama"}}'
   BASE_URL: '{{.BASE_URL | default "http://localhost:11434"}}'
-  MODEL: '{{.MODEL | default "llama3.3:70b"}}'
+  MODEL: '{{.MODEL | default "devstral-small-2"}}'
   API_KEY: '{{.API_KEY | default "ollama"}}'
 
   # Agent configuration
@@ -80,8 +80,7 @@ tasks:
           --provider {{.PROVIDER}} \
           --base-url {{.BASE_URL}} \
           --model {{.MODEL}} \
-          --out /tmp/squad-go-review.txt \
-          --require-actionable=false
+          --out /tmp/squad-go-review.txt
       - echo "Review written to /tmp/squad-go-review.txt"
 
   test:
