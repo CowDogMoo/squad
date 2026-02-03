@@ -28,6 +28,11 @@ tasks:
     cmds:
       - task --list --sort none
 
+  pre-commit:run-pre-commit:
+    desc: Run pre-commit hooks on all files
+    cmds:
+      - pre-commit run --all-files
+
   build:
     desc: Build the squad binary
     cmds:
