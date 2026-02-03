@@ -57,6 +57,7 @@ def test_double_with_ids(input_val, expected):
 ### When to Use Parametrized Tests
 
 **Good for:**
+
 - Functions with multiple valid inputs and outputs
 - Validation logic with many cases
 - Mathematical operations
@@ -64,6 +65,7 @@ def test_double_with_ids(input_val, expected):
 - Boundary testing
 
 **When not needed:**
+
 - Single test case with unique setup
 - Tests requiring different assertions
 - Complex integration scenarios
@@ -126,12 +128,14 @@ def database_connection():
 ### When to Use Fixtures
 
 **Good for:**
+
 - Object creation used by multiple tests
 - Resource setup and teardown
 - Sharing state within a scope
 - Parameterized setup
 
 **When not needed:**
+
 - Simple inline setup
 - One-off test data
 - When it obscures test clarity
@@ -277,6 +281,7 @@ def test_retry_on_failure(mocker):
 ### When to Mock
 
 **Good for:**
+
 - External API calls
 - Database operations
 - File system operations
@@ -285,6 +290,7 @@ def test_retry_on_failure(mocker):
 - Environment variables
 
 **When NOT to mock:**
+
 - Simple data classes
 - Standard library functions (usually)
 - Internal implementation details

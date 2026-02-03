@@ -5,6 +5,7 @@ A comprehensive fabric pattern for reviewing Python code against industry best p
 ## Pattern Structure
 
 This pattern includes:
+
 - **`system.md`** - The review framework and prompt engineering for LLM
 - **`python-review-criteria.md`** - Comprehensive reference document with detailed criteria (source of truth)
 - **`filter.sh`** - Post-processing to clean up output formatting
@@ -17,12 +18,14 @@ The pattern is designed with **separation of concerns**: the `python-review-crit
 ## Style Guide References
 
 This pattern incorporates guidelines from:
+
 - **[PEP 8](https://peps.python.org/pep-0008/)** - Python's official style guide
 - **[Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)** - Google's enterprise Python standards
 
 ## Purpose
 
 This pattern helps you:
+
 - **Review code quality** against established best practices
 - **Identify issues** with severity classification (Critical, High, Medium, Low, Info)
 - **Provide constructive feedback** with specific examples and fixes
@@ -151,24 +154,29 @@ echo "Code review passed!"
 The pattern generates a structured markdown report with:
 
 ### Summary
+
 - 2-3 sentence overview of code quality
 - Main concerns highlighted
 
 ### Critical Issues
+
 - Must-fix items affecting correctness or safety
 - Code snippets showing problem and solution
 - Clear explanation with references to PEP 8/Google Style Guide
 
 ### Improvements
+
 - Non-critical enhancements
 - Best practice suggestions
 - Performance optimizations
 
 ### Positive Observations
+
 - Good practices already implemented
 - Recognition of well-written code
 
 ### Recommendations
+
 - General suggestions for improvement
 - Tooling recommendations
 
@@ -197,6 +205,7 @@ def get_user(user_id: str) -> User:
 ```
 
 **Solution:**
+
 ```python
 def get_user(user_id: str) -> User:
     query = "SELECT * FROM users WHERE id = %s"
@@ -215,6 +224,7 @@ Use parameterized queries per Google Python Style Guide security guidelines.
 **Impact:** Shared mutable state causes unexpected behavior
 
 **Problem:**
+
 ```python
 def append_item(item, items=[]):
     items.append(item)
@@ -222,6 +232,7 @@ def append_item(item, items=[]):
 ```
 
 **Solution:**
+
 ```python
 def append_item(item, items=None):
     if items is None:
@@ -242,6 +253,7 @@ def append_item(item, items=None):
 **Category:** Code Structure
 
 **Current:**
+
 ```python
 if user is not None:
     if user.is_active:
@@ -249,6 +261,7 @@ if user is not None:
 ```
 
 **Suggested:**
+
 ```python
 if user is None:
     return
@@ -273,6 +286,7 @@ process(user)
 - Add mypy to CI pipeline for static type checking
 - Consider using pytest parametrize for test cases
 - Add ruff for automated linting and formatting
+
 ```
 
 ## Customization
@@ -310,6 +324,7 @@ Edit the `# OUTPUT FORMAT` section in `system.md` to customize the report struct
 ### Issue: Too many findings
 
 **Solution:** Focus on critical and high severity issues first:
+
 ```bash
 cat myfile.py | fabric --pattern python-review | grep -A 20 "## Critical Issues"
 ```

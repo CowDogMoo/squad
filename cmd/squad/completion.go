@@ -22,7 +22,11 @@ THE SOFTWARE.
 
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+)
 
 var completionCmd = &cobra.Command{
 	Use:   "completion [bash|zsh|fish|powershell]",
@@ -49,7 +53,7 @@ Examples:
 		case "powershell":
 			return cmd.Root().GenPowerShellCompletionWithDesc(cmd.OutOrStdout())
 		default:
-			return nil
+			return fmt.Errorf("unsupported shell type: %s", args[0])
 		}
 	},
 }

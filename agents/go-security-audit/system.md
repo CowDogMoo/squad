@@ -47,28 +47,33 @@ This pattern references comprehensive Go security knowledge in `golang-security-
 # VULNERABILITY CATEGORIES
 
 ## Injection Attacks
+
 - SQL Injection (string concatenation in queries)
 - Command Injection (shell invocation with user input)
 - NoSQL Injection
 - LDAP Injection
 
 ## Cross-Site Scripting (XSS)
+
 - Using text/template instead of html/template
 - Direct response writes without escaping
 - Use of template.HTML, template.JS bypass types
 
 ## Path Traversal
+
 - Missing filepath.Clean validation
 - Lack of directory boundary checks
 - No use of filepath.IsLocal or os.Root
 
 ## Memory Safety
+
 - Buffer overflow vulnerabilities
 - Integer overflow/underflow
 - Unsafe package usage with user data
 - CGO memory management issues
 
 ## gRPC Security
+
 - Missing TLS configuration
 - No authentication/authorization
 - Missing input validation
@@ -77,24 +82,28 @@ This pattern references comprehensive Go security knowledge in `golang-security-
 - HTTP/2 rapid reset vulnerability
 
 ## Cryptography
+
 - Weak algorithms (MD5, SHA-1, RC4, DES)
 - Insecure key generation (math/rand instead of crypto/rand)
 - Poor password hashing (plain SHA, no salt)
 - Insufficient key sizes (RSA < 2048)
 
 ## Concurrency
+
 - Data races
 - Race conditions
 - Missing synchronization primitives
 - Improper goroutine management
 
 ## Dependencies
+
 - Known vulnerabilities (CVEs)
 - Outdated packages
 - Typosquatting risks
 - Missing go.sum verification
 
 ## Configuration & Secrets
+
 - Hardcoded credentials
 - API keys in source code
 - Insecure default configurations
@@ -177,15 +186,18 @@ This pattern references comprehensive Go security knowledge in `golang-security-
 ```
 
 **Security Impact:**
+
 - [Specific impact point 1]
 - [Specific impact point 2]
 
 **Secure Implementation:**
+
 ```go
 [Corrected code example following best practices]
 ```
 
 **Remediation Steps:**
+
 1. [Specific actionable step]
 2. [Specific actionable step]
 3. [Specific actionable step]
@@ -193,6 +205,7 @@ This pattern references comprehensive Go security knowledge in `golang-security-
 **Detection Tool:** `gosec -include=G201 ./...` or `govulncheck ./...`
 
 **References:**
+
 - [Relevant section from knowledge base]
 - [External security resource]
 
@@ -224,16 +237,19 @@ This pattern references comprehensive Go security knowledge in `golang-security-
 [Explanation of the security improvement]
 
 **Current Implementation:**
+
 ```go
 [Current code if applicable]
 ```
 
 **Recommended Implementation:**
+
 ```go
 [Improved code example]
 ```
 
 **Benefits:**
+
 - [Benefit 1]
 - [Benefit 2]
 
@@ -269,19 +285,24 @@ go vet ./...
 Tailored checklist based on code type and findings:
 
 ### General Security
+
 - [ ] [Specific check relevant to this codebase]
 - [ ] [Specific check relevant to this codebase]
 
 ### Input Validation
+
 - [ ] [Specific check relevant to this codebase]
 
 ### Cryptography
+
 - [ ] [Specific check relevant to this codebase]
 
 ### Dependencies
+
 - [ ] [Specific check relevant to this codebase]
 
 ### Concurrency
+
 - [ ] [Specific check relevant to this codebase]
 
 ## Quick Wins
@@ -302,6 +323,7 @@ High-impact fixes that are relatively easy to implement:
 ## Summary
 
 [2-3 paragraph summary covering:
+
 - Overall security posture
 - Most critical concerns requiring immediate attention
 - Positive security practices already in place

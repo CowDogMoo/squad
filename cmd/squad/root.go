@@ -26,6 +26,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"strings"
 
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
@@ -39,6 +42,7 @@ type configKeyType struct{}
 var (
 	configKey = configKeyType{}
 	cfgFile   string
+	appViper  *viper.Viper
 )
 
 var rootCmd = &cobra.Command{
@@ -65,6 +69,9 @@ func init() {
 
 // Execute runs the root command.
 func Execute() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	rootCmd.SetContext(ctx)
 	return rootCmd.Execute()
 }
 
@@ -90,6 +97,7 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	v := viper.New()
+	appViper = v
 
 	v.SetDefault("log.level", cfg.Log.Level)
 	v.SetDefault("log.format", cfg.Log.Format)
@@ -99,24 +107,40 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	v.SetDefault("provider.api_version", cfg.Provider.APIVersion)
 	v.SetDefault("provider.api_type", cfg.Provider.APIType)
 	v.SetDefault("provider.openai_compat_max_tokens", cfg.Provider.OpenAICompatMaxTokens)
+	v.SetDefault("provider.token", cfg.Provider.Token)
 	v.SetDefault("model.default", cfg.Model.Default)
 	v.SetDefault("model.temperature", cfg.Model.Temperature)
 	v.SetDefault("model.max_tokens", cfg.Model.MaxTokens)
 
 	v.SetEnvPrefix("SQUAD")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
+	// Bind persistent (root) flags.
 	if err := v.BindPFlag("log.level", cmd.Root().PersistentFlags().Lookup("log-level")); err != nil {
 		return fmt.Errorf("failed to bind log-level flag: %w", err)
 	}
 	if err := v.BindPFlag("log.format", cmd.Root().PersistentFlags().Lookup("log-format")); err != nil {
 		return fmt.Errorf("failed to bind log-format flag: %w", err)
 	}
+	if err := v.BindPFlag("quiet", cmd.Root().PersistentFlags().Lookup("quiet")); err != nil {
+		return fmt.Errorf("failed to bind quiet flag: %w", err)
+	}
+	if err := v.BindPFlag("verbose", cmd.Root().PersistentFlags().Lookup("verbose")); err != nil {
+		return fmt.Errorf("failed to bind verbose flag: %w", err)
+	}
+
+	// Bind run command flags so Viper can resolve them via env/config.
+	bindRunFlags(v)
 
 	logLevel := v.GetString("log.level")
 	logFormat := v.GetString("log.format")
-	quiet, _ := cmd.Flags().GetBool("quiet")
-	verbose, _ := cmd.Flags().GetBool("verbose")
+	quiet := v.GetBool("quiet")
+	verbose := v.GetBool("verbose")
+
+	if quiet && verbose {
+		return fmt.Errorf("--quiet and --verbose cannot be used together")
+	}
 
 	if err := logging.Initialize(logLevel, logFormat, quiet, verbose); err != nil {
 		return fmt.Errorf("failed to initialize logging: %w", err)
@@ -130,6 +154,7 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	cfg.Provider.APIVersion = v.GetString("provider.api_version")
 	cfg.Provider.APIType = v.GetString("provider.api_type")
 	cfg.Provider.OpenAICompatMaxTokens = v.GetBool("provider.openai_compat_max_tokens")
+	cfg.Provider.Token = v.GetString("provider.token")
 	cfg.Model.Default = v.GetString("model.default")
 	cfg.Model.Temperature = v.GetFloat64("model.temperature")
 	cfg.Model.MaxTokens = v.GetInt("model.max_tokens")

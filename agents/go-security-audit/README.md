@@ -157,17 +157,20 @@ rows, err := db.Query(query)
 ```
 
 **Security Impact:**
+
 - Attackers can bypass authentication
 - Unauthorized data access or modification
 - Potential database compromise
 
 **Secure Implementation:**
+
 ```go
 query := "SELECT * FROM users WHERE username=$1"
 rows, err := db.Query(query, username)
 ```
 
 **Remediation Steps:**
+
 1. Replace string formatting with parameterized queries
 2. Use database/sql package's parameterized query methods
 3. Validate and sanitize all user input
@@ -176,9 +179,11 @@ rows, err := db.Query(query, username)
 **Detection Tool:** `gosec -include=G201,G202 ./...`
 
 **References:**
+
 - [Official: Avoiding SQL injection risk](https://go.dev/doc/database/sql-injection)
 - golang-security-guide.md: SQL Injection section
 ...
+
 ```
 
 ## When to Use
@@ -215,6 +220,7 @@ cat main.go vulns.txt | fabric -p go-security-audit
 ```
 
 ### gosec (Static Security Analysis)
+
 ```bash
 # Combine gosec findings with code audit
 gosec -fmt=text ./... > gosec.txt
@@ -222,6 +228,7 @@ cat $(find . -name "*.go") gosec.txt | fabric -p go-security-audit
 ```
 
 ### go vet (Built-in Analysis)
+
 ```bash
 # Include go vet output
 go vet ./... 2>&1 | tee vet.txt
@@ -231,6 +238,7 @@ cat main.go vet.txt | fabric -p go-security-audit
 ## Best Practices
 
 1. **Run Regularly**: Integrate into your development workflow
+
    ```bash
    # Git pre-commit hook
    git diff HEAD --name-only --diff-filter=ACM | grep '\.go$' | xargs cat | fabric -p go-security-audit
@@ -247,6 +255,7 @@ cat main.go vet.txt | fabric -p go-security-audit
 6. **Customize Checks**: Modify system.md to add organization-specific security requirements
 
 7. **Track Remediation**: Save reports to track progress over time
+
    ```bash
    cat main.go | fabric -p go-security-audit > audits/$(date +%Y-%m-%d)-audit.md
    ```
@@ -309,6 +318,7 @@ jobs:
 ## Troubleshooting
 
 ### Pattern Not Found
+
 ```bash
 # Verify pattern installation
 ls ~/.config/fabric/patterns/go-security-audit
@@ -318,6 +328,7 @@ fabric --update
 ```
 
 ### Large Codebase Timeout
+
 ```bash
 # Audit packages individually
 for pkg in $(go list ./...); do
@@ -327,7 +338,9 @@ done
 ```
 
 ### False Positives
+
 The pattern is designed to be thorough. Review each finding in context - some may not apply to your specific use case. Consider:
+
 - Input validation already performed elsewhere
 - Code running in trusted contexts only
 - False positives from security tools included in input
@@ -378,6 +391,7 @@ This pattern is part of the Fabric Patterns Hub and follows the same license ter
 ## Support
 
 For issues, questions, or contributions:
+
 - Open an issue in the fabric-patterns-hub repository
 - Refer to the comprehensive `golang-security-guide.md` for detailed security information
 - Check official Go security resources for the latest updates

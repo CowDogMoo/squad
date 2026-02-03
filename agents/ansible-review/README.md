@@ -126,6 +126,7 @@ Run the test script to validate the pattern:
 ```
 
 This will:
+
 1. Test against a playbook with common anti-patterns
 2. Test against a well-structured playbook
 3. Validate the filter script functionality

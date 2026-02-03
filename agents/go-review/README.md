@@ -5,6 +5,7 @@ A comprehensive fabric pattern for reviewing Go code against industry best pract
 ## Pattern Structure
 
 This pattern includes:
+
 - **`system.md`** - The review framework and prompt engineering for LLM
 - **`go-review-criteria.md`** - Comprehensive reference document with detailed criteria (source of truth)
 - **`filter.sh`** - Post-processing to clean up output formatting
@@ -17,6 +18,7 @@ The pattern is designed with **separation of concerns**: the `go-review-criteria
 ## Purpose
 
 This pattern helps you:
+
 - **Review code quality** against established best practices
 - **Identify issues** with severity classification (Critical, High, Medium, Low, Info)
 - **Provide constructive feedback** with specific examples and fixes
@@ -145,24 +147,29 @@ echo "Code review passed!"
 The pattern generates a structured markdown report with:
 
 ### Summary
+
 - 2-3 sentence overview of code quality
 - Main concerns highlighted
 
 ### Critical Issues
+
 - Must-fix items affecting correctness or safety
 - Code snippets showing problem and solution
 - Clear explanation with references to criteria
 
 ### Improvements
+
 - Non-critical enhancements
 - Best practice suggestions
 - Performance optimizations
 
 ### Positive Observations
+
 - Good practices already implemented
 - Recognition of well-written code
 
 ### Recommendations
+
 - General suggestions for improvement
 - Tooling recommendations
 
@@ -196,6 +203,7 @@ func StartWorker() {
 ```
 
 **Solution:**
+
 ```go
 func StartWorker(ctx context.Context) {
     go func() {
@@ -226,6 +234,7 @@ Use context.Context for lifecycle management per go-review-criteria.md.
 **Category:** Code Structure
 
 **Current:**
+
 ```go
 if err == nil {
     if result != nil {
@@ -235,6 +244,7 @@ if err == nil {
 ```
 
 **Suggested:**
+
 ```go
 if err != nil {
     return err
@@ -260,6 +270,7 @@ if result == nil {
 
 - Add golangci-lint to CI pipeline for automated checks
 - Consider adding table-driven tests for complex functions
+
 ```
 
 ## Customization
@@ -297,6 +308,7 @@ Edit the `# OUTPUT FORMAT` section in `system.md` to customize the report struct
 ### Issue: Too many findings
 
 **Solution:** Focus on critical and high severity issues first:
+
 ```bash
 cat myfile.go | fabric --pattern go-review | grep -A 20 "## Critical Issues"
 ```

@@ -31,6 +31,7 @@ A comprehensive guide to writing effective Go tests following community best pra
 ### Simplicity Guidelines
 
 **DO:**
+
 - Write tests that are easy to understand at a glance
 - Use inline test data rather than complex fixtures
 - Keep test setup minimal
@@ -38,6 +39,7 @@ A comprehensive guide to writing effective Go tests following community best pra
 - Test one thing per test case
 
 **DON'T:**
+
 - Create test helpers unless used in many places
 - Build complex test hierarchies
 - Over-parameterize tests
@@ -96,12 +98,14 @@ func TestParseURL(t *testing.T) {
 ### When to Use Table-Driven Tests
 
 **Good for:**
+
 - Functions with multiple input/output combinations
 - Validation functions
 - Parsing functions
 - Mathematical operations
 
 **Not needed for:**
+
 - Single test case scenarios
 - Complex setup/teardown requirements
 - Tests with significantly different logic per case
@@ -164,6 +168,7 @@ func TestParallel(t *testing.T) {
 ### When to Create Helpers
 
 Only create helpers when:
+
 - Used in multiple test files
 - Significantly reduces test code complexity
 - Makes tests more readable
@@ -251,11 +256,13 @@ func TestUserService(t *testing.T) {
 ### When to Mock
 
 **Do mock:**
+
 - External services (databases, APIs)
 - Time-dependent behavior
 - Random/non-deterministic behavior
 
 **Don't mock:**
+
 - Simple value objects
 - Standard library functions
 - Internal implementation details
@@ -527,7 +534,6 @@ if err == nil {
 
 - [Go Testing Package](https://pkg.go.dev/testing)
 - [Table-Driven Tests](https://go.dev/wiki/TableDrivenTests)
-- [Testing Techniques](https://go.dev/doc/articles/testing-techniques)
 - [testify Package](https://github.com/stretchr/testify)
 
 ---

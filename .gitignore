@@ -1,0 +1,47 @@
+# Code coverage output files
+coverage-all.out
+coverage.out
+
+# Distribution directory for binaries
+dist/
+
+# Generated binaries (local development)
+/squad
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Generated directories
+builds/
+
+# Generated logs
+*.log
+
+# Custom attributes files created by macOS
+.DS_Store
+.secrets
+
+# Taskfile
+.task
+
+# Pre-commit artifacts
+node_modules
+
+# Packer artifacts
+manifest.json
+
+# Template discovery artifacts
+discovered-templates.json
+template-matrix.json
+
+# Development artifacts
+TODO
+
+# Test output files (but keep *_test.go files!)
+*.test
+test-results/
+testdata/tmp/
+
+.claude
+FIXME.md

@@ -24,7 +24,7 @@ for the ansible-review pattern.
 
 ## The Zen of Ansible
 
-> *By Tim Appnel*
+> _By Tim Appnel_
 
 Before diving into specifics, understand the guiding philosophy:
 
@@ -82,22 +82,22 @@ The `galaxy.yml` file is required at the collection root:
 ```yaml
 ---
 # Required fields
-namespace: my_namespace              # lowercase, alphanumeric, underscores
-name: my_collection                  # lowercase, alphanumeric, underscores
-version: "1.0.0"                     # semantic versioning
-readme: README.md                    # path to markdown readme
+namespace: my_namespace # lowercase, alphanumeric, underscores
+name: my_collection # lowercase, alphanumeric, underscores
+version: "1.0.0" # semantic versioning
+readme: README.md # path to markdown readme
 authors:
   - "Your Name <email@example.com>"
 
 # Recommended fields
 description: "Brief description of the collection"
 license:
-  - MIT                              # SPDX license identifier
-license_file: LICENSE                # Alternative to license list
+  - MIT # SPDX license identifier
+license_file: LICENSE # Alternative to license list
 
 # Discovery and linking
 tags:
-  - networking                       # lowercase, max 20 tags, 64 chars each
+  - networking # lowercase, max 20 tags, 64 chars each
   - automation
   - infrastructure
 repository: "https://github.com/org/collection"
@@ -205,7 +205,7 @@ roles/my_role/
    ```yaml
    # meta/main.yml - minimize dependencies
    ---
-   dependencies: []  # Prefer explicit role inclusion in playbooks
+   dependencies: [] # Prefer explicit role inclusion in playbooks
    ```
 
 3. **Fail fast with argument specs** - Validate inputs at role start
@@ -233,18 +233,18 @@ roles/my_role/
    - name: Get service status
      ansible.builtin.command: systemctl status nginx
      register: nginx_status
-     changed_when: false  # Read-only command
-     check_mode: false    # Run even in check mode
+     changed_when: false # Read-only command
+     check_mode: false # Run even in check mode
    ```
 
 ### Variable Management
 
 **Defaults vs Vars:**
 
-| Location | Precedence | Use Case |
-|----------|------------|----------|
-| `defaults/main.yml` | Lowest | User-configurable values |
-| `vars/main.yml` | Higher | Internal constants, magic values |
+| Location            | Precedence | Use Case                         |
+| ------------------- | ---------- | -------------------------------- |
+| `defaults/main.yml` | Lowest     | User-configurable values         |
+| `vars/main.yml`     | Higher     | Internal constants, magic values |
 
 **Naming conventions:**
 
@@ -355,7 +355,7 @@ roles:
     tags:
       - nginx
       - web
-      - never  # Skip unless explicitly called
+      - never # Skip unless explicitly called
 ```
 
 **Tag best practices:**
@@ -392,7 +392,7 @@ Roles must produce the same result on repeated runs:
 - name: Check application version
   ansible.builtin.command: /opt/app/version.sh
   register: app_version
-  changed_when: false  # Read-only, never changed
+  changed_when: false # Read-only, never changed
 
 - name: Update configuration
   ansible.builtin.template:
@@ -406,16 +406,16 @@ Roles must produce the same result on repeated runs:
 
 ## Naming Conventions
 
-| Element | Convention | Example |
-|---------|------------|---------|
-| Collections | `namespace.collection_name` | `acme.networking` |
-| Roles | lowercase, underscores | `nginx_reverse_proxy` |
-| Variables | lowercase, underscores, role prefix | `nginx_worker_count` |
-| Internal vars | double underscore prefix | `__nginx_internal_flag` |
-| Tasks | Start with verb, descriptive | `Ensure nginx is running` |
-| Handlers | Describe action | `Restart nginx` |
-| Tags | lowercase, hyphenated | `web-server`, `database` |
-| Files | lowercase, descriptive | `nginx.conf.j2` |
+| Element       | Convention                          | Example                   |
+| ------------- | ----------------------------------- | ------------------------- |
+| Collections   | `namespace.collection_name`         | `acme.networking`         |
+| Roles         | lowercase, underscores              | `nginx_reverse_proxy`     |
+| Variables     | lowercase, underscores, role prefix | `nginx_worker_count`      |
+| Internal vars | double underscore prefix            | `__nginx_internal_flag`   |
+| Tasks         | Start with verb, descriptive        | `Ensure nginx is running` |
+| Handlers      | Describe action                     | `Restart nginx`           |
+| Tags          | lowercase, hyphenated               | `web-server`, `database`  |
+| Files         | lowercase, descriptive              | `nginx.conf.j2`           |
 
 ---
 
@@ -470,16 +470,16 @@ Always use Fully Qualified Collection Names:
 - name: Set file permissions
   ansible.builtin.file:
     path: /etc/app/config.yml
-    mode: "0644"  # Quoted to prevent octal interpretation
+    mode: "0644" # Quoted to prevent octal interpretation
 
 - name: Enable service
   ansible.builtin.service:
     name: nginx
-    enabled: true  # Use true/false, not yes/no
+    enabled: true # Use true/false, not yes/no
 
 - name: Template configuration
   ansible.builtin.template:
-    src: "{{ config_template }}"  # Quoted Jinja2
+    src: "{{ config_template }}" # Quoted Jinja2
     dest: /etc/app/config.yml
 ```
 
@@ -701,7 +701,7 @@ platforms:
 ```yaml
 # .ansible-lint
 ---
-profile: production  # min, basic, moderate, safety, shared, production
+profile: production # min, basic, moderate, safety, shared, production
 
 # Enable optional rules
 enable_list:
@@ -712,7 +712,7 @@ enable_list:
 
 # Skip specific rules (use sparingly)
 skip_list:
-  - role-name[path]  # When role path doesn't match name
+  - role-name[path] # When role path doesn't match name
 
 # Exclude paths
 exclude_paths:
@@ -730,14 +730,14 @@ offline: false
 
 ### Common Rules
 
-| Rule | Description |
-|------|-------------|
-| `yaml[line-length]` | Lines should be <=160 chars |
-| `name[casing]` | Task names should be capitalized |
-| `fqcn[action-core]` | Use FQCN for builtin modules |
-| `no-changed-when` | Commands should have `changed_when` |
-| `risky-shell-pipe` | Shell pipes can hide failures |
-| `package-latest` | Avoid `state: latest` |
+| Rule                | Description                         |
+| ------------------- | ----------------------------------- |
+| `yaml[line-length]` | Lines should be <=160 chars         |
+| `name[casing]`      | Task names should be capitalized    |
+| `fqcn[action-core]` | Use FQCN for builtin modules        |
+| `no-changed-when`   | Commands should have `changed_when` |
+| `risky-shell-pipe`  | Shell pipes can hide failures       |
+| `package-latest`    | Avoid `state: latest`               |
 
 ### YAML Style
 
@@ -826,40 +826,40 @@ ansible-playbook site.yml --ask-vault-pass
 
 ### Collection Anti-Patterns
 
-| Anti-Pattern | Problem | Solution |
-|--------------|---------|----------|
+| Anti-Pattern       | Problem                 | Solution                        |
+| ------------------ | ----------------------- | ------------------------------- |
 | Short module names | Ambiguous, may conflict | Use FQCN: `ansible.builtin.apt` |
-| Missing galaxy.yml | Cannot distribute | Add required metadata |
-| Plugins in roles | Hard to share, test | Centralize in `plugins/` |
-| No runtime.yml | Version mismatches | Specify `requires_ansible` |
+| Missing galaxy.yml | Cannot distribute       | Add required metadata           |
+| Plugins in roles   | Hard to share, test     | Centralize in `plugins/`        |
+| No runtime.yml     | Version mismatches      | Specify `requires_ansible`      |
 
 ### Role Anti-Patterns
 
-| Anti-Pattern | Problem | Solution |
-|--------------|---------|----------|
-| Monolithic roles | Hard to test, reuse | Single responsibility |
-| Hardcoded values | Not reusable | Use defaults/vars |
-| No argument specs | Silent failures | Add validation |
+| Anti-Pattern           | Problem             | Solution              |
+| ---------------------- | ------------------- | --------------------- |
+| Monolithic roles       | Hard to test, reuse | Single responsibility |
+| Hardcoded values       | Not reusable        | Use defaults/vars     |
+| No argument specs      | Silent failures     | Add validation        |
 | Excessive dependencies | Coupling, conflicts | Minimize dependencies |
 
 ### Task Anti-Patterns
 
-| Anti-Pattern | Problem | Solution |
-|--------------|---------|----------|
-| `command`/`shell` without guards | Not idempotent | Use `creates`/`removes` |
-| Missing `changed_when` | False positives | Set explicit conditions |
-| `state: latest` | Non-deterministic | Pin versions |
-| Unnamed tasks | Hard to debug | Descriptive names |
-| Complex Jinja2 in playbooks | Hard to read | Use filters or variables |
+| Anti-Pattern                     | Problem           | Solution                 |
+| -------------------------------- | ----------------- | ------------------------ |
+| `command`/`shell` without guards | Not idempotent    | Use `creates`/`removes`  |
+| Missing `changed_when`           | False positives   | Set explicit conditions  |
+| `state: latest`                  | Non-deterministic | Pin versions             |
+| Unnamed tasks                    | Hard to debug     | Descriptive names        |
+| Complex Jinja2 in playbooks      | Hard to read      | Use filters or variables |
 
 ### Testing Anti-Patterns
 
-| Anti-Pattern | Problem | Solution |
-|--------------|---------|----------|
-| No Molecule tests | Untested code | Add default scenario |
-| Missing verify.yml | No validation | Add verification tasks |
-| Single platform tests | Hidden bugs | Test multiple platforms |
-| No idempotence check | Not idempotent | Include in test sequence |
+| Anti-Pattern          | Problem        | Solution                 |
+| --------------------- | -------------- | ------------------------ |
+| No Molecule tests     | Untested code  | Add default scenario     |
+| Missing verify.yml    | No validation  | Add verification tasks   |
+| Single platform tests | Hidden bugs    | Test multiple platforms  |
+| No idempotence check  | Not idempotent | Include in test sequence |
 
 ---
 
@@ -935,4 +935,4 @@ ansible-playbook site.yml --ask-vault-pass
 
 ---
 
-*Last updated: 2025-01-15*
+_Last updated: 2026-01-15_

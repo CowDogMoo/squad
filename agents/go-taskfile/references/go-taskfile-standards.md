@@ -27,6 +27,7 @@ Go-Task (Task) is a modern, cross-platform task runner and build tool written in
 ### Standard File Names
 
 Use one of these standard names for your Task files:
+
 - `Taskfile.yaml` (recommended)
 - `Taskfile.yml`
 
@@ -118,6 +119,7 @@ tasks:
 ```
 
 Benefits:
+
 - Prevents task name conflicts
 - Groups related functionality
 - Enables reusable task modules
@@ -162,6 +164,7 @@ This enables reusable Taskfiles that can be included multiple times with differe
 ### Variable Types
 
 **Static Variables:**
+
 ```yaml
 vars:
   APP_NAME: myapp
@@ -169,6 +172,7 @@ vars:
 ```
 
 **Dynamic Variables (Shell Commands):**
+
 ```yaml
 vars:
   GIT_COMMIT:
@@ -178,6 +182,7 @@ vars:
 ```
 
 **Task-Specific Variables:**
+
 ```yaml
 tasks:
   build:
@@ -190,6 +195,7 @@ tasks:
 ### Variable Precedence
 
 Variables follow this priority order (highest to lowest):
+
 1. Command-line variables (`task VAR=value taskname`)
 2. Task-specific variables
 3. Global variables
@@ -200,6 +206,7 @@ Variables follow this priority order (highest to lowest):
 ### Environment Variables
 
 **Global Environment:**
+
 ```yaml
 env:
   GO111MODULE: on
@@ -207,6 +214,7 @@ env:
 ```
 
 **Task-Specific Environment:**
+
 ```yaml
 tasks:
   test:
@@ -217,6 +225,7 @@ tasks:
 ```
 
 **DotEnv Files:**
+
 ```yaml
 dotenv: ['.env', '{{.HOME}}/.env']
 
@@ -326,6 +335,7 @@ tasks:
 ### Avoid Shell-Specific Constructs
 
 ❌ **Bad:**
+
 ```yaml
 tasks:
   clean:
@@ -334,6 +344,7 @@ tasks:
 ```
 
 ✅ **Good:**
+
 ```yaml
 tasks:
   clean:
@@ -374,6 +385,7 @@ Valid values: Any valid GOOS/GOARCH combination (e.g., `linux`, `darwin`, `windo
 ### Use Cross-Platform Tools
 
 Prefer Go-based or cross-platform tools:
+
 - Use `go run` instead of shell scripts
 - Use task built-ins for common operations
 - Consider tools like `sh` task runner for portable shell commands
@@ -389,6 +401,7 @@ tasks:
 ```
 
 Or set globally:
+
 ```yaml
 set: [errexit, nounset, pipefail]
 
@@ -432,6 +445,7 @@ tasks:
 ```
 
 Checksum method:
+
 - Takes checksums of dependencies
 - Saves them to `.task/` directory
 - Compares current vs saved checksums
@@ -453,6 +467,7 @@ tasks:
 ```
 
 Timestamp method:
+
 - Compares file modification times
 - Simpler but less reliable
 - Issues with file copies, git operations
@@ -505,6 +520,7 @@ tasks:
 ```
 
 Or per-command:
+
 ```yaml
 tasks:
   build:
@@ -582,6 +598,7 @@ tasks:
 ```
 
 Options:
+
 - `interleaved` - Output as it comes (default for single task)
 - `group` - Buffer output, print when complete
 - `prefixed` - Prefix each line with task name (default for multiple tasks)
@@ -627,6 +644,7 @@ In CI, always pin the Task version:
 ```
 
 Benefits:
+
 - Consistent local and CI environments
 - Single source of truth for build commands
 - Easier to test CI changes locally
@@ -928,24 +946,25 @@ tasks:
 ## References
 
 ### Official Documentation
+
 - [Task Official Documentation](https://taskfile.dev/docs/guide)
 - [Taskfile Schema Reference](https://taskfile.dev/docs/reference/schema)
 - [Task Style Guide](https://taskfile.dev/docs/styleguide)
 - [Task Usage Guide](https://taskfile.dev/usage/)
 
 ### Articles and Tutorials
-- [Why you should be using Go-Task](https://medium.com/@lorique/why-you-should-be-using-go-task-3cd30897f8d8)
+
 - [Taskfiles for Go Developers](https://tutorialedge.net/golang/taskfiles-for-go-developers/)
-- [Taskfile replaces make and Makefiles](https://tomharrisonjr.medium.com/taskfile-replaces-make-and-makefiles-abf564708f81)
-- [Demystification of taskfile variables](https://medium.com/@TianchenW/demystification-of-taskfile-variables-29b751950393)
 - [Streamlining Your Go Projects with Taskfile](https://www.codingexplorations.com/blog/taskfile-automation-for-go-development)
 
 ### Community Resources
+
 - [Monorepo Discussion](https://github.com/go-task/task/discussions/1517)
-- [Go-Task GitHub Repository](https://refft.com/en/go-task_task.html)
+- [Go-Task GitHub Repository](https://github.com/go-task/task)
 - [Applied Go: Just Make a Task](https://appliedgo.net/spotlight/just-make-a-task/)
 
 ### Go Packages
+
 - [github.com/go-task/task/v3](https://pkg.go.dev/github.com/go-task/task/v3)
 - [github.com/go-task/task/v3/taskfile](https://pkg.go.dev/github.com/go-task/task/v3/taskfile)
 

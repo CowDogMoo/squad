@@ -5,6 +5,7 @@ A comprehensive fabric pattern for generating Go tests following community best 
 ## Pattern Structure
 
 This pattern includes:
+
 - **`system.md`** - The test generation framework and prompt engineering for LLM
 - **`go-testing-patterns.md`** - Comprehensive reference document with testing patterns (source of truth)
 - **`filter.sh`** - Post-processing to clean up output formatting
@@ -17,6 +18,7 @@ The pattern is designed with **separation of concerns**: the `go-testing-pattern
 ## Purpose
 
 This pattern helps you:
+
 - **Generate tests** for existing Go code
 - **Follow best practices** for Go testing
 - **Create table-driven tests** for multiple scenarios
@@ -105,6 +107,7 @@ done
 ### Test File
 
 Complete, runnable Go test file with:
+
 - Proper package declaration (`package_test`)
 - Necessary imports
 - Table-driven tests where appropriate
@@ -209,12 +212,14 @@ func TestDivide(t *testing.T) {
 ### When to Use This Pattern
 
 **Good use cases:**
+
 - Generating initial test coverage
 - Adding tests to legacy code
 - Learning Go testing patterns
 - Ensuring consistent test structure
 
 **Not ideal for:**
+
 - Complex integration tests (need more context)
 - Tests requiring specific mocking strategies
 - Performance-critical benchmark design

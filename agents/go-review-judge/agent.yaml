@@ -1,0 +1,8 @@
+---
+name: go-review-judge
+version: 0.1.0
+description: Judge agent that analyzes multiple worker review outputs, identifies consensus, and applies validated fixes.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/go-review-criteria.md

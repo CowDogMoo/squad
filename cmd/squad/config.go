@@ -36,8 +36,9 @@ import (
 )
 
 var configCmd = &cobra.Command{
-	Use:   "config",
-	Short: "Manage squad configuration",
+	Use:     "config",
+	Aliases: []string{"cfg"},
+	Short:   "Manage squad configuration",
 	Long: `Manage squad's global configuration file.
 
 Configuration locations (searched in order):
@@ -63,6 +64,7 @@ This will create an XDG-compliant config file at:
 If a legacy config exists at ~/.squad/config.yaml, you'll be notified.
 If the file already exists, it will be overwritten only with --force.`,
 	RunE: runConfigInit,
+	Args: cobra.NoArgs,
 }
 
 var configShowCmd = &cobra.Command{
@@ -76,12 +78,14 @@ This shows the effective configuration after merging:
 - Environment variables
 - CLI flag overrides`,
 	RunE: runConfigShow,
+	Args: cobra.NoArgs,
 }
 
 var configPathCmd = &cobra.Command{
 	Use:   "path",
 	Short: "Show configuration file path",
 	RunE:  runConfigPath,
+	Args:  cobra.NoArgs,
 }
 
 var configSetCmd = &cobra.Command{
@@ -112,8 +116,6 @@ Examples:
 	RunE: runConfigGet,
 }
 
-var configForce bool
-
 func init() {
 	configCmd.AddCommand(configInitCmd)
 	configCmd.AddCommand(configShowCmd)
@@ -121,7 +123,7 @@ func init() {
 	configCmd.AddCommand(configSetCmd)
 	configCmd.AddCommand(configGetCmd)
 
-	configInitCmd.Flags().BoolVarP(&configForce, "force", "f", false, "Overwrite existing config file")
+	configInitCmd.Flags().BoolP("force", "f", false, "Overwrite existing config file")
 }
 
 func runConfigInit(cmd *cobra.Command, args []string) error {
@@ -132,7 +134,8 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 
 	ctx := cmd.Context()
 	if _, err := os.Stat(configPath); err == nil {
-		if !configForce {
+		force, _ := cmd.Flags().GetBool("force")
+		if !force {
 			return fmt.Errorf("config file already exists at %s (use --force to overwrite)", configPath)
 		}
 		logging.WarnContext(ctx, "Overwriting existing config file at %s", configPath)
@@ -158,6 +161,9 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
 	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
@@ -191,8 +197,8 @@ func runConfigPath(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get config path: %w", err)
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), path)
-	return nil
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), path)
+	return err
 }
 
 func runConfigSet(cmd *cobra.Command, args []string) error {
@@ -217,14 +223,26 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config into viper: %w", err)
 	}
 
-	v.Set(args[0], args[1])
+	var value any
+	if err := yaml.Unmarshal([]byte(args[1]), &value); err != nil {
+		return fmt.Errorf("failed to parse value: %w", err)
+	}
+	v.Set(args[0], value)
 
-	updated := v.AllSettings()
-	out, err := yaml.Marshal(updated)
+	// Unmarshal back into typed config to preserve structure and tags
+	var newCfg config.Config
+	if err := v.Unmarshal(&newCfg); err != nil {
+		return fmt.Errorf("failed to unmarshal updated config: %w", err)
+	}
+
+	out, err := yaml.Marshal(&newCfg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal updated config: %w", err)
 	}
 
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
 	if err := os.WriteFile(configPath, out, 0o644); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
@@ -255,6 +273,6 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("key not found: %s", args[0])
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), value)
-	return nil
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), value)
+	return err
 }
