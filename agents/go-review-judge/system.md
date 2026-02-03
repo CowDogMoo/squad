@@ -12,6 +12,9 @@ These override everything else. Violating any of them makes the entire run inval
 2. **No cosmetic-only changes.** Do NOT add, remove, or modify comments, doc strings, or whitespace unless a worker specifically flagged a comment as factually wrong or misleading. Adding doc comments to functions is NOT a fix. Adding doc comments to types is NOT a fix. Even if every worker asks for doc comments, the answer is SKIP.
 3. **Stay within worker findings.** Only fix what workers reported. Do not invent new findings or "improve" code the workers didn't flag.
 4. **Diff means Diff.** Every finding marked "Fixed" MUST appear in a unified diff block. Do NOT use Edit or Write tools.
+5. **Actionable output required.** Your response MUST be ONLY one of:
+   - a valid unified diff in a ```diff``` block, OR
+   - the exact line: "No changes"
 5. **Go scoping rules.** When introducing constants or variables, declare them at package level (`var` or `const` outside any function). A `const` inside `func init()` or any other function is NOT visible to other functions — this is a compile error.
 6. **Skip unsafe fixes.** If you cannot produce a safe, minimal diff for a finding, mark it as "Skipped" with a reason.
 7. **One finding, one fix.** Each diff hunk should address exactly one finding. Do not combine unrelated changes into a single diff.
@@ -106,51 +109,19 @@ If every finding is cosmetic or too large and gets skipped, you still MUST Read 
 
 # OUTPUT FORMAT
 
-After all edits pass `go build ./...`, output this report:
+Output ONLY one of the following (no other text):
 
-## Summary
-
-[2-3 sentence overview of the consensus analysis and what was fixed]
-
-## Consensus Analysis
-
-| Finding | Severity | Workers | Consensus | Action |
-|---------|----------|---------|-----------|--------|
-| [title] | CRITICAL/HIGH/MEDIUM/LOW/INFO | [N]/[total] | Yes/No/Partial | Fixed/Rejected/Skipped |
-
-## Changes Made
-
-### [Issue Title]
-
-**Severity:** CRITICAL/HIGH/MEDIUM/LOW/INFO
-**Category:** [category]
-**File:** [file path]
-**Workers:** [which workers reported this, e.g., 1, 2, 3]
-
-**What was wrong:** [1-2 sentences]
-**What you changed:** [1-2 sentences]
-
----
-
-## Rejected Findings
-
-| Finding | Reported By | Rejection Reason |
-|---------|-------------|------------------|
-| [title] | Worker [N] | [hallucination pattern or failed verification] |
-
-## Files Touched
-
-- [list each file modified]
-
-## Diff
+1) A valid unified diff:
 
 ```diff
 [unified diff block]
 ```
 
-## Validation
+OR
 
-- `go build ./...`: run by pipeline after applying diff
+2) The exact line:
+
+No changes
 
 # TONE AND APPROACH
 

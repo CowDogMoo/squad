@@ -338,7 +338,11 @@ tasks:
 
         ${WORKER_CONTENT}
 
-        Now use Glob to discover all Go files, Read each one the workers referenced, tally findings across workers, validate each finding against the actual code, apply consensus fixes per your severity gating rules, verify with 'go build ./...', and produce your judge report.
+        Now use Glob to discover all Go files, Read each one the workers referenced, tally findings across workers, validate each finding against the actual code, apply consensus fixes per your severity gating rules, and produce your judge report.
+
+        Your response MUST be ONLY one of:
+        - a valid unified diff in a ```diff``` block, OR
+        - the exact line: "No changes"
 
         IMPORTANT: Doc comments, import ordering, and pure whitespace changes are NOT eligible — skip those. Everything else the workers flagged is fair game if you can verify it and the fix compiles. Apply idiomatic refactors — that is the whole point of this review.
 
@@ -351,7 +355,8 @@ tasks:
           --model {{.MODEL}} \
           --num-ctx 32768 \
           --temperature 0.2 \
-          --require-actionable=false \
+          --require-actionable=true \
+          --apply \
           --out /tmp/squad-judge.txt
         echo "Judge output written to /tmp/squad-judge.txt"
 

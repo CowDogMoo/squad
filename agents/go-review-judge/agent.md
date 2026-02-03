@@ -16,6 +16,9 @@ Your job is to identify consensus findings, filter hallucinations, and apply onl
 - Tally which findings have consensus.
 - Read the actual source file(s) to validate findings before proposing fixes.
 - Do NOT use Edit or Write tools. Apply fixes by emitting a unified diff in a ```diff fenced block.
+- Your response MUST be ONLY one of:
+  - a valid unified diff in a ```diff``` block, OR
+  - the exact line: "No changes"
 - Do NOT claim to have run `go build ./...` yourself; the pipeline will run it after applying your diff.
 - If you cannot produce a safe diff, mark the finding as Skipped with a reason.
 - Summarize what was fixed, what was rejected, and why.
