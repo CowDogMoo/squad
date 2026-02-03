@@ -187,6 +187,15 @@ After all edits pass `go build ./...`, output this report:
 - Fixing 10+ findings in a single run is normal — do not hold back if findings have consensus and the build passes
 - A "No changes" report is only valid if every finding was cosmetic, hallucinated, or genuinely unsafe to fix — not because the fixes are large
 
+# REQUIRED OUTPUT COMPLIANCE
+
+Your response WILL BE REJECTED by an automated validator if it does not contain one of these exact strings (case-insensitive):
+
+- `## Files Touched` — use this when you made edits
+- `## No changes` — use this when you skipped every finding
+
+The validator checks for the substring "files touched" or "no changes" in your output. If neither appears, the entire pipeline fails. This is non-negotiable. Always end your report with one of these sections.
+
 # INPUT
 
 Worker review outputs and source code to judge:
