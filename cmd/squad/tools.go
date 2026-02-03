@@ -32,6 +32,7 @@ func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 
 	messages := buildInitialMessages(systemPrompt, userPrompt)
 
+	var lastContent string
 	for i := 0; i < maxToolIterations; i++ {
 		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxToolIterations)
 		iterStart := time.Now()
@@ -48,6 +49,9 @@ func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 		if gi := choice.GenerationInfo; gi != nil {
 			logging.DebugContext(ctx, "generation info: %v", gi)
 		}
+		if choice.Content != "" {
+			lastContent = choice.Content
+		}
 		if len(choice.ToolCalls) == 0 {
 			logging.InfoContext(ctx, "model returned final response in %s (no tool calls)", iterDuration.Round(time.Millisecond))
 			return choice.Content, nil
@@ -58,7 +62,26 @@ func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 		messages = executeToolCalls(ctx, messages, choice.ToolCalls, handlers)
 	}
 
-	return "", fmt.Errorf("tool loop exceeded %d iterations", maxToolIterations)
+	// Hit the iteration limit. Try one final call without tools to force
+	// the model to produce a text response with whatever it has so far.
+	logging.InfoContext(ctx, "tool loop hit %d iterations, requesting final response without tools", maxToolIterations)
+	noToolOpts := make([]llms.CallOption, 0, len(callOpts)+1)
+	noToolOpts = append(noToolOpts, callOpts...)
+	noToolOpts = append(noToolOpts, llms.WithTools([]llms.Tool{}))
+
+	response, err := llm.GenerateContent(ctx, messages, noToolOpts...)
+	if err == nil && response != nil && len(response.Choices) > 0 && response.Choices[0].Content != "" {
+		logging.InfoContext(ctx, "final no-tools call produced response (%d bytes)", len(response.Choices[0].Content))
+		return response.Choices[0].Content, nil
+	}
+
+	// Fall back to any text content accumulated during the loop.
+	if lastContent != "" {
+		logging.InfoContext(ctx, "returning last partial content (%d bytes)", len(lastContent))
+		return lastContent, nil
+	}
+
+	return "", fmt.Errorf("tool loop exceeded %d iterations with no usable response", maxToolIterations)
 }
 
 func buildInitialMessages(systemPrompt, userPrompt string) []llms.MessageContent {
