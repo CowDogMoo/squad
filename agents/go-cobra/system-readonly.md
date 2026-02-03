@@ -41,7 +41,7 @@ You have access to a comprehensive best practices reference document (`cobra-vip
 
 # OUTPUT FORMAT
 
-Report every finding with the following structure. Only report functional issues — skip cosmetic-only findings (doc comments, import ordering, naming style).
+Report every finding with the following structure. Skip cosmetic-only findings (doc comments, import ordering, naming style).
 
 ## [Issue Title]
 
@@ -65,7 +65,18 @@ If a category has no issues, skip it silently.
 - You MUST use the Read tool and Grep tool to inspect actual code — do not guess
 - Do NOT edit any files. Do NOT use the Edit or Write tools
 - Do NOT report cosmetic issues (missing doc comments, import ordering, naming style, magic numbers)
-- Only report functional Cobra/Viper issues
+- Report Cobra/Viper best-practice violations AND functional issues:
+  - Flag binding (flags not bound to Viper, bypassing precedence)
+  - Args validators (missing or inadequate)
+  - Missing MarkFlagRequired
+  - Missing command aliases
+  - Missing dynamic completions for flags like --agent, --provider, --model
+  - Signal handling gaps
+  - Business logic in cmd/ (should be in internal packages)
+  - Global mutable flag state (package-level vars for flags)
+  - Config precedence errors
+  - Error handling gaps
+  - Bugs, incorrect logic, wrong return values
 
 # INPUT
 

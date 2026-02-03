@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
@@ -69,7 +70,7 @@ func init() {
 
 // Execute runs the root command.
 func Execute() error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	rootCmd.SetContext(ctx)
 	return rootCmd.Execute()
@@ -108,6 +109,7 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	v.SetDefault("provider.api_type", cfg.Provider.APIType)
 	v.SetDefault("provider.openai_compat_max_tokens", cfg.Provider.OpenAICompatMaxTokens)
 	v.SetDefault("provider.token", cfg.Provider.Token)
+	v.SetDefault("provider.num_ctx", cfg.Provider.NumCtx)
 	v.SetDefault("model.default", cfg.Model.Default)
 	v.SetDefault("model.temperature", cfg.Model.Temperature)
 	v.SetDefault("model.max_tokens", cfg.Model.MaxTokens)
@@ -117,6 +119,9 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	v.AutomaticEnv()
 
 	// Bind persistent (root) flags.
+	if err := v.BindPFlag("config", cmd.Root().PersistentFlags().Lookup("config")); err != nil {
+		return fmt.Errorf("failed to bind config flag: %w", err)
+	}
 	if err := v.BindPFlag("log.level", cmd.Root().PersistentFlags().Lookup("log-level")); err != nil {
 		return fmt.Errorf("failed to bind log-level flag: %w", err)
 	}
@@ -131,7 +136,9 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Bind run command flags so Viper can resolve them via env/config.
-	bindRunFlags(v)
+	if err := bindRunFlags(v); err != nil {
+		return err
+	}
 
 	logLevel := v.GetString("log.level")
 	logFormat := v.GetString("log.format")
@@ -155,6 +162,7 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	cfg.Provider.APIType = v.GetString("provider.api_type")
 	cfg.Provider.OpenAICompatMaxTokens = v.GetBool("provider.openai_compat_max_tokens")
 	cfg.Provider.Token = v.GetString("provider.token")
+	cfg.Provider.NumCtx = v.GetInt("provider.num_ctx")
 	cfg.Model.Default = v.GetString("model.default")
 	cfg.Model.Temperature = v.GetFloat64("model.temperature")
 	cfg.Model.MaxTokens = v.GetInt("model.max_tokens")

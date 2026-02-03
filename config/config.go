@@ -56,6 +56,7 @@ type ProviderConfig struct {
 	APIType               string `mapstructure:"api_type" yaml:"api_type"`
 	OpenAICompatMaxTokens bool   `mapstructure:"openai_compat_max_tokens" yaml:"openai_compat_max_tokens"`
 	Token                 string `mapstructure:"token" yaml:"token"`
+	NumCtx                int    `mapstructure:"num_ctx" yaml:"num_ctx"`
 }
 
 // ModelConfig holds model defaults.
@@ -76,6 +77,7 @@ func Defaults() *Config {
 	cfg.Provider.APIVersion = ""
 	cfg.Provider.APIType = ""
 	cfg.Provider.OpenAICompatMaxTokens = false
+	cfg.Provider.NumCtx = 32768
 	cfg.Model.Default = ""
 	cfg.Model.Temperature = 0.2
 	cfg.Model.MaxTokens = 1024
@@ -145,6 +147,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("provider.api_version", "")
 	v.SetDefault("provider.api_type", "")
 	v.SetDefault("provider.openai_compat_max_tokens", false)
+	v.SetDefault("provider.num_ctx", 32768)
 	v.SetDefault("model.default", "")
 	v.SetDefault("model.temperature", 0.2)
 	v.SetDefault("model.max_tokens", 1024)

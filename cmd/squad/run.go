@@ -102,20 +102,41 @@ type RunOptions struct {
 
 // newRunOptions creates a RunOptions by copying from the current CLI flag globals.
 func newRunOptions() *RunOptions {
+	v := appViper
+	apiKey := v.GetString("provider.token")
+	if runAPIKey != "" {
+		apiKey = runAPIKey
+	}
+	provider := v.GetString("provider.default")
+	if runProvider != "" {
+		provider = runProvider
+	}
+	model := v.GetString("model.default")
+	if runModel != "" {
+		model = runModel
+	}
+	temp := v.GetFloat64("model.temperature")
+	if runTemperature >= 0 {
+		temp = runTemperature
+	}
+	maxT := v.GetInt("model.max_tokens")
+	if runMaxTokens >= 0 {
+		maxT = runMaxTokens
+	}
 	return &RunOptions{
 		Agent:             runAgent,
 		AgentsDir:         runAgentsDir,
 		WorkingDir:        runWorkingDir,
-		APIKey:            runAPIKey,
-		BaseURL:           runBaseURL,
-		Org:               runOrg,
-		APIVersion:        runAPIVersion,
-		APIType:           runAPIType,
-		OpenAICompatMax:   runOpenAICompatMax,
-		Provider:          runProvider,
-		Model:             runModel,
-		Temperature:       runTemperature,
-		MaxTokens:         runMaxTokens,
+		APIKey:            apiKey,
+		BaseURL:           v.GetString("provider.base_url"),
+		Org:               v.GetString("provider.organization"),
+		APIVersion:        v.GetString("provider.api_version"),
+		APIType:           v.GetString("provider.api_type"),
+		OpenAICompatMax:   v.GetBool("provider.openai_compat_max_tokens"),
+		Provider:          provider,
+		Model:             model,
+		Temperature:       temp,
+		MaxTokens:         maxT,
 		System:            runSystem,
 		Output:            runOutput,
 		Print:             runPrint,
@@ -125,25 +146,52 @@ func newRunOptions() *RunOptions {
 		RequireActionable: runRequireActionable,
 		Apply:             runApply,
 		ApplyFallback:     runApplyFallback,
-		NumCtx:            runNumCtx,
+		NumCtx:            v.GetInt("provider.num_ctx"),
 		Mode:              runMode,
 	}
 }
 
 // bindRunFlags binds the run command's flags to Viper keys so that env vars
 // and config file values participate in precedence resolution.
-func bindRunFlags(v *viper.Viper) {
+func bindRunFlags(v *viper.Viper) error {
 	flags := runCmd.Flags()
-	_ = v.BindPFlag("provider.default", flags.Lookup("provider"))
-	_ = v.BindPFlag("model.default", flags.Lookup("model"))
-	_ = v.BindPFlag("model.temperature", flags.Lookup("temperature"))
-	_ = v.BindPFlag("model.max_tokens", flags.Lookup("max-tokens"))
-	_ = v.BindPFlag("provider.base_url", flags.Lookup("base-url"))
-	_ = v.BindPFlag("provider.organization", flags.Lookup("organization"))
-	_ = v.BindPFlag("provider.api_version", flags.Lookup("api-version"))
-	_ = v.BindPFlag("provider.api_type", flags.Lookup("api-type"))
-	_ = v.BindPFlag("provider.openai_compat_max_tokens", flags.Lookup("openai-compat-max-tokens"))
-	_ = v.BindPFlag("provider.token", flags.Lookup("api-key"))
+	bind := func(key string, f string) error {
+		return v.BindPFlag(key, flags.Lookup(f))
+	}
+	if err := bind("provider.default", "provider"); err != nil {
+		return err
+	}
+	if err := bind("model.default", "model"); err != nil {
+		return err
+	}
+	if err := bind("model.temperature", "temperature"); err != nil {
+		return err
+	}
+	if err := bind("model.max_tokens", "max-tokens"); err != nil {
+		return err
+	}
+	if err := bind("provider.base_url", "base-url"); err != nil {
+		return err
+	}
+	if err := bind("provider.organization", "organization"); err != nil {
+		return err
+	}
+	if err := bind("provider.api_version", "api-version"); err != nil {
+		return err
+	}
+	if err := bind("provider.api_type", "api-type"); err != nil {
+		return err
+	}
+	if err := bind("provider.openai_compat_max_tokens", "openai-compat-max-tokens"); err != nil {
+		return err
+	}
+	if err := bind("provider.token", "api-key"); err != nil {
+		return err
+	}
+	if err := bind("provider.num_ctx", "num-ctx"); err != nil {
+		return err
+	}
+	return nil
 }
 
 var runCmd = &cobra.Command{
@@ -201,6 +249,9 @@ func init() {
 	// Static completions for --provider.
 	_ = runCmd.RegisterFlagCompletionFunc("provider", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"openai", "openai-responses", "anthropic", "ollama", "gemini"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = runCmd.RegisterFlagCompletionFunc("model", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return nil, cobra.ShellCompDirectiveNoFileComp
 	})
 }
 
@@ -274,10 +325,10 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 // invokeModel resolves provider settings and calls the appropriate model backend.
 func invokeModel(cmd *cobra.Command, opts *RunOptions, bundle *agent.Bundle) (string, error) {
 	v := appViper
-	provider := normalizeProvider(v.GetString("provider.default"))
-	model := v.GetString("model.default")
-	temperature := v.GetFloat64("model.temperature")
-	maxTokens := v.GetInt("model.max_tokens")
+	provider := normalizeProvider(opts.Provider)
+	model := opts.Model
+	temperature := opts.Temperature
+	maxTokens := opts.MaxTokens
 
 	systemPrompt := bundle.System
 	if opts.System != "" {
@@ -539,7 +590,7 @@ func buildNativeOllamaLLM(model string) llms.Model {
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
 	}
-	numCtx := runNumCtx
+	numCtx := appViper.GetInt("provider.num_ctx")
 	if numCtx <= 0 {
 		numCtx = 32768
 	}
