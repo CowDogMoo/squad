@@ -1,6 +1,6 @@
 module github.com/cowdogmoo/squad
 
-go 1.25.5
+go 1.25.6
 
 require (
 	github.com/fatih/color v1.18.0

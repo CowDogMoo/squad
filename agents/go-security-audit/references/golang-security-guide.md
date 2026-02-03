@@ -323,7 +323,7 @@ template.CSS       // Unescaped CSS
 **Resources:**
 
 - [Understanding XSS Protection in Go's html/template](https://leapcell.io/blog/understanding-xss-protection-in-go-s-html-template)
-- [Preventing Cross-Site Scripting (XSS) Attacks in Go](https://medium.com/@mgm06bm/preventing-cross-site-scripting-xss-attacks-in-go-a-step-by-step-guide-6b8e3cf01d9f)
+- [Understanding XSS Protection in Go's html/template](https://leapcell.io/blog/understanding-xss-protection-in-go-s-html-template)
 
 ### 3. Path Traversal
 
@@ -443,7 +443,7 @@ if len(slice) >= 4 {
 
 **Resources:**
 
-- [Go: Memory Safety with Bounds Check](https://medium.com/a-journey-with-go/go-memory-safety-with-bounds-check-1397bef748b5)
+- [BCE (Bound Check Elimination) in Go](https://go101.org/optimizations/5-bce.html)
 - [Bounds Check Elimination In Go](https://www.ardanlabs.com/blog/2018/04/bounds-check-elimination-in-go.html)
 - [CISA: Eliminating Buffer Overflow Vulnerabilities](https://www.cisa.gov/resources-tools/resources/secure-design-alert-eliminating-buffer-overflow-vulnerabilities)
 
@@ -974,7 +974,7 @@ grpcServer := grpc.NewServer(
 
 - [Enhancing gRPC Security Best Practices](https://www.bytesizego.com/blog/grpc-security)
 - [Protecting gRPC Against OWASP's Top Ten API Risks](https://nordicapis.com/protecting-grpc-against-owasps-top-ten-api-risks/)
-- [gRPC Security Series: Part 3](https://medium.com/@ibm_ptc_security/grpc-security-series-part-3-c92f3b687dd9)
+- [Securing gRPC Services with JWT Authentication in Go](https://www.bytesizego.com/blog/securing-grpc-golang)
 
 ---
 
@@ -1394,7 +1394,7 @@ jobs:
 
 - [How Go Mitigates Supply Chain Attacks](https://go.dev/blog/supply-chain)
 - [GitLab catches MongoDB Go module supply chain attack](https://about.gitlab.com/blog/gitlab-catches-mongodb-go-module-supply-chain-attack/)
-- [Go Supply Chain Attack: Malicious Package Exploits Go Module](https://socket.dev/blog/malicious-package-exploits-go-module-proxy-caching-for-persistence)
+- [Supply Chain Attacks in the Golang Open-Source Ecosystem](https://www.crocoder.dev/blog/supply-chain-attacks-in-the-golang-open-source-ecosystem)
 
 ---
 
@@ -1503,7 +1503,7 @@ jobs:
 
 - [OWASP Go Secure Coding Practices Guide](https://owasp.org/www-project-go-secure-coding-practices-guide/)
 - [OWASP Go-SCP GitHub](https://github.com/OWASP/Go-SCP)
-- [OWASP Top Ten Guide for Go Developers](https://medium.com/@erwindev/the-owasp-top-ten-guide-for-go-developers-e80786dc4400)
+- [How to Secure Go APIs Against OWASP Top 10](https://oneuptime.com/blog/post/2026-01-07-go-secure-apis-owasp-top-10/view)
 - [OWASP gRPC Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/gRPC_Security_Cheat_Sheet.html)
 
 ### Security Tools

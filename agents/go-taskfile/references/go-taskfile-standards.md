@@ -954,15 +954,13 @@ tasks:
 
 ### Articles and Tutorials
 
-- [Why you should be using Go-Task](https://medium.com/@lorique/why-you-should-be-using-go-task-3cd30897f8d8)
 - [Taskfiles for Go Developers](https://tutorialedge.net/golang/taskfiles-for-go-developers/)
-- [Demystification of taskfile variables](https://medium.com/@TianchenW/demystification-of-taskfile-variables-29b751950393)
 - [Streamlining Your Go Projects with Taskfile](https://www.codingexplorations.com/blog/taskfile-automation-for-go-development)
 
 ### Community Resources
 
 - [Monorepo Discussion](https://github.com/go-task/task/discussions/1517)
-- [Go-Task GitHub Repository](https://refft.com/en/go-task_task.html)
+- [Go-Task GitHub Repository](https://github.com/go-task/task)
 - [Applied Go: Just Make a Task](https://appliedgo.net/spotlight/just-make-a-task/)
 
 ### Go Packages
