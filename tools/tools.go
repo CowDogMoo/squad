@@ -591,9 +591,9 @@ func grepSearchPath(workingDir, resolved string, re *regexp.Regexp) ([]string, e
 }
 
 func grepVisitFile(workingDir string, re *regexp.Regexp, matches *[]string) filepath.WalkFunc {
-	return func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	return func(path string, info os.FileInfo, walkErr error) (retErr error) {
+		if walkErr != nil {
+			return walkErr
 		}
 		if info.IsDir() {
 			return nil
@@ -602,7 +602,11 @@ func grepVisitFile(workingDir string, re *regexp.Regexp, matches *[]string) file
 		if err != nil {
 			return nil
 		}
-		defer file.Close()
+		defer func() {
+			if cerr := file.Close(); cerr != nil && retErr == nil {
+				retErr = cerr
+			}
+		}()
 		rel, err := filepath.Rel(workingDir, path)
 		if err != nil {
 			rel = path

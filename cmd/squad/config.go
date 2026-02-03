@@ -197,8 +197,8 @@ func runConfigPath(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get config path: %w", err)
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), path)
-	return nil
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), path)
+	return err
 }
 
 func runConfigSet(cmd *cobra.Command, args []string) error {
@@ -273,6 +273,6 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("key not found: %s", args[0])
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), value)
-	return nil
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), value)
+	return err
 }

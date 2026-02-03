@@ -40,7 +40,7 @@ func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOptio
 }
 
 // GenerateContent implements llms.Model via Ollama's native /api/chat endpoint.
-func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error) {
+func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (resp *llms.ContentResponse, retErr error) {
 	opts := llms.CallOptions{}
 	for _, opt := range options {
 		opt(&opts)
@@ -82,18 +82,22 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	httpResp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ollama request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := httpResp.Body.Close(); cerr != nil && retErr == nil {
+			retErr = fmt.Errorf("failed to close response body: %w", cerr)
+		}
+	}()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read ollama response: %w", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	if httpResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ollama returned %d: %s", httpResp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
 	var chatResp chatResponse
