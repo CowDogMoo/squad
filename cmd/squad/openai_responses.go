@@ -97,7 +97,7 @@ func runWithToolsResponses(ctx context.Context, apiKey, baseURL, model, systemPr
 	return "", fmt.Errorf("responses API tool loop ended after %d iterations with no usable response", maxToolIterations)
 }
 
-func newResponsesClient(apiKey, baseURL, organization string) *openai.Client {
+func newResponsesClient(apiKey, baseURL, organization string) openai.Client {
 	clientOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
 	if organization != "" {
 		clientOpts = append(clientOpts, option.WithOrganization(organization))
@@ -105,13 +105,12 @@ func newResponsesClient(apiKey, baseURL, organization string) *openai.Client {
 	if baseURL != "" {
 		clientOpts = append(clientOpts, option.WithBaseURL(baseURL))
 	}
-	c := openai.NewClient(clientOpts...)
-	return &c
+	return openai.NewClient(clientOpts...)
 }
 
 // responsesToolLoop iterates the tool-calling loop, returning the final
 // response, any accumulated text, and an error.
-func responsesToolLoop(ctx context.Context, client *openai.Client, resp *responses.Response, handlers map[string]toolHandler, rc *responsesConfig) (*responses.Response, string, error) {
+func responsesToolLoop(ctx context.Context, client openai.Client, resp *responses.Response, handlers map[string]toolHandler, rc *responsesConfig) (*responses.Response, string, error) {
 	var repeat toolRepeatTracker
 	for i := 0; i < maxToolIterations; i++ {
 		calls := extractFunctionCalls(resp)
@@ -167,7 +166,7 @@ func checkResponsesRepeat(repeat *toolRepeatTracker, calls []responseFunctionCal
 	return false
 }
 
-func requestResponsesFinal(ctx context.Context, client *openai.Client, previousID, systemPrompt string, rc *responsesConfig) (string, error) {
+func requestResponsesFinal(ctx context.Context, client openai.Client, previousID, systemPrompt string, rc *responsesConfig) (string, error) {
 	if strings.TrimSpace(previousID) == "" {
 		return "", fmt.Errorf("missing previous response id")
 	}
