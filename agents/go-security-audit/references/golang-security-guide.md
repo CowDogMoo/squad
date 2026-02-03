@@ -972,7 +972,6 @@ grpcServer := grpc.NewServer(
 
 **Resources:**
 
-- [Enhancing gRPC Security Best Practices](https://www.bytesizego.com/blog/grpc-security)
 - [Protecting gRPC Against OWASP's Top Ten API Risks](https://nordicapis.com/protecting-grpc-against-owasps-top-ten-api-risks/)
 - [Securing gRPC Services with JWT Authentication in Go](https://www.bytesizego.com/blog/securing-grpc-golang)
 

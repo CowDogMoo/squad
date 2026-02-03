@@ -677,7 +677,7 @@ convention = "google"
 
 | Tool                                  | Description              |
 | ------------------------------------- | ------------------------ |
-| [Sphinx](https://www.sphinx-doc.org/) | Full documentation suite |
+| [Sphinx](https://www.sphinx-doc.org/en/master/) | Full documentation suite |
 | [MkDocs](https://www.mkdocs.org/)     | Markdown-based docs      |
 | [pdoc](https://pdoc.dev/)             | Auto-generated API docs  |
 
