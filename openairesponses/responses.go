@@ -1,65 +1,63 @@
-package main
+package openairesponses
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/tools"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/tmc/langchaingo/llms"
 )
 
-// responseFunctionCall holds the parsed details of a function_call item
+// FunctionCall holds the parsed details of a function_call item
 // from the Responses API output.
-type responseFunctionCall struct {
-	ID        string // output item ID
-	CallID    string // unique call ID for pairing with output
-	Name      string // function name
-	Arguments string // JSON arguments string
+type FunctionCall struct {
+	ID        string
+	CallID    string
+	Name      string
+	Arguments string
 }
 
-// responsesConfig bundles the immutable parameters for a Responses API session.
-type responsesConfig struct {
-	model       string
-	tools       []responses.ToolUnionParam
-	temperature float64
-	maxTokens   int
+// Config bundles the immutable parameters for a Responses API session.
+type Config struct {
+	Model       string
+	Tools       []responses.ToolUnionParam
+	Temperature float64
+	MaxTokens   int
 }
 
-func (rc *responsesConfig) applyOptionals(params *responses.ResponseNewParams) {
-	if rc.temperature >= 0 && supportsResponsesTemperature(rc.model) {
-		params.Temperature = openai.Float(rc.temperature)
+func (rc *Config) applyOptionals(params *responses.ResponseNewParams) {
+	if rc.Temperature >= 0 && supportsTemperature(rc.Model) {
+		params.Temperature = openai.Float(rc.Temperature)
 	}
-	if rc.maxTokens > 0 {
-		params.MaxOutputTokens = openai.Int(int64(rc.maxTokens))
+	if rc.MaxTokens > 0 {
+		params.MaxOutputTokens = openai.Int(int64(rc.MaxTokens))
 	}
 }
 
-// useResponsesAPI returns true when the Responses API path should be used
-// instead of LangChainGo's Chat Completions.
-func useResponsesAPI(provider, model string) bool {
-	provider = normalizeProvider(provider)
+// UseResponsesAPI returns true when the Responses API path should be used.
+func UseResponsesAPI(provider, model string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "openai-responses" {
 		return true
 	}
 	return provider == "openai" && strings.HasPrefix(model, "gpt-5")
 }
 
-// runWithToolsResponses drives a tool-calling loop using the OpenAI
-// Responses API. It reuses the same tool handlers from buildToolHandlers.
-func runWithToolsResponses(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens int) (string, error) {
-	client := newResponsesClient(apiKey, baseURL, organization)
-	handlers, toolDefs := buildToolHandlers(workingDir)
-	rc := responsesConfig{
-		model:       model,
-		tools:       convertToolsToResponses(toolDefs),
-		temperature: temperature,
-		maxTokens:   maxTokens,
+// RunWithTools drives a tool-calling loop using the OpenAI Responses API.
+func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens int) (string, error) {
+	client := newClient(apiKey, baseURL, organization)
+	handlers, toolDefs := tools.BuildHandlers(workingDir)
+	rc := Config{
+		Model:       model,
+		Tools:       ConvertTools(toolDefs),
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
 	}
 
 	params := responses.ResponseNewParams{
@@ -68,7 +66,7 @@ func runWithToolsResponses(ctx context.Context, apiKey, baseURL, model, systemPr
 		Input: responses.ResponseNewParamsInputUnion{
 			OfString: openai.String(userPrompt),
 		},
-		Tools:      rc.tools,
+		Tools:      rc.Tools,
 		Truncation: responses.ResponseNewParamsTruncation("auto"),
 		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
 			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsRequired),
@@ -82,7 +80,7 @@ func runWithToolsResponses(ctx context.Context, apiKey, baseURL, model, systemPr
 		return "", fmt.Errorf("responses API call failed: %w", err)
 	}
 
-	resp, text, err := responsesToolLoop(ctx, client, resp, handlers, &rc)
+	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc)
 	if err != nil {
 		return text, err
 	}
@@ -90,14 +88,14 @@ func runWithToolsResponses(ctx context.Context, apiKey, baseURL, model, systemPr
 		return text, nil
 	}
 
-	finalText, err := requestResponsesFinal(ctx, client, resp.ID, systemPrompt, &rc)
+	finalText, err := requestFinal(ctx, client, resp.ID, systemPrompt, &rc)
 	if err == nil && finalText != "" {
 		return finalText, nil
 	}
-	return "", fmt.Errorf("responses API tool loop ended after %d iterations with no usable response", maxToolIterations)
+	return "", fmt.Errorf("responses API tool loop ended after %d iterations with no usable response", tools.MaxToolIterations)
 }
 
-func newResponsesClient(apiKey, baseURL, organization string) openai.Client {
+func newClient(apiKey, baseURL, organization string) openai.Client {
 	clientOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
 	if organization != "" {
 		clientOpts = append(clientOpts, option.WithOrganization(organization))
@@ -108,12 +106,10 @@ func newResponsesClient(apiKey, baseURL, organization string) openai.Client {
 	return openai.NewClient(clientOpts...)
 }
 
-// responsesToolLoop iterates the tool-calling loop, returning the final
-// response, any accumulated text, and an error.
-func responsesToolLoop(ctx context.Context, client openai.Client, resp *responses.Response, handlers map[string]toolHandler, rc *responsesConfig) (*responses.Response, string, error) {
-	var repeat toolRepeatTracker
-	for i := 0; i < maxToolIterations; i++ {
-		calls := extractFunctionCalls(resp)
+func toolLoop(ctx context.Context, client openai.Client, resp *responses.Response, handlers map[string]tools.Handler, rc *Config) (*responses.Response, string, error) {
+	var repeat tools.RepeatTracker
+	for i := 0; i < tools.MaxToolIterations; i++ {
+		calls := ExtractFunctionCalls(resp)
 		if len(calls) == 0 {
 			text := resp.OutputText()
 			logging.InfoContext(ctx, "responses API: final response at iteration %d (%d bytes)", i, len(text))
@@ -121,18 +117,18 @@ func responsesToolLoop(ctx context.Context, client openai.Client, resp *response
 		}
 
 		logging.InfoContext(ctx, "responses API: iteration %d with %d tool call(s)", i+1, len(calls))
-		if checkResponsesRepeat(&repeat, calls, ctx) {
+		if checkRepeat(&repeat, calls, ctx) {
 			break
 		}
 
 		outputs := executeAndBuildOutputs(ctx, calls, handlers)
 		params := responses.ResponseNewParams{
-			Model:              rc.model,
+			Model:              rc.Model,
 			PreviousResponseID: openai.String(resp.ID),
 			Input: responses.ResponseNewParamsInputUnion{
 				OfInputItemList: responses.ResponseInputParam(outputs),
 			},
-			Tools:      rc.tools,
+			Tools:      rc.Tools,
 			Truncation: responses.ResponseNewParamsTruncation("auto"),
 		}
 		rc.applyOptionals(&params)
@@ -151,27 +147,30 @@ func responsesToolLoop(ctx context.Context, client openai.Client, resp *response
 	return resp, text, nil
 }
 
-func checkResponsesRepeat(repeat *toolRepeatTracker, calls []responseFunctionCall, ctx context.Context) bool {
+func checkRepeat(repeat *tools.RepeatTracker, calls []FunctionCall, ctx context.Context) bool {
 	fakeToolCalls := make([]llms.ToolCall, len(calls))
 	for j, c := range calls {
 		fakeToolCalls[j] = llms.ToolCall{
-			FunctionCall: &llms.FunctionCall{Name: c.Name},
+			FunctionCall: &llms.FunctionCall{
+				Name:      c.Name,
+				Arguments: c.Arguments,
+			},
 		}
 	}
-	repeat.update(fakeToolCalls)
-	if repeat.exceeded() {
-		logging.InfoContext(ctx, "responses API: %s called %d times in a row, breaking", repeat.lastName, repeat.count)
+	repeat.Update(fakeToolCalls)
+	if repeat.Exceeded() {
+		logging.InfoContext(ctx, "responses API: %s called %d times in a row, breaking", repeat.LastName, repeat.Count)
 		return true
 	}
 	return false
 }
 
-func requestResponsesFinal(ctx context.Context, client openai.Client, previousID, systemPrompt string, rc *responsesConfig) (string, error) {
+func requestFinal(ctx context.Context, client openai.Client, previousID, systemPrompt string, rc *Config) (string, error) {
 	if strings.TrimSpace(previousID) == "" {
 		return "", fmt.Errorf("missing previous response id")
 	}
 	params := responses.ResponseNewParams{
-		Model:              rc.model,
+		Model:              rc.Model,
 		PreviousResponseID: openai.String(previousID),
 		Input: responses.ResponseNewParamsInputUnion{
 			OfString: openai.String("Provide the final response. Do not call any tools."),
@@ -180,7 +179,7 @@ func requestResponsesFinal(ctx context.Context, client openai.Client, previousID
 		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
 			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsNone),
 		},
-		Tools:      rc.tools,
+		Tools:      rc.Tools,
 		Truncation: responses.ResponseNewParamsTruncation("auto"),
 	}
 	rc.applyOptionals(&params)
@@ -198,15 +197,15 @@ func requestResponsesFinal(ctx context.Context, client openai.Client, previousID
 	return text, nil
 }
 
-func supportsResponsesTemperature(model string) bool {
+func supportsTemperature(model string) bool {
 	return !strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5")
 }
 
-// convertToolsToResponses converts langchaingo tool definitions to the
+// ConvertTools converts langchaingo tool definitions to the
 // Responses API FunctionToolParam format.
-func convertToolsToResponses(tools []llms.Tool) []responses.ToolUnionParam {
-	out := make([]responses.ToolUnionParam, 0, len(tools))
-	for _, t := range tools {
+func ConvertTools(toolDefs []llms.Tool) []responses.ToolUnionParam {
+	out := make([]responses.ToolUnionParam, 0, len(toolDefs))
+	for _, t := range toolDefs {
 		if t.Function == nil {
 			continue
 		}
@@ -226,16 +225,15 @@ func convertToolsToResponses(tools []llms.Tool) []responses.ToolUnionParam {
 	return out
 }
 
-// extractFunctionCalls pulls function_call items from a Responses API
-// response output.
-func extractFunctionCalls(resp *responses.Response) []responseFunctionCall {
-	if resp == nil {
+// ExtractFunctionCalls pulls function_call items from a Responses API response.
+func ExtractFunctionCalls(resp *responses.Response) []FunctionCall {
+	if resp == nil || resp.Output == nil {
 		return nil
 	}
-	var calls []responseFunctionCall
+	var calls []FunctionCall
 	for _, item := range resp.Output {
 		if item.Type == "function_call" {
-			calls = append(calls, responseFunctionCall{
+			calls = append(calls, FunctionCall{
 				ID:        item.ID,
 				CallID:    item.CallID,
 				Name:      item.Name,
@@ -246,9 +244,7 @@ func extractFunctionCalls(resp *responses.Response) []responseFunctionCall {
 	return calls
 }
 
-// executeAndBuildOutputs runs each tool call through the existing handlers
-// and builds the input items for the next Responses API request.
-func executeAndBuildOutputs(ctx context.Context, calls []responseFunctionCall, handlers map[string]toolHandler) []responses.ResponseInputItemUnionParam {
+func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers map[string]tools.Handler) []responses.ResponseInputItemUnionParam {
 	outputs := make([]responses.ResponseInputItemUnionParam, 0, len(calls))
 	for _, call := range calls {
 		handler, ok := handlers[call.Name]
@@ -265,9 +261,9 @@ func executeAndBuildOutputs(ctx context.Context, calls []responseFunctionCall, h
 			continue
 		}
 
-		logging.DebugContext(ctx, "responses API: calling %s args=%s", call.Name, truncateString(call.Arguments, 200))
+		logging.DebugContext(ctx, "responses API: calling %s args=%s", call.Name, tools.TruncateString(call.Arguments, 200))
 		toolStart := time.Now()
-		result, err := handler.call(ctx, []byte(call.Arguments))
+		result, err := handler.Call(ctx, []byte(call.Arguments))
 		toolDuration := time.Since(toolStart)
 
 		var output string
@@ -289,17 +285,4 @@ func executeAndBuildOutputs(ctx context.Context, calls []responseFunctionCall, h
 		})
 	}
 	return outputs
-}
-
-// resolveResponsesAPIKey determines the API key for the Responses API path,
-// checking CLI flag, config, and environment in order.
-func resolveResponsesAPIKey(cfgToken string) (string, error) {
-	key := pickString(runAPIKey, cfgToken)
-	if key == "" {
-		key = os.Getenv("OPENAI_API_KEY")
-	}
-	if key == "" {
-		return "", fmt.Errorf("API key required for OpenAI Responses API: use --api-key, config provider.token, or OPENAI_API_KEY env var")
-	}
-	return key, nil
 }

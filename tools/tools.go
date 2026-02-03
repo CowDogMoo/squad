@@ -1,4 +1,4 @@
-package main
+package tools
 
 import (
 	"bufio"
@@ -18,13 +18,14 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
-const maxToolIterations = 100
+const MaxToolIterations = 100
 const maxToolOutput = 64 * 1024
 const maxSameToolRepeat = 10
+const maxMutatingToolRepeat = 50
 
-// mutatingTools are tools that legitimately chain in long sequences
-// (e.g. a judge applying many edits). The repetition guard uses a
-// higher threshold for these to avoid breaking valid workflows.
+var editsUsed bool
+
+// mutatingTools are tools that legitimately chain in long sequences.
 var mutatingTools = map[string]bool{
 	"Edit":  true,
 	"Write": true,
@@ -36,48 +37,67 @@ var highRepeatTools = map[string]bool{
 	"Grep": true,
 }
 
-const maxMutatingToolRepeat = 50
-
-type toolHandler struct {
-	def  llms.Tool
-	call func(ctx context.Context, rawArgs []byte) (string, error)
+// ResetEditsApplied resets the edit tracking state.
+func ResetEditsApplied() {
+	editsUsed = false
 }
 
-// toolRepeatTracker detects when the model is stuck calling the same
-// tool repeatedly (e.g. Bash in a loop). Mutating tools like Edit and
-// Write get a higher threshold since sequential edits are expected
-// behavior for agents applying fixes.
-type toolRepeatTracker struct {
-	lastName string
-	count    int
+// MarkEditsApplied marks that tool-based edits were made.
+func MarkEditsApplied() {
+	editsUsed = true
 }
 
-func (t *toolRepeatTracker) update(calls []llms.ToolCall) {
+// EditsApplied returns whether tool-based edits were made.
+func EditsApplied() bool {
+	return editsUsed
+}
+
+// Handler wraps a tool definition and its implementation function.
+type Handler struct {
+	Def  llms.Tool
+	Call func(ctx context.Context, rawArgs []byte) (string, error)
+}
+
+// RepeatTracker detects when the model is stuck calling the same
+// tool repeatedly. Mutating tools get a higher threshold.
+type RepeatTracker struct {
+	lastSignature string
+	LastName      string
+	Count         int
+}
+
+// Update records a new set of tool calls for repetition tracking.
+func (t *RepeatTracker) Update(calls []llms.ToolCall) {
+	signature := ""
 	name := ""
 	if len(calls) == 1 && calls[0].FunctionCall != nil {
 		name = calls[0].FunctionCall.Name
+		signature = name + ":" + calls[0].FunctionCall.Arguments
 	}
-	if name != "" && name == t.lastName {
-		t.count++
+	if signature != "" && signature == t.lastSignature {
+		t.Count++
 	} else {
-		t.count = 1
-		t.lastName = name
+		t.Count = 1
+		t.lastSignature = signature
+		t.LastName = name
 	}
 }
 
-func (t *toolRepeatTracker) exceeded() bool {
+// Exceeded returns true if the repetition limit has been hit.
+func (t *RepeatTracker) Exceeded() bool {
 	limit := maxSameToolRepeat
-	if highRepeatTools[t.lastName] {
-		limit = maxToolIterations
+	if highRepeatTools[t.LastName] {
+		limit = MaxToolIterations
 	}
-	if mutatingTools[t.lastName] {
+	if mutatingTools[t.LastName] {
 		limit = maxMutatingToolRepeat
 	}
-	return t.count >= limit
+	return t.Count >= limit
 }
 
-func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, callOpts ...llms.CallOption) (string, error) {
-	handlers, toolDefs := buildToolHandlers(workingDir)
+// RunWithTools drives a tool-calling loop for LangChainGo-based models.
+func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, callOpts ...llms.CallOption) (string, error) {
+	handlers, toolDefs := BuildHandlers(workingDir)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
 	messages := buildInitialMessages(systemPrompt, userPrompt)
@@ -92,11 +112,11 @@ func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	return finishToolLoop(ctx, llm, messages, lastContent, callOpts)
 }
 
-func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]toolHandler, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
+func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
 	var lastContent string
-	var repeat toolRepeatTracker
-	for i := 0; i < maxToolIterations; i++ {
-		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxToolIterations)
+	var repeat RepeatTracker
+	for i := 0; i < MaxToolIterations; i++ {
+		logging.InfoContext(ctx, "model iteration %d/%d", i+1, MaxToolIterations)
 		iterStart := time.Now()
 		response, err := llm.GenerateContent(ctx, messages, callOpts...)
 		iterDuration := time.Since(iterStart)
@@ -122,9 +142,9 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		}
 		logging.DebugContext(ctx, "model responded in %s with %d tool call(s)", iterDuration.Round(time.Millisecond), len(choice.ToolCalls))
 
-		repeat.update(choice.ToolCalls)
-		if repeat.exceeded() {
-			logging.InfoContext(ctx, "model called %s %d times in a row, breaking tool loop", repeat.lastName, repeat.count)
+		repeat.Update(choice.ToolCalls)
+		if repeat.Exceeded() {
+			logging.InfoContext(ctx, "model called %s %d times in a row, breaking tool loop", repeat.LastName, repeat.Count)
 			break
 		}
 
@@ -135,8 +155,6 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 }
 
 func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, lastContent string, callOpts []llms.CallOption) (string, error) {
-	// Hit the iteration or repetition limit. Make one final call with
-	// tool_choice="none" to force the model to produce a text summary.
 	logging.InfoContext(ctx, "tool loop ended, requesting final response with tool_choice=none")
 	finalOpts := make([]llms.CallOption, len(callOpts), len(callOpts)+1)
 	copy(finalOpts, callOpts)
@@ -148,13 +166,12 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 		return response.Choices[0].Content, nil
 	}
 
-	// Fall back to any text content accumulated during the loop.
 	if lastContent != "" {
 		logging.InfoContext(ctx, "returning last partial content (%d bytes)", len(lastContent))
 		return lastContent, nil
 	}
 
-	return "", fmt.Errorf("tool loop ended after %d iterations with no usable response", maxToolIterations)
+	return "", fmt.Errorf("tool loop ended after %d iterations with no usable response", MaxToolIterations)
 }
 
 func buildInitialMessages(systemPrompt, userPrompt string) []llms.MessageContent {
@@ -194,7 +211,7 @@ func appendToolCallMessage(messages []llms.MessageContent, toolCalls []llms.Tool
 	})
 }
 
-func executeToolCalls(ctx context.Context, messages []llms.MessageContent, toolCalls []llms.ToolCall, handlers map[string]toolHandler) []llms.MessageContent {
+func executeToolCalls(ctx context.Context, messages []llms.MessageContent, toolCalls []llms.ToolCall, handlers map[string]Handler) []llms.MessageContent {
 	for _, toolCall := range toolCalls {
 		toolResponse := executeToolCall(ctx, toolCall, handlers)
 		messages = append(messages, llms.MessageContent{
@@ -205,7 +222,7 @@ func executeToolCalls(ctx context.Context, messages []llms.MessageContent, toolC
 	return messages
 }
 
-func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[string]toolHandler) llms.ToolCallResponse {
+func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[string]Handler) llms.ToolCallResponse {
 	toolResponse := llms.ToolCallResponse{
 		ToolCallID: toolCall.ID,
 	}
@@ -222,9 +239,9 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 	}
 
 	toolResponse.Name = toolCall.FunctionCall.Name
-	logging.DebugContext(ctx, "tool %s args: %s", toolCall.FunctionCall.Name, truncateString(toolCall.FunctionCall.Arguments, 200))
+	logging.DebugContext(ctx, "tool %s args: %s", toolCall.FunctionCall.Name, TruncateString(toolCall.FunctionCall.Arguments, 200))
 	toolStart := time.Now()
-	output, err := handler.call(ctx, []byte(toolCall.FunctionCall.Arguments))
+	output, err := handler.Call(ctx, []byte(toolCall.FunctionCall.Arguments))
 	toolDuration := time.Since(toolStart)
 	if err != nil {
 		toolResponse.Content = fmt.Sprintf("error: %v", err)
@@ -236,24 +253,25 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 	return toolResponse
 }
 
-func buildToolHandlers(workingDir string) (map[string]toolHandler, []llms.Tool) {
-	handlers := map[string]toolHandler{}
+// BuildHandlers creates all tool handlers and their definitions.
+func BuildHandlers(workingDir string) (map[string]Handler, []llms.Tool) {
+	handlers := map[string]Handler{}
 
-	add := func(handler toolHandler) {
-		name := handler.def.Function.Name
+	add := func(handler Handler) {
+		name := handler.Def.Function.Name
 		handlers[name] = handler
 	}
 
-	add(toolHandler{def: toolDefinitionRead(), call: readTool(workingDir)})
-	add(toolHandler{def: toolDefinitionWrite(), call: writeTool(workingDir)})
-	add(toolHandler{def: toolDefinitionEdit(), call: editTool(workingDir)})
-	add(toolHandler{def: toolDefinitionGlob(), call: globTool(workingDir)})
-	add(toolHandler{def: toolDefinitionGrep(), call: grepTool(workingDir)})
-	add(toolHandler{def: toolDefinitionBash(), call: bashTool(workingDir)})
+	add(Handler{Def: definitionRead(), Call: readTool(workingDir)})
+	add(Handler{Def: definitionWrite(), Call: trackEdits(writeTool(workingDir))})
+	add(Handler{Def: definitionEdit(), Call: trackEdits(editTool(workingDir))})
+	add(Handler{Def: definitionGlob(), Call: globTool(workingDir)})
+	add(Handler{Def: definitionGrep(), Call: grepTool(workingDir)})
+	add(Handler{Def: definitionBash(), Call: bashTool(workingDir)})
 
 	toolDefs := make([]llms.Tool, 0, len(handlers))
 	for _, handler := range handlers {
-		toolDefs = append(toolDefs, handler.def)
+		toolDefs = append(toolDefs, handler.Def)
 	}
 	sort.Slice(toolDefs, func(i, j int) bool {
 		return toolDefs[i].Function.Name < toolDefs[j].Function.Name
@@ -262,7 +280,19 @@ func buildToolHandlers(workingDir string) (map[string]toolHandler, []llms.Tool) 
 	return handlers, toolDefs
 }
 
-func toolDefinitionRead() llms.Tool {
+func trackEdits(call func(ctx context.Context, rawArgs []byte) (string, error)) func(ctx context.Context, rawArgs []byte) (string, error) {
+	return func(ctx context.Context, rawArgs []byte) (string, error) {
+		result, err := call(ctx, rawArgs)
+		if err == nil {
+			MarkEditsApplied()
+		}
+		return result, err
+	}
+}
+
+// --- Tool definitions ---
+
+func definitionRead() llms.Tool {
 	return llms.Tool{
 		Type: "function",
 		Function: &llms.FunctionDefinition{
@@ -279,7 +309,7 @@ func toolDefinitionRead() llms.Tool {
 	}
 }
 
-func toolDefinitionWrite() llms.Tool {
+func definitionWrite() llms.Tool {
 	return llms.Tool{
 		Type: "function",
 		Function: &llms.FunctionDefinition{
@@ -297,7 +327,7 @@ func toolDefinitionWrite() llms.Tool {
 	}
 }
 
-func toolDefinitionEdit() llms.Tool {
+func definitionEdit() llms.Tool {
 	return llms.Tool{
 		Type: "function",
 		Function: &llms.FunctionDefinition{
@@ -317,7 +347,7 @@ func toolDefinitionEdit() llms.Tool {
 	}
 }
 
-func toolDefinitionGlob() llms.Tool {
+func definitionGlob() llms.Tool {
 	return llms.Tool{
 		Type: "function",
 		Function: &llms.FunctionDefinition{
@@ -334,7 +364,7 @@ func toolDefinitionGlob() llms.Tool {
 	}
 }
 
-func toolDefinitionGrep() llms.Tool {
+func definitionGrep() llms.Tool {
 	return llms.Tool{
 		Type: "function",
 		Function: &llms.FunctionDefinition{
@@ -352,7 +382,7 @@ func toolDefinitionGrep() llms.Tool {
 	}
 }
 
-func toolDefinitionBash() llms.Tool {
+func definitionBash() llms.Tool {
 	return llms.Tool{
 		Type: "function",
 		Function: &llms.FunctionDefinition{
@@ -369,6 +399,8 @@ func toolDefinitionBash() llms.Tool {
 	}
 }
 
+// --- Tool implementations ---
+
 func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (string, error) {
 	type args struct {
 		Path string `json:"path"`
@@ -378,7 +410,7 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		if err := json.Unmarshal(rawArgs, &payload); err != nil {
 			return "", fmt.Errorf("invalid args: %w", err)
 		}
-		path, err := resolvePath(workingDir, payload.Path)
+		path, err := ResolvePath(workingDir, payload.Path)
 		if err != nil {
 			return "", err
 		}
@@ -400,7 +432,7 @@ func writeTool(workingDir string) func(ctx context.Context, rawArgs []byte) (str
 		if err := json.Unmarshal(rawArgs, &payload); err != nil {
 			return "", fmt.Errorf("invalid args: %w", err)
 		}
-		path, err := resolvePath(workingDir, payload.Path)
+		path, err := ResolvePath(workingDir, payload.Path)
 		if err != nil {
 			return "", err
 		}
@@ -419,14 +451,14 @@ func editTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		Path       string   `json:"path"`
 		Old        string   `json:"old"`
 		New        string   `json:"new"`
-		ReplaceAll flexBool `json:"replace_all"`
+		ReplaceAll FlexBool `json:"replace_all"`
 	}
 	return func(_ context.Context, rawArgs []byte) (string, error) {
 		var payload args
 		if err := json.Unmarshal(rawArgs, &payload); err != nil {
 			return "", fmt.Errorf("invalid args: %w", err)
 		}
-		path, err := resolvePath(workingDir, payload.Path)
+		path, err := ResolvePath(workingDir, payload.Path)
 		if err != nil {
 			return "", err
 		}
@@ -521,7 +553,7 @@ func grepTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		if strings.TrimSpace(searchPath) == "" {
 			searchPath = "."
 		}
-		resolved, err := resolvePath(workingDir, searchPath)
+		resolved, err := ResolvePath(workingDir, searchPath)
 		if err != nil {
 			return "", err
 		}
@@ -576,6 +608,7 @@ func grepVisitFile(workingDir string, re *regexp.Regexp, matches *[]string) file
 			rel = path
 		}
 		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64*1024), maxToolOutput)
 		lineNum := 1
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -583,6 +616,9 @@ func grepVisitFile(workingDir string, re *regexp.Regexp, matches *[]string) file
 				*matches = append(*matches, fmt.Sprintf("%s:%d:%s", filepath.ToSlash(rel), lineNum, line))
 			}
 			lineNum++
+		}
+		if err := scanner.Err(); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -614,18 +650,18 @@ func bashTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 	}
 }
 
-// flexBool unmarshals both JSON booleans and string representations
-// ("true"/"false") that LLMs sometimes produce for boolean fields.
-type flexBool bool
+// --- Utilities ---
 
-func (b *flexBool) UnmarshalJSON(data []byte) error {
-	// Try bool first.
+// FlexBool unmarshals both JSON booleans and string representations
+// ("true"/"false") that LLMs sometimes produce for boolean fields.
+type FlexBool bool
+
+func (b *FlexBool) UnmarshalJSON(data []byte) error {
 	var v bool
 	if err := json.Unmarshal(data, &v); err == nil {
-		*b = flexBool(v)
+		*b = FlexBool(v)
 		return nil
 	}
-	// Fall back to string.
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
 		return fmt.Errorf("replace_all must be bool or string, got %s", string(data))
@@ -639,7 +675,8 @@ func (b *flexBool) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func resolvePath(workingDir, input string) (string, error) {
+// ResolvePath resolves a path relative to the working directory and validates it's within bounds.
+func ResolvePath(workingDir, input string) (string, error) {
 	if strings.TrimSpace(input) == "" {
 		return "", fmt.Errorf("path is required")
 	}
@@ -720,7 +757,8 @@ func globToRegex(pattern string) (string, error) {
 	return buf.String(), nil
 }
 
-func truncateString(s string, maxLen int) string {
+// TruncateString truncates a string to the given max length.
+func TruncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}

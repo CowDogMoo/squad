@@ -55,9 +55,11 @@ func init() {
 }
 
 var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print version information",
-	Long:  "Display the version, commit hash, and build date of squad.",
+	Use:     "version",
+	Aliases: []string{"v"},
+	Short:   "Print version information",
+	Long:    "Display the version, commit hash, and build date of squad.",
+	Args:    cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("squad version %s\n", version)
 		fmt.Printf("  commit: %s\n", commit)

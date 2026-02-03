@@ -27,6 +27,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cowdogmoo/squad/agent"
 )
 
 // setupTestAgent creates a temporary agent directory with the given manifest
@@ -75,12 +77,7 @@ modes:
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
-	// Save and restore runMode.
-	origMode := runMode
-	runMode = ""
-	t.Cleanup(func() { runMode = origMode })
-
-	bundle, err := buildAgentBundle(agentsDir, "test-agent", "review this", "/tmp")
+	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "review this", "/tmp", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -124,11 +121,7 @@ modes:
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
-	origMode := runMode
-	runMode = "readonly"
-	t.Cleanup(func() { runMode = origMode })
-
-	bundle, err := buildAgentBundle(agentsDir, "test-agent", "review this", "/tmp")
+	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "review this", "/tmp", "readonly")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -169,11 +162,7 @@ modes:
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
-	origMode := runMode
-	runMode = "custom"
-	t.Cleanup(func() { runMode = origMode })
-
-	bundle, err := buildAgentBundle(agentsDir, "test-agent", "test", "/tmp")
+	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "custom")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -203,11 +192,7 @@ modes:
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
-	origMode := runMode
-	runMode = "nonexistent"
-	t.Cleanup(func() { runMode = origMode })
-
-	_, err := buildAgentBundle(agentsDir, "test-agent", "test", "/tmp")
+	_, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent mode")
 	}
@@ -229,11 +214,7 @@ wrapper: agent.md
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
-	origMode := runMode
-	runMode = "anything"
-	t.Cleanup(func() { runMode = origMode })
-
-	_, err := buildAgentBundle(agentsDir, "test-agent", "test", "/tmp")
+	_, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "anything")
 	if err == nil {
 		t.Fatal("expected error when requesting mode on agent with no modes")
 	}
@@ -260,11 +241,7 @@ modes:
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
-	origMode := runMode
-	runMode = "lite"
-	t.Cleanup(func() { runMode = origMode })
-
-	bundle, err := buildAgentBundle(agentsDir, "test-agent", "test", "/tmp")
+	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "lite")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

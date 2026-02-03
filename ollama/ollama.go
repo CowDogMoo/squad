@@ -1,4 +1,4 @@
-package main
+package ollama
 
 import (
 	"bytes"
@@ -12,23 +12,22 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
-// ollamaLLM implements llms.Model using Ollama's native /api/chat endpoint,
-// which supports both tool calling and the num_ctx parameter. The langchaingo
-// llms/ollama package does not support tool calls, and the OpenAI-compat
-// endpoint silently truncates to 4096 tokens.
-type ollamaLLM struct {
+// LLM implements llms.Model using Ollama's native /api/chat endpoint,
+// which supports both tool calling and the num_ctx parameter.
+type LLM struct {
 	serverURL string
 	model     string
 	numCtx    int
 }
 
 // Verify interface compliance.
-var _ llms.Model = (*ollamaLLM)(nil)
+var _ llms.Model = (*LLM)(nil)
 
-func newOllamaLLM(serverURL, model string, numCtx int) *ollamaLLM {
+// New creates a new Ollama LLM client.
+func New(serverURL, model string, numCtx int) *LLM {
 	serverURL = strings.TrimSuffix(serverURL, "/v1")
 	serverURL = strings.TrimSuffix(serverURL, "/")
-	return &ollamaLLM{
+	return &LLM{
 		serverURL: serverURL,
 		model:     model,
 		numCtx:    numCtx,
@@ -36,12 +35,12 @@ func newOllamaLLM(serverURL, model string, numCtx int) *ollamaLLM {
 }
 
 // Call implements the simple string-based call interface.
-func (o *ollamaLLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
+func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
 	return llms.GenerateFromSinglePrompt(ctx, o, prompt, options...)
 }
 
 // GenerateContent implements llms.Model via Ollama's native /api/chat endpoint.
-func (o *ollamaLLM) GenerateContent(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error) {
+func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error) {
 	opts := llms.CallOptions{}
 	for _, opt := range options {
 		opt(&opts)
@@ -51,14 +50,12 @@ func (o *ollamaLLM) GenerateContent(ctx context.Context, messages []llms.Message
 	if err != nil {
 		return nil, err
 	}
-	// Ollama has no tool_choice parameter. When tool_choice is "none",
-	// omit tools entirely so the model cannot call them.
 	var tools []ollamaTool
 	if opts.ToolChoice != "none" {
 		tools = convertTools(opts.Tools)
 	}
 
-	reqBody := ollamaChatRequest{
+	reqBody := chatRequest{
 		Model:    o.model,
 		Messages: chatMsgs,
 		Tools:    tools,
@@ -99,7 +96,7 @@ func (o *ollamaLLM) GenerateContent(ctx context.Context, messages []llms.Message
 		return nil, fmt.Errorf("ollama returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
-	var chatResp ollamaChatResponse
+	var chatResp chatResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
 		return nil, fmt.Errorf("failed to parse ollama response: %w", err)
 	}
@@ -109,7 +106,7 @@ func (o *ollamaLLM) GenerateContent(ctx context.Context, messages []llms.Message
 
 // --- Ollama native API types ---
 
-type ollamaChatRequest struct {
+type chatRequest struct {
 	Model    string          `json:"model"`
 	Messages []ollamaMessage `json:"messages"`
 	Tools    []ollamaTool    `json:"tools,omitempty"`
@@ -143,7 +140,7 @@ type ollamaToolFunction struct {
 	Parameters  any    `json:"parameters"`
 }
 
-type ollamaChatResponse struct {
+type chatResponse struct {
 	Model           string         `json:"model"`
 	Message         *ollamaMessage `json:"message,omitempty"`
 	Done            bool           `json:"done"`
@@ -176,11 +173,19 @@ func convertMessages(messages []llms.MessageContent) ([]ollamaMessage, error) {
 					})
 				}
 			case llms.ToolCallResponse:
-				msg.Role = "tool"
-				msg.Content = pt.Content
+				if msg.Content != "" || len(msg.ToolCalls) > 0 {
+					if msg.Role == "" {
+						msg.Role = "assistant"
+					}
+					out = append(out, msg)
+					msg = ollamaMessage{}
+				}
+				out = append(out, ollamaMessage{Role: "tool", Content: pt.Content})
 			}
 		}
-		out = append(out, msg)
+		if msg.Role != "" || msg.Content != "" || len(msg.ToolCalls) > 0 {
+			out = append(out, msg)
+		}
 	}
 	return out, nil
 }
@@ -206,7 +211,7 @@ func convertTools(tools []llms.Tool) []ollamaTool {
 	return out
 }
 
-func convertResponse(resp ollamaChatResponse) *llms.ContentResponse {
+func convertResponse(resp chatResponse) *llms.ContentResponse {
 	choice := &llms.ContentChoice{
 		GenerationInfo: map[string]any{
 			"PromptTokens":     resp.PromptEvalCount,
@@ -218,10 +223,13 @@ func convertResponse(resp ollamaChatResponse) *llms.ContentResponse {
 	if resp.Message != nil {
 		choice.Content = resp.Message.Content
 
-		for _, tc := range resp.Message.ToolCalls {
-			argsJSON, _ := json.Marshal(tc.Function.Arguments)
+		for i, tc := range resp.Message.ToolCalls {
+			argsJSON, err := json.Marshal(tc.Function.Arguments)
+			if err != nil {
+				continue
+			}
 			choice.ToolCalls = append(choice.ToolCalls, llms.ToolCall{
-				ID:   tc.Function.Name, // Ollama doesn't provide IDs; use name
+				ID:   fmt.Sprintf("%s-%d", tc.Function.Name, i),
 				Type: "function",
 				FunctionCall: &llms.FunctionCall{
 					Name:      tc.Function.Name,

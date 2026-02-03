@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/cowdogmoo/squad/openairesponses"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/tmc/langchaingo/llms"
 )
@@ -28,9 +29,9 @@ func TestUseResponsesAPI(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider+"/"+tt.model, func(t *testing.T) {
-			got := useResponsesAPI(tt.provider, tt.model)
+			got := openairesponses.UseResponsesAPI(tt.provider, tt.model)
 			if got != tt.want {
-				t.Errorf("useResponsesAPI(%q, %q) = %v, want %v", tt.provider, tt.model, got, tt.want)
+				t.Errorf("UseResponsesAPI(%q, %q) = %v, want %v", tt.provider, tt.model, got, tt.want)
 			}
 		})
 	}
@@ -69,7 +70,7 @@ func TestConvertToolsToResponses(t *testing.T) {
 		{Type: "function", Function: nil}, // should be skipped
 	}
 
-	result := convertToolsToResponses(tools)
+	result := openairesponses.ConvertTools(tools)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 tools, got %d", len(result))
 	}
@@ -89,7 +90,7 @@ func TestConvertToolsToResponses(t *testing.T) {
 
 func TestExtractFunctionCalls(t *testing.T) {
 	t.Run("nil response", func(t *testing.T) {
-		calls := extractFunctionCalls(nil)
+		calls := openairesponses.ExtractFunctionCalls(nil)
 		if len(calls) != 0 {
 			t.Errorf("expected 0 calls, got %d", len(calls))
 		}
@@ -101,7 +102,7 @@ func TestExtractFunctionCalls(t *testing.T) {
 				{Type: "message", ID: "msg_1"},
 			},
 		}
-		calls := extractFunctionCalls(resp)
+		calls := openairesponses.ExtractFunctionCalls(resp)
 		if len(calls) != 0 {
 			t.Errorf("expected 0 calls, got %d", len(calls))
 		}
@@ -127,7 +128,7 @@ func TestExtractFunctionCalls(t *testing.T) {
 				},
 			},
 		}
-		calls := extractFunctionCalls(resp)
+		calls := openairesponses.ExtractFunctionCalls(resp)
 		if len(calls) != 2 {
 			t.Fatalf("expected 2 calls, got %d", len(calls))
 		}
@@ -136,55 +137,6 @@ func TestExtractFunctionCalls(t *testing.T) {
 		}
 		if calls[1].Name != "Bash" || calls[1].CallID != "call_def" {
 			t.Errorf("unexpected second call: %+v", calls[1])
-		}
-	})
-}
-
-func TestResolveResponsesAPIKey(t *testing.T) {
-	// Save and restore globals.
-	origKey := runAPIKey
-	t.Cleanup(func() { runAPIKey = origKey })
-
-	t.Run("from flag", func(t *testing.T) {
-		runAPIKey = "flag-key"
-		key, err := resolveResponsesAPIKey("")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if key != "flag-key" {
-			t.Errorf("expected flag-key, got %s", key)
-		}
-	})
-
-	t.Run("from config", func(t *testing.T) {
-		runAPIKey = ""
-		key, err := resolveResponsesAPIKey("config-key")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if key != "config-key" {
-			t.Errorf("expected config-key, got %s", key)
-		}
-	})
-
-	t.Run("from env", func(t *testing.T) {
-		runAPIKey = ""
-		t.Setenv("OPENAI_API_KEY", "env-key")
-		key, err := resolveResponsesAPIKey("")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if key != "env-key" {
-			t.Errorf("expected env-key, got %s", key)
-		}
-	})
-
-	t.Run("missing", func(t *testing.T) {
-		runAPIKey = ""
-		t.Setenv("OPENAI_API_KEY", "")
-		_, err := resolveResponsesAPIKey("")
-		if err == nil {
-			t.Fatal("expected error for missing key")
 		}
 	})
 }
