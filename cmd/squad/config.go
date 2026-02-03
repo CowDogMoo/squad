@@ -222,8 +222,13 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 
 	v.Set(args[0], args[1])
 
-	updated := v.AllSettings()
-	out, err := yaml.Marshal(updated)
+	// Unmarshal back into typed config to preserve structure and tags
+	var newCfg config.Config
+	if err := v.Unmarshal(&newCfg); err != nil {
+		return fmt.Errorf("failed to unmarshal updated config: %w", err)
+	}
+
+	out, err := yaml.Marshal(&newCfg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal updated config: %w", err)
 	}

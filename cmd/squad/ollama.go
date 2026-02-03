@@ -54,7 +54,7 @@ func (o *ollamaLLM) GenerateContent(ctx context.Context, messages []llms.Message
 	// Ollama has no tool_choice parameter. When tool_choice is "none",
 	// omit tools entirely so the model cannot call them.
 	var tools []ollamaTool
-	if fmt.Sprintf("%v", opts.ToolChoice) != "none" {
+	if opts.ToolChoice != "none" {
 		tools = convertTools(opts.Tools)
 	}
 
@@ -64,9 +64,11 @@ func (o *ollamaLLM) GenerateContent(ctx context.Context, messages []llms.Message
 		Tools:    tools,
 		Stream:   false,
 		Options: map[string]any{
-			"num_ctx":     o.numCtx,
-			"temperature": opts.Temperature,
+			"num_ctx": o.numCtx,
 		},
+	}
+	if opts.Temperature != 0 {
+		reqBody.Options["temperature"] = opts.Temperature
 	}
 	if opts.MaxTokens > 0 {
 		reqBody.Options["num_predict"] = opts.MaxTokens
@@ -159,7 +161,7 @@ func convertMessages(messages []llms.MessageContent) ([]ollamaMessage, error) {
 		for _, p := range mc.Parts {
 			switch pt := p.(type) {
 			case llms.TextContent:
-				msg.Content = pt.Text
+				msg.Content += pt.Text
 			case llms.ToolCall:
 				if pt.FunctionCall != nil {
 					var args map[string]any

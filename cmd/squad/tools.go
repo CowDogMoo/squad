@@ -30,6 +30,12 @@ var mutatingTools = map[string]bool{
 	"Write": true,
 }
 
+var highRepeatTools = map[string]bool{
+	"Read": true,
+	"Glob": true,
+	"Grep": true,
+}
+
 const maxMutatingToolRepeat = 50
 
 type toolHandler struct {
@@ -61,6 +67,9 @@ func (t *toolRepeatTracker) update(calls []llms.ToolCall) {
 
 func (t *toolRepeatTracker) exceeded() bool {
 	limit := maxSameToolRepeat
+	if highRepeatTools[t.lastName] {
+		limit = maxToolIterations
+	}
 	if mutatingTools[t.lastName] {
 		limit = maxMutatingToolRepeat
 	}

@@ -42,3 +42,6 @@ TODO
 *.test
 test-results/
 testdata/tmp/
+
+.claude
+FIXME.md

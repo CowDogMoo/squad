@@ -183,7 +183,7 @@ func (l *CustomLogger) Error(firstArg interface{}, args ...interface{}) {
 		format = fmt.Sprintf("%v", v)
 	}
 
-	l.log(ErrorLevel, format, args...)
+	l.log(ErrorLevel, "%s", format)
 }
 
 func DetermineLogLevel(levelStr string) slog.Level {

@@ -127,40 +127,59 @@ var runCmd = &cobra.Command{
 		temperature := pickFloat(runTemperature, cfg.Model.Temperature)
 		maxTokens := pickInt(runMaxTokens, cfg.Model.MaxTokens)
 
-		llm, err := buildLLM(provider, model, cfg)
-		if err != nil {
-			return err
-		}
-
-		callOpts := []llms.CallOption{
-			llms.WithTemperature(temperature),
-		}
-
-		if maxTokens > 0 {
-			if isOpenAICompatProvider(provider) {
-				useLegacy := provider != "openai" || runOpenAICompatMax || cfg.Provider.OpenAICompatMaxTokens
-				if useLegacy {
-					callOpts = append(callOpts, llms.WithMaxTokens(maxTokens), openai.WithLegacyMaxTokensField())
-				} else {
-					callOpts = append(callOpts, openai.WithMaxCompletionTokens(maxTokens))
-				}
-			} else {
-				callOpts = append(callOpts, llms.WithMaxTokens(maxTokens))
-			}
-		}
-
 		systemPrompt := bundle.System
 		if runSystem != "" {
 			systemPrompt += "\n\n## System Override\n\n" + strings.TrimSpace(runSystem) + "\n"
 		}
 
-		logging.InfoContext(cmd.Context(), "model call started (provider=%s model=%s)", provider, model)
-		modelStart := time.Now()
-		response, err := runWithTools(cmd.Context(), llm, systemPrompt, bundle.User, bundle.WorkDir, callOpts...)
-		if err != nil {
-			return fmt.Errorf("model call failed: %w", err)
+		var response string
+
+		if useResponsesAPI(provider, model) {
+			apiKey, err := resolveResponsesAPIKey(cfg.Provider.Token)
+			if err != nil {
+				return err
+			}
+			baseURL := pickString(runBaseURL, cfg.Provider.BaseURL)
+			org := pickString(runOrg, cfg.Provider.Organization)
+
+			logging.InfoContext(cmd.Context(), "model call started via Responses API (provider=%s model=%s)", provider, model)
+			modelStart := time.Now()
+			response, err = runWithToolsResponses(cmd.Context(), apiKey, baseURL, model, systemPrompt, bundle.User, bundle.WorkDir, org, temperature, maxTokens)
+			if err != nil {
+				return fmt.Errorf("model call failed: %w", err)
+			}
+			logging.InfoContext(cmd.Context(), "model call finished in %s (response-bytes=%d)", time.Since(modelStart).Round(time.Millisecond), len(response))
+		} else {
+			llm, err := buildLLM(provider, model, cfg)
+			if err != nil {
+				return err
+			}
+
+			callOpts := []llms.CallOption{
+				llms.WithTemperature(temperature),
+			}
+
+			if maxTokens > 0 {
+				if isOpenAICompatProvider(provider) {
+					useLegacy := provider != "openai" || runOpenAICompatMax || cfg.Provider.OpenAICompatMaxTokens
+					if useLegacy {
+						callOpts = append(callOpts, llms.WithMaxTokens(maxTokens), openai.WithLegacyMaxTokensField())
+					} else {
+						callOpts = append(callOpts, openai.WithMaxCompletionTokens(maxTokens))
+					}
+				} else {
+					callOpts = append(callOpts, llms.WithMaxTokens(maxTokens))
+				}
+			}
+
+			logging.InfoContext(cmd.Context(), "model call started (provider=%s model=%s)", provider, model)
+			modelStart := time.Now()
+			response, err = runWithTools(cmd.Context(), llm, systemPrompt, bundle.User, bundle.WorkDir, callOpts...)
+			if err != nil {
+				return fmt.Errorf("model call failed: %w", err)
+			}
+			logging.InfoContext(cmd.Context(), "model call finished in %s (response-bytes=%d)", time.Since(modelStart).Round(time.Millisecond), len(response))
 		}
-		logging.InfoContext(cmd.Context(), "model call finished in %s (response-bytes=%d)", time.Since(modelStart).Round(time.Millisecond), len(response))
 
 		if runRequireActionable {
 			if err := validateActionableResponse(response); err != nil {
