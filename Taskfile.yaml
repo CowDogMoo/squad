@@ -212,7 +212,9 @@ tasks:
 
         Now read {{.REVIEW_TARGET}} yourself, tally findings across workers, validate each finding against the actual code, apply consensus fixes per your severity gating rules, verify with 'go build ./...', and produce your judge report.
 
-        IMPORTANT: Doc comments, cosmetic changes, magic number extraction, and style fixes are NOT eligible for the Edit tool — skip them even if workers flagged them. Only fix functional bugs, error handling, resource leaks, concurrency issues, and security problems." \
+        IMPORTANT: Doc comments, import ordering, and pure whitespace changes are NOT eligible — skip those. Everything else the workers flagged is fair game if you can verify it and the fix compiles. Apply idiomatic refactors — that is the whole point of this review.
+
+        If a fix would require creating new files, adding dependencies, or writing 50+ lines of new code, skip it as too large." \
           --agent go-review-judge \
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
@@ -337,17 +339,9 @@ tasks:
 
         Now use Glob to discover all Go files, Read each one the workers referenced, tally findings across workers, validate each finding against the actual code, apply consensus fixes per your severity gating rules, verify with 'go build ./...', and produce your judge report.
 
-        IMPORTANT: Doc comments, cosmetic changes, magic number extraction, and style fixes are NOT eligible for the Edit tool — skip them even if workers flagged them.
+        IMPORTANT: Doc comments, import ordering, and pure whitespace changes are NOT eligible — skip those. Everything else the workers flagged is fair game if you can verify it and the fix compiles. Apply idiomatic refactors — that is the whole point of this review.
 
-        These categories ARE eligible for fixes in this Cobra/Viper review:
-        - Using Run instead of RunE (fix: change to RunE and return nil)
-        - Reading flags directly instead of using Viper (fix: replace cmd.Flags().Get* with v.Get*)
-        - Missing Args validation on commands (fix: add appropriate cobra.ExactArgs/NoArgs/etc)
-        - Missing error wrapping (fix: wrap with fmt.Errorf and %%w)
-        - Ignored errors from BindPFlag (fix: check error return)
-        - Functional bugs, error handling, resource leaks, concurrency issues, and security problems
-
-        Findings about project structure, config validation architecture, global Viper refactoring, or adding entirely new features (graceful shutdown, shell completions) require too much new code — skip those." \
+        If a fix would require creating new files, adding dependencies, or writing 50+ lines of new code, skip it as too large." \
           --agent go-review-judge \
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
