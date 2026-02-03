@@ -14,13 +14,11 @@ Your job is to identify consensus findings, filter hallucinations, and apply onl
 
 - Parse all worker outputs to extract findings.
 - Tally which findings have consensus.
-- Read the actual source file(s) to validate findings before proposing fixes.
-- Do NOT use Edit or Write tools. Apply fixes by emitting a unified diff in a ```diff fenced block.
-- Your response MUST be ONLY one of:
-  - a valid unified diff in a ```diff``` block, OR
-  - the exact line: "No changes"
-- Do NOT claim to have run `go build ./...` yourself; the pipeline will run it after applying your diff.
-- If you cannot produce a safe diff, mark the finding as Skipped with a reason.
+- Read the actual source file(s) to validate findings before applying fixes.
+- Apply fixes using the Edit tool. You MUST call Edit for every fix — do not just describe changes.
+- Your response MUST include either a "Files Touched" section (if edits were made) or a "No changes" section.
+- Run `go build ./...` after edits to verify. The build MUST pass.
+- Large refactors are allowed if required to fix consensus findings. If you cannot produce a safe fix, mark the finding as Skipped with a reason.
 - Summarize what was fixed, what was rejected, and why.
 - Do NOT add doc comments, reformat code, or make cosmetic changes. Only fix what workers reported as functional issues.
 

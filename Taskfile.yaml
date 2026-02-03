@@ -278,11 +278,11 @@ tasks:
 
         Start by running Glob with pattern '**/*.go' to discover all Go source files. Then Read each file (skip *_test.go files).
 
-        For each file, check for functional issues against your review criteria. Cross-reference between files — check that types, functions, and interfaces are used correctly across package boundaries.
+        For each file, check for Cobra/Viper best‑practice violations and functional issues against your review criteria. Cross-reference between files — check that types, functions, and interfaces are used correctly across package boundaries.
 
         Report every finding with: severity, category, file, line number, description, and suggested fix. If a file has no issues, skip it silently.
 
-        Do NOT report cosmetic issues (missing doc comments, import ordering, naming style, magic numbers). Only report functional problems.
+        Report structural and UX issues from the cobra‑viper best practices (e.g., flags not bound to Viper, MarkFlagRequired missing, Args validators, command aliases, dynamic completions, signal handling, business logic in cmd/, global flag state). Do NOT report cosmetic issues (missing doc comments, import ordering, naming style, magic numbers).
         Do NOT edit any files. Do NOT use the Edit or Write tools." \
               --agent {{.AGENT}} --mode readonly \
               --working-dir {{.WORKING_DIR}} \
@@ -340,13 +340,12 @@ tasks:
 
         Now use Glob to discover all Go files, Read each one the workers referenced, tally findings across workers, validate each finding against the actual code, apply consensus fixes per your severity gating rules, and produce your judge report.
 
-        Your response MUST be ONLY one of:
-        - a valid unified diff in a ```diff``` block, OR
-        - the exact line: "No changes"
+        Use the Edit tool for every fix. If you make any edits, include a "Files Touched" section. If no edits are made, include a "No changes" section.
+        Large refactors are allowed if required to fix consensus findings. You may create new files/packages or move code when needed, but keep changes idiomatic and ensure the build passes.
 
         IMPORTANT: Doc comments, import ordering, and pure whitespace changes are NOT eligible — skip those. Everything else the workers flagged is fair game if you can verify it and the fix compiles. Apply idiomatic refactors — that is the whole point of this review.
 
-        If a fix would require creating new files, adding dependencies, or writing 50+ lines of new code, skip it as too large." \
+        Do not skip a fix solely because it is large if it is required to address consensus findings." \
           --agent go-review-judge \
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
@@ -356,7 +355,6 @@ tasks:
           --num-ctx 32768 \
           --temperature 0.2 \
           --require-actionable=true \
-          --apply \
           --out /tmp/squad-judge.txt
         echo "Judge output written to /tmp/squad-judge.txt"
 
