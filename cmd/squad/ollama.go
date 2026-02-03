@@ -51,7 +51,12 @@ func (o *ollamaLLM) GenerateContent(ctx context.Context, messages []llms.Message
 	if err != nil {
 		return nil, err
 	}
-	tools := convertTools(opts.Tools)
+	// Ollama has no tool_choice parameter. When tool_choice is "none",
+	// omit tools entirely so the model cannot call them.
+	var tools []ollamaTool
+	if fmt.Sprintf("%v", opts.ToolChoice) != "none" {
+		tools = convertTools(opts.Tools)
+	}
 
 	reqBody := ollamaChatRequest{
 		Model:    o.model,

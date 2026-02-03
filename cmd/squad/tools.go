@@ -20,10 +20,35 @@ import (
 
 const maxToolIterations = 100
 const maxToolOutput = 64 * 1024
+const maxSameToolRepeat = 10
 
 type toolHandler struct {
 	def  llms.Tool
 	call func(ctx context.Context, rawArgs []byte) (string, error)
+}
+
+// toolRepeatTracker detects when the model is stuck calling the same
+// tool repeatedly (e.g. Bash in a loop).
+type toolRepeatTracker struct {
+	lastName string
+	count    int
+}
+
+func (t *toolRepeatTracker) update(calls []llms.ToolCall) {
+	name := ""
+	if len(calls) == 1 && calls[0].FunctionCall != nil {
+		name = calls[0].FunctionCall.Name
+	}
+	if name != "" && name == t.lastName {
+		t.count++
+	} else {
+		t.count = 1
+		t.lastName = name
+	}
+}
+
+func (t *toolRepeatTracker) exceeded() bool {
+	return t.count >= maxSameToolRepeat
 }
 
 func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, callOpts ...llms.CallOption) (string, error) {
@@ -31,18 +56,24 @@ func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
 	messages := buildInitialMessages(systemPrompt, userPrompt)
+	lastContent, messages := toolLoop(ctx, llm, messages, handlers, callOpts)
 
+	return finishToolLoop(ctx, llm, messages, lastContent, callOpts)
+}
+
+func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]toolHandler, callOpts []llms.CallOption) (string, []llms.MessageContent) {
 	var lastContent string
+	var repeat toolRepeatTracker
 	for i := 0; i < maxToolIterations; i++ {
 		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxToolIterations)
 		iterStart := time.Now()
 		response, err := llm.GenerateContent(ctx, messages, callOpts...)
 		iterDuration := time.Since(iterStart)
 		if err != nil {
-			return "", err
+			return lastContent, messages
 		}
 		if response == nil || len(response.Choices) == 0 {
-			return "", fmt.Errorf("model returned no choices")
+			return lastContent, messages
 		}
 
 		choice := response.Choices[0]
@@ -54,24 +85,33 @@ func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 		}
 		if len(choice.ToolCalls) == 0 {
 			logging.InfoContext(ctx, "model returned final response in %s (no tool calls)", iterDuration.Round(time.Millisecond))
-			return choice.Content, nil
+			return choice.Content, messages
 		}
 		logging.DebugContext(ctx, "model responded in %s with %d tool call(s)", iterDuration.Round(time.Millisecond), len(choice.ToolCalls))
+
+		repeat.update(choice.ToolCalls)
+		if repeat.exceeded() {
+			logging.InfoContext(ctx, "model called %s %d times in a row, breaking tool loop", repeat.lastName, repeat.count)
+			break
+		}
 
 		messages = appendToolCallMessage(messages, choice.ToolCalls, ctx)
 		messages = executeToolCalls(ctx, messages, choice.ToolCalls, handlers)
 	}
+	return lastContent, messages
+}
 
-	// Hit the iteration limit. Try one final call without tools to force
-	// the model to produce a text response with whatever it has so far.
-	logging.InfoContext(ctx, "tool loop hit %d iterations, requesting final response without tools", maxToolIterations)
-	noToolOpts := make([]llms.CallOption, 0, len(callOpts)+1)
-	noToolOpts = append(noToolOpts, callOpts...)
-	noToolOpts = append(noToolOpts, llms.WithTools([]llms.Tool{}))
+func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, lastContent string, callOpts []llms.CallOption) (string, error) {
+	// Hit the iteration or repetition limit. Make one final call with
+	// tool_choice="none" to force the model to produce a text summary.
+	logging.InfoContext(ctx, "tool loop ended, requesting final response with tool_choice=none")
+	finalOpts := make([]llms.CallOption, len(callOpts), len(callOpts)+1)
+	copy(finalOpts, callOpts)
+	finalOpts = append(finalOpts, llms.WithToolChoice("none"))
 
-	response, err := llm.GenerateContent(ctx, messages, noToolOpts...)
+	response, err := llm.GenerateContent(ctx, messages, finalOpts...)
 	if err == nil && response != nil && len(response.Choices) > 0 && response.Choices[0].Content != "" {
-		logging.InfoContext(ctx, "final no-tools call produced response (%d bytes)", len(response.Choices[0].Content))
+		logging.InfoContext(ctx, "final call produced response (%d bytes)", len(response.Choices[0].Content))
 		return response.Choices[0].Content, nil
 	}
 
@@ -81,7 +121,7 @@ func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 		return lastContent, nil
 	}
 
-	return "", fmt.Errorf("tool loop exceeded %d iterations with no usable response", maxToolIterations)
+	return "", fmt.Errorf("tool loop ended after %d iterations with no usable response", maxToolIterations)
 }
 
 func buildInitialMessages(systemPrompt, userPrompt string) []llms.MessageContent {
