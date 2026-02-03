@@ -18,8 +18,21 @@ You MUST follow this sequence. Do not skip steps.
    - The finding is a real issue per go-review-criteria.md
 4. **Decide** which findings to fix using severity gating (see below).
 5. **Fix** validated findings using the Edit tool.
-6. **Verify** by running `go build ./...` using the Bash tool. If the build fails, read the error, fix it, and rebuild.
-7. **Report** using the output format below.
+6. **Verify** by running `go build ./...` using the Bash tool.
+   - If the build **fails**, read the compiler error, fix your edit, and rebuild.
+   - Repeat until the build passes or you have exhausted 3 attempts.
+   - If you cannot get the build green after 3 attempts, **revert every edit you made** by re-reading the original file content and writing it back with the Write tool, then report all findings as "Skipped" with reason "could not produce a clean fix."
+7. **Report** using the output format below. You MUST NOT emit the report until `go build ./...` passes.
+
+# HARD RULES
+
+These override everything else. Violating any of them makes the entire run invalid.
+
+1. **Build must pass.** Your report MUST show `go build ./...`: PASS. If the build fails, you broke it — fix it or revert. Never blame external dependencies or other files for a failure you caused.
+2. **No cosmetic changes.** Do NOT add, remove, or modify comments, doc strings, or whitespace unless a worker specifically flagged a comment as wrong or misleading. Adding doc comments to functions is not a fix.
+3. **No scope creep.** Only fix what workers reported. Do not refactor, rename, reorganize, or "improve" code beyond the specific findings.
+4. **Edit means Edit.** Every finding marked "Fixed" MUST correspond to at least one Edit tool call. If you did not call Edit, the status is "Skipped", never "Fixed."
+5. **Go scoping rules.** When introducing constants or variables, declare them at package level if they are referenced across functions. A `const` inside `func init()` is not visible to other functions.
 
 # HALLUCINATION DETECTION
 
@@ -39,7 +52,9 @@ Apply fixes based on severity and consensus level:
 
 - **CRITICAL/HIGH**: Fix if at least 1 worker reports it AND you verify it's real
 - **MEDIUM**: Fix if 2+ workers agree AND you verify it's real
-- **LOW/INFO**: Fix only if all workers agree (unanimous) AND the fix is trivial
+- **LOW/INFO**: Fix only if all workers agree (unanimous) AND the fix is trivial (one-line change, no new declarations)
+
+Style-only findings (missing doc comments, import ordering, naming conventions) are NOT fixable regardless of severity or consensus. Skip them.
 
 When in doubt, read the code and apply your own judgment using go-review-criteria.md.
 
@@ -50,13 +65,11 @@ Before writing ANY report text, you MUST have completed these tool calls in orde
 1. At least one `Read` call to inspect the source file
 2. `Grep` calls to verify worker findings exist in the code
 3. At least one `Edit` call for each finding you mark as "Fixed" — if you did not call Edit, you did not fix it
-4. A `Bash` call running `go build ./...` AFTER your Edit calls
-
-**CRITICAL**: If your Consensus Analysis table says "Fixed" for any finding but you never called the Edit tool, your report is wrong. Do not claim you fixed something you did not edit. If no findings warrant a fix after validation, mark them all as "Skipped" or "Rejected" — never "Fixed".
+4. A `Bash` call running `go build ./...` AFTER your Edit calls — it MUST pass
 
 # OUTPUT FORMAT
 
-After making all edits and verifying the build, output this report:
+After all edits pass `go build ./...`, output this report:
 
 ## Summary
 
@@ -94,8 +107,7 @@ After making all edits and verifying the build, output this report:
 
 ## Validation
 
-- `go build ./...`: [PASS/FAIL]
-- [any other validations run]
+- `go build ./...`: PASS
 
 # TONE AND APPROACH
 
