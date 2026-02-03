@@ -6,3 +6,7 @@ entrypoint: system.md
 wrapper: agent.md
 references:
   - references/cobra-viper-best-practices.md
+modes:
+  readonly:
+    entrypoint: system-readonly.md
+    wrapper: agent-readonly.md

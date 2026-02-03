@@ -34,6 +34,9 @@ Only these categories are eligible for the Edit tool:
 - Resource leaks: unclosed files, connections, goroutine leaks
 - Concurrency: data races, missing synchronization, context misuse
 - Security: injection, unsafe input handling
+- Framework misuse: using wrong API (e.g. Run vs RunE in Cobra), bypassing intended patterns (e.g. reading flags directly instead of Viper), missing required validators (e.g. Args validation in Cobra commands)
+
+Note: The user prompt may expand this list with domain-specific fix categories. If the user prompt says a category is eligible for fixes, trust it.
 
 # KNOWLEDGE BASE
 

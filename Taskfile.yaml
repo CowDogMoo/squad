@@ -266,22 +266,22 @@ tasks:
     silent: true
     cmds:
       - |
-        echo "Starting {{.NUM_WORKERS}} codebase review workers in parallel..."
+        echo "Starting {{.NUM_WORKERS}} codebase review workers (agent={{.AGENT}}) in parallel..."
         pids=""
         for i in $(seq 1 {{.NUM_WORKERS}}); do
           (
             go run ./cmd/squad run -v \
-              "Review the ENTIRE Go codebase using ALL 12 review categories from go-review-criteria.md.
+              "Review the ENTIRE Go codebase.
 
         Start by running Glob with pattern '**/*.go' to discover all Go source files. Then Read each file (skip *_test.go files).
 
-        For each file, check for functional issues: error handling bugs, resource leaks, concurrency problems, security issues, incorrect logic, and API misuse. Cross-reference between files — check that types, functions, and interfaces are used correctly across package boundaries.
+        For each file, check for functional issues against your review criteria. Cross-reference between files — check that types, functions, and interfaces are used correctly across package boundaries.
 
         Report every finding with: severity, category, file, line number, description, and suggested fix. If a file has no issues, skip it silently.
 
         Do NOT report cosmetic issues (missing doc comments, import ordering, naming style, magic numbers). Only report functional problems.
         Do NOT edit any files. Do NOT use the Edit or Write tools." \
-              --agent go-review --mode readonly \
+              --agent {{.AGENT}} --mode readonly \
               --working-dir {{.WORKING_DIR}} \
               --api-key {{.API_KEY}} \
               --provider {{.PROVIDER}} \
@@ -337,7 +337,17 @@ tasks:
 
         Now use Glob to discover all Go files, Read each one the workers referenced, tally findings across workers, validate each finding against the actual code, apply consensus fixes per your severity gating rules, verify with 'go build ./...', and produce your judge report.
 
-        IMPORTANT: Doc comments, cosmetic changes, magic number extraction, and style fixes are NOT eligible for the Edit tool — skip them even if workers flagged them. Only fix functional bugs, error handling, resource leaks, concurrency issues, and security problems." \
+        IMPORTANT: Doc comments, cosmetic changes, magic number extraction, and style fixes are NOT eligible for the Edit tool — skip them even if workers flagged them.
+
+        These categories ARE eligible for fixes in this Cobra/Viper review:
+        - Using Run instead of RunE (fix: change to RunE and return nil)
+        - Reading flags directly instead of using Viper (fix: replace cmd.Flags().Get* with v.Get*)
+        - Missing Args validation on commands (fix: add appropriate cobra.ExactArgs/NoArgs/etc)
+        - Missing error wrapping (fix: wrap with fmt.Errorf and %%w)
+        - Ignored errors from BindPFlag (fix: check error return)
+        - Functional bugs, error handling, resource leaks, concurrency issues, and security problems
+
+        Findings about project structure, config validation architecture, global Viper refactoring, or adding entirely new features (graceful shutdown, shell completions) require too much new code — skip those." \
           --agent go-review-judge \
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
