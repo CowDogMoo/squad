@@ -1,0 +1,8 @@
+---
+name: python-doc-comments
+version: 0.1.0
+description: Generate or improve Python documentation, docstrings, and type hints following PEP standards.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/python-documentation-standards.md

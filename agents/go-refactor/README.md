@@ -5,6 +5,7 @@ A comprehensive fabric pattern for refactoring Go code to be more idiomatic, mai
 ## Pattern Structure
 
 This pattern includes:
+
 - **`system.md`** - The refactoring framework and prompt engineering for LLM
 - **`go-best-practices.md`** - Comprehensive reference document with detailed patterns (source of truth)
 - **`filter.sh`** - Post-processing to clean up output formatting
@@ -18,6 +19,7 @@ The pattern is designed with **separation of concerns**: the `go-best-practices.
 ## Purpose
 
 This pattern helps you:
+
 - **Identify anti-patterns** in Go code (deep nesting, poor error handling, etc.)
 - **Apply idiomatic patterns** following official Go guidelines
 - **Improve code quality** without changing behavior
@@ -125,16 +127,19 @@ done
 The pattern generates output with:
 
 ### Refactored Code
+
 - Complete, runnable Go code
 - All improvements applied
 - Proper formatting (gofmt-compatible)
 
 ### Changes Made
+
 - Numbered list of changes
 - Explanation of why each change was made
 - Reference to pattern from knowledge base
 
 ### Notes
+
 - Important assumptions made
 - Potential follow-up improvements
 - Behavior-preserving guarantees
@@ -196,6 +201,7 @@ func GetUser(id int) (*User, error) {
 ### When to Use This Pattern
 
 **Good use cases:**
+
 - Refactoring legacy Go code
 - Code review preparation
 - Learning idiomatic Go patterns
@@ -203,6 +209,7 @@ func GetUser(id int) (*User, error) {
 - Pre-commit code improvements
 
 **Not ideal for:**
+
 - Large-scale architectural changes
 - Adding new functionality
 - Performance-critical optimizations (use profiling instead)
@@ -210,6 +217,7 @@ func GetUser(id int) (*User, error) {
 ### Preserving Functionality
 
 The pattern is designed to:
+
 - Never change the public API
 - Maintain exact behavior
 - Preserve backwards compatibility
@@ -218,6 +226,7 @@ The pattern is designed to:
 ### Iterative Refactoring
 
 For large files, consider:
+
 1. Refactor one function at a time
 2. Review and test each change
 3. Commit incrementally
@@ -236,6 +245,7 @@ To add or modify refactoring patterns, edit the `go-best-practices.md` file:
 ### Adjusting Output Format
 
 To modify the output structure, edit the `# OUTPUT FORMAT` section in `system.md`:
+
 - Add new sections
 - Change formatting
 - Adjust detail level
@@ -245,6 +255,7 @@ To modify the output structure, edit the `# OUTPUT FORMAT` section in `system.md
 ### Issue: Pattern changes too much
 
 **Solution:** The pattern tries to be comprehensive. For targeted changes, provide specific instructions:
+
 ```bash
 echo "// Only fix error handling\n$(cat myfile.go)" | fabric --pattern go-refactor
 ```
@@ -252,6 +263,7 @@ echo "// Only fix error handling\n$(cat myfile.go)" | fabric --pattern go-refact
 ### Issue: Output isn't gofmt-compatible
 
 **Solution:** Run gofmt on the output:
+
 ```bash
 cat myfile.go | fabric --pattern go-refactor | gofmt
 ```

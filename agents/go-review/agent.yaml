@@ -1,3 +1,4 @@
+---
 name: go-review
 version: 0.1.0
 description: Review Go code for correctness, performance, and maintainability, and apply fixes.
@@ -5,3 +6,7 @@ entrypoint: system.md
 wrapper: agent.md
 references:
   - references/go-review-criteria.md
+modes:
+  readonly:
+    entrypoint: system-readonly.md
+    wrapper: agent-readonly.md

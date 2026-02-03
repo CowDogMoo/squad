@@ -172,10 +172,10 @@ func (l *CustomLogger) Error(firstArg interface{}, args ...interface{}) {
 	var format string
 	switch v := firstArg.(type) {
 	case error:
-		if len(args) == 0 {
-			format = v.Error()
-		} else {
-			format = fmt.Sprintf(v.Error(), args...)
+		// Treat error as a value, not a format string
+		format = v.Error()
+		if len(args) > 0 {
+			format = fmt.Sprintf("%s %v", format, args)
 		}
 	case string:
 		format = v
@@ -183,7 +183,7 @@ func (l *CustomLogger) Error(firstArg interface{}, args ...interface{}) {
 		format = fmt.Sprintf("%v", v)
 	}
 
-	l.log(ErrorLevel, format, args...)
+	l.log(ErrorLevel, "%s", format)
 }
 
 func DetermineLogLevel(levelStr string) slog.Level {

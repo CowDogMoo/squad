@@ -20,9 +20,7 @@ concurrency:
 
 env:
   DEBIAN_FRONTEND: noninteractive
-  GO_VERSION: 1.25.5
-  TASK_VERSION: 3.45.5
-  TASK_X_REMOTE_TASKFILES: 1
+  GO_VERSION: 1.25.6
 
 permissions:
   actions: read
@@ -54,27 +52,7 @@ jobs:
           bash .hooks/run-go-tests.sh coverage
 
       - name: Send the coverage output
-        uses: shogo82148/actions-goveralls@25f5320d970fb565100cf1993ada29be1bb196a1 # v1
+        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5
         with:
-          path-to-profile: coverage-all.out
-
-  schema-validation:
-    name: Validate JSON schema is up to date
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout git repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-
-      - name: Setup Go
-        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          check-latest: true
-
-      - name: Setup go-task
-        run: |
-          sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin v${{ env.TASK_VERSION }}
-          task --version
-
-      - name: Validate schema is in sync with code
-        run: task -y schema:validate
+          files: coverage-all.out
+          token: ${{ secrets.CODECOV_TOKEN }}

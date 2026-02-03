@@ -1,3 +1,4 @@
+---
 name: ansible-review
 version: 0.1.0
 description: Review Ansible playbooks/roles for best practices and apply fixes.

@@ -55,7 +55,7 @@ type ProviderConfig struct {
 	APIVersion            string `mapstructure:"api_version" yaml:"api_version"`
 	APIType               string `mapstructure:"api_type" yaml:"api_type"`
 	OpenAICompatMaxTokens bool   `mapstructure:"openai_compat_max_tokens" yaml:"openai_compat_max_tokens"`
-	Token                 string `mapstructure:"token" yaml:"-"`
+	Token                 string `mapstructure:"token" yaml:"token"`
 }
 
 // ModelConfig holds model defaults.
@@ -129,7 +129,7 @@ func loadConfigWithViper(setup func(*viper.Viper) error) (*Config, error) {
 	}
 
 	cfg := Defaults()
-	if err := v.Unmarshal(&cfg); err != nil {
+	if err := v.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("config unmarshal failed: %w", err)
 	}
 

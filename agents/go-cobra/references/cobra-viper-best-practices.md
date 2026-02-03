@@ -31,6 +31,7 @@ APPNAME COMMAND ARG --FLAG
 ```
 
 **Good Examples:**
+
 ```bash
 git clone URL --depth 1
 kubectl get pods --namespace kube-system
@@ -39,6 +40,7 @@ myapp deploy production --dry-run
 ```
 
 **Bad Examples:**
+
 ```bash
 myapp --deploy production           # Flag instead of command
 myapp production-deploy             # Hyphenated compound
@@ -47,13 +49,13 @@ myapp do_deployment --env=prod      # Underscores, verbose
 
 ### Command Hierarchy
 
-| Level | Purpose | Example |
-|-------|---------|---------|
-| Root | Application entry point | `myapp` |
-| Command | Primary action | `myapp serve` |
-| Subcommand | Action refinement | `myapp config set` |
-| Arguments | Required input | `myapp deploy prod` |
-| Flags | Optional modifiers | `--verbose`, `--port 8080` |
+| Level      | Purpose                 | Example                    |
+| ---------- | ----------------------- | -------------------------- |
+| Root       | Application entry point | `myapp`                    |
+| Command    | Primary action          | `myapp serve`              |
+| Subcommand | Action refinement       | `myapp config set`         |
+| Arguments  | Required input          | `myapp deploy prod`        |
+| Flags      | Optional modifiers      | `--verbose`, `--port 8080` |
 
 ### Naming Conventions
 
@@ -84,16 +86,17 @@ myapp/
 
 ### Critical Rules
 
-| Rule | Severity | Rationale |
-|------|----------|-----------|
-| Minimal main.go | HIGH | Entry point only initializes and executes |
-| One command per file | MEDIUM | Maintainability and clarity |
-| Business logic in internal/ | HIGH | Separation of concerns, testability |
-| Config structs separate | MEDIUM | Reusable, type-safe configuration |
+| Rule                        | Severity | Rationale                                 |
+| --------------------------- | -------- | ----------------------------------------- |
+| Minimal main.go             | HIGH     | Entry point only initializes and executes |
+| One command per file        | MEDIUM   | Maintainability and clarity               |
+| Business logic in internal/ | HIGH     | Separation of concerns, testability       |
+| Config structs separate     | MEDIUM   | Reusable, type-safe configuration         |
 
 ### Minimal main.go
 
 **Good:**
+
 ```go
 package main
 
@@ -111,6 +114,7 @@ func main() {
 ```
 
 **Bad:**
+
 ```go
 package main
 
@@ -152,16 +156,17 @@ var exampleCmd = &cobra.Command{
 
 ### Critical Checks
 
-| Check | Severity | Rationale |
-|-------|----------|-----------|
-| Use RunE not Run | HIGH | Proper error propagation |
-| Args validation | MEDIUM | User feedback before execution |
-| Short description | MEDIUM | Help readability |
-| Example usage | LOW | User guidance |
+| Check             | Severity | Rationale                      |
+| ----------------- | -------- | ------------------------------ |
+| Use RunE not Run  | HIGH     | Proper error propagation       |
+| Args validation   | MEDIUM   | User feedback before execution |
+| Short description | MEDIUM   | Help readability               |
+| Example usage     | LOW      | User guidance                  |
 
 ### RunE vs Run
 
 **Good - RunE:**
+
 ```go
 RunE: func(cmd *cobra.Command, args []string) error {
     if err := doSomething(); err != nil {
@@ -172,6 +177,7 @@ RunE: func(cmd *cobra.Command, args []string) error {
 ```
 
 **Bad - Run:**
+
 ```go
 Run: func(cmd *cobra.Command, args []string) {
     doSomething()  // Errors are swallowed
@@ -181,6 +187,7 @@ Run: func(cmd *cobra.Command, args []string) {
 ### Argument Validation
 
 **Built-in validators:**
+
 ```go
 Args: cobra.NoArgs              // No arguments allowed
 Args: cobra.ExactArgs(2)        // Exactly 2 arguments
@@ -191,6 +198,7 @@ Args: cobra.OnlyValidArgs       // Only from ValidArgs list
 ```
 
 **Custom validation:**
+
 ```go
 Args: func(cmd *cobra.Command, args []string) error {
     if len(args) < 1 {
@@ -206,6 +214,7 @@ Args: func(cmd *cobra.Command, args []string) error {
 ### Command Lifecycle Hooks
 
 Execution order:
+
 1. `PersistentPreRun` (inherited by children)
 2. `PreRun`
 3. `Run` / `RunE`
@@ -213,6 +222,7 @@ Execution order:
 5. `PersistentPostRun` (inherited by children)
 
 **Good - Use PersistentPreRunE for initialization:**
+
 ```go
 var rootCmd = &cobra.Command{
     Use:   "myapp",
@@ -248,15 +258,15 @@ func init() {
 
 ### Flag Types Reference
 
-| Type | Method | Example |
-|------|--------|---------|
-| String | `StringVarP` | `--name value` |
-| Int | `IntVarP` | `--port 8080` |
-| Bool | `BoolVarP` | `--verbose` |
-| Duration | `DurationVarP` | `--timeout 30s` |
-| StringSlice | `StringSliceVarP` | `--tag a,b --tag c` |
+| Type        | Method            | Example                              |
+| ----------- | ----------------- | ------------------------------------ |
+| String      | `StringVarP`      | `--name value`                       |
+| Int         | `IntVarP`         | `--port 8080`                        |
+| Bool        | `BoolVarP`        | `--verbose`                          |
+| Duration    | `DurationVarP`    | `--timeout 30s`                      |
+| StringSlice | `StringSliceVarP` | `--tag a,b --tag c`                  |
 | StringArray | `StringArrayVarP` | `--tag a,b --tag c` (no comma split) |
-| Count | `CountVarP` | `-v`, `-vv`, `-vvv` |
+| Count       | `CountVarP`       | `-v`, `-vv`, `-vvv`                  |
 
 ### Required Flags
 
@@ -315,12 +325,13 @@ func init() {
 
 ### Avoid the Global Instance
 
-| Pattern | Severity | Status |
-|---------|----------|--------|
-| Use dedicated Viper instance | HIGH | Recommended |
-| Global viper singleton | MEDIUM | Avoid |
+| Pattern                      | Severity | Status      |
+| ---------------------------- | -------- | ----------- |
+| Use dedicated Viper instance | HIGH     | Recommended |
+| Global viper singleton       | MEDIUM   | Avoid       |
 
 **Good - Explicit instance:**
+
 ```go
 func NewConfig() (*Config, error) {
     v := viper.New()
@@ -331,6 +342,7 @@ func NewConfig() (*Config, error) {
 ```
 
 **Bad - Global singleton:**
+
 ```go
 func init() {
     viper.SetConfigName("config")  // Hard to test
@@ -504,6 +516,7 @@ func initConfig() {
 ### Reading Values in Commands
 
 **Good - Read from Viper:**
+
 ```go
 func runServe(cmd *cobra.Command, args []string) error {
     // Read from Viper (respects precedence: flag > env > file > default)
@@ -515,6 +528,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 ```
 
 **Bad - Read directly from flags:**
+
 ```go
 func runServe(cmd *cobra.Command, args []string) error {
     // Bypasses precedence - ignores env vars and config file
@@ -556,11 +570,13 @@ func init() {
 ### Actionable Error Messages
 
 **Good:**
+
 ```go
 return fmt.Errorf("config file not found at %s (create one or use --config)", path)
 ```
 
 **Bad:**
+
 ```go
 return errors.New("config not found")
 ```
@@ -775,9 +791,9 @@ func init() {
         func(cmd *cobra.Command, args []string, toComplete string) (
             []string, cobra.ShellCompDirective) {
             return []string{
-                "us-east-1\tN. Virginia",
-                "us-west-2\tOregon",
-                "eu-west-1\tIreland",
+                "us-east-1  N. Virginia",
+                "us-west-2  Oregon",
+                "eu-west-1  Ireland",
             }, cobra.ShellCompDirectiveNoFileComp
         })
 }
@@ -893,22 +909,23 @@ func initLogger(v *viper.Viper) *slog.Logger {
 
 ### Common Mistakes to Avoid
 
-| Anti-Pattern | Severity | Why It's Bad |
-|--------------|----------|--------------|
-| Using Run instead of RunE | HIGH | Errors are silently ignored |
-| Reading flags directly in commands | HIGH | Bypasses config precedence |
-| Global Viper singleton | MEDIUM | Hard to test |
-| Business logic in cmd/ | HIGH | Tight coupling, hard to test |
-| Complex main.go | MEDIUM | Entry point should be minimal |
-| Goroutines in init() | HIGH | Unpredictable startup |
-| Ignoring errors from BindPFlag | MEDIUM | Silent configuration issues |
-| Hardcoded config paths | MEDIUM | Inflexible deployment |
-| Missing shell completions | LOW | Reduced UX |
-| Missing version command | LOW | Deployment debugging difficulty |
+| Anti-Pattern                       | Severity | Why It's Bad                    |
+| ---------------------------------- | -------- | ------------------------------- |
+| Using Run instead of RunE          | HIGH     | Errors are silently ignored     |
+| Reading flags directly in commands | HIGH     | Bypasses config precedence      |
+| Global Viper singleton             | MEDIUM   | Hard to test                    |
+| Business logic in cmd/             | HIGH     | Tight coupling, hard to test    |
+| Complex main.go                    | MEDIUM   | Entry point should be minimal   |
+| Goroutines in init()               | HIGH     | Unpredictable startup           |
+| Ignoring errors from BindPFlag     | MEDIUM   | Silent configuration issues     |
+| Hardcoded config paths             | MEDIUM   | Inflexible deployment           |
+| Missing shell completions          | LOW      | Reduced UX                      |
+| Missing version command            | LOW      | Deployment debugging difficulty |
 
 ### Anti-Pattern Examples
 
 **Bad - Complex main.go:**
+
 ```go
 func main() {
     initLogging()      // Don't do setup here
@@ -919,6 +936,7 @@ func main() {
 ```
 
 **Good - Minimal main.go:**
+
 ```go
 func main() {
     if err := cmd.Execute(); err != nil {
@@ -928,6 +946,7 @@ func main() {
 ```
 
 **Bad - Flags bypass config:**
+
 ```go
 func runServe(cmd *cobra.Command, args []string) error {
     port, _ := cmd.Flags().GetInt("port")  // Ignores env/config
@@ -935,6 +954,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 ```
 
 **Good - Use Viper:**
+
 ```go
 func runServe(cmd *cobra.Command, args []string) error {
     port := v.GetInt("server.port")  // Respects precedence
@@ -948,6 +968,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 ### CRITICAL
 
 Issues that affect correctness, security, or cause crashes:
+
 - Using Run instead of RunE with important error handling
 - Missing argument validation that could cause panics
 - Secrets stored in config files
@@ -956,6 +977,7 @@ Issues that affect correctness, security, or cause crashes:
 ### HIGH
 
 Significant issues affecting reliability or maintainability:
+
 - Reading flags directly instead of using Viper
 - Business logic in cmd/ package
 - Global Viper singleton
@@ -965,6 +987,7 @@ Significant issues affecting reliability or maintainability:
 ### MEDIUM
 
 Best practice violations:
+
 - Missing shell completions
 - Missing version command
 - Complex main.go
@@ -974,6 +997,7 @@ Best practice violations:
 ### LOW
 
 Minor improvements:
+
 - Missing command aliases
 - Missing Long descriptions
 - Missing Example in commands
@@ -982,6 +1006,7 @@ Minor improvements:
 ### INFO
 
 Suggestions for optimization:
+
 - Live config reload
 - Dynamic completions
 - Structured logging integration
@@ -1008,14 +1033,14 @@ Suggestions for optimization:
 
 ### Common Patterns Summary
 
-| Pattern | Location | Purpose |
-|---------|----------|---------|
-| Root command | cmd/root.go | Global config, PersistentPreRunE |
-| Subcommand | cmd/[name].go | One command per file |
-| Config struct | config/config.go | Type-safe configuration |
-| Business logic | internal/app/ | Testable, CLI-independent |
-| Flag binding | init() | Bind flags to Viper |
-| Config loading | PersistentPreRunE | Before any command runs |
+| Pattern        | Location          | Purpose                          |
+| -------------- | ----------------- | -------------------------------- |
+| Root command   | cmd/root.go       | Global config, PersistentPreRunE |
+| Subcommand     | cmd/[name].go     | One command per file             |
+| Config struct  | config/config.go  | Type-safe configuration          |
+| Business logic | internal/app/     | Testable, CLI-independent        |
+| Flag binding   | init()            | Bind flags to Viper              |
+| Config loading | PersistentPreRunE | Before any command runs          |
 
 ---
 
@@ -1029,4 +1054,4 @@ Suggestions for optimization:
 
 ---
 
-*Last updated: 2026-01-13*
+_Last updated: 2026-01-13_
