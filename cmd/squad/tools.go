@@ -56,15 +56,18 @@ func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
 	messages := buildInitialMessages(systemPrompt, userPrompt)
-	lastContent, messages, done := toolLoop(ctx, llm, messages, handlers, callOpts)
+	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, callOpts)
 	if done {
 		return lastContent, nil
+	}
+	if loopErr != nil {
+		return lastContent, loopErr
 	}
 
 	return finishToolLoop(ctx, llm, messages, lastContent, callOpts)
 }
 
-func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]toolHandler, callOpts []llms.CallOption) (string, []llms.MessageContent, bool) {
+func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]toolHandler, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
 	var lastContent string
 	var repeat toolRepeatTracker
 	for i := 0; i < maxToolIterations; i++ {
@@ -73,10 +76,12 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		response, err := llm.GenerateContent(ctx, messages, callOpts...)
 		iterDuration := time.Since(iterStart)
 		if err != nil {
-			return lastContent, messages, false
+			logging.InfoContext(ctx, "model call failed in %s: %v", iterDuration.Round(time.Millisecond), err)
+			return lastContent, messages, fmt.Errorf("GenerateContent failed: %w", err), false
 		}
 		if response == nil || len(response.Choices) == 0 {
-			return lastContent, messages, false
+			logging.InfoContext(ctx, "model returned empty response in %s", iterDuration.Round(time.Millisecond))
+			return lastContent, messages, fmt.Errorf("model returned empty response"), false
 		}
 
 		choice := response.Choices[0]
@@ -88,7 +93,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		}
 		if len(choice.ToolCalls) == 0 {
 			logging.InfoContext(ctx, "model returned final response in %s (no tool calls)", iterDuration.Round(time.Millisecond))
-			return choice.Content, messages, true
+			return choice.Content, messages, nil, true
 		}
 		logging.DebugContext(ctx, "model responded in %s with %d tool call(s)", iterDuration.Round(time.Millisecond), len(choice.ToolCalls))
 
@@ -101,7 +106,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		messages = appendToolCallMessage(messages, choice.ToolCalls, ctx)
 		messages = executeToolCalls(ctx, messages, choice.ToolCalls, handlers)
 	}
-	return lastContent, messages, false
+	return lastContent, messages, nil, false
 }
 
 func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, lastContent string, callOpts []llms.CallOption) (string, error) {

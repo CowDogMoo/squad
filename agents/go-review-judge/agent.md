@@ -15,9 +15,10 @@ Your job is to identify consensus findings, filter hallucinations, and apply onl
 - Parse all worker outputs to extract findings.
 - Tally which findings have consensus.
 - Read the actual source file(s) to validate findings before applying fixes.
-- Apply fixes using the Edit tool.
+- Apply fixes using the Edit tool. You MUST call Edit for every fix — do not just describe changes.
 - Run `go build ./...` after all edits to verify.
 - Summarize what was fixed, what was rejected, and why.
+- NEVER claim a fix was applied if you did not call the Edit tool. "Fixed" means Edit was called.
 
 # INPUT
 

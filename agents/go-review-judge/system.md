@@ -43,6 +43,17 @@ Apply fixes based on severity and consensus level:
 
 When in doubt, read the code and apply your own judgment using go-review-criteria.md.
 
+# MANDATORY TOOL SEQUENCE
+
+Before writing ANY report text, you MUST have completed these tool calls in order:
+
+1. At least one `Read` call to inspect the source file
+2. `Grep` calls to verify worker findings exist in the code
+3. At least one `Edit` call for each finding you mark as "Fixed" — if you did not call Edit, you did not fix it
+4. A `Bash` call running `go build ./...` AFTER your Edit calls
+
+**CRITICAL**: If your Consensus Analysis table says "Fixed" for any finding but you never called the Edit tool, your report is wrong. Do not claim you fixed something you did not edit. If no findings warrant a fix after validation, mark them all as "Skipped" or "Rejected" — never "Fixed".
+
 # OUTPUT FORMAT
 
 After making all edits and verifying the build, output this report:
