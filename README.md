@@ -1,5 +1,7 @@
 # squad
 
+[![codecov](https://codecov.io/gh/CowDogMoo/squad/graph/badge.svg?token=O74GTQA4J7)](https://codecov.io/gh/CowDogMoo/squad)
+
 Model-agnostic agent CLI built on LangChainGo.
 
 ## Install
