@@ -66,6 +66,7 @@ var (
 	runApply             bool
 	runApplyFallback     bool
 	runNumCtx            int
+	runMode              string
 )
 
 var runCmd = &cobra.Command{
@@ -219,14 +220,22 @@ func init() {
 	runCmd.Flags().BoolVar(&runApply, "apply", false, "Apply unified diff from the response to the working directory")
 	runCmd.Flags().BoolVar(&runApplyFallback, "apply-fallback", false, "Fallback to patch(1) if git apply fails (may create .rej/.orig)")
 	runCmd.Flags().IntVar(&runNumCtx, "num-ctx", 32768, "Context window size for Ollama models")
+	runCmd.Flags().StringVar(&runMode, "mode", "", "Agent mode override (e.g. readonly)")
+}
+
+type agentModeOverride struct {
+	EntryPoint string   `yaml:"entrypoint,omitempty"`
+	Wrapper    string   `yaml:"wrapper,omitempty"`
+	References []string `yaml:"references,omitempty"`
 }
 
 type agentManifest struct {
-	Name       string   `yaml:"name"`
-	Version    string   `yaml:"version"`
-	EntryPoint string   `yaml:"entrypoint"`
-	Wrapper    string   `yaml:"wrapper"`
-	References []string `yaml:"references"`
+	Name       string                       `yaml:"name"`
+	Version    string                       `yaml:"version"`
+	EntryPoint string                       `yaml:"entrypoint"`
+	Wrapper    string                       `yaml:"wrapper"`
+	References []string                     `yaml:"references"`
+	Modes      map[string]agentModeOverride `yaml:"modes,omitempty"`
 }
 
 type agentBundle struct {
@@ -286,6 +295,22 @@ func buildAgentBundle(agentsDir, agentName, prompt, workingDir string) (*agentBu
 	var manifest agentManifest
 	if err := yaml.Unmarshal(manifestData, &manifest); err != nil {
 		return nil, fmt.Errorf("failed to parse agent manifest: %w", err)
+	}
+
+	if runMode != "" {
+		override, ok := manifest.Modes[runMode]
+		if !ok {
+			return nil, fmt.Errorf("agent %q has no mode %q", agentName, runMode)
+		}
+		if override.EntryPoint != "" {
+			manifest.EntryPoint = override.EntryPoint
+		}
+		if override.Wrapper != "" {
+			manifest.Wrapper = override.Wrapper
+		}
+		if len(override.References) > 0 {
+			manifest.References = override.References
+		}
 	}
 
 	entryPath := filepath.Join(agentPath, manifest.EntryPoint)
