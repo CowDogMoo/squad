@@ -107,18 +107,23 @@ tasks:
       - rm -f /tmp/squad-worker-*.txt /tmp/squad-judge.txt /tmp/squad-workers-combined.txt
       - task: _run-workers
       - |
-        # Check quorum: at least 2 workers must have produced output
+        # Check quorum: at least 2 workers must have produced usable output
         count=0
         for i in $(seq 1 {{.NUM_WORKERS}}); do
           if [ -s "/tmp/squad-worker-${i}.txt" ]; then
-            count=$((count + 1))
+            findings=$(grep -c '^\*\*Severity:\*\*\|^### ' "/tmp/squad-worker-${i}.txt" 2>/dev/null || echo 0)
+            if [ "$findings" -ge 2 ]; then
+              count=$((count + 1))
+            else
+              echo "WARNING: Worker ${i} output has fewer than 2 findings — excluding from quorum."
+            fi
           fi
         done
         if [ "$count" -lt 2 ]; then
-          echo "ERROR: Only ${count} worker(s) produced output. Need at least 2 for quorum."
+          echo "ERROR: Only ${count} worker(s) produced usable output. Need at least 2 for quorum."
           exit 1
         fi
-        echo "Quorum met: ${count}/{{.NUM_WORKERS}} workers produced output."
+        echo "Quorum met: ${count}/{{.NUM_WORKERS}} workers produced usable output."
       - task: _run-judge
       - |
         echo ""
@@ -141,7 +146,13 @@ tasks:
         for i in $(seq 1 {{.NUM_WORKERS}}); do
           (
             go run ./cmd/squad run -v \
-              "Review {{.REVIEW_TARGET}} for Go best practices. Use Read to inspect the file, then provide a structured review with findings. Do NOT edit any files." \
+              "Review {{.REVIEW_TARGET}} using ALL 12 review categories from go-review-criteria.md.
+
+        For each category, Read the file and check for issues. You MUST use the Read tool and Grep tool to inspect the actual code — do not guess.
+
+        Report every finding with: severity, category, file, line number, description, and suggested fix. If a category has no issues, skip it.
+
+        Do NOT edit any files. Do NOT use the Edit or Write tools." \
               --agent go-review --mode readonly \
               --working-dir {{.WORKING_DIR}} \
               --api-key {{.API_KEY}} \
@@ -164,7 +175,12 @@ tasks:
         echo "All workers complete."
         for i in $(seq 1 {{.NUM_WORKERS}}); do
           if [ -s "/tmp/squad-worker-${i}.txt" ]; then
-            echo "  Worker ${i}: $(wc -l < /tmp/squad-worker-${i}.txt) lines"
+            lines=$(wc -l < "/tmp/squad-worker-${i}.txt")
+            findings=$(grep -c '^\*\*Severity:\*\*\|^### ' "/tmp/squad-worker-${i}.txt" 2>/dev/null || echo 0)
+            echo "  Worker ${i}: ${lines} lines, ${findings} findings"
+            if [ "$findings" -lt 2 ]; then
+              echo "  Worker ${i}: WARNING — fewer than 2 findings, output may be low quality"
+            fi
           else
             echo "  Worker ${i}: EMPTY (failed)"
           fi
