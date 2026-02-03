@@ -223,7 +223,8 @@ tasks:
           --model {{.MODEL}} \
           --num-ctx 32768 \
           --temperature 0.2 \
-          --require-actionable=false \
+          --require-actionable=true \
+          --apply \
           --out /tmp/squad-judge.txt
         echo "Judge output written to /tmp/squad-judge.txt"
 
