@@ -22,13 +22,25 @@ const maxToolIterations = 100
 const maxToolOutput = 64 * 1024
 const maxSameToolRepeat = 10
 
+// mutatingTools are tools that legitimately chain in long sequences
+// (e.g. a judge applying many edits). The repetition guard uses a
+// higher threshold for these to avoid breaking valid workflows.
+var mutatingTools = map[string]bool{
+	"Edit":  true,
+	"Write": true,
+}
+
+const maxMutatingToolRepeat = 50
+
 type toolHandler struct {
 	def  llms.Tool
 	call func(ctx context.Context, rawArgs []byte) (string, error)
 }
 
 // toolRepeatTracker detects when the model is stuck calling the same
-// tool repeatedly (e.g. Bash in a loop).
+// tool repeatedly (e.g. Bash in a loop). Mutating tools like Edit and
+// Write get a higher threshold since sequential edits are expected
+// behavior for agents applying fixes.
 type toolRepeatTracker struct {
 	lastName string
 	count    int
@@ -48,7 +60,11 @@ func (t *toolRepeatTracker) update(calls []llms.ToolCall) {
 }
 
 func (t *toolRepeatTracker) exceeded() bool {
-	return t.count >= maxSameToolRepeat
+	limit := maxSameToolRepeat
+	if mutatingTools[t.lastName] {
+		limit = maxMutatingToolRepeat
+	}
+	return t.count >= limit
 }
 
 func runWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, callOpts ...llms.CallOption) (string, error) {
