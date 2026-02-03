@@ -5,7 +5,7 @@ version: "3"
 vars:
   # Provider configuration
   PROVIDER: '{{.PROVIDER | default "ollama"}}'
-  BASE_URL: '{{.BASE_URL | default "http://localhost:11434"}}'
+  BASE_URL: '{{.BASE_URL | default ""}}'
   MODEL: '{{.MODEL | default "qwen3-coder:30b"}}'
   API_KEY: '{{.API_KEY | default "ollama"}}'
 
@@ -17,6 +17,9 @@ vars:
   # Judge pipeline configuration
   NUM_WORKERS: '{{.NUM_WORKERS | default "3"}}'
   REVIEW_TARGET: '{{.REVIEW_TARGET | default "cmd/squad/tools.go"}}'
+
+  # Internal: conditionally include --base-url flag
+  _BASE_URL_FLAG: '{{if .BASE_URL}}--base-url {{.BASE_URL}}{{end}}'
 
 tasks:
   default:
@@ -46,7 +49,7 @@ tasks:
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
-          --base-url {{.BASE_URL}} \
+          {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --out {{.OUT}}
 
@@ -67,7 +70,7 @@ tasks:
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
-          --base-url {{.BASE_URL}} \
+          {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --out {{.OUT}}
 
@@ -82,7 +85,7 @@ tasks:
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
-          --base-url {{.BASE_URL}} \
+          {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --out /tmp/squad-go-review.txt
       - echo "Review written to /tmp/squad-go-review.txt"
@@ -143,7 +146,7 @@ tasks:
               --working-dir {{.WORKING_DIR}} \
               --api-key {{.API_KEY}} \
               --provider {{.PROVIDER}} \
-              --base-url {{.BASE_URL}} \
+              {{._BASE_URL_FLAG}} \
               --model {{.MODEL}} \
               --require-actionable=false \
               --temperature 0.7 \
@@ -196,7 +199,7 @@ tasks:
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
-          --base-url {{.BASE_URL}} \
+          {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --num-ctx 32768 \
           --temperature 0.2 \
