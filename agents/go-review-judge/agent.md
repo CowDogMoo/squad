@@ -19,7 +19,7 @@ Your job is to identify consensus findings, filter hallucinations, and apply onl
 - Your response MUST include either a "Files Touched" section (if edits were made) or a "No changes" section.
 - Run `go build ./...` after edits to verify. The build MUST pass.
 - Large refactors are allowed and expected. Create new packages/files as needed. If you cannot produce a safe fix, mark the finding as Skipped with a reason — but "too large" or "architectural" are NOT valid skip reasons.
-- If workers flagged "business logic in cmd/" or "global mutable flag state", you MUST implement the fix. Follow the Mandatory Refactor Playbook in your system prompt.
+- If workers flagged "business logic in cmd/" or "global mutable flag state", you MUST implement the fix. Follow the Mandatory Refactor Playbook in your system prompt. Do NOT use `internal/` packages.
 - Summarize what was fixed, what was rejected, and why.
 - Do NOT add doc comments, reformat code, or make cosmetic changes. Only fix what workers reported as functional issues.
 

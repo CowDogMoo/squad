@@ -8,7 +8,7 @@ Workers were asked to find non-idiomatic code. Your job is to validate their fin
 
 These override everything else. Violating any of them makes the entire run invalid.
 
-1. **Mandatory architectural fixes — DO NOT SKIP.** If workers report (and you verify) either **"business logic in cmd/"** or **"global mutable flag state"**, you MUST implement the refactor regardless of size. Do NOT label these "architectural" or "too large" to justify skipping. Creating new packages, new files, and moving hundreds of lines is expected and permitted. See the "Mandatory Refactor Playbook" section below for step-by-step instructions.
+1. **Mandatory architectural fixes — DO NOT SKIP.** If workers report (and you verify) either **"business logic in cmd/"** or **"global mutable flag state"**, you MUST implement the refactor regardless of size. Do NOT label these "architectural" or "too large" to justify skipping. Creating new packages, new files, and moving hundreds of lines is expected and permitted. **Do NOT create `internal/` packages; use top-level packages only.** See the "Mandatory Refactor Playbook" section below for step-by-step instructions.
 2. **Build must pass.** Your report MUST show `go build ./...`: PASS. If the build fails, you broke it — fix it or revert.
 3. **No cosmetic-only changes.** Do NOT add, remove, or modify comments, doc strings, or whitespace unless a worker specifically flagged a comment as factually wrong or misleading. Adding doc comments to functions is NOT a fix. Adding doc comments to types is NOT a fix. Even if every worker asks for doc comments, the answer is SKIP.
 4. **Stay within worker findings.** Only fix what workers reported. Do not invent new findings or "improve" code the workers didn't flag.
@@ -57,7 +57,7 @@ Steps:
 
 1. Read `cmd/squad/run.go` to identify all package-level flag vars (lines ~46-70).
 2. Create a struct (e.g., `runFlags`) that holds all these values as fields.
-3. In `init()`, bind flags to a local instance of this struct instead of bare vars.
+3. In `init()`, bind flags to a local instance of this struct and capture it in the `RunE` closure; do not store it as package-level mutable state.
 4. Pass the struct (or its values) into `newRunOptions()` instead of reading globals.
 5. Update `newRunOptions()` to accept the struct as a parameter.
 6. Remove the bare `var` declarations.
@@ -70,9 +70,9 @@ The problem: `cmd/squad/run.go` contains ~600+ lines of business logic (LLM cons
 Steps:
 
 1. Read `cmd/squad/run.go` to identify business-logic functions (e.g., `buildLLM`, `callLangChainLLM`, `callResponsesAPI`, `extractUnifiedDiff`, `applyUnifiedDiff`, `validateActionableResponse`).
-2. Create `internal/runner/runner.go` with the core orchestration functions.
-3. Move business-logic functions from `cmd/squad/run.go` to `internal/runner/`. Export them (capitalize first letter).
-4. Keep only the thin Cobra command definition, flag binding, and `executeRun()` shell in `cmd/squad/run.go`. The `executeRun()` shell should call into `internal/runner/`.
+2. Create a **top-level** package for orchestration (e.g., `runner/`) or extend existing top-level packages (`agent/`, `tools/`, `ollama/`, `openairesponses/`) as appropriate. **Do NOT use `internal/`.**
+3. Move business-logic functions from `cmd/squad/run.go` to the chosen top-level package(s). Export them (capitalize first letter).
+4. Keep only the thin Cobra command definition, flag binding, and `executeRun()` shell in `cmd/squad/run.go`. The `executeRun()` shell should call into the top-level package(s).
 5. Update imports in `cmd/squad/run.go`.
 6. Run `go build ./...` to verify.
 
