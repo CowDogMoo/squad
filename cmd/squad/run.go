@@ -223,12 +223,14 @@ func init() {
 	runCmd.Flags().StringVar(&runMode, "mode", "", "Agent mode override (e.g. readonly)")
 }
 
+// agentModeOverride represents an override for agent mode configuration in the manifest.
 type agentModeOverride struct {
 	EntryPoint string   `yaml:"entrypoint,omitempty"`
 	Wrapper    string   `yaml:"wrapper,omitempty"`
 	References []string `yaml:"references,omitempty"`
 }
 
+// agentManifest represents the structure of an agent's manifest file.
 type agentManifest struct {
 	Name       string                       `yaml:"name"`
 	Version    string                       `yaml:"version"`
@@ -238,6 +240,7 @@ type agentManifest struct {
 	Modes      map[string]agentModeOverride `yaml:"modes,omitempty"`
 }
 
+// agentBundle contains the assembled system, user, and combined prompt content for an agent run.
 type agentBundle struct {
 	System   string // wrapper + system prompt + references
 	User     string // user request only
@@ -284,6 +287,7 @@ func resolveAgentsDir(explicit string) (string, error) {
 	return filepath.Join(home, ".config", "squad", "agents"), nil
 }
 
+// buildAgentBundle assembles the agent bundle from manifest, system prompt, wrapper, and references.
 func buildAgentBundle(agentsDir, agentName, prompt, workingDir string) (*agentBundle, error) {
 	agentPath := filepath.Join(agentsDir, agentName)
 	manifestPath := filepath.Join(agentPath, "agent.yaml")
@@ -371,6 +375,7 @@ func buildAgentBundle(agentsDir, agentName, prompt, workingDir string) (*agentBu
 	}, nil
 }
 
+// buildLLM constructs an LLM model instance based on the provider and configuration.
 func buildLLM(provider, model string, cfg *config.Config) (llms.Model, error) {
 	provider = normalizeProvider(provider)
 	switch provider {
@@ -385,6 +390,7 @@ func buildLLM(provider, model string, cfg *config.Config) (llms.Model, error) {
 	}
 }
 
+// buildOpenAICompatLLM creates an OpenAI-compatible LLM model with the given configuration.
 func buildOpenAICompatLLM(provider, model string, cfg *config.Config) (llms.Model, error) {
 	opts := []openai.Option{}
 	if model != "" {
@@ -421,6 +427,7 @@ func buildOpenAICompatLLM(provider, model string, cfg *config.Config) (llms.Mode
 	return openai.New(opts...)
 }
 
+// buildAnthropicLLM creates an Anthropic LLM model with the given configuration.
 func buildAnthropicLLM(model string, cfg *config.Config) (llms.Model, error) {
 	opts := []anthropic.Option{}
 	if model != "" {
