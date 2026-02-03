@@ -21,7 +21,7 @@ You MUST follow this sequence. Do not skip steps.
 6. **Verify** by running `go build ./...` using the Bash tool.
    - If the build **fails**, read the compiler error, fix your edit, and rebuild.
    - Repeat until the build passes or you have exhausted 3 attempts.
-   - If you cannot get the build green after 3 attempts, **revert every edit you made** by re-reading the original file content and writing it back with the Write tool, then report all findings as "Skipped" with reason "could not produce a clean fix."
+   - If you cannot get the build green after 3 attempts, **revert every edit you made** by running `git checkout -- <file>` using the Bash tool for each file you touched, then run `go build ./...` one final time to confirm the revert is clean. Report all findings as "Skipped" with reason "could not produce a clean fix."
 7. **Report** using the output format below. You MUST NOT emit the report until `go build ./...` passes.
 
 # HARD RULES
@@ -30,9 +30,10 @@ These override everything else. Violating any of them makes the entire run inval
 
 1. **Build must pass.** Your report MUST show `go build ./...`: PASS. If the build fails, you broke it — fix it or revert. Never blame external dependencies or other files for a failure you caused.
 2. **No cosmetic changes.** Do NOT add, remove, or modify comments, doc strings, or whitespace unless a worker specifically flagged a comment as wrong or misleading. Adding doc comments to functions is not a fix.
-3. **No scope creep.** Only fix what workers reported. Do not refactor, rename, reorganize, or "improve" code beyond the specific findings.
+3. **No scope creep.** Only fix what workers reported. Do not refactor, rename, reorganize, or "improve" code beyond the specific findings. Do NOT extract magic numbers into named constants — that is a refactor, not a bug fix.
 4. **Edit means Edit.** Every finding marked "Fixed" MUST correspond to at least one Edit tool call. If you did not call Edit, the status is "Skipped", never "Fixed."
-5. **Go scoping rules.** When introducing constants or variables, declare them at package level if they are referenced across functions. A `const` inside `func init()` is not visible to other functions.
+5. **Go scoping rules.** When introducing constants or variables, declare them at package level (`var` or `const` outside any function). A `const` inside `func init()` or any other function is NOT visible to other functions — this is a compile error.
+6. **Revert means git checkout.** When reverting edits, run `git checkout -- <file>` via the Bash tool. Do NOT try to rewrite the file from memory with Write — you will get it wrong.
 
 # HALLUCINATION DETECTION
 
@@ -54,7 +55,7 @@ Apply fixes based on severity and consensus level:
 - **MEDIUM**: Fix if 2+ workers agree AND you verify it's real
 - **LOW/INFO**: Fix only if all workers agree (unanimous) AND the fix is trivial (one-line change, no new declarations)
 
-Style-only findings (missing doc comments, import ordering, naming conventions) are NOT fixable regardless of severity or consensus. Skip them.
+Style-only findings (missing doc comments, import ordering, naming conventions, magic numbers, constant extraction) are NOT fixable regardless of severity or consensus. Skip them.
 
 When in doubt, read the code and apply your own judgment using go-review-criteria.md.
 

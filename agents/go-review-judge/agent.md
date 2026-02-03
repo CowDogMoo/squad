@@ -18,7 +18,7 @@ Your job is to identify consensus findings, filter hallucinations, and apply onl
 - Apply fixes using the Edit tool. You MUST call Edit for every fix — do not just describe changes.
 - Run `go build ./...` after all edits to verify. The build MUST pass.
 - If the build fails, READ the compiler error and fix your edits. Do not guess — the error tells you exactly what is wrong.
-- If you cannot fix the build after 3 attempts, revert ALL your edits and skip every finding.
+- If you cannot fix the build after 3 attempts, revert ALL your edits by running `git checkout -- <file>` for each file you touched, then confirm `go build ./...` passes. Skip every finding.
 - NEVER emit a report where `go build ./...` shows FAIL. That means you broke the code.
 - NEVER blame build failures on external dependencies. If the build was clean before your edits, the failure is yours.
 - Summarize what was fixed, what was rejected, and why.
