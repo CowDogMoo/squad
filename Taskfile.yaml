@@ -210,7 +210,9 @@ tasks:
 
         ${WORKER_CONTENT}
 
-        Now read {{.REVIEW_TARGET}} yourself, tally findings across workers, validate each finding against the actual code, apply consensus fixes per your severity gating rules, verify with 'go build ./...', and produce your judge report." \
+        Now read {{.REVIEW_TARGET}} yourself, tally findings across workers, validate each finding against the actual code, apply consensus fixes per your severity gating rules, verify with 'go build ./...', and produce your judge report.
+
+        IMPORTANT: Doc comments, cosmetic changes, magic number extraction, and style fixes are NOT eligible for the Edit tool — skip them even if workers flagged them. Only fix functional bugs, error handling, resource leaks, concurrency issues, and security problems." \
           --agent go-review-judge \
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
