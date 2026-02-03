@@ -6,7 +6,7 @@ vars:
   # Provider configuration
   PROVIDER: '{{.PROVIDER | default "ollama"}}'
   BASE_URL: '{{.BASE_URL | default "http://localhost:11434"}}'
-  MODEL: '{{.MODEL | default "devstral-small-2"}}'
+  MODEL: '{{.MODEL | default "qwen3-coder:30b"}}'
   API_KEY: '{{.API_KEY | default "ollama"}}'
 
   # Agent configuration
@@ -137,7 +137,7 @@ tasks:
         pids=""
         for i in $(seq 1 {{.NUM_WORKERS}}); do
           (
-            go run ./cmd/squad run \
+            go run ./cmd/squad run -v \
               "Review {{.REVIEW_TARGET}} for Go best practices. Use Read to inspect the file, then provide a structured review with findings. Do NOT edit any files." \
               --agent go-review --mode readonly \
               --working-dir {{.WORKING_DIR}} \
@@ -149,12 +149,12 @@ tasks:
               --temperature 0.7 \
               --out "/tmp/squad-worker-${i}.txt" \
               --print=false \
-              2>/dev/null
+              2>"/tmp/squad-worker-${i}.log"
             echo "Worker ${i} finished."
           ) &
           pids="${pids} $!"
         done
-        echo "Waiting for all workers to complete..."
+        echo "Waiting for all workers to complete... (logs: /tmp/squad-worker-{1..{{.NUM_WORKERS}}}.log)"
         for pid in ${pids}; do
           wait ${pid} 2>/dev/null || true
         done
@@ -184,7 +184,7 @@ tasks:
         done
         echo "Running judge agent..."
         WORKER_CONTENT=$(cat /tmp/squad-workers-combined.txt)
-        go run ./cmd/squad run \
+        go run ./cmd/squad run -v \
           "You are judging {{.NUM_WORKERS}} independent reviews of {{.REVIEW_TARGET}}.
 
         Here are the worker outputs:
@@ -198,7 +198,7 @@ tasks:
           --provider {{.PROVIDER}} \
           --base-url {{.BASE_URL}} \
           --model {{.MODEL}} \
-          --num-ctx 131072 \
+          --num-ctx 32768 \
           --temperature 0.2 \
           --require-actionable=false \
           --out /tmp/squad-judge.txt
