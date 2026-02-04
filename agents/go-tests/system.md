@@ -41,8 +41,25 @@ Follow this sequence exactly. Do not skip steps.
 
 1. Run `go test ./... -coverprofile=coverage.out -count=1` via Bash.
 2. Run `go tool cover -func=coverage.out | tail -1` to get total coverage.
-3. Run `go tool cover -func=coverage.out` and analyze per-package and
-   per-function coverage. Identify:
+3. Analyze coverage gaps. Tool output is capped at 64 KB — always filter
+   with grep/awk/head to avoid truncation. Useful commands:
+
+   ```bash
+   # Per-package coverage summary
+   go test ./... -cover -count=1
+
+   # Count uncovered functions per source file (highest-impact first)
+   go tool cover -func=coverage.out | grep '0.0%' \
+     | awk -F: '{print $1}' | sort | uniq -c | sort -rn | head -20
+
+   # List all 0% functions in a specific package
+   go tool cover -func=coverage.out | grep 'mypackage/' | grep '0.0%'
+
+   # Per-package statement counts
+   go tool cover -func=coverage.out | grep -v '0.0%' | wc -l
+   ```
+
+   From this output, identify:
    - Packages with the lowest coverage percentages
    - Functions at 0.0% coverage
    - The number of uncovered functions per package
