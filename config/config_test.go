@@ -81,6 +81,28 @@ func TestGetConfigDirsIncludesConfigHome(t *testing.T) {
 	}
 }
 
+func TestLoadMissingFileReturnsDefaults(t *testing.T) {
+	baseDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", baseDir)
+	t.Setenv("HOME", baseDir)
+	t.Setenv("USERPROFILE", baseDir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Log.Level != "info" || cfg.Log.Format != "text" {
+		t.Fatalf("unexpected defaults: %+v", cfg.Log)
+	}
+}
+
+func TestLoadFromPathMissingFile(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	if _, err := LoadFromPath(missing); err == nil {
+		t.Fatalf("expected error for missing config file")
+	}
+}
+
 func contains(values []string, value string) bool {
 	for _, v := range values {
 		if v == value {

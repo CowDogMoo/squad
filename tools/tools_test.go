@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -189,47 +190,61 @@ func TestInitEditsAndTracking(t *testing.T) {
 
 func TestBuildHandlers(t *testing.T) {
 	t.Parallel()
-
-	t.Run("without TaskConfig", func(t *testing.T) {
-		t.Parallel()
-		handlers, defs := BuildHandlers(t.TempDir(), nil)
-		if _, ok := handlers["Task"]; ok {
-			t.Fatalf("expected no Task handler without TaskConfig")
-		}
-		if _, ok := handlers["Read"]; !ok {
-			t.Fatalf("expected Read handler")
-		}
-		if len(defs) != 6 {
-			t.Fatalf("expected 6 tool defs without Task, got %d", len(defs))
-		}
-	})
-
-	t.Run("with TaskConfig", func(t *testing.T) {
-		t.Parallel()
-		cfg := &TaskConfig{
-			AgentsDir:  "agents",
-			WorkingDir: t.TempDir(),
-			CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error) {
-				return "", nil
-			},
-		}
-		handlers, defs := BuildHandlers(cfg.WorkingDir, cfg)
-		if _, ok := handlers["Task"]; !ok {
-			t.Fatalf("expected Task handler")
-		}
-		if len(defs) != 7 {
-			t.Fatalf("expected 7 tool defs with Task, got %d", len(defs))
-		}
-		names := make([]string, len(defs))
-		for i, d := range defs {
-			names[i] = d.Function.Name
-		}
-		for i := 1; i < len(names); i++ {
-			if names[i] < names[i-1] {
-				t.Fatalf("expected sorted tool defs, got %v", names)
+	tests := []struct {
+		name     string
+		withTask bool
+		wantDefs int
+	}{
+		{"without TaskConfig", false, 6},
+		{"with TaskConfig", true, 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			var cfg *TaskConfig
+			if tt.withTask {
+				cfg = &TaskConfig{
+					AgentsDir:  "agents",
+					WorkingDir: dir,
+					CallModel: func(
+						_ context.Context,
+						_, _, _, _, _ string,
+					) (string, error) {
+						return "", nil
+					},
+				}
 			}
-		}
-	})
+			handlers, defs := BuildHandlers(dir, cfg)
+			if _, ok := handlers["Task"]; ok != tt.withTask {
+				t.Fatalf(
+					"Task handler present = %v, want %v",
+					ok, tt.withTask,
+				)
+			}
+			if _, ok := handlers["Read"]; !ok {
+				t.Fatalf("expected Read handler")
+			}
+			if len(defs) != tt.wantDefs {
+				t.Fatalf(
+					"tool defs = %d, want %d",
+					len(defs), tt.wantDefs,
+				)
+			}
+			names := make([]string, len(defs))
+			for i, d := range defs {
+				names[i] = d.Function.Name
+			}
+			for i := 1; i < len(names); i++ {
+				if names[i] < names[i-1] {
+					t.Fatalf(
+						"expected sorted tool defs, got %v",
+						names,
+					)
+				}
+			}
+		})
+	}
 }
 
 func TestGlobMatcher(t *testing.T) {
@@ -354,18 +369,47 @@ func TestGrepSearchPathSingleFile(t *testing.T) {
 }
 
 func TestBashTool(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
-	bash := bashTool(dir)
-	out, err := bash(context.Background(), []byte(`{"command":"printf 'hi'"}`))
-	if err != nil {
-		t.Fatalf("bashTool: %v", err)
+	tests := []struct {
+		name    string
+		payload string
+		wantErr bool
+		wantOut string
+	}{
+		{
+			"valid command",
+			`{"command":"printf 'hi'"}`,
+			false,
+			"hi",
+		},
+		{
+			"empty command",
+			`{"command":""}`,
+			true,
+			"",
+		},
 	}
-	if !strings.Contains(out, "hi") {
-		t.Fatalf("unexpected bash output: %q", out)
-	}
-
-	if _, err := bash(context.Background(), []byte(`{"command":""}`)); err == nil {
-		t.Fatalf("expected error for empty command")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			bash := bashTool(dir)
+			out, err := bash(
+				context.Background(), []byte(tt.payload),
+			)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf(
+					"bashTool() error = %v, wantErr %v",
+					err, tt.wantErr,
+				)
+			}
+			if !tt.wantErr && !strings.Contains(out, tt.wantOut) {
+				t.Fatalf(
+					"output = %q, want containing %q",
+					out, tt.wantOut,
+				)
+			}
+		})
 	}
 }
 
@@ -380,5 +424,181 @@ func TestRepeatTracker(t *testing.T) {
 	}
 	if !tracker.Exceeded() {
 		t.Fatalf("expected repeat limit exceeded")
+	}
+}
+
+func TestReadToolErrors(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	read := readTool(dir)
+	tests := []struct {
+		name         string
+		payload      string
+		wantErr      bool
+		wantContains string
+	}{
+		{"invalid json", "{", true, "invalid args"},
+		{"empty path", `{"path":""}`, true, "path is required"},
+		{"outside path", `{"path":"../outside.txt"}`, true, "outside working directory"},
+		{"missing file", `{"path":"missing.txt"}`, true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := read(context.Background(), []byte(tt.payload))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("readTool() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantContains != "" && err != nil && !strings.Contains(err.Error(), tt.wantContains) {
+				t.Fatalf("error = %q, want containing %q", err.Error(), tt.wantContains)
+			}
+		})
+	}
+}
+
+func TestWriteToolErrors(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := writeTool(dir)
+	tests := []struct {
+		name         string
+		payload      string
+		wantErr      bool
+		wantContains string
+	}{
+		{"invalid json", "{", true, "invalid args"},
+		{"empty path", `{"path":"","content":"x"}`, true, "path is required"},
+		{"outside path", `{"path":"../outside.txt","content":"x"}`, true, "outside working directory"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := write(context.Background(), []byte(tt.payload))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("writeTool() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantContains != "" && err != nil && !strings.Contains(err.Error(), tt.wantContains) {
+				t.Fatalf("error = %q, want containing %q", err.Error(), tt.wantContains)
+			}
+		})
+	}
+}
+
+func TestEditToolErrors(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	edit := editTool(dir)
+	_, _ = writeTool(dir)(context.Background(), []byte(`{"path":"note.txt","content":"hello"}`))
+	tests := []struct {
+		name         string
+		payload      string
+		wantErr      bool
+		wantContains string
+	}{
+		{"invalid json", "{", true, "invalid args"},
+		{"missing file", `{"path":"missing.txt","old":"a","new":"b"}`, true, ""},
+		{"text not found", `{"path":"note.txt","old":"absent","new":"x"}`, true, "text not found"},
+		{"outside path", `{"path":"../outside.txt","old":"a","new":"b"}`, true, "outside working directory"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := edit(context.Background(), []byte(tt.payload))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("editTool() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantContains != "" && err != nil && !strings.Contains(err.Error(), tt.wantContains) {
+				t.Fatalf("error = %q, want containing %q", err.Error(), tt.wantContains)
+			}
+		})
+	}
+}
+
+func TestEditToolSingleReplacement(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := writeTool(dir)
+	edit := editTool(dir)
+	_, err := write(context.Background(), []byte(`{"path":"note.txt","content":"hello"}`))
+	if err != nil {
+		t.Fatalf("writeTool: %v", err)
+	}
+
+	out, err := edit(context.Background(), []byte(`{"path":"note.txt","old":"l","new":"L"}`))
+	if err != nil {
+		t.Fatalf("editTool: %v", err)
+	}
+	if !strings.Contains(out, "1 replacement") {
+		t.Fatalf("output = %q, want single replacement", out)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "note.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "heLlo" {
+		t.Fatalf("content = %q, want heLlo", string(data))
+	}
+}
+
+func TestGlobToolErrors(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	glob := globTool(dir)
+	tests := []struct {
+		name         string
+		payload      string
+		wantErr      bool
+		wantContains string
+		wantOutput   string
+	}{
+		{"invalid json", "{", true, "invalid args", ""},
+		{"empty pattern", `{"pattern":""}`, true, "pattern is required", ""},
+		{"no matches", `{"pattern":"**/*.txt"}`, false, "", "no matches"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := glob(context.Background(), []byte(tt.payload))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("globTool() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantContains != "" && err != nil && !strings.Contains(err.Error(), tt.wantContains) {
+				t.Fatalf("error = %q, want containing %q", err.Error(), tt.wantContains)
+			}
+			if tt.wantOutput != "" && out != tt.wantOutput {
+				t.Fatalf("output = %q, want %q", out, tt.wantOutput)
+			}
+		})
+	}
+}
+
+func TestGrepToolErrors(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := writeTool(dir)
+	_, _ = write(context.Background(), []byte(`{"path":"note.txt","content":"alpha"}`))
+	grep := grepTool(dir)
+	tests := []struct {
+		name         string
+		payload      string
+		wantErr      bool
+		wantContains string
+		wantOutput   string
+	}{
+		{"invalid json", "{", true, "invalid args", ""},
+		{"empty pattern", `{"pattern":""}`, true, "pattern is required", ""},
+		{"invalid regex", `{"pattern":"["}`, true, "invalid regex", ""},
+		{"outside path", `{"pattern":"alpha","path":"../outside"}`, true, "outside working directory", ""},
+		{"no matches", `{"pattern":"beta","path":"."}`, false, "", "no matches"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := grep(context.Background(), []byte(tt.payload))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("grepTool() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantContains != "" && err != nil && !strings.Contains(err.Error(), tt.wantContains) {
+				t.Fatalf("error = %q, want containing %q", err.Error(), tt.wantContains)
+			}
+			if tt.wantOutput != "" && out != tt.wantOutput {
+				t.Fatalf("output = %q, want %q", out, tt.wantOutput)
+			}
+		})
 	}
 }
