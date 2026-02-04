@@ -94,7 +94,10 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 	flags := cmd.Flags()
 	bind := func(key string, f string) error {
-		return v.BindPFlag(key, flags.Lookup(f))
+		if err := v.BindPFlag(key, flags.Lookup(f)); err != nil {
+			return fmt.Errorf("failed to bind flag %q to %q: %w", f, key, err)
+		}
+		return nil
 	}
 	if err := bind("provider.default", "provider"); err != nil {
 		return err
@@ -206,6 +209,9 @@ func newRunCmd() *cobra.Command {
 	// Static completions for --provider.
 	_ = cmd.RegisterFlagCompletionFunc("provider", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"openai", "openai-responses", "anthropic", "ollama", "gemini"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = cmd.RegisterFlagCompletionFunc("api-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"openai", "azure"}, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = cmd.RegisterFlagCompletionFunc("model", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return nil, cobra.ShellCompDirectiveNoFileComp
