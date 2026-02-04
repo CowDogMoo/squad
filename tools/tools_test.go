@@ -189,47 +189,61 @@ func TestInitEditsAndTracking(t *testing.T) {
 
 func TestBuildHandlers(t *testing.T) {
 	t.Parallel()
-
-	t.Run("without TaskConfig", func(t *testing.T) {
-		t.Parallel()
-		handlers, defs := BuildHandlers(t.TempDir(), nil)
-		if _, ok := handlers["Task"]; ok {
-			t.Fatalf("expected no Task handler without TaskConfig")
-		}
-		if _, ok := handlers["Read"]; !ok {
-			t.Fatalf("expected Read handler")
-		}
-		if len(defs) != 6 {
-			t.Fatalf("expected 6 tool defs without Task, got %d", len(defs))
-		}
-	})
-
-	t.Run("with TaskConfig", func(t *testing.T) {
-		t.Parallel()
-		cfg := &TaskConfig{
-			AgentsDir:  "agents",
-			WorkingDir: t.TempDir(),
-			CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error) {
-				return "", nil
-			},
-		}
-		handlers, defs := BuildHandlers(cfg.WorkingDir, cfg)
-		if _, ok := handlers["Task"]; !ok {
-			t.Fatalf("expected Task handler")
-		}
-		if len(defs) != 7 {
-			t.Fatalf("expected 7 tool defs with Task, got %d", len(defs))
-		}
-		names := make([]string, len(defs))
-		for i, d := range defs {
-			names[i] = d.Function.Name
-		}
-		for i := 1; i < len(names); i++ {
-			if names[i] < names[i-1] {
-				t.Fatalf("expected sorted tool defs, got %v", names)
+	tests := []struct {
+		name     string
+		withTask bool
+		wantDefs int
+	}{
+		{"without TaskConfig", false, 6},
+		{"with TaskConfig", true, 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			var cfg *TaskConfig
+			if tt.withTask {
+				cfg = &TaskConfig{
+					AgentsDir:  "agents",
+					WorkingDir: dir,
+					CallModel: func(
+						_ context.Context,
+						_, _, _, _, _ string,
+					) (string, error) {
+						return "", nil
+					},
+				}
 			}
-		}
-	})
+			handlers, defs := BuildHandlers(dir, cfg)
+			if _, ok := handlers["Task"]; ok != tt.withTask {
+				t.Fatalf(
+					"Task handler present = %v, want %v",
+					ok, tt.withTask,
+				)
+			}
+			if _, ok := handlers["Read"]; !ok {
+				t.Fatalf("expected Read handler")
+			}
+			if len(defs) != tt.wantDefs {
+				t.Fatalf(
+					"tool defs = %d, want %d",
+					len(defs), tt.wantDefs,
+				)
+			}
+			names := make([]string, len(defs))
+			for i, d := range defs {
+				names[i] = d.Function.Name
+			}
+			for i := 1; i < len(names); i++ {
+				if names[i] < names[i-1] {
+					t.Fatalf(
+						"expected sorted tool defs, got %v",
+						names,
+					)
+				}
+			}
+		})
+	}
 }
 
 func TestGlobMatcher(t *testing.T) {
@@ -354,18 +368,47 @@ func TestGrepSearchPathSingleFile(t *testing.T) {
 }
 
 func TestBashTool(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
-	bash := bashTool(dir)
-	out, err := bash(context.Background(), []byte(`{"command":"printf 'hi'"}`))
-	if err != nil {
-		t.Fatalf("bashTool: %v", err)
+	tests := []struct {
+		name    string
+		payload string
+		wantErr bool
+		wantOut string
+	}{
+		{
+			"valid command",
+			`{"command":"printf 'hi'"}`,
+			false,
+			"hi",
+		},
+		{
+			"empty command",
+			`{"command":""}`,
+			true,
+			"",
+		},
 	}
-	if !strings.Contains(out, "hi") {
-		t.Fatalf("unexpected bash output: %q", out)
-	}
-
-	if _, err := bash(context.Background(), []byte(`{"command":""}`)); err == nil {
-		t.Fatalf("expected error for empty command")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			bash := bashTool(dir)
+			out, err := bash(
+				context.Background(), []byte(tt.payload),
+			)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf(
+					"bashTool() error = %v, wantErr %v",
+					err, tt.wantErr,
+				)
+			}
+			if !tt.wantErr && !strings.Contains(out, tt.wantOut) {
+				t.Fatalf(
+					"output = %q, want containing %q",
+					out, tt.wantOut,
+				)
+			}
+		})
 	}
 }
 

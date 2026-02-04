@@ -3,9 +3,7 @@ package logging
 import (
 	"bytes"
 	"context"
-	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 )
@@ -168,20 +166,17 @@ func TestContextLogging(t *testing.T) {
 }
 
 func TestOutputContextJSON(t *testing.T) {
-	origStdout := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
+	t.Parallel()
+	var buf bytes.Buffer
+	local := &CustomLogger{
+		OutputType:    JSONOutput,
+		ConsoleWriter: &bytes.Buffer{},
+		OutputWriter:  &buf,
 	}
-	os.Stdout = w
-	local := &CustomLogger{OutputType: JSONOutput, ConsoleWriter: &bytes.Buffer{}}
 	ctx := WithLogger(context.Background(), local)
 	OutputContext(ctx, map[string]string{"status": "ok"})
-	_ = w.Close()
-	os.Stdout = origStdout
-	data, _ := io.ReadAll(r)
-	if !strings.Contains(string(data), "status") {
-		t.Fatalf("expected json output, got %q", string(data))
+	if !strings.Contains(buf.String(), "status") {
+		t.Fatalf("expected json output, got %q", buf.String())
 	}
 }
 

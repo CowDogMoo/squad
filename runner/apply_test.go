@@ -157,6 +157,42 @@ func TestApplyResponseDiffNoChanges(t *testing.T) {
 	}
 }
 
+func TestApplyResponseDiffBranches(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		response string
+		edits    bool
+		wantErr  bool
+	}{
+		{
+			name:     "missing diff returns error",
+			response: "plain text response",
+			edits:    false,
+			wantErr:  true,
+		},
+		{
+			name:     "edits applied skip",
+			response: "plain text response",
+			edits:    true,
+			wantErr:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := tools.InitEdits(context.Background())
+			if tt.edits {
+				tools.MarkEditsApplied(ctx)
+			}
+			err := applyResponseDiff(ctx, tt.response, ".", false)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("applyResponseDiff() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestApplyUnifiedDiffEmpty(t *testing.T) {
 	t.Parallel()
 	if err := applyUnifiedDiff(context.Background(), ".", "", false); err == nil {

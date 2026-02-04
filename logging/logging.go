@@ -62,6 +62,7 @@ type CustomLogger struct {
 	OutputType    OutputType
 	Quiet         bool
 	ConsoleWriter io.Writer
+	OutputWriter  io.Writer
 	Verbose       bool
 }
 
@@ -144,16 +145,24 @@ func (l *CustomLogger) Info(format string, args ...interface{}) {
 	l.log(InfoLevel, format, args...)
 }
 
+func (l *CustomLogger) outputWriter() io.Writer {
+	if l.OutputWriter != nil {
+		return l.OutputWriter
+	}
+	return os.Stdout
+}
+
 func (l *CustomLogger) Output(data interface{}) {
+	w := l.outputWriter()
 	switch l.OutputType {
 	case JSONOutput:
-		encoder := json.NewEncoder(os.Stdout)
+		encoder := json.NewEncoder(w)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(data); err != nil {
 			l.Error("Failed to encode JSON output: %v", err)
 		}
 	default:
-		if _, err := fmt.Fprintln(os.Stdout, data); err != nil {
+		if _, err := fmt.Fprintln(w, data); err != nil {
 			l.Error("Failed to write output: %v", err)
 		}
 	}

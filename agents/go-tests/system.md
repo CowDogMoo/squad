@@ -36,9 +36,10 @@ These override everything else.
 7. **Report coverage delta.** Record the starting total coverage percentage
    in Phase 1 BEFORE writing any tests. Report both before and after numbers
    in the final output. Runs that omit the before/after delta are failures.
-8. **Table-driven tests are mandatory.** When a function has 2 or more test
-   cases, use `[]struct` with `t.Run` subtests. Inline sequential assertions
-   for multiple cases is not acceptable. Single-case tests do not need tables.
+8. **Table-driven tests are mandatory — no exceptions.** When a function has
+   2 or more test cases, use `[]struct` with `t.Run` subtests. Inline
+   sequential assertions for multiple cases are not acceptable — immediately
+   rewrite them as table-driven tests. Single-case tests do not need tables.
 9. **Test file naming.** Name test files to match the source file under test:
    `foo.go` → `foo_test.go`. Add tests to existing `_test.go` files when one
    already exists for that source file. Never create `_extra_test.go`,
@@ -51,6 +52,16 @@ These override everything else.
     Go version. If Go 1.22+, range loop variables are per-iteration and
     `tt := tt` is dead code — do not include it. If below 1.22, you MUST
     add `tt := tt` before `t.Run` in parallel table-driven tests.
+12. **Budget awareness.** You have a limited iteration budget. Prefer Write
+    over Edit when creating new test files — one Write call replaces dozens
+    of incremental Edits. Batch Read calls for related files. Track your
+    iteration count mentally. Cap yourself at 20 iterations per package —
+    if you cannot finish a package in 20 iterations, move on.
+13. **Wind-down protocol.** When you sense you are approaching your iteration
+    limit (e.g. you have covered 3+ packages and still have work to do),
+    stop writing new tests immediately. Run `go test ./...` to measure
+    final coverage, then produce the structured report. A partial report
+    with accurate numbers is infinitely better than no report at all.
 
 # WORKFLOW
 

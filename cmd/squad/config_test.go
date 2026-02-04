@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,32 +13,6 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
-
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	orig := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("Pipe: %v", err)
-	}
-	os.Stdout = w
-
-	fn()
-
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	os.Stdout = orig
-
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
-	}
-	if err := r.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	return string(data)
-}
 
 func TestRunConfigInit(t *testing.T) {
 	tests := []struct {
@@ -101,16 +74,17 @@ func TestRunConfigInit(t *testing.T) {
 
 func TestRunConfigShow(t *testing.T) {
 	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
 	cfg := config.Defaults()
 	cfg.Model.MaxTokens = 1234
 	cmd.SetContext(withConfig(context.Background(), cfg))
 
-	out := captureStdout(t, func() {
-		if err := runConfigShow(cmd, nil); err != nil {
-			t.Fatalf("runConfigShow() error = %v", err)
-		}
-	})
+	if err := runConfigShow(cmd, nil); err != nil {
+		t.Fatalf("runConfigShow() error = %v", err)
+	}
 
+	out := buf.String()
 	if !strings.Contains(out, "Current Squad Configuration") {
 		t.Fatalf("expected header in output")
 	}
@@ -257,11 +231,12 @@ func TestCompletionCommand(t *testing.T) {
 }
 
 func TestVersionCommand(t *testing.T) {
-	cmd := &cobra.Command{}
-	out := captureStdout(t, func() {
-		versionCmd.Run(cmd, nil)
-	})
+	var buf bytes.Buffer
+	versionCmd.SetOut(&buf)
+	defer versionCmd.SetOut(nil)
+	versionCmd.Run(versionCmd, nil)
 
+	out := buf.String()
 	if !strings.Contains(out, fmt.Sprintf("squad version %s", version)) {
 		t.Fatalf("unexpected version output: %s", out)
 	}

@@ -1,8 +1,14 @@
 package runner
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/cowdogmoo/squad/agent"
 )
 
 func TestNormalizeProvider(t *testing.T) {
@@ -126,5 +132,54 @@ func TestBuildAnthropicLLM(t *testing.T) {
 	model, err := buildAnthropicLLM(opts, "claude-3")
 	if err != nil || model == nil {
 		t.Fatalf("buildAnthropicLLM() error = %v", err)
+	}
+}
+
+func TestCallLangChainLLMWithOllama(t *testing.T) {
+	t.Parallel()
+	reqErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			reqErr <- fmt.Errorf("unexpected path: %s", r.URL.Path)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			reqErr <- fmt.Errorf("decode request: %w", err)
+			return
+		}
+		reqErr <- nil
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"model":"mistral",
+			"message":{"role":"assistant","content":"hello"},
+			"done":true,
+			"prompt_eval_count":1,
+			"eval_count":1
+		}`))
+	}))
+	defer server.Close()
+
+	opts := &RunOptions{Provider: "ollama", BaseURL: server.URL, MaxIterations: 1}
+	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
+	response, err := callLangChainLLM(
+		context.Background(),
+		opts,
+		"ollama",
+		"mistral",
+		bundle.System,
+		bundle,
+		0.4,
+		0,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("callLangChainLLM() error = %v", err)
+	}
+	if err := <-reqErr; err != nil {
+		t.Fatalf("request error: %v", err)
+	}
+	if response != "hello" {
+		t.Fatalf("response = %q, want hello", response)
 	}
 }

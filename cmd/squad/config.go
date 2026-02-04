@@ -188,10 +188,11 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	fmt.Println("# Current Squad Configuration")
-	fmt.Println("# Sources: defaults -> config file -> environment variables -> CLI flags")
-	fmt.Println()
-	fmt.Print(string(data))
+	w := cmd.OutOrStdout()
+	fmt.Fprintln(w, "# Current Squad Configuration")
+	fmt.Fprintln(w, "# Sources: defaults -> config file -> environment variables -> CLI flags")
+	fmt.Fprintln(w)
+	fmt.Fprint(w, string(data))
 	return nil
 }
 

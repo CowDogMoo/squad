@@ -354,3 +354,16 @@ func TestBuildTaskConfig(t *testing.T) {
 		t.Fatalf("expected CallModel function")
 	}
 }
+
+func TestExecuteRunDryRun(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	opts := &RunOptions{
+		Agent:     "go-tests",
+		AgentsDir: filepath.Join("..", "agents"),
+		DryRun:    true,
+	}
+	if err := ExecuteRun(cmd, []string{"hello"}, opts); err != nil {
+		t.Fatalf("ExecuteRun() error = %v", err)
+	}
+}

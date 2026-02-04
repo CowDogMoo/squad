@@ -61,8 +61,9 @@ var versionCmd = &cobra.Command{
 	Long:    "Display the version, commit hash, and build date of squad.",
 	Args:    cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("squad version %s\n", version)
-		fmt.Printf("  commit: %s\n", commit)
-		fmt.Printf("  built:  %s\n", date)
+		w := cmd.OutOrStdout()
+		fmt.Fprintf(w, "squad version %s\n", version)
+		fmt.Fprintf(w, "  commit: %s\n", commit)
+		fmt.Fprintf(w, "  built:  %s\n", date)
 	},
 }
