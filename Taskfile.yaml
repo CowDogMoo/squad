@@ -3,6 +3,9 @@
 version: "3"
 
 vars:
+  BINARY_NAME: squad
+  CMD_PATH: ./cmd/squad
+
   # Provider configuration
   PROVIDER: '{{.PROVIDER | default "ollama"}}'
   BASE_URL: '{{.BASE_URL | default ""}}'
@@ -21,22 +24,20 @@ vars:
   # Internal: conditionally include --base-url flag
   _BASE_URL_FLAG: '{{if .BASE_URL}}--base-url {{.BASE_URL}}{{end}}'
 
+includes:
+  go:
+    taskfile: "https://raw.githubusercontent.com/CowDogMoo/taskfile-templates/main/go/Taskfile.yaml"
+    vars:
+      BINARY_NAME: squad
+      CMD_PATH: ./cmd/squad
+  pre-commit:
+    taskfile: "https://raw.githubusercontent.com/CowDogMoo/taskfile-templates/main/pre-commit/Taskfile.yaml"
+
 tasks:
   default:
-    desc: List all available tasks
-    silent: true
+    desc: Build, test, and clean
     cmds:
-      - task --list --sort none
-
-  pre-commit:run-pre-commit:
-    desc: Run pre-commit hooks on all files
-    cmds:
-      - pre-commit run --all-files
-
-  build:
-    desc: Build the squad binary
-    cmds:
-      - go build -o squad ./cmd/squad/
+      - task: go:default
 
   run:
     desc: "Run an agent with a prompt (usage: task run PROMPT='your prompt here')"
@@ -94,16 +95,6 @@ tasks:
           --model {{.MODEL}} \
           --out /tmp/squad-go-review.txt
       - echo "Review written to /tmp/squad-go-review.txt"
-
-  test:
-    desc: Run tests
-    cmds:
-      - go test -v ./...
-
-  lint:
-    desc: Run linters
-    cmds:
-      - golangci-lint run ./...
 
   run:judge-review:
     desc: "Multi-run judge pipeline: N workers review in parallel, judge applies consensus fixes"
@@ -596,6 +587,7 @@ tasks:
         Write tests for each priority package, verify they pass, and iterate.
 
         Target: {{.COVERAGE_TARGET}}% total coverage.
+        Use table-driven tests ([]struct + t.Run) for any function with 2+ test cases.
         Only create or modify _test.go files. Never edit source code." \
           --agent go-tests \
           --working-dir {{.WORKING_DIR}} \
@@ -640,7 +632,7 @@ tasks:
       - echo "Coverage analysis written to /tmp/squad-go-tests-analysis.txt"
 
   clean:
-    desc: Clean build artifacts
+    desc: Clean build artifacts and temp files
     cmds:
-      - rm -f squad
+      - task: go:clean
       - rm -f /tmp/squad-*.txt

@@ -26,10 +26,11 @@ type FunctionCall struct {
 
 // Config bundles the immutable parameters for a Responses API session.
 type Config struct {
-	Model       string
-	Tools       []oairesponses.ToolUnionParam
-	Temperature float64
-	MaxTokens   int
+	Model        string
+	Tools        []oairesponses.ToolUnionParam
+	Temperature  float64
+	MaxTokens    int
+	Instructions string
 }
 
 // DefaultMaxOutputTokens is the fallback output-token budget for reasoning
@@ -73,10 +74,11 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		maxIterations = tools.MaxToolIterations
 	}
 	rc := Config{
-		Model:       model,
-		Tools:       ConvertTools(toolDefs),
-		Temperature: temperature,
-		MaxTokens:   maxTokens,
+		Model:        model,
+		Tools:        ConvertTools(toolDefs),
+		Temperature:  temperature,
+		MaxTokens:    maxTokens,
+		Instructions: systemPrompt,
 	}
 
 	params := oairesponses.ResponseNewParams{
@@ -87,9 +89,6 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		},
 		Tools:      rc.Tools,
 		Truncation: oairesponses.ResponseNewParamsTruncation("auto"),
-		ToolChoice: oairesponses.ResponseNewParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(oairesponses.ToolChoiceOptionsRequired),
-		},
 	}
 	rc.applyOptionals(&params)
 
@@ -151,6 +150,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 		params := oairesponses.ResponseNewParams{
 			Model:              rc.Model,
 			PreviousResponseID: openai.String(resp.ID),
+			Instructions:       openai.String(rc.Instructions),
 			Input: oairesponses.ResponseNewParamsInputUnion{
 				OfInputItemList: oairesponses.ResponseInputParam(outputs),
 			},

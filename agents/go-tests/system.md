@@ -33,6 +33,9 @@ These override everything else.
 7. **Report coverage delta.** Record the starting total coverage percentage
    in Phase 1 BEFORE writing any tests. Report both before and after numbers
    in the final output. Runs that omit the before/after delta are failures.
+8. **Table-driven tests are mandatory.** When a function has 2 or more test
+   cases, use `[]struct` with `t.Run` subtests. Inline sequential assertions
+   for multiple cases is not acceptable. Single-case tests do not need tables.
 
 # WORKFLOW
 
