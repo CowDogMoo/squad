@@ -27,8 +27,11 @@ These override everything else.
 4. **No test-only interfaces.** Do not add interfaces to source code just
    to make things testable. Work with what exists.
 5. **Use `package foo_test` (black-box) by default.** Use `package foo`
-   (white-box) only when you need access to unexported symbols and
-   black-box testing is not feasible.
+   (white-box) only when you must test unexported symbols that cannot be
+   exercised through the public API. Do not use white-box just to call
+   unexported functions directly — test through exported entry points
+   instead. If an unexported function has no exported caller path, skip
+   it and note "requires source refactor to test."
 6. **80-character comment lines.** Keep all comment lines under 80 chars.
 7. **Report coverage delta.** Record the starting total coverage percentage
    in Phase 1 BEFORE writing any tests. Report both before and after numbers
@@ -36,6 +39,18 @@ These override everything else.
 8. **Table-driven tests are mandatory.** When a function has 2 or more test
    cases, use `[]struct` with `t.Run` subtests. Inline sequential assertions
    for multiple cases is not acceptable. Single-case tests do not need tables.
+9. **Test file naming.** Name test files to match the source file under test:
+   `foo.go` → `foo_test.go`. Add tests to existing `_test.go` files when one
+   already exists for that source file. Never create `_extra_test.go`,
+   `_more_test.go`, or similarly suffixed files.
+10. **No global state swapping in tests.** Do not swap `os.Stdout`,
+    `os.Stderr`, or other package-level globals to capture output. Use
+    `cmd.SetOut(&buf)`, return values, or dependency injection instead.
+    Global swaps are not goroutine-safe and break with `t.Parallel()`.
+11. **Loop variable capture depends on Go version.** Check `go.mod` for the
+    Go version. If Go 1.22+, range loop variables are per-iteration and
+    `tt := tt` is dead code — do not include it. If below 1.22, you MUST
+    add `tt := tt` before `t.Run` in parallel table-driven tests.
 
 # WORKFLOW
 
