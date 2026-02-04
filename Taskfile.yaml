@@ -580,6 +580,65 @@ tasks:
         echo ""
         echo "=== Both refactor phases complete ==="
 
+  run:go-tests:
+    desc: "Run the go-tests agent to autonomously increase test coverage to a target"
+    silent: true
+    vars:
+      COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Get this codebase to {{.COVERAGE_TARGET}}% test coverage.
+
+        Start by measuring current coverage with 'go test ./... -coverprofile=coverage.out -count=1'.
+        Analyze gaps with 'go tool cover -func=coverage.out'.
+        Prioritize packages by impact — most uncovered statements first.
+        Write tests for each priority package, verify they pass, and iterate.
+
+        Target: {{.COVERAGE_TARGET}}% total coverage.
+        Only create or modify _test.go files. Never edit source code." \
+          --agent go-tests \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=true \
+          --temperature 0.3 \
+          --out /tmp/squad-go-tests.txt
+      - echo "Test coverage output written to /tmp/squad-go-tests.txt"
+      - |
+        echo ""
+        echo "Running final verification..."
+      - go test ./...
+      - echo "go test ./... PASSED"
+
+  run:go-tests-analyze:
+    desc: "Run the go-tests agent in readonly mode to analyze coverage gaps without writing tests"
+    silent: true
+    vars:
+      COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Analyze this codebase's test coverage gaps. Target is {{.COVERAGE_TARGET}}%.
+
+        Measure current coverage, identify gaps, classify functions as testable vs
+        needing refactor, and produce a prioritized report of what to test first.
+
+        Do NOT write or modify any files." \
+          --agent go-tests --mode readonly \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=false \
+          --temperature 0.3 \
+          --print=false \
+          --out /tmp/squad-go-tests-analysis.txt
+      - echo "Coverage analysis written to /tmp/squad-go-tests-analysis.txt"
+
   clean:
     desc: Clean build artifacts
     cmds:

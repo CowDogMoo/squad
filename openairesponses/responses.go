@@ -2,6 +2,7 @@ package openairesponses
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -79,6 +80,7 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 	if err != nil {
 		return "", fmt.Errorf("responses API call failed: %w", err)
 	}
+	logOutputItems(ctx, resp, "initial")
 
 	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc)
 	if err != nil {
@@ -88,11 +90,14 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		return text, nil
 	}
 
-	finalText, err := requestFinal(ctx, client, resp.ID, systemPrompt, &rc)
-	if err == nil && finalText != "" {
+	finalText, finalErr := requestFinal(ctx, client, resp.ID, systemPrompt, &rc)
+	if finalErr == nil && finalText != "" {
 		return finalText, nil
 	}
-	return "", fmt.Errorf("responses API tool loop ended after %d iterations with no usable response", tools.MaxToolIterations)
+	if finalErr != nil {
+		logging.DebugContext(ctx, "responses API: requestFinal error: %v", finalErr)
+	}
+	return "", fmt.Errorf("responses API: no usable text after tool loop (OutputText empty, requestFinal failed: %v)", finalErr)
 }
 
 func newClient(apiKey, baseURL, organization string) openai.Client {
@@ -113,6 +118,9 @@ func toolLoop(ctx context.Context, client openai.Client, resp *responses.Respons
 		if len(calls) == 0 {
 			text := resp.OutputText()
 			logging.InfoContext(ctx, "responses API: final response at iteration %d (%d bytes)", i, len(text))
+			if text == "" {
+				logOutputItems(ctx, resp, fmt.Sprintf("empty-text-iter-%d", i))
+			}
 			return resp, text, nil
 		}
 
@@ -138,6 +146,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *responses.Respons
 		if err != nil {
 			return resp, "", fmt.Errorf("responses API follow-up failed at iteration %d: %w", i+1, err)
 		}
+		logOutputItems(ctx, resp, fmt.Sprintf("follow-up-iter-%d", i+1))
 	}
 
 	text := resp.OutputText()
@@ -189,6 +198,7 @@ func requestFinal(ctx context.Context, client openai.Client, previousID, systemP
 	if err != nil {
 		return "", fmt.Errorf("responses API final call failed: %w", err)
 	}
+	logOutputItems(ctx, resp, "final-call")
 	text := resp.OutputText()
 	if text == "" {
 		return "", fmt.Errorf("responses API final call returned empty text")
@@ -242,6 +252,32 @@ func ExtractFunctionCalls(resp *responses.Response) []FunctionCall {
 		}
 	}
 	return calls
+}
+
+// logOutputItems dumps the type, status, and a content preview for every
+// item in a Responses API response.  This is the primary diagnostic for
+// "model returned 0 bytes" issues — it shows whether the model produced
+// reasoning tokens, message items, or something else entirely.
+func logOutputItems(ctx context.Context, resp *responses.Response, label string) {
+	if resp == nil {
+		logging.DebugContext(ctx, "responses API [%s]: resp is nil", label)
+		return
+	}
+	logging.DebugContext(ctx, "responses API [%s]: response id=%s, status=%s, output items=%d",
+		label, resp.ID, resp.Status, len(resp.Output))
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+		logging.DebugContext(ctx, "responses API [%s]: usage input_tokens=%d output_tokens=%d",
+			label, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+	}
+	for i, item := range resp.Output {
+		raw, _ := json.Marshal(item)
+		preview := string(raw)
+		if len(preview) > 500 {
+			preview = preview[:500] + "...(truncated)"
+		}
+		logging.DebugContext(ctx, "responses API [%s]: output[%d] type=%s: %s",
+			label, i, item.Type, preview)
+	}
 }
 
 func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers map[string]tools.Handler) []responses.ResponseInputItemUnionParam {
