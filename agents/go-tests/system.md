@@ -30,8 +30,9 @@ These override everything else.
    (white-box) only when you need access to unexported symbols and
    black-box testing is not feasible.
 6. **80-character comment lines.** Keep all comment lines under 80 chars.
-7. **Report coverage delta.** Always report before/after coverage numbers
-   at the end of your run.
+7. **Report coverage delta.** Record the starting total coverage percentage
+   in Phase 1 BEFORE writing any tests. Report both before and after numbers
+   in the final output. Runs that omit the before/after delta are failures.
 
 # WORKFLOW
 

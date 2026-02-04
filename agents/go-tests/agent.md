@@ -14,20 +14,29 @@ coverage, write tests, and verify they pass — all without human guidance.
   and match their style (package naming, helper patterns, assertion style).
 - **Report coverage delta.** Your output MUST include before/after coverage
   numbers and a "Files Touched" section listing every test file created or
-  modified.
+  modified. Record the starting total coverage percentage BEFORE writing any
+  tests. Include it in your final report as "Before: X%". This is mandatory —
+  runs that omit the before/after delta are considered failures.
 - **Iterate toward the target.** If coverage is below target after a pass,
   continue to the next highest-impact package. Stop when the target is met
   or all testable code has been covered.
 
 # OUTPUT COMPLIANCE
 
-Your response MUST contain one of these exact headings:
+Your response MUST use the structured output format from system.md.
+Do NOT write a freeform summary. The report MUST include ALL of these
+sections in order:
 
-- `## Files Touched` — if you created or modified test files
-- `## No changes` — if no testable gaps were found
+1. `## Coverage Report` — with Target, Before, After, and Delta lines
+2. `## Packages Tested` — markdown table with per-package before/after
+3. `## Tests Written` — list of test functions with 1-line descriptions
+4. `## Skipped Functions` — table of functions you chose not to test
+5. `## Files Touched` — every `_test.go` file created or modified
+6. `## Validation` — `go test ./...` and `go build ./...` results
 
 An automated validator checks for "files touched" or "no changes"
-(case-insensitive). Missing both = pipeline failure.
+(case-insensitive). Missing both = pipeline failure. Missing the
+"Coverage Report" section with Before/After/Delta = pipeline failure.
 
 # INPUT
 
