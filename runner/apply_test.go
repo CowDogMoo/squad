@@ -1,0 +1,186 @@
+package runner
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/cowdogmoo/squad/tools"
+)
+
+func TestExtractUnifiedDiff(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		wantErr  bool
+		contains []string
+	}{
+		{
+			"single diff block",
+			"before\n```diff\ndiff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n```\nafter",
+			false,
+			[]string{"diff --git a/a.txt b/a.txt"},
+		},
+		{
+			"multiple diff blocks",
+			strings.Join([]string{
+				"before",
+				"```diff",
+				"diff --git a/a.txt b/a.txt",
+				"--- a/a.txt",
+				"+++ b/a.txt",
+				"@@ -1 +1 @@",
+				"-old",
+				"+new",
+				"```",
+				"```patch",
+				"diff --git a/b.txt b/b.txt",
+				"--- a/b.txt",
+				"+++ b/b.txt",
+				"@@ -1 +1 @@",
+				"-old",
+				"+new",
+				"```",
+			}, "\n"),
+			false,
+			[]string{"diff --git a/a.txt", "diff --git a/b.txt"},
+		},
+		{
+			"patch fence",
+			"```patch\ndiff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n```",
+			false,
+			[]string{"diff --git a/x b/x"},
+		},
+		{
+			"no fence",
+			"no diff here",
+			true,
+			nil,
+		},
+		{
+			"invalid diff content",
+			"```diff\nnot a diff\n```",
+			true,
+			nil,
+		},
+		{
+			"unclosed fence with valid diff",
+			"```diff\ndiff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-x\n+y",
+			false,
+			[]string{"diff --git a/f b/f"},
+		},
+		{
+			"empty body",
+			"```diff\n```",
+			true,
+			nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diff, err := extractUnifiedDiff(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("extractUnifiedDiff() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			for _, s := range tt.contains {
+				if !strings.Contains(diff, s) {
+					t.Fatalf("expected diff to contain %q, got %q", s, diff)
+				}
+			}
+		})
+	}
+}
+
+func TestLooksLikeDiff(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"diff --git header", "diff --git a/a b/a", true},
+		{"patch headers", "--- a/a\n+++ b/a", true},
+		{"plain text", "no headers", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := looksLikeDiff(tt.input); got != tt.want {
+				t.Fatalf("looksLikeDiff(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateActionableResponse(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   string
+		edits   bool
+		wantErr bool
+	}{
+		{
+			"has diff block",
+			"```diff\ndiff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n```",
+			false,
+			false,
+		},
+		{"has files touched", "files touched: a.txt", false, false},
+		{"has no changes", "No changes detected", false, false},
+		{"bare text", "no diff or markers", false, true},
+		{"edits applied bypasses check", "bare text", true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := tools.InitEdits(context.Background())
+			if tt.edits {
+				tools.MarkEditsApplied(ctx)
+			}
+			err := validateActionableResponse(ctx, tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateActionableResponse() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestApplyResponseDiffNoChanges(t *testing.T) {
+	t.Parallel()
+	ctx := tools.InitEdits(context.Background())
+	if err := applyResponseDiff(ctx, "No changes", ".", false); err != nil {
+		t.Fatalf("applyResponseDiff() error = %v", err)
+	}
+}
+
+func TestApplyUnifiedDiffEmpty(t *testing.T) {
+	t.Parallel()
+	if err := applyUnifiedDiff(context.Background(), ".", "", false); err == nil {
+		t.Fatalf("expected error for empty diff")
+	}
+}
+
+func TestResponseIndicatesNoChanges(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"has no changes", "No changes needed", true},
+		{"lowercase", "no changes found", true},
+		{"no match", "all done", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := responseIndicatesNoChanges(tt.input); got != tt.want {
+				t.Fatalf("responseIndicatesNoChanges(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}

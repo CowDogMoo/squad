@@ -1,7 +1,8 @@
-package openairesponses
+package responses
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"github.com/cowdogmoo/squad/tools"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/responses"
+	oairesponses "github.com/openai/openai-go/v3/responses"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -25,19 +26,35 @@ type FunctionCall struct {
 
 // Config bundles the immutable parameters for a Responses API session.
 type Config struct {
-	Model       string
-	Tools       []responses.ToolUnionParam
-	Temperature float64
-	MaxTokens   int
+	Model        string
+	Tools        []oairesponses.ToolUnionParam
+	Temperature  float64
+	MaxTokens    int
+	Instructions string
 }
 
-func (rc *Config) applyOptionals(params *responses.ResponseNewParams) {
-	if rc.Temperature >= 0 && supportsTemperature(rc.Model) {
+// DefaultMaxOutputTokens is the fallback output-token budget for reasoning
+// models (gpt-5*) when the caller does not specify --max-tokens.  The API
+// default (1024) is far too small — reasoning tokens compete with the
+// visible response, so the model exhausts its budget on thinking alone.
+const DefaultMaxOutputTokens = 16384
+
+func (rc *Config) applyOptionals(params *oairesponses.ResponseNewParams) {
+	if rc.Temperature >= 0 && !IsReasoningModel(rc.Model) {
 		params.Temperature = openai.Float(rc.Temperature)
 	}
-	if rc.MaxTokens > 0 {
+	switch {
+	case rc.MaxTokens > 0:
 		params.MaxOutputTokens = openai.Int(int64(rc.MaxTokens))
+	case IsReasoningModel(rc.Model):
+		params.MaxOutputTokens = openai.Int(DefaultMaxOutputTokens)
 	}
+}
+
+// IsReasoningModel returns true for models that emit reasoning tokens
+// (e.g. gpt-5*) which require a larger output-token budget.
+func IsReasoningModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5")
 }
 
 // UseResponsesAPI returns true when the Responses API path should be used.
@@ -50,27 +67,28 @@ func UseResponsesAPI(provider, model string) bool {
 }
 
 // RunWithTools drives a tool-calling loop using the OpenAI Responses API.
-func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens int) (string, error) {
+func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations int, taskCfg *tools.TaskConfig) (string, error) {
 	client := newClient(apiKey, baseURL, organization)
-	handlers, toolDefs := tools.BuildHandlers(workingDir)
+	handlers, toolDefs := tools.BuildHandlers(workingDir, taskCfg)
+	if maxIterations <= 0 {
+		maxIterations = tools.MaxToolIterations
+	}
 	rc := Config{
-		Model:       model,
-		Tools:       ConvertTools(toolDefs),
-		Temperature: temperature,
-		MaxTokens:   maxTokens,
+		Model:        model,
+		Tools:        ConvertTools(toolDefs),
+		Temperature:  temperature,
+		MaxTokens:    maxTokens,
+		Instructions: systemPrompt,
 	}
 
-	params := responses.ResponseNewParams{
+	params := oairesponses.ResponseNewParams{
 		Model:        model,
 		Instructions: openai.String(systemPrompt),
-		Input: responses.ResponseNewParamsInputUnion{
+		Input: oairesponses.ResponseNewParamsInputUnion{
 			OfString: openai.String(userPrompt),
 		},
 		Tools:      rc.Tools,
-		Truncation: responses.ResponseNewParamsTruncation("auto"),
-		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsRequired),
-		},
+		Truncation: oairesponses.ResponseNewParamsTruncation("auto"),
 	}
 	rc.applyOptionals(&params)
 
@@ -79,8 +97,9 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 	if err != nil {
 		return "", fmt.Errorf("responses API call failed: %w", err)
 	}
+	logOutputItems(ctx, resp, "initial")
 
-	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc)
+	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc, maxIterations)
 	if err != nil {
 		return text, err
 	}
@@ -88,11 +107,14 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		return text, nil
 	}
 
-	finalText, err := requestFinal(ctx, client, resp.ID, systemPrompt, &rc)
-	if err == nil && finalText != "" {
+	finalText, finalErr := requestFinal(ctx, client, resp.ID, systemPrompt, &rc)
+	if finalErr == nil && finalText != "" {
 		return finalText, nil
 	}
-	return "", fmt.Errorf("responses API tool loop ended after %d iterations with no usable response", tools.MaxToolIterations)
+	if finalErr != nil {
+		logging.DebugContext(ctx, "responses API: requestFinal error: %v", finalErr)
+	}
+	return "", fmt.Errorf("responses API: no usable text after tool loop (OutputText empty, requestFinal failed: %v)", finalErr)
 }
 
 func newClient(apiKey, baseURL, organization string) openai.Client {
@@ -106,30 +128,34 @@ func newClient(apiKey, baseURL, organization string) openai.Client {
 	return openai.NewClient(clientOpts...)
 }
 
-func toolLoop(ctx context.Context, client openai.Client, resp *responses.Response, handlers map[string]tools.Handler, rc *Config) (*responses.Response, string, error) {
+func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config, maxIter int) (*oairesponses.Response, string, error) {
 	var repeat tools.RepeatTracker
-	for i := 0; i < tools.MaxToolIterations; i++ {
+	for i := 0; i < maxIter; i++ {
 		calls := ExtractFunctionCalls(resp)
 		if len(calls) == 0 {
 			text := resp.OutputText()
 			logging.InfoContext(ctx, "responses API: final response at iteration %d (%d bytes)", i, len(text))
+			if text == "" {
+				logOutputItems(ctx, resp, fmt.Sprintf("empty-text-iter-%d", i))
+			}
 			return resp, text, nil
 		}
 
 		logging.InfoContext(ctx, "responses API: iteration %d with %d tool call(s)", i+1, len(calls))
-		if checkRepeat(&repeat, calls, ctx) {
+		if checkRepeat(ctx, &repeat, calls) {
 			break
 		}
 
 		outputs := executeAndBuildOutputs(ctx, calls, handlers)
-		params := responses.ResponseNewParams{
+		params := oairesponses.ResponseNewParams{
 			Model:              rc.Model,
 			PreviousResponseID: openai.String(resp.ID),
-			Input: responses.ResponseNewParamsInputUnion{
-				OfInputItemList: responses.ResponseInputParam(outputs),
+			Instructions:       openai.String(rc.Instructions),
+			Input: oairesponses.ResponseNewParamsInputUnion{
+				OfInputItemList: oairesponses.ResponseInputParam(outputs),
 			},
 			Tools:      rc.Tools,
-			Truncation: responses.ResponseNewParamsTruncation("auto"),
+			Truncation: oairesponses.ResponseNewParamsTruncation("auto"),
 		}
 		rc.applyOptionals(&params)
 
@@ -138,6 +164,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *responses.Respons
 		if err != nil {
 			return resp, "", fmt.Errorf("responses API follow-up failed at iteration %d: %w", i+1, err)
 		}
+		logOutputItems(ctx, resp, fmt.Sprintf("follow-up-iter-%d", i+1))
 	}
 
 	text := resp.OutputText()
@@ -147,7 +174,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *responses.Respons
 	return resp, text, nil
 }
 
-func checkRepeat(repeat *tools.RepeatTracker, calls []FunctionCall, ctx context.Context) bool {
+func checkRepeat(ctx context.Context, repeat *tools.RepeatTracker, calls []FunctionCall) bool {
 	fakeToolCalls := make([]llms.ToolCall, len(calls))
 	for j, c := range calls {
 		fakeToolCalls[j] = llms.ToolCall{
@@ -169,18 +196,18 @@ func requestFinal(ctx context.Context, client openai.Client, previousID, systemP
 	if strings.TrimSpace(previousID) == "" {
 		return "", fmt.Errorf("missing previous response id")
 	}
-	params := responses.ResponseNewParams{
+	params := oairesponses.ResponseNewParams{
 		Model:              rc.Model,
 		PreviousResponseID: openai.String(previousID),
-		Input: responses.ResponseNewParamsInputUnion{
+		Input: oairesponses.ResponseNewParamsInputUnion{
 			OfString: openai.String("Provide the final response. Do not call any tools."),
 		},
 		Instructions: openai.String(systemPrompt),
-		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsNone),
+		ToolChoice: oairesponses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(oairesponses.ToolChoiceOptionsNone),
 		},
 		Tools:      rc.Tools,
-		Truncation: responses.ResponseNewParamsTruncation("auto"),
+		Truncation: oairesponses.ResponseNewParamsTruncation("auto"),
 	}
 	rc.applyOptionals(&params)
 
@@ -189,6 +216,7 @@ func requestFinal(ctx context.Context, client openai.Client, previousID, systemP
 	if err != nil {
 		return "", fmt.Errorf("responses API final call failed: %w", err)
 	}
+	logOutputItems(ctx, resp, "final-call")
 	text := resp.OutputText()
 	if text == "" {
 		return "", fmt.Errorf("responses API final call returned empty text")
@@ -197,14 +225,10 @@ func requestFinal(ctx context.Context, client openai.Client, previousID, systemP
 	return text, nil
 }
 
-func supportsTemperature(model string) bool {
-	return !strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5")
-}
-
 // ConvertTools converts langchaingo tool definitions to the
 // Responses API FunctionToolParam format.
-func ConvertTools(toolDefs []llms.Tool) []responses.ToolUnionParam {
-	out := make([]responses.ToolUnionParam, 0, len(toolDefs))
+func ConvertTools(toolDefs []llms.Tool) []oairesponses.ToolUnionParam {
+	out := make([]oairesponses.ToolUnionParam, 0, len(toolDefs))
 	for _, t := range toolDefs {
 		if t.Function == nil {
 			continue
@@ -213,8 +237,8 @@ func ConvertTools(toolDefs []llms.Tool) []responses.ToolUnionParam {
 		if !ok {
 			params = map[string]any{}
 		}
-		out = append(out, responses.ToolUnionParam{
-			OfFunction: &responses.FunctionToolParam{
+		out = append(out, oairesponses.ToolUnionParam{
+			OfFunction: &oairesponses.FunctionToolParam{
 				Name:        t.Function.Name,
 				Description: openai.String(t.Function.Description),
 				Parameters:  params,
@@ -226,7 +250,7 @@ func ConvertTools(toolDefs []llms.Tool) []responses.ToolUnionParam {
 }
 
 // ExtractFunctionCalls pulls function_call items from a Responses API response.
-func ExtractFunctionCalls(resp *responses.Response) []FunctionCall {
+func ExtractFunctionCalls(resp *oairesponses.Response) []FunctionCall {
 	if resp == nil || resp.Output == nil {
 		return nil
 	}
@@ -244,16 +268,42 @@ func ExtractFunctionCalls(resp *responses.Response) []FunctionCall {
 	return calls
 }
 
-func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers map[string]tools.Handler) []responses.ResponseInputItemUnionParam {
-	outputs := make([]responses.ResponseInputItemUnionParam, 0, len(calls))
+// logOutputItems dumps the type, status, and a content preview for every
+// item in a Responses API response.  This is the primary diagnostic for
+// "model returned 0 bytes" issues — it shows whether the model produced
+// reasoning tokens, message items, or something else entirely.
+func logOutputItems(ctx context.Context, resp *oairesponses.Response, label string) {
+	if resp == nil {
+		logging.DebugContext(ctx, "responses API [%s]: resp is nil", label)
+		return
+	}
+	logging.DebugContext(ctx, "responses API [%s]: response id=%s, status=%s, output items=%d",
+		label, resp.ID, resp.Status, len(resp.Output))
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+		logging.DebugContext(ctx, "responses API [%s]: usage input_tokens=%d output_tokens=%d",
+			label, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+	}
+	for i, item := range resp.Output {
+		raw, _ := json.Marshal(item)
+		preview := string(raw)
+		if len(preview) > 500 {
+			preview = preview[:500] + "...(truncated)"
+		}
+		logging.DebugContext(ctx, "responses API [%s]: output[%d] type=%s: %s",
+			label, i, item.Type, preview)
+	}
+}
+
+func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers map[string]tools.Handler) []oairesponses.ResponseInputItemUnionParam {
+	outputs := make([]oairesponses.ResponseInputItemUnionParam, 0, len(calls))
 	for _, call := range calls {
 		handler, ok := handlers[call.Name]
 		if !ok {
 			logging.DebugContext(ctx, "responses API: unknown tool %s", call.Name)
-			outputs = append(outputs, responses.ResponseInputItemUnionParam{
-				OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
+				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
 					CallID: call.CallID,
-					Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
+					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 						OfString: openai.String(fmt.Sprintf("unknown tool: %s", call.Name)),
 					},
 				},
@@ -275,10 +325,10 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			logging.DebugContext(ctx, "responses API: %s completed in %s (%d bytes)", call.Name, toolDuration.Round(time.Millisecond), len(result))
 		}
 
-		outputs = append(outputs, responses.ResponseInputItemUnionParam{
-			OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+		outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
+			OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
 				CallID: call.CallID,
-				Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
+				Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 					OfString: openai.String(output),
 				},
 			},

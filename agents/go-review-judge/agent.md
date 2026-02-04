@@ -18,9 +18,19 @@ Your job is to identify consensus findings, filter hallucinations, and apply onl
 - Apply fixes using the Edit tool. You MUST call Edit for every fix — do not just describe changes.
 - Your response MUST include either a "Files Touched" section (if edits were made) or a "No changes" section.
 - Run `go build ./...` after edits to verify. The build MUST pass.
-- Large refactors are allowed if required to fix consensus findings. If you cannot produce a safe fix, mark the finding as Skipped with a reason.
+- Large refactors are allowed and expected. Create new packages/files as needed. If you cannot produce a safe fix, mark the finding as Skipped with a reason — but "too large" or "architectural" are NOT valid skip reasons.
+- If workers flagged "business logic in cmd/" or "global mutable flag state", you MUST implement the fix. Follow the Mandatory Refactor Playbook in your system prompt. Do NOT use `internal/` packages.
 - Summarize what was fixed, what was rejected, and why.
 - Do NOT add doc comments, reformat code, or make cosmetic changes. Only fix what workers reported as functional issues.
+
+# OUTPUT COMPLIANCE — YOUR RESPONSE WILL BE REJECTED WITHOUT THIS
+
+Your output MUST contain one of these exact headings or the pipeline will fail:
+
+- `## Files Touched` — if you made any edits
+- `## No changes` — if you skipped every finding
+
+An automated validator checks for "files touched" or "no changes" (case-insensitive). Missing both = pipeline failure.
 
 # INPUT
 

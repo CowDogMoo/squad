@@ -23,7 +23,7 @@ const maxToolOutput = 64 * 1024
 const maxSameToolRepeat = 10
 const maxMutatingToolRepeat = 50
 
-var editsUsed bool
+type editsKeyType struct{}
 
 // mutatingTools are tools that legitimately chain in long sequences.
 var mutatingTools = map[string]bool{
@@ -37,19 +37,32 @@ var highRepeatTools = map[string]bool{
 	"Grep": true,
 }
 
-// ResetEditsApplied resets the edit tracking state.
-func ResetEditsApplied() {
-	editsUsed = false
+// InitEdits initializes edit tracking in the context.
+func InitEdits(ctx context.Context) context.Context {
+	b := false
+	return context.WithValue(ctx, editsKeyType{}, &b)
 }
 
-// MarkEditsApplied marks that tool-based edits were made.
-func MarkEditsApplied() {
-	editsUsed = true
+// ResetEditsApplied resets the edit tracking state on the context.
+func ResetEditsApplied(ctx context.Context) {
+	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
+		*b = false
+	}
 }
 
-// EditsApplied returns whether tool-based edits were made.
-func EditsApplied() bool {
-	return editsUsed
+// MarkEditsApplied marks that tool-based edits were made on the context.
+func MarkEditsApplied(ctx context.Context) {
+	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
+		*b = true
+	}
+}
+
+// EditsApplied returns whether tool-based edits were made on the context.
+func EditsApplied(ctx context.Context) bool {
+	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
+		return *b
+	}
+	return false
 }
 
 // Handler wraps a tool definition and its implementation function.
@@ -96,12 +109,16 @@ func (t *RepeatTracker) Exceeded() bool {
 }
 
 // RunWithTools drives a tool-calling loop for LangChainGo-based models.
-func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, callOpts ...llms.CallOption) (string, error) {
-	handlers, toolDefs := BuildHandlers(workingDir)
+func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations int, taskCfg *TaskConfig, callOpts ...llms.CallOption) (string, error) {
+	handlers, toolDefs := BuildHandlers(workingDir, taskCfg)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
+	if maxIterations <= 0 {
+		maxIterations = MaxToolIterations
+	}
+
 	messages := buildInitialMessages(systemPrompt, userPrompt)
-	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, callOpts)
+	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, maxIterations, callOpts)
 	if done {
 		return lastContent, nil
 	}
@@ -109,14 +126,14 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 		return lastContent, loopErr
 	}
 
-	return finishToolLoop(ctx, llm, messages, lastContent, callOpts)
+	return finishToolLoop(ctx, llm, messages, lastContent, maxIterations, callOpts)
 }
 
-func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
+func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter int, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
 	var lastContent string
 	var repeat RepeatTracker
-	for i := 0; i < MaxToolIterations; i++ {
-		logging.InfoContext(ctx, "model iteration %d/%d", i+1, MaxToolIterations)
+	for i := 0; i < maxIter; i++ {
+		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxIter)
 		iterStart := time.Now()
 		response, err := llm.GenerateContent(ctx, messages, callOpts...)
 		iterDuration := time.Since(iterStart)
@@ -154,7 +171,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 	return lastContent, messages, nil, false
 }
 
-func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, lastContent string, callOpts []llms.CallOption) (string, error) {
+func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, lastContent string, maxIter int, callOpts []llms.CallOption) (string, error) {
 	logging.InfoContext(ctx, "tool loop ended, requesting final response with tool_choice=none")
 	finalOpts := make([]llms.CallOption, len(callOpts), len(callOpts)+1)
 	copy(finalOpts, callOpts)
@@ -171,7 +188,7 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 		return lastContent, nil
 	}
 
-	return "", fmt.Errorf("tool loop ended after %d iterations with no usable response", MaxToolIterations)
+	return "", fmt.Errorf("tool loop ended after %d iterations with no usable response", maxIter)
 }
 
 func buildInitialMessages(systemPrompt, userPrompt string) []llms.MessageContent {
@@ -254,7 +271,8 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 }
 
 // BuildHandlers creates all tool handlers and their definitions.
-func BuildHandlers(workingDir string) (map[string]Handler, []llms.Tool) {
+// When taskCfg is non-nil, the Task tool is registered for sub-agent spawning.
+func BuildHandlers(workingDir string, taskCfg *TaskConfig) (map[string]Handler, []llms.Tool) {
 	handlers := map[string]Handler{}
 
 	add := func(handler Handler) {
@@ -268,6 +286,10 @@ func BuildHandlers(workingDir string) (map[string]Handler, []llms.Tool) {
 	add(Handler{Def: definitionGlob(), Call: globTool(workingDir)})
 	add(Handler{Def: definitionGrep(), Call: grepTool(workingDir)})
 	add(Handler{Def: definitionBash(), Call: bashTool(workingDir)})
+
+	if taskCfg != nil {
+		add(Handler{Def: definitionTask(), Call: taskTool(*taskCfg)})
+	}
 
 	toolDefs := make([]llms.Tool, 0, len(handlers))
 	for _, handler := range handlers {
@@ -284,7 +306,7 @@ func trackEdits(call func(ctx context.Context, rawArgs []byte) (string, error)) 
 	return func(ctx context.Context, rawArgs []byte) (string, error) {
 		result, err := call(ctx, rawArgs)
 		if err == nil {
-			MarkEditsApplied()
+			MarkEditsApplied(ctx)
 		}
 		return result, err
 	}

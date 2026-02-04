@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/tmc/langchaingo/llms"
 )
+
+var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
 // LLM implements llms.Model using Ollama's native /api/chat endpoint,
 // which supports both tool calling and the num_ctx parameter.
@@ -82,7 +86,7 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	httpResp, err := http.DefaultClient.Do(req)
+	httpResp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ollama request failed: %w", err)
 	}
@@ -230,6 +234,7 @@ func convertResponse(resp chatResponse) *llms.ContentResponse {
 		for i, tc := range resp.Message.ToolCalls {
 			argsJSON, err := json.Marshal(tc.Function.Arguments)
 			if err != nil {
+				log.Printf("ollama: failed to marshal tool call %q arguments: %v", tc.Function.Name, err)
 				continue
 			}
 			choice.ToolCalls = append(choice.ToolCalls, llms.ToolCall{

@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
@@ -36,57 +37,46 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Context key type for storing config.
-type configKeyType struct{}
-
-var (
-	configKey = configKeyType{}
-	cfgFile   string
-	appViper  *viper.Viper
-)
-
-var rootCmd = &cobra.Command{
-	Use:   "squad",
-	Short: "squad - model-agnostic agent CLI",
-	Long: `squad is a model-agnostic agent CLI built on LangChainGo.
+func NewRootCmd() *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:   "squad",
+		Short: "squad - model-agnostic agent CLI",
+		Long: `squad is a model-agnostic agent CLI built on LangChainGo.
 It provides a clean config + logging foundation for agent workflows.`,
-	Version:           version,
-	PersistentPreRunE: initConfig,
-}
+		Version:           version,
+		PersistentPreRunE: initConfig,
+	}
 
-func init() {
-	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "Config file (default is $HOME/.config/squad/config.yaml)")
+	rootCmd.PersistentFlags().StringP("config", "c", "", "Config file (default is $HOME/.config/squad/config.yaml)")
 	rootCmd.PersistentFlags().String("log-level", "", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().String("log-format", "", "Log format (text, json, color)")
 	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "Quiet mode - only show errors")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Verbose mode - show debug output")
 
-	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(newRunCmd())
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(completionCmd)
+
+	return rootCmd
 }
 
 // Execute runs the root command.
 func Execute() error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	rootCmd := NewRootCmd()
 	rootCmd.SetContext(ctx)
 	return rootCmd.Execute()
-}
-
-func configFromContext(cmd *cobra.Command) *config.Config {
-	if cfg, ok := cmd.Context().Value(configKey).(*config.Config); ok {
-		return cfg
-	}
-	return nil
 }
 
 func initConfig(cmd *cobra.Command, _ []string) error {
 	var cfg *config.Config
 	var err error
-	if cfgFile != "" {
-		cfg, err = config.LoadFromPath(cfgFile)
+	// Resolve config file path directly from flags to avoid global mutable flag state
+	configPath, _ := cmd.Root().PersistentFlags().GetString("config")
+	if configPath != "" {
+		cfg, err = config.LoadFromPath(configPath)
 	} else {
 		cfg, err = config.Load()
 	}
@@ -97,7 +87,6 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	v := viper.New()
-	appViper = v
 
 	v.SetDefault("log.level", cfg.Log.Level)
 	v.SetDefault("log.format", cfg.Log.Format)
@@ -108,6 +97,7 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	v.SetDefault("provider.api_type", cfg.Provider.APIType)
 	v.SetDefault("provider.openai_compat_max_tokens", cfg.Provider.OpenAICompatMaxTokens)
 	v.SetDefault("provider.token", cfg.Provider.Token)
+	v.SetDefault("provider.num_ctx", cfg.Provider.NumCtx)
 	v.SetDefault("model.default", cfg.Model.Default)
 	v.SetDefault("model.temperature", cfg.Model.Temperature)
 	v.SetDefault("model.max_tokens", cfg.Model.MaxTokens)
@@ -117,6 +107,9 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	v.AutomaticEnv()
 
 	// Bind persistent (root) flags.
+	if err := v.BindPFlag("config", cmd.Root().PersistentFlags().Lookup("config")); err != nil {
+		return fmt.Errorf("failed to bind config flag: %w", err)
+	}
 	if err := v.BindPFlag("log.level", cmd.Root().PersistentFlags().Lookup("log-level")); err != nil {
 		return fmt.Errorf("failed to bind log-level flag: %w", err)
 	}
@@ -131,7 +124,13 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Bind run command flags so Viper can resolve them via env/config.
-	bindRunFlags(v)
+	runCmd := findRunCmd(cmd.Root())
+	if runCmd == nil {
+		return fmt.Errorf("run command not found for flag binding")
+	}
+	if err := bindRunFlags(runCmd, v); err != nil {
+		return err
+	}
 
 	logLevel := v.GetString("log.level")
 	logFormat := v.GetString("log.format")
@@ -155,14 +154,25 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	cfg.Provider.APIType = v.GetString("provider.api_type")
 	cfg.Provider.OpenAICompatMaxTokens = v.GetBool("provider.openai_compat_max_tokens")
 	cfg.Provider.Token = v.GetString("provider.token")
+	cfg.Provider.NumCtx = v.GetInt("provider.num_ctx")
 	cfg.Model.Default = v.GetString("model.default")
 	cfg.Model.Temperature = v.GetFloat64("model.temperature")
 	cfg.Model.MaxTokens = v.GetInt("model.max_tokens")
 
 	logger := logging.FromContext(cmd.Context())
-	ctx := context.WithValue(cmd.Context(), configKey, cfg)
+	ctx := withConfig(cmd.Context(), cfg)
+	ctx = withViper(ctx, v)
 	ctx = logging.WithLogger(ctx, logger)
 	cmd.SetContext(ctx)
 
+	return nil
+}
+
+func findRunCmd(root *cobra.Command) *cobra.Command {
+	for _, sub := range root.Commands() {
+		if sub.Name() == "run" {
+			return sub
+		}
+	}
 	return nil
 }
