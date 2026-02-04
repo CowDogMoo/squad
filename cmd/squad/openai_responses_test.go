@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/cowdogmoo/squad/openairesponses"
-	"github.com/openai/openai-go/v3/responses"
+	"github.com/cowdogmoo/squad/responses"
+	oairesponses "github.com/openai/openai-go/v3/responses"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -29,7 +29,7 @@ func TestUseResponsesAPI(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider+"/"+tt.model, func(t *testing.T) {
-			got := openairesponses.UseResponsesAPI(tt.provider, tt.model)
+			got := responses.UseResponsesAPI(tt.provider, tt.model)
 			if got != tt.want {
 				t.Errorf("UseResponsesAPI(%q, %q) = %v, want %v", tt.provider, tt.model, got, tt.want)
 			}
@@ -70,7 +70,7 @@ func TestConvertToolsToResponses(t *testing.T) {
 		{Type: "function", Function: nil}, // should be skipped
 	}
 
-	result := openairesponses.ConvertTools(tools)
+	result := responses.ConvertTools(tools)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 tools, got %d", len(result))
 	}
@@ -90,27 +90,27 @@ func TestConvertToolsToResponses(t *testing.T) {
 
 func TestExtractFunctionCalls(t *testing.T) {
 	t.Run("nil response", func(t *testing.T) {
-		calls := openairesponses.ExtractFunctionCalls(nil)
+		calls := responses.ExtractFunctionCalls(nil)
 		if len(calls) != 0 {
 			t.Errorf("expected 0 calls, got %d", len(calls))
 		}
 	})
 
 	t.Run("no function calls", func(t *testing.T) {
-		resp := &responses.Response{
-			Output: []responses.ResponseOutputItemUnion{
+		resp := &oairesponses.Response{
+			Output: []oairesponses.ResponseOutputItemUnion{
 				{Type: "message", ID: "msg_1"},
 			},
 		}
-		calls := openairesponses.ExtractFunctionCalls(resp)
+		calls := responses.ExtractFunctionCalls(resp)
 		if len(calls) != 0 {
 			t.Errorf("expected 0 calls, got %d", len(calls))
 		}
 	})
 
 	t.Run("with function calls", func(t *testing.T) {
-		resp := &responses.Response{
-			Output: []responses.ResponseOutputItemUnion{
+		resp := &oairesponses.Response{
+			Output: []oairesponses.ResponseOutputItemUnion{
 				{
 					Type:      "function_call",
 					ID:        "fc_1",
@@ -128,7 +128,7 @@ func TestExtractFunctionCalls(t *testing.T) {
 				},
 			},
 		}
-		calls := openairesponses.ExtractFunctionCalls(resp)
+		calls := responses.ExtractFunctionCalls(resp)
 		if len(calls) != 2 {
 			t.Fatalf("expected 2 calls, got %d", len(calls))
 		}

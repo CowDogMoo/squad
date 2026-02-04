@@ -10,7 +10,7 @@ import (
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/ollama"
-	"github.com/cowdogmoo/squad/openairesponses"
+	"github.com/cowdogmoo/squad/responses"
 	"github.com/cowdogmoo/squad/tools"
 	"github.com/spf13/cobra"
 	"github.com/tmc/langchaingo/llms"
@@ -35,7 +35,7 @@ func invokeModel(cmd *cobra.Command, opts *RunOptions, bundle *agent.Bundle) (st
 
 // callModel dispatches the prompt to the appropriate model backend and returns the response.
 func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int) (string, error) {
-	if openairesponses.UseResponsesAPI(provider, model) {
+	if responses.UseResponsesAPI(provider, model) {
 		return callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens)
 	}
 	return callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens)
@@ -51,9 +51,18 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 		return "", fmt.Errorf("API key required for OpenAI Responses API: use --api-key, config provider.token, or OPENAI_API_KEY env var")
 	}
 
+	// Reasoning models (gpt-5*) consume output tokens on internal reasoning
+	// before producing visible text.  The config default of 1024 is far too
+	// small — the model burns the entire budget on thinking and returns no
+	// message.  Apply a higher floor unless the user explicitly set --max-tokens.
+	if responses.IsReasoningModel(model) && maxTokens < responses.DefaultMaxOutputTokens {
+		logging.InfoContext(ctx, "raising max_output_tokens %d → %d for reasoning model %s", maxTokens, responses.DefaultMaxOutputTokens, model)
+		maxTokens = responses.DefaultMaxOutputTokens
+	}
+
 	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
 	modelStart := time.Now()
-	response, err := openairesponses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens)
+	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens)
 	if err != nil {
 		return "", fmt.Errorf("model call failed: %w", err)
 	}
