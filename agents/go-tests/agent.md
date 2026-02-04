@@ -38,6 +38,18 @@ An automated validator checks for "files touched" or "no changes"
 (case-insensitive). Missing both = pipeline failure. Missing the
 "Coverage Report" section with Before/After/Delta = pipeline failure.
 
+# EFFICIENCY RULES
+
+- **Write whole files, not incremental edits.** When creating a new test file,
+  use the Write tool with the complete file content. One Write call is cheaper
+  than 10+ Edit calls building up the same file incrementally.
+- **Wind down gracefully.** If you are running low on iterations, stop writing
+  tests, measure final coverage, and produce the report. A partial report with
+  accurate before/after numbers is a success. No report is a failure.
+- **Prioritize breadth over depth.** Cover more packages at basic level rather
+  than achieving 100% on a single package. Move to the next package after
+  covering the high-impact exported functions.
+
 # INPUT
 
 User request and any constraints.

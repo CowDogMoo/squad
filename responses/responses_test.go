@@ -2,8 +2,13 @@ package responses
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cowdogmoo/squad/tools"
@@ -254,16 +259,413 @@ func TestExecuteAndBuildOutputs(t *testing.T) {
 
 func TestLogOutputItems(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	logOutputItems(ctx, nil, "nil")
-	resp := &oairesponses.Response{
-		ID:     "resp",
-		Status: "completed",
-		Usage: oairesponses.ResponseUsage{
-			InputTokens:  2,
-			OutputTokens: 3,
+	tests := []struct {
+		name  string
+		resp  *oairesponses.Response
+		label string
+	}{
+		{"nil response", nil, "nil"},
+		{
+			"with output",
+			&oairesponses.Response{
+				ID:     "resp",
+				Status: "completed",
+				Usage: oairesponses.ResponseUsage{
+					InputTokens:  2,
+					OutputTokens: 3,
+				},
+				Output: []oairesponses.ResponseOutputItemUnion{
+					{Type: "message", ID: "msg"},
+				},
+			},
+			"with-output",
 		},
-		Output: []oairesponses.ResponseOutputItemUnion{{Type: "message", ID: "msg"}},
 	}
-	logOutputItems(ctx, resp, "with-output")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// logOutputItems only logs; verify no panic.
+			logOutputItems(
+				context.Background(), tt.resp, tt.label,
+			)
+		})
+	}
+}
+
+func TestRunWithToolsNoToolCalls(t *testing.T) {
+	t.Parallel()
+	payload := map[string]any{
+		"id":                  "resp-1",
+		"object":              "response",
+		"created_at":          0,
+		"model":               "gpt-4o",
+		"parallel_tool_calls": false,
+		"temperature":         0,
+		"tool_choice":         "auto",
+		"tools":               []any{},
+		"top_p":               1,
+		"error": map[string]any{
+			"code":    "server_error",
+			"message": "",
+		},
+		"incomplete_details": map[string]any{"reason": ""},
+		"instructions":       "system",
+		"metadata":           map[string]any{},
+		"output": []map[string]any{
+			{
+				"id":     "msg-1",
+				"type":   "message",
+				"role":   "assistant",
+				"status": "completed",
+				"content": []map[string]any{
+					{"type": "output_text", "text": "hello"},
+				},
+			},
+		},
+	}
+
+	reqErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			reqErr <- errors.New("unexpected path")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		reqErr <- json.NewEncoder(w).Encode(payload)
+	}))
+	defer server.Close()
+
+	resp, err := RunWithTools(
+		context.Background(),
+		"key",
+		server.URL,
+		"gpt-4o",
+		"system",
+		"user",
+		t.TempDir(),
+		"",
+		0.4,
+		0,
+		1,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("RunWithTools() error = %v", err)
+	}
+	if err := <-reqErr; err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if resp != "hello" {
+		t.Fatalf("response = %q, want hello", resp)
+	}
+}
+
+func TestRequestFinalMissingID(t *testing.T) {
+	t.Parallel()
+	client := openai.NewClient()
+	cfg := &Config{Model: "gpt-4o"}
+	if _, err := requestFinal(context.Background(), client, "", "sys", cfg); err == nil {
+		t.Fatalf("expected error")
+	}
+}
+
+func TestRunWithToolsExhaustedWithPendingCalls(t *testing.T) {
+	t.Parallel()
+
+	// Scenario: maxIterations=1.
+	// Call 1 (initial): returns a function_call.
+	// Call 2 (tool output follow-up): returns another function_call
+	//   → loop exits at iteration budget with pending calls.
+	// Call 3 (resolvePendingCalls): dummy outputs + tool_choice=none → text.
+	callCount := int32(0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count := atomic.AddInt32(&callCount, 1)
+		w.Header().Set("Content-Type", "application/json")
+		var payload map[string]any
+		switch count {
+		case 1:
+			// Initial request → function_call
+			payload = map[string]any{
+				"id": "resp-1", "object": "response", "created_at": 0,
+				"model": "gpt-4o", "parallel_tool_calls": false,
+				"temperature": 0, "tool_choice": "auto", "tools": []any{},
+				"top_p":              1,
+				"error":              map[string]any{"code": "server_error", "message": ""},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output": []map[string]any{
+					{
+						"id": "fc-1", "type": "function_call",
+						"call_id": "call-1", "name": "Echo", "arguments": `{"msg":"hi"}`,
+					},
+				},
+			}
+		case 2:
+			// After tool output → another function_call (budget exhausted)
+			payload = map[string]any{
+				"id": "resp-2", "object": "response", "created_at": 0,
+				"model": "gpt-4o", "parallel_tool_calls": false,
+				"temperature": 0, "tool_choice": "auto", "tools": []any{},
+				"top_p":              1,
+				"error":              map[string]any{"code": "server_error", "message": ""},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output": []map[string]any{
+					{
+						"id": "fc-2", "type": "function_call",
+						"call_id": "call-2", "name": "Echo", "arguments": `{"msg":"again"}`,
+					},
+				},
+			}
+		default:
+			// resolvePendingCalls → text response
+			payload = map[string]any{
+				"id": "resp-3", "object": "response", "created_at": 0,
+				"model": "gpt-4o", "parallel_tool_calls": false,
+				"temperature": 0, "tool_choice": "auto", "tools": []any{},
+				"top_p":              1,
+				"error":              map[string]any{"code": "server_error", "message": ""},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output": []map[string]any{
+					{
+						"id": "msg-1", "type": "message", "role": "assistant",
+						"status": "completed",
+						"content": []map[string]any{
+							{"type": "output_text", "text": "resolved"},
+						},
+					},
+				},
+			}
+		}
+		if err := json.NewEncoder(w).Encode(payload); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer server.Close()
+
+	resp, err := RunWithTools(
+		context.Background(),
+		"key",
+		server.URL,
+		"gpt-4o",
+		"system",
+		"user",
+		t.TempDir(),
+		"",
+		0.4,
+		0,
+		1, // maxIterations=1 → loop exits with pending calls
+		&tools.TaskConfig{},
+	)
+	if err != nil {
+		t.Fatalf("RunWithTools() error = %v", err)
+	}
+	if resp != "resolved" {
+		t.Fatalf("response = %q, want %q", resp, "resolved")
+	}
+	finalCount := atomic.LoadInt32(&callCount)
+	if finalCount != 3 {
+		t.Fatalf("expected 3 API calls (initial + follow-up + resolve), got %d", finalCount)
+	}
+}
+
+func TestRunWithToolsFollowUp(t *testing.T) {
+	t.Parallel()
+	reqErr := make(chan error, 2)
+	callCount := int32(0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count := atomic.AddInt32(&callCount, 1)
+		w.Header().Set("Content-Type", "application/json")
+		var payload map[string]any
+		switch count {
+		case 1:
+			payload = map[string]any{
+				"id":                  "resp-1",
+				"object":              "response",
+				"created_at":          0,
+				"model":               "gpt-4o",
+				"parallel_tool_calls": false,
+				"temperature":         0,
+				"tool_choice":         "auto",
+				"tools":               []any{},
+				"top_p":               1,
+				"error": map[string]any{
+					"code":    "server_error",
+					"message": "",
+				},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output": []map[string]any{
+					{
+						"id":        "call-1",
+						"type":      "function_call",
+						"call_id":   "call-1",
+						"name":      "MissingTool",
+						"arguments": "{}",
+					},
+				},
+			}
+		default:
+			payload = map[string]any{
+				"id":                  "resp-2",
+				"object":              "response",
+				"created_at":          0,
+				"model":               "gpt-4o",
+				"parallel_tool_calls": false,
+				"temperature":         0,
+				"tool_choice":         "auto",
+				"tools":               []any{},
+				"top_p":               1,
+				"error": map[string]any{
+					"code":    "server_error",
+					"message": "",
+				},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output": []map[string]any{
+					{
+						"id":     "msg-1",
+						"type":   "message",
+						"role":   "assistant",
+						"status": "completed",
+						"content": []map[string]any{
+							{"type": "output_text", "text": "follow-up"},
+						},
+					},
+				},
+			}
+		}
+		reqErr <- json.NewEncoder(w).Encode(payload)
+	}))
+	defer server.Close()
+
+	resp, err := RunWithTools(
+		context.Background(),
+		"key",
+		server.URL,
+		"gpt-4o",
+		"system",
+		"user",
+		t.TempDir(),
+		"",
+		0.4,
+		0,
+		2,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("RunWithTools() error = %v", err)
+	}
+	if resp != "follow-up" {
+		t.Fatalf("response = %q, want follow-up", resp)
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-reqErr; err != nil {
+			t.Fatalf("handler error: %v", err)
+		}
+	}
+}
+
+func TestRequestFinal(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		payload     map[string]any
+		wantErr     bool
+		wantText    string
+		wantErrPart string
+	}{
+		{
+			name: "success",
+			payload: map[string]any{
+				"id":                  "resp-final",
+				"object":              "response",
+				"created_at":          0,
+				"model":               "gpt-4o",
+				"parallel_tool_calls": false,
+				"temperature":         0,
+				"tool_choice":         "none",
+				"tools":               []any{},
+				"top_p":               1,
+				"error": map[string]any{
+					"code":    "server_error",
+					"message": "",
+				},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output": []map[string]any{
+					{
+						"id":     "msg-1",
+						"type":   "message",
+						"role":   "assistant",
+						"status": "completed",
+						"content": []map[string]any{
+							{"type": "output_text", "text": "final"},
+						},
+					},
+				},
+			},
+			wantText: "final",
+		},
+		{
+			name: "empty output",
+			payload: map[string]any{
+				"id":                  "resp-final",
+				"object":              "response",
+				"created_at":          0,
+				"model":               "gpt-4o",
+				"parallel_tool_calls": false,
+				"temperature":         0,
+				"tool_choice":         "none",
+				"tools":               []any{},
+				"top_p":               1,
+				"error": map[string]any{
+					"code":    "server_error",
+					"message": "",
+				},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output":             []map[string]any{},
+			},
+			wantErr:     true,
+			wantErrPart: "empty text",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(tt.payload)
+			}))
+			defer server.Close()
+
+			client := newClient("key", server.URL, "org")
+			cfg := &Config{Model: "gpt-4o"}
+			text, err := requestFinal(
+				context.Background(),
+				client,
+				"resp-1",
+				"system",
+				cfg,
+			)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("requestFinal() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErrPart != "" && err != nil && !strings.Contains(err.Error(), tt.wantErrPart) {
+				t.Fatalf("error = %q, want containing %q", err.Error(), tt.wantErrPart)
+			}
+			if !tt.wantErr && text != tt.wantText {
+				t.Fatalf("text = %q, want %q", text, tt.wantText)
+			}
+		})
+	}
 }

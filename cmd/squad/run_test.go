@@ -401,28 +401,47 @@ func TestBindRunFlags(t *testing.T) {
 func TestHasPipedInput(t *testing.T) {
 	tests := []struct {
 		name   string
-		reader io.Reader
+		reader func(t *testing.T) (io.Reader, func())
 		want   bool
 	}{
 		{
-			name:   "buffer with data",
-			reader: bytes.NewBufferString("data"),
-			want:   true,
+			name: "buffer with data",
+			reader: func(*testing.T) (io.Reader, func()) {
+				return bytes.NewBufferString("data"), func() {}
+			},
+			want: true,
 		},
 		{
-			name:   "empty buffer",
-			reader: bytes.NewBuffer(nil),
-			want:   false,
+			name: "empty buffer",
+			reader: func(*testing.T) (io.Reader, func()) {
+				return bytes.NewBuffer(nil), func() {}
+			},
+			want: false,
 		},
 		{
-			name:   "string reader",
-			reader: strings.NewReader("data"),
-			want:   false,
+			name: "string reader",
+			reader: func(*testing.T) (io.Reader, func()) {
+				return strings.NewReader("data"), func() {}
+			},
+			want: false,
+		},
+		{
+			name: "file reader",
+			reader: func(t *testing.T) (io.Reader, func()) {
+				file, err := os.CreateTemp(t.TempDir(), "input")
+				if err != nil {
+					t.Fatalf("CreateTemp: %v", err)
+				}
+				return file, func() { _ = file.Close() }
+			},
+			want: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := hasPipedInput(tt.reader); got != tt.want {
+			reader, cleanup := tt.reader(t)
+			defer cleanup()
+			if got := hasPipedInput(reader); got != tt.want {
 				t.Fatalf("hasPipedInput() = %v, want %v", got, tt.want)
 			}
 		})

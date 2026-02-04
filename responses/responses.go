@@ -107,6 +107,16 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		return text, nil
 	}
 
+	// If the loop exited with pending function calls, resolve them with
+	// dummy outputs so PreviousResponseID chaining doesn't fail.
+	resp, text, err = resolvePendingCalls(ctx, client, resp, &rc)
+	if err != nil {
+		return "", fmt.Errorf("responses API: resolvePendingCalls failed: %w", err)
+	}
+	if text != "" {
+		return text, nil
+	}
+
 	finalText, finalErr := requestFinal(ctx, client, resp.ID, systemPrompt, &rc)
 	if finalErr == nil && finalText != "" {
 		return finalText, nil
@@ -223,6 +233,52 @@ func requestFinal(ctx context.Context, client openai.Client, previousID, systemP
 	}
 	logging.InfoContext(ctx, "responses API: final call produced response (%d bytes)", len(text))
 	return text, nil
+}
+
+// resolvePendingCalls checks whether resp contains unresolved function_call
+// items and, if so, submits dummy outputs with ToolChoice=none so the
+// conversation is in a clean state for subsequent chaining.
+func resolvePendingCalls(ctx context.Context, client openai.Client, resp *oairesponses.Response, rc *Config) (*oairesponses.Response, string, error) {
+	calls := ExtractFunctionCalls(resp)
+	if len(calls) == 0 {
+		return resp, resp.OutputText(), nil
+	}
+
+	logging.InfoContext(ctx, "responses API: resolving %d pending call(s) after iteration budget exhausted", len(calls))
+
+	outputs := make([]oairesponses.ResponseInputItemUnionParam, 0, len(calls))
+	for _, call := range calls {
+		outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
+			OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
+				CallID: call.CallID,
+				Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
+					OfString: openai.String("Tool call skipped: iteration budget exhausted."),
+				},
+			},
+		})
+	}
+
+	params := oairesponses.ResponseNewParams{
+		Model:              rc.Model,
+		PreviousResponseID: openai.String(resp.ID),
+		Instructions:       openai.String(rc.Instructions),
+		Input: oairesponses.ResponseNewParamsInputUnion{
+			OfInputItemList: oairesponses.ResponseInputParam(outputs),
+		},
+		ToolChoice: oairesponses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(oairesponses.ToolChoiceOptionsNone),
+		},
+		Tools:      rc.Tools,
+		Truncation: oairesponses.ResponseNewParamsTruncation("auto"),
+	}
+	rc.applyOptionals(&params)
+
+	resolved, err := client.Responses.New(ctx, params)
+	if err != nil {
+		return resp, "", fmt.Errorf("resolve pending calls failed: %w", err)
+	}
+	logOutputItems(ctx, resolved, "resolve-pending")
+	return resolved, resolved.OutputText(), nil
 }
 
 // ConvertTools converts langchaingo tool definitions to the

@@ -1,6 +1,12 @@
 package ollama
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/tmc/langchaingo/llms"
@@ -210,6 +216,125 @@ func TestConvertResponse(t *testing.T) {
 			}
 			if choice.GenerationInfo["TotalTokens"] != tt.wantTokens {
 				t.Fatalf("TotalTokens = %v, want %d", choice.GenerationInfo["TotalTokens"], tt.wantTokens)
+			}
+		})
+	}
+}
+
+func TestGenerateContentSuccess(t *testing.T) {
+	t.Parallel()
+	var gotRequest chatRequest
+	reqErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			reqErr <- fmt.Errorf("unexpected path: %s", r.URL.Path)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotRequest); err != nil {
+			reqErr <- fmt.Errorf("decode request: %w", err)
+			return
+		}
+		reqErr <- nil
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"model":"mistral",
+			"message":{"role":"assistant","content":"hello","tool_calls":[{"function":{"name":"Echo","arguments":{"value":"hi"}}}]},
+			"done":true,
+			"prompt_eval_count":2,
+			"eval_count":3
+		}`))
+	}))
+	defer server.Close()
+
+	llm := New(server.URL, "mistral", 4096)
+	messages := []llms.MessageContent{{
+		Role:  llms.ChatMessageTypeHuman,
+		Parts: []llms.ContentPart{llms.TextPart("hi")},
+	}}
+
+	resp, err := llm.GenerateContent(
+		context.Background(),
+		messages,
+		llms.WithTemperature(0.7),
+		llms.WithMaxTokens(123),
+		llms.WithTools([]llms.Tool{{
+			Function: &llms.FunctionDefinition{Name: "Echo", Description: "desc"},
+		}}),
+		llms.WithToolChoice("auto"),
+	)
+	if err != nil {
+		t.Fatalf("GenerateContent() error = %v", err)
+	}
+	if err := <-reqErr; err != nil {
+		t.Fatalf("request error: %v", err)
+	}
+	if resp == nil || len(resp.Choices) != 1 {
+		t.Fatalf("expected 1 choice")
+	}
+	if resp.Choices[0].Content != "hello" {
+		t.Fatalf("Content = %q, want hello", resp.Choices[0].Content)
+	}
+	if len(resp.Choices[0].ToolCalls) != 1 {
+		t.Fatalf("ToolCalls len = %d, want 1", len(resp.Choices[0].ToolCalls))
+	}
+	if gotRequest.Model != "mistral" {
+		t.Fatalf("request model = %q, want mistral", gotRequest.Model)
+	}
+	if gotRequest.Options["num_ctx"] != float64(4096) {
+		t.Fatalf("num_ctx = %v, want 4096", gotRequest.Options["num_ctx"])
+	}
+	if gotRequest.Options["temperature"] != 0.7 {
+		t.Fatalf("temperature = %v, want 0.7", gotRequest.Options["temperature"])
+	}
+	if gotRequest.Options["num_predict"] != float64(123) {
+		t.Fatalf("num_predict = %v, want 123", gotRequest.Options["num_predict"])
+	}
+	if len(gotRequest.Tools) != 1 {
+		t.Fatalf("tools len = %d, want 1", len(gotRequest.Tools))
+	}
+}
+
+func TestGenerateContentErrors(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		wantErrMsg string
+	}{
+		{
+			name:       "http error",
+			status:     http.StatusBadRequest,
+			body:       "bad request",
+			wantErrMsg: "ollama returned 400",
+		},
+		{
+			name:       "invalid json",
+			status:     http.StatusOK,
+			body:       "not-json",
+			wantErrMsg: "failed to parse ollama response",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			llm := New(server.URL, "mistral", 256)
+			messages := []llms.MessageContent{{
+				Role:  llms.ChatMessageTypeHuman,
+				Parts: []llms.ContentPart{llms.TextPart("hi")},
+			}}
+			_, err := llm.GenerateContent(context.Background(), messages)
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErrMsg) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErrMsg)
 			}
 		})
 	}

@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -157,6 +159,42 @@ func TestApplyResponseDiffNoChanges(t *testing.T) {
 	}
 }
 
+func TestApplyResponseDiffBranches(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		response string
+		edits    bool
+		wantErr  bool
+	}{
+		{
+			name:     "missing diff returns error",
+			response: "plain text response",
+			edits:    false,
+			wantErr:  true,
+		},
+		{
+			name:     "edits applied skip",
+			response: "plain text response",
+			edits:    true,
+			wantErr:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := tools.InitEdits(context.Background())
+			if tt.edits {
+				tools.MarkEditsApplied(ctx)
+			}
+			err := applyResponseDiff(ctx, tt.response, ".", false)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("applyResponseDiff() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestApplyUnifiedDiffEmpty(t *testing.T) {
 	t.Parallel()
 	if err := applyUnifiedDiff(context.Background(), ".", "", false); err == nil {
@@ -182,5 +220,107 @@ func TestResponseIndicatesNoChanges(t *testing.T) {
 				t.Fatalf("responseIndicatesNoChanges(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestApplyUnifiedDiffScenarios(t *testing.T) {
+	tests := []struct {
+		name          string
+		gitScript     string
+		patchScript   string
+		applyFallback bool
+		wantErr       bool
+		wantContains  string
+	}{
+		{
+			name:          "git success",
+			gitScript:     "#!/bin/sh\ncat >/dev/null\nexit 0\n",
+			patchScript:   "#!/bin/sh\nexit 1\n",
+			applyFallback: false,
+			wantErr:       false,
+		},
+		{
+			name:          "git fails without fallback",
+			gitScript:     "#!/bin/sh\necho git-fail 1>&2\nexit 1\n",
+			patchScript:   "#!/bin/sh\nexit 1\n",
+			applyFallback: false,
+			wantErr:       true,
+			wantContains:  "failed to apply diff with git",
+		},
+		{
+			name:          "fallback to patch",
+			gitScript:     "#!/bin/sh\necho git-fail 1>&2\nexit 1\n",
+			patchScript:   "#!/bin/sh\ncat >/dev/null\nexit 0\n",
+			applyFallback: true,
+			wantErr:       false,
+		},
+		{
+			name:          "git and patch fail",
+			gitScript:     "#!/bin/sh\necho git-fail 1>&2\nexit 1\n",
+			patchScript:   "#!/bin/sh\necho patch-fail 1>&2\nexit 1\n",
+			applyFallback: true,
+			wantErr:       true,
+			wantContains:  "failed to apply diff with git or patch",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			writeFakeTool(t, binDir, "git", tt.gitScript)
+			writeFakeTool(t, binDir, "patch", tt.patchScript)
+			pathEnv := binDir + string(os.PathListSeparator) + os.Getenv("PATH")
+			t.Setenv("PATH", pathEnv)
+
+			diff := strings.Join([]string{
+				"diff --git a/a.txt b/a.txt",
+				"--- a/a.txt",
+				"+++ b/a.txt",
+				"@@ -1 +1 @@",
+				"-old",
+				"+new",
+				"",
+			}, "\n")
+			err := applyUnifiedDiff(
+				context.Background(), t.TempDir(), diff, tt.applyFallback,
+			)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("applyUnifiedDiff() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantContains != "" && err != nil && !strings.Contains(err.Error(), tt.wantContains) {
+				t.Fatalf("error = %q, want containing %q", err.Error(), tt.wantContains)
+			}
+		})
+	}
+}
+
+func TestApplyResponseDiffAppliesUnifiedDiff(t *testing.T) {
+	binDir := t.TempDir()
+	writeFakeTool(t, binDir, "git", "#!/bin/sh\ncat >/dev/null\nexit 0\n")
+	writeFakeTool(t, binDir, "patch", "#!/bin/sh\nexit 1\n")
+	pathEnv := binDir + string(os.PathListSeparator) + os.Getenv("PATH")
+	t.Setenv("PATH", pathEnv)
+
+	response := strings.Join([]string{
+		"```diff",
+		"diff --git a/a.txt b/a.txt",
+		"--- a/a.txt",
+		"+++ b/a.txt",
+		"@@ -1 +1 @@",
+		"-old",
+		"+new",
+		"```",
+	}, "\n")
+
+	ctx := tools.InitEdits(context.Background())
+	if err := applyResponseDiff(ctx, response, t.TempDir(), false); err != nil {
+		t.Fatalf("applyResponseDiff() error = %v", err)
+	}
+}
+
+func writeFakeTool(t *testing.T, dir, name, script string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile %s: %v", name, err)
 	}
 }

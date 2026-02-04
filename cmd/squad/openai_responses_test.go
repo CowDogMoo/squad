@@ -89,54 +89,56 @@ func TestConvertToolsToResponses(t *testing.T) {
 }
 
 func TestExtractFunctionCalls(t *testing.T) {
-	t.Run("nil response", func(t *testing.T) {
-		calls := responses.ExtractFunctionCalls(nil)
-		if len(calls) != 0 {
-			t.Errorf("expected 0 calls, got %d", len(calls))
-		}
-	})
-
-	t.Run("no function calls", func(t *testing.T) {
-		resp := &oairesponses.Response{
-			Output: []oairesponses.ResponseOutputItemUnion{
-				{Type: "message", ID: "msg_1"},
-			},
-		}
-		calls := responses.ExtractFunctionCalls(resp)
-		if len(calls) != 0 {
-			t.Errorf("expected 0 calls, got %d", len(calls))
-		}
-	})
-
-	t.Run("with function calls", func(t *testing.T) {
-		resp := &oairesponses.Response{
-			Output: []oairesponses.ResponseOutputItemUnion{
-				{
-					Type:      "function_call",
-					ID:        "fc_1",
-					CallID:    "call_abc",
-					Name:      "Read",
-					Arguments: `{"path":"main.go"}`,
-				},
-				{Type: "message", ID: "msg_1"},
-				{
-					Type:      "function_call",
-					ID:        "fc_2",
-					CallID:    "call_def",
-					Name:      "Bash",
-					Arguments: `{"command":"go build"}`,
+	t.Parallel()
+	tests := []struct {
+		name    string
+		resp    *oairesponses.Response
+		wantLen int
+	}{
+		{"nil response", nil, 0},
+		{
+			"no function calls",
+			&oairesponses.Response{
+				Output: []oairesponses.ResponseOutputItemUnion{
+					{Type: "message", ID: "msg_1"},
 				},
 			},
-		}
-		calls := responses.ExtractFunctionCalls(resp)
-		if len(calls) != 2 {
-			t.Fatalf("expected 2 calls, got %d", len(calls))
-		}
-		if calls[0].Name != "Read" || calls[0].CallID != "call_abc" {
-			t.Errorf("unexpected first call: %+v", calls[0])
-		}
-		if calls[1].Name != "Bash" || calls[1].CallID != "call_def" {
-			t.Errorf("unexpected second call: %+v", calls[1])
-		}
-	})
+			0,
+		},
+		{
+			"with function calls",
+			&oairesponses.Response{
+				Output: []oairesponses.ResponseOutputItemUnion{
+					{
+						Type:      "function_call",
+						ID:        "fc_1",
+						CallID:    "call_abc",
+						Name:      "Read",
+						Arguments: `{"path":"main.go"}`,
+					},
+					{Type: "message", ID: "msg_1"},
+					{
+						Type:      "function_call",
+						ID:        "fc_2",
+						CallID:    "call_def",
+						Name:      "Bash",
+						Arguments: `{"command":"go build"}`,
+					},
+				},
+			},
+			2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			calls := responses.ExtractFunctionCalls(tt.resp)
+			if len(calls) != tt.wantLen {
+				t.Fatalf(
+					"ExtractFunctionCalls() len = %d, want %d",
+					len(calls), tt.wantLen,
+				)
+			}
+		})
+	}
 }

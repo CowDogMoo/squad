@@ -567,7 +567,11 @@ tasks:
 
         Target: {{.COVERAGE_TARGET}}% total coverage.
         Use table-driven tests ([]struct + t.Run) for any function with 2+ test cases.
-        Only create or modify _test.go files. Never edit source code." \
+        Only create or modify _test.go files. Never edit source code.
+
+        BUDGET: You have 200 iterations. Use Write (not Edit) for new files.
+        Cap 20 iterations per package. Wind down early if needed — a partial
+        report with before/after numbers is better than no report." \
           --agent go-tests \
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
@@ -576,6 +580,7 @@ tasks:
           --model {{.MODEL}} \
           --require-actionable=true \
           --temperature 0.3 \
+          --max-iterations 200 \
           --out /tmp/squad-go-tests.txt
       - echo "Test coverage output written to /tmp/squad-go-tests.txt"
       - |
