@@ -13,6 +13,7 @@ A comprehensive guide to writing effective Go tests following community best pra
 7. [Test Coverage](#test-coverage)
 8. [Common Patterns](#common-patterns)
 9. [What Not to Test](#what-not-to-test)
+10. [Cobra CLI Testing](#cobra-cli-testing)
 
 ---
 
@@ -526,6 +527,85 @@ if err != nil {
 if err == nil {
     t.Fatal("expected error, got nil")
 }
+```
+
+---
+
+## Cobra CLI Testing
+
+Testing Cobra commands requires extra care because `rootCmd` is typically
+a package-level singleton whose state persists across subtests.
+
+### Per-Subtest Isolation
+
+```go
+func TestExecute(t *testing.T) {
+    // Subtests share rootCmd — do not add t.Parallel().
+    tests := []struct {
+        name    string
+        args    []string
+        wantErr string // empty means no error expected
+        wantOut string // substring expected in stdout
+    }{
+        {"help flag", []string{"--help"}, "", "Usage:"},
+        {"unknown flag", []string{"--bogus"}, "unknown flag", ""},
+    }
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Fresh buffer per subtest.
+            var buf bytes.Buffer
+            rootCmd.SetOut(&buf)
+            rootCmd.SetErr(&buf)
+            rootCmd.SetArgs(tt.args)
+            t.Cleanup(func() {
+                rootCmd.SetOut(os.Stdout)
+                rootCmd.SetErr(os.Stderr)
+                rootCmd.SetArgs(nil)
+            })
+
+            err := Execute()
+
+            if tt.wantErr != "" {
+                if err == nil {
+                    t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+                }
+                if !strings.Contains(err.Error(), tt.wantErr) &&
+                    !strings.Contains(buf.String(), tt.wantErr) {
+                    t.Fatalf("error %q does not contain %q", err, tt.wantErr)
+                }
+                return
+            }
+            if err != nil {
+                t.Fatalf("unexpected error: %v", err)
+            }
+            if tt.wantOut != "" && !strings.Contains(buf.String(), tt.wantOut) {
+                t.Fatalf("output missing %q:\n%s", tt.wantOut, buf.String())
+            }
+        })
+    }
+}
+```
+
+Key points:
+
+- **`t.Cleanup` inside every subtest** — restores `SetOut`, `SetErr`,
+  and `SetArgs` so the next subtest starts clean.
+- **Fresh `bytes.Buffer` per subtest** — never share a buffer.
+- **Assert on error content** — check `err.Error()` or stderr for the
+  expected substring, not just `err != nil`.
+- **Comment explaining no `t.Parallel()`** — the singleton command is
+  shared mutable state.
+
+### Variable Shadowing
+
+Never declare a local variable that shadows a package-level name:
+
+```go
+// BAD — shadows the package-level `output` flag variable
+output := string(data)
+
+// GOOD — distinct name
+got := string(data)
 ```
 
 ---
