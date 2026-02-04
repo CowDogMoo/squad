@@ -108,9 +108,22 @@ HTTPclient               // inconsistent capitalization
 
 | Rule                         | Severity | Example               |
 | ---------------------------- | -------- | --------------------- |
-| Never ignore errors with `_` | CRITICAL | `_ = file.Close()`    |
+| Ignored errors that mask failures | CRITICAL | `_ = db.Close()` when error means data loss |
 | Handle errors once at source | HIGH     | Don't log and return  |
 | Return errors as last value  | MEDIUM   | `func X() (T, error)` |
+
+**Important nuance on `_ =`:** Not every `_ =` is a bug. Ask: "What would
+the caller do with this error?" Some `_ =` usages are acceptable:
+
+- Logging write failures (`_ = fmt.Fprintln(w, msg)`) — you cannot log a
+  logging failure
+- Shell completion registration (`_ = cmd.RegisterFlagCompletionFunc(...)`) —
+  failure means a typo caught in development, not a runtime risk
+- Response body closes in defers (`defer func() { _ = resp.Body.Close() }()`)
+- Any case where the error cannot cause incorrect behavior or data loss
+
+Only flag `_ =` when the ignored error can cause silent data corruption,
+resource leaks that matter, or incorrect program behavior.
 
 ### Error Wrapping (Go 1.13+)
 
@@ -386,8 +399,13 @@ func NewServer(opts ...Option) *Server {
 | ----------------- | ----------- | ----------------------- |
 | `strconv.Itoa()`  | Fast        | int to string           |
 | `fmt.Sprintf()`   | Slower      | Complex formatting      |
-| `strings.Builder` | Fast        | Multiple concatenations |
-| `+` operator      | Slow        | Avoid in loops          |
+| `strings.Builder` | Fast        | Hot loops (dozens+ iterations) |
+| `+` operator      | Fine        | Small loops (≤5 iterations), one-off concat |
+
+**Important**: `strings.Builder` is only worth the complexity when the loop
+iterates many times (dozens or more). For a 1-5 element loop, `+=` is
+simpler, equally fast, and easier to read. Do not replace `+=` with a
+Builder in small fixed-size loops — that is over-engineering.
 
 ### Time Handling
 
@@ -551,11 +569,14 @@ func TestGetUser(t *testing.T) {
 
 Issues that affect correctness, security, or cause crashes:
 
-- Ignored errors
+- Ignored errors **that can cause data loss, corruption, or silent failures**
+  (not all `_ =` — see Error Handling section for nuance)
 - Goroutine leaks
 - Race conditions
 - Security vulnerabilities
-- Panics in production code
+- Panics in production code (and NEVER add `panic()` as a fix — return
+  errors or log warnings — see the `_ =` nuance in the Error Handling
+  section for the narrow list of cases where `_ =` is acceptable)
 
 ### HIGH
 
@@ -611,14 +632,15 @@ Suggestions for optimization:
 
 ### Common Issues to Watch
 
-1. Ignored errors (`_ = something()`)
+1. Ignored errors that mask real failures (not all `_ =` — see nuance above)
 2. Goroutines without cancellation
 3. Deep nesting instead of early returns
-4. Missing error context
-5. Unchecked type assertions
-6. Global state
+4. Missing error context (missing `%w` wrapping)
+5. Unchecked type assertions (missing comma-ok pattern)
+6. Global mutable state
 7. Missing defer for cleanup
-8. Hardcoded values (magic numbers)
+8. `http.DefaultClient` without timeout
+9. Race conditions from mixed sync primitives
 
 ---
 
