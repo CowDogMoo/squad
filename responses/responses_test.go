@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -569,5 +570,102 @@ func TestRunWithToolsFollowUp(t *testing.T) {
 		if err := <-reqErr; err != nil {
 			t.Fatalf("handler error: %v", err)
 		}
+	}
+}
+
+func TestRequestFinal(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		payload     map[string]any
+		wantErr     bool
+		wantText    string
+		wantErrPart string
+	}{
+		{
+			name: "success",
+			payload: map[string]any{
+				"id":                  "resp-final",
+				"object":              "response",
+				"created_at":          0,
+				"model":               "gpt-4o",
+				"parallel_tool_calls": false,
+				"temperature":         0,
+				"tool_choice":         "none",
+				"tools":               []any{},
+				"top_p":               1,
+				"error": map[string]any{
+					"code":    "server_error",
+					"message": "",
+				},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output": []map[string]any{
+					{
+						"id":     "msg-1",
+						"type":   "message",
+						"role":   "assistant",
+						"status": "completed",
+						"content": []map[string]any{
+							{"type": "output_text", "text": "final"},
+						},
+					},
+				},
+			},
+			wantText: "final",
+		},
+		{
+			name: "empty output",
+			payload: map[string]any{
+				"id":                  "resp-final",
+				"object":              "response",
+				"created_at":          0,
+				"model":               "gpt-4o",
+				"parallel_tool_calls": false,
+				"temperature":         0,
+				"tool_choice":         "none",
+				"tools":               []any{},
+				"top_p":               1,
+				"error": map[string]any{
+					"code":    "server_error",
+					"message": "",
+				},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output":             []map[string]any{},
+			},
+			wantErr:     true,
+			wantErrPart: "empty text",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(tt.payload)
+			}))
+			defer server.Close()
+
+			client := newClient("key", server.URL, "org")
+			cfg := &Config{Model: "gpt-4o"}
+			text, err := requestFinal(
+				context.Background(),
+				client,
+				"resp-1",
+				"system",
+				cfg,
+			)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("requestFinal() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErrPart != "" && err != nil && !strings.Contains(err.Error(), tt.wantErrPart) {
+				t.Fatalf("error = %q, want containing %q", err.Error(), tt.wantErrPart)
+			}
+			if !tt.wantErr && text != tt.wantText {
+				t.Fatalf("text = %q, want %q", text, tt.wantText)
+			}
+		})
 	}
 }
