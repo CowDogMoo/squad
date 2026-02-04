@@ -3,7 +3,9 @@ package logging
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 )
@@ -189,5 +191,90 @@ func TestFallbackLogging(t *testing.T) {
 	InfoContext(context.TODO(), "fallback")
 	if !strings.Contains(buf.String(), "fallback") {
 		t.Fatalf("expected fallback output")
+	}
+}
+
+func TestNewCustomLoggerAndOutput(t *testing.T) {
+	buf := &bytes.Buffer{}
+	logger := NewCustomLogger(slog.LevelWarn)
+	if logger.LogLevel != slog.LevelWarn {
+		t.Fatalf("LogLevel = %v, want %v", logger.LogLevel, slog.LevelWarn)
+	}
+	if logger.OutputType != PlainOutput {
+		t.Fatalf("OutputType = %v, want %v", logger.OutputType, PlainOutput)
+	}
+	if logger.ConsoleWriter == nil {
+		t.Fatalf("expected ConsoleWriter to be set")
+	}
+
+	logger.OutputWriter = buf
+	logger.Output("hello")
+	if !strings.Contains(buf.String(), "hello") {
+		t.Fatalf("expected output to contain hello")
+	}
+}
+
+func TestCustomLoggerFormatMessageColor(t *testing.T) {
+	logger := &CustomLogger{OutputType: ColorOutput}
+	colored := logger.formatMessage(InfoLevel, "hi %s", "squad")
+	if !strings.Contains(colored, "hi squad") {
+		t.Fatalf("expected colored output to contain message")
+	}
+	logger.OutputType = PlainOutput
+	plain := logger.formatMessage(InfoLevel, "hi")
+	if plain != "hi" {
+		t.Fatalf("plain output = %q, want %q", plain, "hi")
+	}
+}
+
+func TestCustomLoggerOutputJSONError(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	logger := &CustomLogger{
+		OutputType:    JSONOutput,
+		OutputWriter:  &out,
+		ConsoleWriter: &errOut,
+		LogLevel:      slog.LevelInfo,
+	}
+	logger.Output(make(chan int))
+	if !strings.Contains(errOut.String(), "Failed to encode JSON output") {
+		t.Fatalf("expected json error output, got %q", errOut.String())
+	}
+}
+
+func TestCustomLoggerErrorFormatsError(t *testing.T) {
+	buf := &bytes.Buffer{}
+	logger := &CustomLogger{ConsoleWriter: buf, LogLevel: slog.LevelDebug}
+	logger.Error(fmt.Errorf("boom"), "extra")
+	logger.Error(123)
+	out := buf.String()
+	if !strings.Contains(out, "boom extra") {
+		t.Fatalf("expected formatted error, got %q", out)
+	}
+	if !strings.Contains(out, "123") {
+		t.Fatalf("expected numeric error, got %q", out)
+	}
+}
+
+func TestGlobalOutput(t *testing.T) {
+	buf := &bytes.Buffer{}
+	loggerMu.Lock()
+	logger = &CustomLogger{
+		OutputType:    PlainOutput,
+		OutputWriter:  buf,
+		ConsoleWriter: &bytes.Buffer{},
+	}
+	loggerMu.Unlock()
+
+	Output("global")
+	if !strings.Contains(buf.String(), "global") {
+		t.Fatalf("expected global output to be written")
+	}
+}
+
+func TestOutputWriterDefaultsToStdout(t *testing.T) {
+	logger := &CustomLogger{}
+	if logger.outputWriter() != os.Stdout {
+		t.Fatalf("expected outputWriter to default to stdout")
 	}
 }
