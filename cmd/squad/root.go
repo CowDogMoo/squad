@@ -53,6 +53,13 @@ It provides a clean config + logging foundation for agent workflows.`,
 	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "Quiet mode - only show errors")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Verbose mode - show debug output")
 
+	_ = rootCmd.RegisterFlagCompletionFunc("log-level", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"debug", "info", "warn", "error"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = rootCmd.RegisterFlagCompletionFunc("log-format", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"text", "json", "color"}, cobra.ShellCompDirectiveNoFileComp
+	})
+
 	rootCmd.AddCommand(newRunCmd())
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(versionCmd)
@@ -74,7 +81,10 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	var cfg *config.Config
 	var err error
 	// Resolve config file path directly from flags to avoid global mutable flag state
-	configPath, _ := cmd.Root().PersistentFlags().GetString("config")
+	configPath, err := cmd.Root().PersistentFlags().GetString("config")
+	if err != nil {
+		return fmt.Errorf("failed to read config flag: %w", err)
+	}
 	if configPath != "" {
 		cfg, err = config.LoadFromPath(configPath)
 	} else {

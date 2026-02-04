@@ -59,27 +59,6 @@ tasks:
           --model {{.MODEL}} \
           --out {{.OUT}}
 
-  run:review-cobra:
-    desc: Run the go-cobra agent to review and fix Cobra/Viper best practices
-    silent: true
-    cmds:
-      - |
-        go run ./cmd/squad run -v \
-          "Search cmd/squad/*.go for these specific issues and fix them using Edit tool:
-        1. Find any cmd.Flags().Get* calls that should use Viper instead
-        2. Find any cobra.Command without Args validators
-        3. Find any flags without descriptions (empty string after flag name)
-        4. Add missing error wrapping with fmt.Errorf and %w
-
-        List each file you modify and what you changed." \
-          --agent {{.AGENT}} \
-          --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
-          --provider {{.PROVIDER}} \
-          {{._BASE_URL_FLAG}} \
-          --model {{.MODEL}} \
-          --out {{.OUT}}
-
   run:go-review:
     desc: Run the go-review agent to review Go code quality
     silent: true
@@ -630,6 +609,69 @@ tasks:
           --print=false \
           --out /tmp/squad-go-tests-analysis.txt
       - echo "Coverage analysis written to /tmp/squad-go-tests-analysis.txt"
+
+  run:go-cobra:
+    desc: "Run the go-cobra agent to autonomously fix Cobra/Viper best-practice violations"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Review and fix all Cobra/Viper best-practice violations in this codebase.
+
+        Start by using Glob with '**/*.go' to discover all Go source files.
+        Read each file in cmd/ and internal/ that imports cobra or viper.
+        Cross-reference between files for integration issues.
+        Apply fixes via Edit tool, highest severity first.
+        Run 'go build ./...' after each batch of edits.
+
+        IMPORTANT CONSTRAINTS (repeat from system prompt):
+        - Only modify files in cmd/ and internal/
+        - No cosmetic changes (doc comments, import ordering, naming style)
+        - No new dependencies
+        - Skip fixes needing 50+ lines or new files
+        - Preserve backwards compatibility — no flag renames or removals
+        - Every file touched must appear in the output report" \
+          --agent go-cobra \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=true \
+          --temperature 0.3 \
+          --out /tmp/squad-go-cobra.txt
+      - echo "Cobra review output written to /tmp/squad-go-cobra.txt"
+      - |
+        echo ""
+        echo "Running final verification..."
+      - go build ./...
+      - echo "go build ./... PASSED"
+
+  run:go-cobra-analyze:
+    desc: "Run the go-cobra agent in readonly mode to analyze Cobra/Viper violations without applying fixes"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Analyze this codebase for Cobra/Viper best-practice violations.
+
+        Use Glob with '**/*.go' to discover all Go source files.
+        Read each file in cmd/ and internal/ that imports cobra or viper.
+        Cross-reference between files for integration issues.
+        Produce a prioritized report of all findings.
+
+        Do NOT write or modify any files." \
+          --agent go-cobra --mode readonly \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=false \
+          --temperature 0.3 \
+          --print=false \
+          --out /tmp/squad-go-cobra-analysis.txt
+      - echo "Cobra analysis written to /tmp/squad-go-cobra-analysis.txt"
 
   clean:
     desc: Clean build artifacts and temp files
