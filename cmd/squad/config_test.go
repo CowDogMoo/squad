@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cowdogmoo/squad/config"
@@ -241,5 +242,203 @@ func TestVersionCommand(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, fmt.Sprintf("squad version %s", version)) {
 		t.Fatalf("unexpected version output: %s", out)
+	}
+}
+
+func TestRunConfigInitForceOverwrite(t *testing.T) {
+	baseDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", baseDir)
+	t.Setenv("HOME", baseDir)
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("force", true, "")
+	cmd.SetContext(withConfig(context.Background(), config.Defaults()))
+
+	configPath, err := config.ConfigFile("config.yaml")
+	if err != nil {
+		t.Fatalf("ConfigFile: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("existing"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := runConfigInit(cmd, nil); err != nil {
+		t.Fatalf("runConfigInit() error = %v", err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.TrimSpace(string(data)) == "existing" {
+		t.Fatalf("expected config file to be overwritten")
+	}
+}
+
+func TestRunConfigInitMissingConfig(t *testing.T) {
+	baseDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", baseDir)
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("force", false, "")
+	cmd.SetContext(context.Background())
+
+	if err := runConfigInit(cmd, nil); err == nil {
+		t.Fatalf("expected error for missing config")
+	}
+}
+
+func TestRunConfigInitMissingForceFlag(t *testing.T) {
+	baseDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", baseDir)
+	t.Setenv("HOME", baseDir)
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(withConfig(context.Background(), config.Defaults()))
+
+	configPath, err := config.ConfigFile("config.yaml")
+	if err != nil {
+		t.Fatalf("ConfigFile: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("existing"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := runConfigInit(cmd, nil); err == nil {
+		t.Fatalf("expected error for missing force flag")
+	}
+}
+
+func TestRunConfigShowMissingConfig(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	if err := runConfigShow(cmd, nil); err == nil {
+		t.Fatalf("expected error for missing config")
+	}
+}
+
+type errWriter struct{}
+
+func (errWriter) Write(p []byte) (int, error) {
+	return 0, fmt.Errorf("write failed")
+}
+
+type failAfterWriter struct {
+	failAfter int32
+	writes    atomic.Int32
+}
+
+func (w *failAfterWriter) Write(p []byte) (int, error) {
+	if w.writes.Add(1) > w.failAfter {
+		return 0, fmt.Errorf("write failed")
+	}
+	return len(p), nil
+}
+
+func TestRunConfigShowWriteError(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetOut(errWriter{})
+	cmd.SetContext(withConfig(context.Background(), config.Defaults()))
+
+	if err := runConfigShow(cmd, nil); err == nil {
+		t.Fatalf("expected write error")
+	}
+}
+
+func TestRunConfigShowWriteFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		failAfter int32
+	}{
+		{"fail after header", 1},
+		{"fail after description", 2},
+		{"fail after spacer", 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writer := &failAfterWriter{failAfter: tt.failAfter}
+			cmd := &cobra.Command{}
+			cmd.SetOut(writer)
+			cmd.SetContext(withConfig(context.Background(), config.Defaults()))
+			if err := runConfigShow(cmd, nil); err == nil {
+				t.Fatalf("expected write error")
+			}
+		})
+	}
+}
+
+func TestRunConfigPathWriteError(t *testing.T) {
+	baseDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", baseDir)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(errWriter{})
+
+	if err := runConfigPath(cmd, nil); err == nil {
+		t.Fatalf("expected write error")
+	}
+}
+
+func TestRunConfigSetErrors(t *testing.T) {
+	baseDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", baseDir)
+
+	cfg := config.Defaults()
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	configPath, err := config.ConfigFile("config.yaml")
+	if err != nil {
+		t.Fatalf("ConfigFile: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	tests := []struct {
+		name  string
+		args  []string
+		setup func(t *testing.T)
+	}{
+		{
+			name: "missing file",
+			args: []string{"model.max_tokens", "42"},
+			setup: func(t *testing.T) {
+				t.Helper()
+				_ = os.Remove(configPath)
+			},
+		},
+		{
+			name: "invalid value",
+			args: []string{"model.max_tokens", ":["},
+			setup: func(t *testing.T) {
+				t.Helper()
+				if err := os.WriteFile(configPath, data, 0o644); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setup != nil {
+				tt.setup(t)
+			}
+			err := runConfigSet(cmd, tt.args)
+			if err == nil {
+				t.Fatalf("expected error for %s", tt.name)
+			}
+		})
+	}
+}
+
+func TestRunConfigGetMissingConfig(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	if err := runConfigGet(cmd, []string{"model.max_tokens"}); err == nil {
+		t.Fatalf("expected error for missing config")
 	}
 }

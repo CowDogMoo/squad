@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -665,6 +666,87 @@ func TestRequestFinal(t *testing.T) {
 			}
 			if !tt.wantErr && text != tt.wantText {
 				t.Fatalf("text = %q, want %q", text, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestRunWithToolsErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T) *httptest.Server
+	}{
+		{
+			name: "initial request error",
+			setup: func(t *testing.T) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusInternalServerError)
+					_, _ = w.Write([]byte("boom"))
+				}))
+			},
+		},
+		{
+			name: "resolve pending error",
+			setup: func(t *testing.T) *httptest.Server {
+				callCount := int32(0)
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					count := atomic.AddInt32(&callCount, 1)
+					if count == 3 {
+						w.WriteHeader(http.StatusInternalServerError)
+						_, _ = w.Write([]byte("boom"))
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					payload := map[string]any{
+						"id":                  fmt.Sprintf("resp-%d", count),
+						"object":              "response",
+						"created_at":          0,
+						"model":               "gpt-4o",
+						"parallel_tool_calls": false,
+						"temperature":         0,
+						"tool_choice":         "auto",
+						"tools":               []any{},
+						"top_p":               1,
+						"error":               map[string]any{"code": "server_error", "message": ""},
+						"incomplete_details":  map[string]any{"reason": ""},
+						"instructions":        "system",
+						"metadata":            map[string]any{},
+						"output": []map[string]any{
+							{
+								"id":        "fc-1",
+								"type":      "function_call",
+								"call_id":   "call-1",
+								"name":      "Missing",
+								"arguments": "{}",
+							},
+						},
+					}
+					_ = json.NewEncoder(w).Encode(payload)
+				}))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := tt.setup(t)
+			defer server.Close()
+
+			_, err := RunWithTools(
+				context.Background(),
+				"key",
+				server.URL,
+				"gpt-4o",
+				"system",
+				"user",
+				t.TempDir(),
+				"",
+				0.2,
+				0,
+				1,
+				&tools.TaskConfig{},
+			)
+			if err == nil {
+				t.Fatalf("expected error")
 			}
 		})
 	}

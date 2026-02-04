@@ -191,7 +191,7 @@ func TestCallLangChainLLMWithOllama(t *testing.T) {
 	}
 }
 
-func TestCallResponsesAPIAdjustsMaxTokens(t *testing.T) {
+func TestCallResponsesAPIRoundTrip(t *testing.T) {
 	maxTokensCh := make(chan int, 1)
 	reqErr := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -326,5 +326,121 @@ func TestBuildTaskConfigCallModel(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "API key required") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCallModelRoutes(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		setup    func(t *testing.T) *httptest.Server
+		want     string
+	}{
+		{
+			name:     "ollama",
+			provider: "ollama",
+			model:    "mistral",
+			setup: func(t *testing.T) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != "/api/chat" {
+						t.Fatalf("unexpected path: %s", r.URL.Path)
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"model":"mistral","message":{"role":"assistant","content":"ok"},"done":true}`))
+				}))
+			},
+			want: "ok",
+		},
+		{
+			name:     "responses api",
+			provider: "openai-responses",
+			model:    "gpt-4o",
+			setup: func(t *testing.T) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != "/responses" {
+						t.Fatalf("unexpected path: %s", r.URL.Path)
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"id":                  "resp-1",
+						"object":              "response",
+						"created_at":          0,
+						"model":               "gpt-4o",
+						"parallel_tool_calls": false,
+						"temperature":         0,
+						"tool_choice":         "auto",
+						"tools":               []any{},
+						"top_p":               1,
+						"error":               map[string]any{"code": "server_error", "message": ""},
+						"incomplete_details":  map[string]any{"reason": ""},
+						"instructions":        "system",
+						"metadata":            map[string]any{},
+						"output": []map[string]any{
+							{
+								"id":     "msg-1",
+								"type":   "message",
+								"role":   "assistant",
+								"status": "completed",
+								"content": []map[string]any{
+									{"type": "output_text", "text": "ok"},
+								},
+							},
+						},
+					})
+				}))
+			},
+			want: "ok",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := tt.setup(t)
+			defer server.Close()
+
+			opts := &RunOptions{APIKey: "key", BaseURL: server.URL, MaxIterations: 1}
+			if tt.provider == "ollama" {
+				opts.Provider = "ollama"
+				opts.APIKey = ""
+			}
+
+			bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
+			got, err := callModel(
+				context.Background(),
+				opts,
+				tt.provider,
+				tt.model,
+				bundle.System,
+				bundle,
+				0.4,
+				0,
+				nil,
+			)
+			if err != nil {
+				t.Fatalf("callModel() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("response = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCallLangChainLLMUnknownProvider(t *testing.T) {
+	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
+	opts := &RunOptions{Provider: "unknown"}
+	_, err := callLangChainLLM(
+		context.Background(),
+		opts,
+		"unknown",
+		"model",
+		bundle.System,
+		bundle,
+		0.2,
+		0,
+		nil,
+	)
+	if err == nil {
+		t.Fatalf("expected error")
 	}
 }

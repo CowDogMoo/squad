@@ -35,6 +35,7 @@ import (
 	"github.com/cowdogmoo/squad/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 // setupTestAgent creates a temporary agent directory with the given manifest
@@ -398,6 +399,14 @@ func TestBindRunFlags(t *testing.T) {
 	}
 }
 
+func TestBindRunFlagsMissingFlag(t *testing.T) {
+	cmd := &cobra.Command{}
+	v := viper.New()
+	if err := bindRunFlags(cmd, v); err == nil {
+		t.Fatalf("expected bindRunFlags error")
+	}
+}
+
 func TestHasPipedInput(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -520,6 +529,154 @@ func TestFindRunCmd(t *testing.T) {
 			cmd := findRunCmd(tt.root)
 			if (cmd == nil) != tt.wantNil {
 				t.Fatalf("findRunCmd() nil = %v, want %v", cmd == nil, tt.wantNil)
+			}
+		})
+	}
+}
+
+func TestNewRunCmdArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		input   io.Reader
+		wantErr bool
+	}{
+		{
+			name:    "args provided",
+			args:    []string{"prompt"},
+			input:   bytes.NewBuffer(nil),
+			wantErr: false,
+		},
+		{
+			name:    "piped input",
+			args:    nil,
+			input:   bytes.NewBufferString("hello"),
+			wantErr: false,
+		},
+		{
+			name:    "missing prompt",
+			args:    nil,
+			input:   bytes.NewBuffer(nil),
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRunCmd()
+			cmd.SetIn(tt.input)
+			err := cmd.Args(cmd, tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Args() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestInitConfigWithConfigPath(t *testing.T) {
+	baseDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", baseDir)
+	t.Setenv("HOME", baseDir)
+
+	cfg := config.Defaults()
+	cfg.Log.Level = "debug"
+	path := filepath.Join(baseDir, "config.yaml")
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	root := NewRootCmd()
+	root.SetContext(context.Background())
+	if err := root.PersistentFlags().Set("config", path); err != nil {
+		t.Fatalf("Set config: %v", err)
+	}
+
+	if err := initConfig(root, nil); err != nil {
+		t.Fatalf("initConfig() error = %v", err)
+	}
+	loaded := configFromContext(root)
+	if loaded == nil {
+		t.Fatalf("expected config in context")
+	}
+	if loaded.Log.Level != "debug" {
+		t.Fatalf("Log.Level = %q, want %q", loaded.Log.Level, "debug")
+	}
+}
+
+func TestInitConfigMissingConfigFile(t *testing.T) {
+	baseDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", baseDir)
+	t.Setenv("HOME", baseDir)
+
+	missingPath := filepath.Join(baseDir, "missing.yaml")
+	root := NewRootCmd()
+	root.SetContext(context.Background())
+	if err := root.PersistentFlags().Set("config", missingPath); err != nil {
+		t.Fatalf("Set config: %v", err)
+	}
+
+	if err := initConfig(root, nil); err != nil {
+		t.Fatalf("initConfig() error = %v", err)
+	}
+	loaded := configFromContext(root)
+	if loaded == nil {
+		t.Fatalf("expected config in context")
+	}
+	defaults := config.Defaults()
+	if loaded.Log.Level != defaults.Log.Level {
+		t.Fatalf("Log.Level = %q, want %q", loaded.Log.Level, defaults.Log.Level)
+	}
+}
+
+func TestInitConfigMissingRunCommand(t *testing.T) {
+	baseDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", baseDir)
+	t.Setenv("HOME", baseDir)
+
+	root := NewRootCmd()
+	root.SetContext(context.Background())
+	if runCmd := findRunCmd(root); runCmd != nil {
+		root.RemoveCommand(runCmd)
+	}
+
+	if err := initConfig(root, nil); err == nil {
+		t.Fatalf("expected error for missing run command")
+	}
+}
+
+func TestConfigFromContext(t *testing.T) {
+	tests := []struct {
+		name    string
+		cmd     *cobra.Command
+		wantNil bool
+	}{
+		{
+			name: "missing config",
+			cmd: func() *cobra.Command {
+				cmd := &cobra.Command{}
+				cmd.SetContext(context.Background())
+				return cmd
+			}(),
+			wantNil: true,
+		},
+		{
+			name: "config present",
+			cmd: func() *cobra.Command {
+				cmd := &cobra.Command{}
+				cmd.SetContext(withConfig(context.Background(), config.Defaults()))
+				return cmd
+			}(),
+			wantNil: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := configFromContext(tt.cmd)
+			if (cfg == nil) != tt.wantNil {
+				t.Fatalf("configFromContext() nil = %v, want %v", cfg == nil, tt.wantNil)
 			}
 		})
 	}
