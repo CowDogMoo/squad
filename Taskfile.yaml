@@ -421,11 +421,17 @@ tasks:
           --out /tmp/squad-judge.txt
         echo "Judge output written to /tmp/squad-judge.txt"
         # Validate that the judge produced actionable output
-        if grep -qi 'files touched' /tmp/squad-judge.txt; then
+        has_files_touched=$(grep -qi 'files touched' /tmp/squad-judge.txt && echo yes || echo no)
+        has_no_changes=$(grep -qi 'no changes' /tmp/squad-judge.txt && echo yes || echo no)
+        if [ "$has_files_touched" = "yes" ]; then
           echo "Judge made edits (Files Touched found)."
-        elif grep -qi 'no changes' /tmp/squad-judge.txt; then
-          echo "ERROR: Judge reported 'No changes' — expected edits for this phase."
-          exit 1
+        elif [ "$has_no_changes" = "yes" ]; then
+          if [ "{{.SCOPE_MODE}}" = "phase-flags" ]; then
+            echo "Judge reported 'No changes' — allowing for Phase A if checks pass."
+          else
+            echo "ERROR: Judge reported 'No changes' — expected edits for this phase."
+            exit 1
+          fi
         else
           echo "ERROR: Judge output missing both 'Files Touched' and 'No changes' — invalid report."
           exit 1

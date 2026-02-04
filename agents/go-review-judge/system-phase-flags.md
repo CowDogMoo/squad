@@ -162,7 +162,7 @@ After all edits pass `go build ./...`, output this report:
 Your response WILL BE REJECTED by an automated validator if it does not contain one of these exact strings (case-insensitive):
 
 - `## Files Touched` — use this when you made edits
-- `## No changes` — use this when you skipped every finding
+- `## No changes` — use this when you skipped every finding or the code already complies with Phase A
 
 # INPUT
 
