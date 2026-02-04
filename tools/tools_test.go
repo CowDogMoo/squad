@@ -13,67 +13,260 @@ import (
 )
 
 func TestFlexBoolUnmarshal(t *testing.T) {
-	var b FlexBool
-	if err := json.Unmarshal([]byte("true"), &b); err != nil || !bool(b) {
-		t.Fatalf("expected true, got %v err=%v", b, err)
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   string
+		want    bool
+		wantErr bool
+	}{
+		{"true literal", "true", true, false},
+		{"false literal", "false", false, false},
+		{"string true", `"true"`, true, false},
+		{"string false", `"false"`, false, false},
+		{"string 1", `"1"`, true, false},
+		{"string yes", `"yes"`, true, false},
+		{"string no", `"no"`, false, false},
+		{"string 0", `"0"`, false, false},
+		{"number rejects", "123", false, true},
 	}
-	if err := json.Unmarshal([]byte("\"yes\""), &b); err != nil || !bool(b) {
-		t.Fatalf("expected true from string, got %v err=%v", b, err)
-	}
-	if err := json.Unmarshal([]byte("\"no\""), &b); err != nil || bool(b) {
-		t.Fatalf("expected false from string, got %v err=%v", b, err)
-	}
-	if err := json.Unmarshal([]byte("123"), &b); err == nil {
-		t.Fatalf("expected error for invalid type")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var b FlexBool
+			err := json.Unmarshal([]byte(tt.input), &b)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("UnmarshalJSON(%s) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if !tt.wantErr && bool(b) != tt.want {
+				t.Fatalf("UnmarshalJSON(%s) = %v, want %v", tt.input, b, tt.want)
+			}
+		})
 	}
 }
 
 func TestResolvePath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
-	resolved, err := ResolvePath(dir, "child.txt")
-	if err != nil {
-		t.Fatalf("ResolvePath: %v", err)
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"empty input", "", true},
+		{"relative path", "child.txt", false},
+		{"absolute within bounds", filepath.Join(dir, "inner.txt"), false},
+		{"path traversal", "../outside.txt", true},
 	}
-	if !strings.HasSuffix(resolved, filepath.Join(dir, "child.txt")) {
-		t.Fatalf("unexpected resolved path: %s", resolved)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			resolved, err := ResolvePath(dir, tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ResolvePath(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if !tt.wantErr && resolved == "" {
+				t.Fatalf("expected non-empty resolved path")
+			}
+		})
 	}
 
-	outside := filepath.Join(filepath.Dir(dir), "outside.txt")
-	if _, err := ResolvePath(dir, outside); err == nil {
-		t.Fatalf("expected error for outside path")
+	t.Run("absolute outside bounds", func(t *testing.T) {
+		t.Parallel()
+		outside := filepath.Join(filepath.Dir(dir), "outside.txt")
+		if _, err := ResolvePath(dir, outside); err == nil {
+			t.Fatalf("expected error for outside path")
+		}
+	})
+}
+
+func TestTruncateString(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{"shorter than max", "short", 10, "short"},
+		{"equal to max", "abcde", 5, "abcde"},
+		{"longer than max", "longer string", 4, "long..."},
+		{"empty string", "", 5, ""},
+		{"max zero", "abc", 0, "..."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := TruncateString(tt.input, tt.maxLen); got != tt.want {
+				t.Fatalf("TruncateString(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+			}
+		})
 	}
 }
 
+func TestGlobToRegex(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		pattern string
+		match   string
+		noMatch string
+	}{
+		{"star dot go", "*.go", "main.go", "cmd/main.go"},
+		{"double star", "**/*.go", "cmd/main.go", "main.txt"},
+		{"question mark", "foo?", "foox", "fooxx"},
+		{"literal dots", "file.txt", "file.txt", "filextxt"},
+		{"literal bracket", "[ab].go", "[ab].go", "a.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			regex, err := globToRegex(tt.pattern)
+			if err != nil {
+				t.Fatalf("globToRegex(%q) error = %v", tt.pattern, err)
+			}
+			re, err := regexp.Compile(regex)
+			if err != nil {
+				t.Fatalf("regexp.Compile(%q) error = %v", regex, err)
+			}
+			if !re.MatchString(tt.match) {
+				t.Fatalf("expected %q to match pattern %q (regex %q)", tt.match, tt.pattern, regex)
+			}
+			if re.MatchString(tt.noMatch) {
+				t.Fatalf("expected %q to NOT match pattern %q (regex %q)", tt.noMatch, tt.pattern, regex)
+			}
+		})
+	}
+}
+
+func TestInitEditsAndTracking(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		setup      func(context.Context) context.Context
+		wantResult bool
+	}{
+		{
+			"init returns not applied",
+			func(ctx context.Context) context.Context { return InitEdits(ctx) },
+			false,
+		},
+		{
+			"mark sets applied",
+			func(ctx context.Context) context.Context {
+				ctx = InitEdits(ctx)
+				MarkEditsApplied(ctx)
+				return ctx
+			},
+			true,
+		},
+		{
+			"reset clears applied",
+			func(ctx context.Context) context.Context {
+				ctx = InitEdits(ctx)
+				MarkEditsApplied(ctx)
+				ResetEditsApplied(ctx)
+				return ctx
+			},
+			false,
+		},
+		{
+			"bare context returns false",
+			func(ctx context.Context) context.Context { return ctx },
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := tt.setup(context.Background())
+			if got := EditsApplied(ctx); got != tt.wantResult {
+				t.Fatalf("EditsApplied() = %v, want %v", got, tt.wantResult)
+			}
+		})
+	}
+}
+
+func TestBuildHandlers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("without TaskConfig", func(t *testing.T) {
+		t.Parallel()
+		handlers, defs := BuildHandlers(t.TempDir(), nil)
+		if _, ok := handlers["Task"]; ok {
+			t.Fatalf("expected no Task handler without TaskConfig")
+		}
+		if _, ok := handlers["Read"]; !ok {
+			t.Fatalf("expected Read handler")
+		}
+		if len(defs) != 6 {
+			t.Fatalf("expected 6 tool defs without Task, got %d", len(defs))
+		}
+	})
+
+	t.Run("with TaskConfig", func(t *testing.T) {
+		t.Parallel()
+		cfg := &TaskConfig{
+			AgentsDir:  "agents",
+			WorkingDir: t.TempDir(),
+			CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error) {
+				return "", nil
+			},
+		}
+		handlers, defs := BuildHandlers(cfg.WorkingDir, cfg)
+		if _, ok := handlers["Task"]; !ok {
+			t.Fatalf("expected Task handler")
+		}
+		if len(defs) != 7 {
+			t.Fatalf("expected 7 tool defs with Task, got %d", len(defs))
+		}
+		names := make([]string, len(defs))
+		for i, d := range defs {
+			names[i] = d.Function.Name
+		}
+		for i := 1; i < len(names); i++ {
+			if names[i] < names[i-1] {
+				t.Fatalf("expected sorted tool defs, got %v", names)
+			}
+		}
+	})
+}
+
 func TestGlobMatcher(t *testing.T) {
+	t.Parallel()
 	matcher, err := newGlobMatcher("**/*.go")
 	if err != nil {
 		t.Fatalf("newGlobMatcher: %v", err)
 	}
 	if !matcher.Match("cmd/main.go") {
-		t.Fatalf("expected match")
+		t.Fatalf("expected match for cmd/main.go")
 	}
 	if matcher.Match("cmd/main.txt") {
-		t.Fatalf("expected no match")
+		t.Fatalf("expected no match for cmd/main.txt")
 	}
 }
 
 func TestLimitOutput(t *testing.T) {
-	data := bytes.Repeat([]byte("a"), maxToolOutput+10)
-	truncated := limitOutput(data)
-	if len(truncated) <= maxToolOutput {
-		t.Fatalf("expected truncation")
+	t.Parallel()
+	tests := []struct {
+		name    string
+		size    int
+		wantTrn bool
+	}{
+		{"within limit", 100, false},
+		{"at limit", maxToolOutput, false},
+		{"over limit", maxToolOutput + 10, true},
 	}
-	if !strings.Contains(string(truncated), "output truncated") {
-		t.Fatalf("expected truncation marker")
-	}
-}
-
-func TestTruncateString(t *testing.T) {
-	if got := TruncateString("short", 10); got != "short" {
-		t.Fatalf("unexpected truncate result: %s", got)
-	}
-	if got := TruncateString("longer string", 4); got != "long..." {
-		t.Fatalf("unexpected truncate result: %s", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data := bytes.Repeat([]byte("a"), tt.size)
+			result := limitOutput(data)
+			truncated := strings.Contains(string(result), "output truncated")
+			if truncated != tt.wantTrn {
+				t.Fatalf("truncated = %v, want %v", truncated, tt.wantTrn)
+			}
+		})
 	}
 }
 
@@ -177,6 +370,7 @@ func TestBashTool(t *testing.T) {
 }
 
 func TestRepeatTracker(t *testing.T) {
+	t.Parallel()
 	tracker := &RepeatTracker{}
 	call := func(name string) []llms.ToolCall {
 		return []llms.ToolCall{{FunctionCall: &llms.FunctionCall{Name: name, Arguments: "{}"}}}
