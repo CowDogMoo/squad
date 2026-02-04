@@ -378,6 +378,17 @@ func TestRunConfigPathWriteError(t *testing.T) {
 	}
 }
 
+func TestRunConfigPathMissingHome(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+
+	cmd := &cobra.Command{}
+	if err := runConfigPath(cmd, nil); err == nil {
+		t.Fatalf("expected error for missing config home")
+	}
+}
+
 func TestRunConfigSetErrors(t *testing.T) {
 	baseDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", baseDir)
@@ -440,5 +451,38 @@ func TestRunConfigGetMissingConfig(t *testing.T) {
 	cmd.SetContext(context.Background())
 	if err := runConfigGet(cmd, []string{"model.max_tokens"}); err == nil {
 		t.Fatalf("expected error for missing config")
+	}
+}
+
+func TestRunConfigGetWriteError(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetOut(errWriter{})
+	cmd.SetContext(withConfig(context.Background(), config.Defaults()))
+
+	if err := runConfigGet(cmd, []string{"model.max_tokens"}); err == nil {
+		t.Fatalf("expected write error")
+	}
+}
+
+func TestRunConfigInitLegacyConfig(t *testing.T) {
+	baseDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", baseDir)
+	t.Setenv("HOME", baseDir)
+	t.Setenv("USERPROFILE", baseDir)
+
+	legacyPath := filepath.Join(baseDir, ".squad", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("legacy"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("force", false, "")
+	cmd.SetContext(withConfig(context.Background(), config.Defaults()))
+
+	if err := runConfigInit(cmd, nil); err != nil {
+		t.Fatalf("runConfigInit() error = %v", err)
 	}
 }

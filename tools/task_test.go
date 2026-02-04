@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +38,104 @@ func TestTaskTool(t *testing.T) {
 	}
 	if out != "response" {
 		t.Fatalf("unexpected response: %s", out)
+	}
+}
+
+func TestTaskToolErrors(t *testing.T) {
+	dir := t.TempDir()
+	cfg := TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error) {
+			return "", fmt.Errorf("boom")
+		},
+	}
+	tool := taskTool(cfg)
+
+	longResponse := strings.Repeat("a", maxToolOutput+10)
+
+	tests := []struct {
+		name         string
+		ctx          context.Context
+		payload      []byte
+		config       TaskConfig
+		wantContains string
+		wantOutput   string
+	}{
+		{
+			name:         "invalid json",
+			ctx:          context.Background(),
+			payload:      []byte("{"),
+			wantContains: "invalid Task args",
+		},
+		{
+			name:         "missing agent",
+			ctx:          context.Background(),
+			payload:      []byte(`{"prompt":"hi"}`),
+			wantContains: "agent is required",
+		},
+		{
+			name:         "missing prompt",
+			ctx:          context.Background(),
+			payload:      []byte(`{"agent":"child"}`),
+			wantContains: "prompt is required",
+		},
+		{
+			name:         "depth exceeded",
+			ctx:          WithTaskDepth(context.Background(), MaxTaskDepth),
+			payload:      []byte(`{"agent":"child","prompt":"hi"}`),
+			wantContains: "maximum task depth",
+		},
+		{
+			name:         "invalid working dir",
+			ctx:          context.Background(),
+			payload:      []byte(`{"agent":"child","prompt":"hi","working_dir":"../oops"}`),
+			wantContains: "invalid working_dir",
+		},
+		{
+			name:         "child error",
+			ctx:          context.Background(),
+			payload:      []byte(`{"agent":"child","prompt":"hi"}`),
+			wantContains: "child agent \"child\" failed",
+		},
+		{
+			name:    "truncate response",
+			ctx:     context.Background(),
+			payload: []byte(`{"agent":"child","prompt":"hi"}`),
+			config: TaskConfig{
+				AgentsDir:  "agents",
+				WorkingDir: dir,
+				CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error) {
+					return longResponse, nil
+				},
+			},
+			wantOutput: "...output truncated",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			localTool := tool
+			if tt.config.CallModel != nil {
+				localTool = taskTool(tt.config)
+			}
+			output, err := localTool(tt.ctx, tt.payload)
+			if tt.wantContains != "" {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantContains) {
+					t.Fatalf("error = %q, want containing %q", err.Error(), tt.wantContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !strings.Contains(output, tt.wantOutput) {
+				t.Fatalf("output = %q, want containing %q", output, tt.wantOutput)
+			}
+		})
 	}
 }
 

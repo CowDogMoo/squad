@@ -500,10 +500,24 @@ func (s *Service) CreateUser(u *User) error {
 
 ### Test File Naming
 
-- `foo.go` → `foo_test.go`
+- `foo.go` → `foo_test.go` (strict 1:1 mapping)
 - Test functions: `TestXxx(t *testing.T)`
 - Benchmarks: `BenchmarkXxx(b *testing.B)`
 - Examples: `ExampleXxx()`
+
+Never create files with extra infixes like `_extra_test.go`,
+`_coverage_test.go`, or any `*_<suffix>_test.go` variant — these have no
+special meaning in the Go toolchain and are not an idiomatic convention.
+
+To separate test types, use these community-standard mechanisms:
+
+- **Build tags** (`//go:build integration`) to separate unit vs integration
+  vs coverage-boost tests into different build groups.
+- **Subtests** (`t.Run("edge-case/empty-input", ...)`) to group related
+  cases within a single `_test.go` file.
+- **`_internal_test.go`** (`package foo`) vs `_test.go` (`package foo_test`)
+  — the only suffix variant with real semantic meaning in Go, distinguishing
+  white-box from black-box tests.
 
 ### Common Assertions
 
@@ -615,6 +629,11 @@ got := string(data)
 - [Go Testing Package](https://pkg.go.dev/testing)
 - [Table-Driven Tests](https://go.dev/wiki/TableDrivenTests)
 - [testify Package](https://github.com/stretchr/testify)
+- [Testing in Go: Naming Conventions](https://ieftimov.com/posts/testing-in-go-naming-conventions/)
+- [Best Practices for Test Files (Symflower)](https://symflower.com/en/company/blog/2022/best-practices-for-test-files/)
+- [Google Go Style Decisions](https://google.github.io/styleguide/go/decisions.html)
+- [golang/go#33688 — Test file organization](https://github.com/golang/go/issues/33688)
+- [Organizing Go Tests — Comprehensive Guide](https://moldstud.com/articles/p-best-practices-for-organizing-golang-tests-and-test-files-a-comprehensive-guide)
 
 ---
 
