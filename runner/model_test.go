@@ -89,16 +89,19 @@ func TestBuildLLMVariants(t *testing.T) {
 		name     string
 		provider string
 		model    string
+		opts     *RunOptions
 		wantType string
 		wantErr  bool
 	}{
-		{"ollama", "ollama", "mistral", "*ollama.LLM", false},
-		{"unknown provider", "unknown", "model", "", true},
+		{"ollama", "ollama", "mistral", &RunOptions{}, "*ollama.LLM", false},
+		{"openai", "openai", "gpt-4o", &RunOptions{APIKey: "token"}, "*openai.LLM", false},
+		{"anthropic", "anthropic", "claude-3", &RunOptions{APIKey: "token"}, "*anthropic.LLM", false},
+		{"unknown provider", "unknown", "model", &RunOptions{}, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			model, err := buildLLM(&RunOptions{}, tt.provider, tt.model)
+			model, err := buildLLM(tt.opts, tt.provider, tt.model)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("buildLLM() error = %v, wantErr %v", err, tt.wantErr)
 			}
