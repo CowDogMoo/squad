@@ -367,7 +367,7 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			continue
 		}
 
-		logging.DebugContext(ctx, "responses API: calling %s args=%s", call.Name, tools.TruncateString(call.Arguments, 200))
+		logging.InfoContext(ctx, "responses API: calling %s args=%s", call.Name, tools.TruncateString(call.Arguments, 200))
 		toolStart := time.Now()
 		result, err := handler.Call(ctx, []byte(call.Arguments))
 		toolDuration := time.Since(toolStart)
@@ -375,10 +375,10 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 		var output string
 		if err != nil {
 			output = fmt.Sprintf("error: %v", err)
-			logging.DebugContext(ctx, "responses API: %s failed in %s: %v", call.Name, toolDuration.Round(time.Millisecond), err)
+			logging.InfoContext(ctx, "responses API: %s failed in %s: %v", call.Name, toolDuration.Round(time.Millisecond), err)
 		} else {
 			output = result
-			logging.DebugContext(ctx, "responses API: %s completed in %s (%d bytes)", call.Name, toolDuration.Round(time.Millisecond), len(result))
+			logging.InfoContext(ctx, "responses API: %s completed in %s (%d bytes)", call.Name, toolDuration.Round(time.Millisecond), len(result))
 		}
 
 		outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{

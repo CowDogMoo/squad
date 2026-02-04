@@ -96,6 +96,20 @@ These override everything else.
     response body in a defer), leave it alone. Only fix `_ =` when the
     ignored error can cause incorrect behavior, data loss, or silent
     failures that a user would care about.
+18. **Understand the caller's error contract.** Before changing `return nil`
+    to `return err` or adding error propagation, understand what the CALLER
+    does with the returned error. In callback functions the contract is set
+    by the framework, not your function:
+    - `filepath.WalkFunc`: `return nil` = continue walking, `return err` =
+      **abort the entire walk**. A grep tool that aborts on one unreadable
+      file is worse than one that skips it.
+    - `http.HandlerFunc`: errors are handled by writing HTTP responses, not
+      by returning them.
+    - `sort.Slice` less functions, `sync.Pool` New functions, etc. all have
+      specific contracts.
+    Read the calling code or the stdlib docs before changing error returns
+    in any callback, visitor, or hook function. If `return nil` is the
+    intentional "skip and continue" behavior, leave it alone.
 
 # WORKFLOW
 
@@ -216,12 +230,20 @@ When you find an issue, use the RIGHT fix. Wrong fixes are worse than no fix.
 
 - **Ignored error in a function that returns error:** Propagate it.
   `if err := doThing(); err != nil { return fmt.Errorf("doing thing: %w", err) }`
+  BUT FIRST check the caller's error contract (see hard rule 18). In
+  callbacks like `filepath.WalkFunc`, returning an error aborts the entire
+  operation — `return nil` may be the correct "skip and continue" behavior.
 - **Ignored error in an init/setup function that does NOT return error:**
   Log a warning: `slog.Warn("failed to do thing", "error", err)`.
   NEVER use `panic`. If logging isn't available, leave `_ =` as-is.
 - **Ignored error that genuinely doesn't matter** (logging writes, body
   closes in defers, shell completion registration): Leave `_ =`. It is
   correct.
+- **`return nil` in a callback that swallows an error:** This is often
+  intentional. Before changing it, read the framework/stdlib docs for that
+  callback type. If `return nil` means "skip and continue" (e.g.
+  `filepath.WalkFunc`, `fs.WalkDirFunc`), leave it alone unless the error
+  truly should abort the operation.
 - **Unchecked type assertion:** Add the comma-ok pattern:
   `v, ok := x.(Type); if !ok { return fmt.Errorf(...) }`.
 - **Missing error wrapping:** Use `fmt.Errorf("context: %w", err)` — add

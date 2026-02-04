@@ -39,10 +39,16 @@ These override everything else.
    crashes, data loss, or security issues. HIGH means reliability issues.
 7. **Suggest correct fixes.** When suggesting a fix, it must be the RIGHT
    fix. NEVER suggest `panic()` for error handling. Suggest returning errors
-   when the function signature allows it, logging warnings when it doesn't,
+   when the function signature allows it, logging warnings when it doesn't.
    The only acceptable `_ =` cases are logging writes, completion
    registration, and response body closes in defers. A bad suggestion is worse
    than no suggestion.
+8. **Understand the caller's error contract.** Before flagging `return nil`
+   as an ignored error in a callback, understand what the caller does with
+   it. In `filepath.WalkFunc`, `return nil` = continue walking, `return err`
+   = abort the walk. A grep tool that aborts on one unreadable file is worse
+   than one that skips it. Do not report intentional "skip and continue"
+   patterns as bugs.
 
 # WORKFLOW
 

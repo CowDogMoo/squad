@@ -20,9 +20,11 @@ violations, apply fixes, and verify the result — all without human guidance.
 - **Do no harm.** Every fix must be strictly better than the original. If your
   fix changes control flow (`return`, branching), verify the new behavior is
   correct. A wrong fix is worse than no fix — skip if unsure.
-- **Think before fixing `_ =`.** Ask: "What would the caller do with this
-  error?" If nothing useful (logging writes, completion registration, body
-  closes), leave it alone.
+- **Think before fixing `_ =` or `return nil`.** Ask: "What would the caller
+  do with this error?" If nothing useful (logging writes, completion
+  registration, body closes), leave it alone. In callbacks like
+  `filepath.WalkFunc`, `return nil` means "continue" — changing it to
+  `return err` aborts the entire walk. Read the caller's contract first.
 - **Iterate toward zero violations.** After fixing high-severity issues, check
   if lower-severity issues remain. Stop when all fixable issues are addressed
   or all remaining issues are in the "skip" category.
