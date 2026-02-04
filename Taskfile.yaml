@@ -529,6 +529,80 @@ tasks:
           --out /tmp/squad-go-cobra-analysis.txt
       - echo "Cobra analysis written to /tmp/squad-go-cobra-analysis.txt"
 
+  run:go-doc-comments:
+    desc: "Run the go-doc-comments agent to autonomously add/improve Go doc comments"
+    silent: true
+    vars:
+      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Add or improve doc comments on all exported Go declarations in this codebase.
+
+        Start by using Glob with '**/*.go' to discover all Go source files.
+        Read each file (skip _test.go and vendor/).
+        Catalog every exported declaration that is missing a doc comment or has a deficient one.
+        Apply fixes via Edit tool, highest priority first.
+        Run 'go build ./...' after each batch of edits.
+
+        IMPORTANT CONSTRAINTS (repeat from system prompt):
+        - ONLY modify doc comments — never change code logic, signatures, or imports
+        - Start every comment with the declared name (godoc indexes by first word)
+        - No blank line between comment and declaration (godoc drops these)
+        - Complete sentences with proper punctuation
+        - Focus on WHAT, not HOW — no implementation details
+        - No redundant comments ('Process processes the data' = skip)
+        - Boolean functions use 'reports whether' pattern
+        - Proportional: one-line getter = one-line comment
+        - Exported declarations only — skip unexported names
+        - Read each file ONCE, catalog all findings, then fix — target ≤15 iterations
+        - Use ONE Grep/Glob on repo root, not per-directory — minimize tool calls
+        - After go build passes, emit report IMMEDIATELY — no post-fix exploration
+        - Every file touched must appear in the output report" \
+          --agent go-doc-comments \
+          --working-dir {{.TARGET_REPO}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=true \
+          --temperature 0.3 \
+          --out /tmp/squad-go-doc-comments.txt
+      - echo "Doc comments output written to /tmp/squad-go-doc-comments.txt"
+      - |
+        echo ""
+        echo "Running final verification..."
+      - cd {{.TARGET_REPO}} && go build ./...
+      - echo "go build ./... PASSED"
+
+  run:go-doc-comments-analyze:
+    desc: "Run the go-doc-comments agent in readonly mode to analyze doc comment gaps without applying fixes"
+    silent: true
+    vars:
+      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Analyze this codebase for missing or deficient Go doc comments.
+
+        Use Glob with '**/*.go' to discover all Go source files.
+        Read each file (skip _test.go and vendor/).
+        Catalog every exported declaration that needs a doc comment.
+        Produce a prioritized report of all findings.
+
+        Do NOT write or modify any files." \
+          --agent go-doc-comments --mode readonly \
+          --working-dir {{.TARGET_REPO}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=false \
+          --temperature 0.3 \
+          --print=false \
+          --out /tmp/squad-go-doc-comments-analysis.txt
+      - echo "Doc comments analysis written to /tmp/squad-go-doc-comments-analysis.txt"
+
   clean:
     desc: Clean build artifacts and temp files
     cmds:
