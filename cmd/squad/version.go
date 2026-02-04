@@ -60,10 +60,17 @@ var versionCmd = &cobra.Command{
 	Short:   "Print version information",
 	Long:    "Display the version, commit hash, and build date of squad.",
 	Args:    cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		w := cmd.OutOrStdout()
-		fmt.Fprintf(w, "squad version %s\n", version)
-		fmt.Fprintf(w, "  commit: %s\n", commit)
-		fmt.Fprintf(w, "  built:  %s\n", date)
+		if _, err := fmt.Fprintf(w, "squad version %s\n", version); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  commit: %s\n", commit); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  built:  %s\n", date); err != nil {
+			return err
+		}
+		return nil
 	},
 }

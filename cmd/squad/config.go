@@ -189,10 +189,18 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	}
 
 	w := cmd.OutOrStdout()
-	fmt.Fprintln(w, "# Current Squad Configuration")
-	fmt.Fprintln(w, "# Sources: defaults -> config file -> environment variables -> CLI flags")
-	fmt.Fprintln(w)
-	fmt.Fprint(w, string(data))
+	if _, err := fmt.Fprintln(w, "# Current Squad Configuration"); err != nil {
+		return fmt.Errorf("failed to write config header: %w", err)
+	}
+	if _, err := fmt.Fprintln(w, "# Sources: defaults -> config file -> environment variables -> CLI flags"); err != nil {
+		return fmt.Errorf("failed to write config header: %w", err)
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return fmt.Errorf("failed to write config header: %w", err)
+	}
+	if _, err := fmt.Fprint(w, string(data)); err != nil {
+		return fmt.Errorf("failed to write config data: %w", err)
+	}
 	return nil
 }
 

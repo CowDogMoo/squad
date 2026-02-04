@@ -234,7 +234,9 @@ func TestVersionCommand(t *testing.T) {
 	var buf bytes.Buffer
 	versionCmd.SetOut(&buf)
 	defer versionCmd.SetOut(nil)
-	versionCmd.Run(versionCmd, nil)
+	if err := versionCmd.RunE(versionCmd, nil); err != nil {
+		t.Fatalf("versionCmd.RunE() error = %v", err)
+	}
 
 	out := buf.String()
 	if !strings.Contains(out, fmt.Sprintf("squad version %s", version)) {
