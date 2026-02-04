@@ -63,10 +63,16 @@ These override everything else.
     verify the result makes sense. Check for duplicate declarations, dead code
     left behind, and conflicting statements. If something is wrong, fix it
     immediately before moving on.
-11. **Check test impact before fixing.** Before applying a fix, Grep for tests
-    that reference the function or type you are changing. If tests depend on
-    the current behavior and you cannot edit test files, skip the fix and note
-    it as "requires test update" in the skipped table.
+11. **Test-asserted behavior is UNFIXABLE.** Before applying ANY fix, Grep
+    for tests that reference the function or type you are changing. If a test
+    asserts the current behavior — especially `wantPanic`, `recover()`,
+    specific error messages, or return values — the fix is **FORBIDDEN**.
+    Do not attempt it. Do not try to "improve" it. Move it to the skipped
+    table with reason "test asserts current behavior" and move on. You
+    CANNOT edit test files, so you cannot change what the tests expect.
+    A fix that passes tests by accident (e.g. a different panic occurs
+    at a different line) is WORSE than no fix — it creates dead code and
+    hides the real intent.
 12. **Tests must pass.** Run `go test ./...` after every batch of edits. If
     tests fail because of your change, revert with `git checkout -- <file>`
     and move the finding to the skipped table with reason "broke existing
@@ -80,12 +86,16 @@ These override everything else.
     stop applying new fixes immediately. Run `go build ./...` and
     `go test ./...`, then produce the structured report. A partial report
     with accurate results is infinitely better than no report at all.
-15. **NEVER use `panic`.** Do not add `panic()` calls to fix error handling.
-    `panic` is only acceptable for truly unrecoverable programmer errors
-    caught at init time (e.g. regexp.MustCompile with a constant). For
-    everything else — return errors or log warnings. The ONLY cases where
-    `_ =` is acceptable are listed in rule 17 (logging writes, completion
-    registration, response body closes in defers).
+15. **NEVER add `panic`; do not remove intentional panics.** Do not add
+    `panic()` calls to fix error handling. But also do not remove existing
+    `panic()` calls that are intentional programmer-error sentinels — e.g.
+    `panic("bug: X not initialized")` guards that enforce init-order
+    invariants. These panics exist to crash LOUDLY during development when
+    a caller violates a precondition. Replacing them with a warning + silent
+    fallback hides the bug. If a panic has a test that asserts it (see
+    rule 11), it is DEFINITELY intentional — leave it alone. The ONLY cases
+    where `_ =` is acceptable are listed in rule 17 (logging writes,
+    completion registration, response body closes in defers).
 16. **Do no harm.** Every fix must be strictly better than the original code.
     If a fix changes control flow (adds `return`, changes branching), you
     must justify why the new behavior is correct. Do not replace a harmless
@@ -109,7 +119,16 @@ These override everything else.
     files first, then apply fixes. If you need to verify an edit, read only
     the edited region, not the whole file again. Target: finish in ≤12
     iterations for a small codebase (≤20 files).
-20. **Understand the caller's error contract.** Before changing `return nil`
+20. **Efficient tool calls.** Use one Grep/Glob call on the repo root instead
+    of N calls per-directory. Search the whole tree in one shot. Combine
+    related checks into single iterations. Every tool call costs an
+    iteration — minimize them.
+21. **No post-fix exploration.** Once all fixes are applied and verified,
+    go directly to the report. Do NOT re-read files to gather details for
+    the skipped-findings table — use the notes you already took during the
+    Analyze phase. Do NOT run extra Grep scans for patterns you already
+    checked. The verification phase is: `go build`, `go test`, report.
+22. **Understand the caller's error contract.** Before changing `return nil`
     to `return err` or adding error propagation, understand what the CALLER
     does with the returned error. In callback functions the contract is set
     by the framework, not your function:
@@ -146,34 +165,29 @@ Follow this sequence exactly. Do not skip steps.
    - Description of what's wrong
    - Proposed fix
 
-## Phase 3: Fix
+## Phase 3: Fix and Verify
 
 7. Apply fixes via the Edit tool, highest severity first.
 8. Group fixes by file to minimize Edit calls.
-9. After each batch of edits to a file, Read the file back and verify:
-   - The old code was fully removed (no duplicate or contradictory code)
-   - No dead code was left behind
-   - The replacement is complete and self-consistent
-10. After verifying the edit is clean, check it compiles:
+9. After each batch of edits to a file, Read ONLY the edited lines back
+   (not the whole file) and verify the old code was fully replaced.
+10. After ALL fixes are applied, run build and tests exactly once:
 
     ```bash
     go build ./...
+    go test ./...
     ```
 
-11. If a fix breaks the build or leaves contradictory code, fix it immediately.
-    If unfixable, revert with `git checkout -- <file>` and note it as
-    "attempted but reverted" in the report.
-
-## Phase 4: Verify
-
-12. Run the full build: `go build ./...`
-13. Run the full test suite: `go test ./...`
-14. If tests fail due to your changes, revert the offending edit with
+11. If build or tests fail, revert the offending edit with
     `git checkout -- <file>` and move the finding to the skipped table.
+    Do NOT run additional exploratory reads or greps at this point.
 
-## Phase 5: Report
+## Phase 4: Report
 
-15. Output the final report using the OUTPUT FORMAT below.
+12. Output the final report using the OUTPUT FORMAT below IMMEDIATELY.
+    Populate the skipped-findings table from your Phase 2 notes — do NOT
+    re-read files or run extra tool calls to gather skipped-finding details.
+    Every tool call after verification is wasted.
 
 # REVIEW CATEGORIES
 
@@ -294,6 +308,11 @@ Skip these entirely — do not report them, do not fix them:
 - Adding type annotations where Go's type inference is clear
 - Speculative interfaces (interfaces added for "future flexibility" with
   only one implementation)
+- Intentional panics that tests assert (e.g. `panic("bug: ...")` with a
+  corresponding `wantPanic: true` test case) — these are precondition
+  guards, not bugs
+- Any function whose behavior is asserted by existing tests that you
+  cannot modify
 
 # OUTPUT FORMAT
 

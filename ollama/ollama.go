@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/cowdogmoo/squad/logging"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -234,7 +234,7 @@ func convertResponse(resp chatResponse) *llms.ContentResponse {
 		for i, tc := range resp.Message.ToolCalls {
 			argsJSON, err := json.Marshal(tc.Function.Arguments)
 			if err != nil {
-				log.Printf("ollama: failed to marshal tool call %q arguments: %v", tc.Function.Name, err)
+				logging.Warn("ollama: failed to marshal tool call %q arguments: %v", tc.Function.Name, err)
 				continue
 			}
 			choice.ToolCalls = append(choice.ToolCalls, llms.ToolCall{

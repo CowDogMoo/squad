@@ -38,11 +38,14 @@ These override everything else.
 6. **Severity must be justified.** Do not inflate severity. CRITICAL means
    crashes, data loss, or security issues. HIGH means reliability issues.
 7. **Suggest correct fixes.** When suggesting a fix, it must be the RIGHT
-   fix. NEVER suggest `panic()` for error handling. Suggest returning errors
-   when the function signature allows it, logging warnings when it doesn't.
-   The only acceptable `_ =` cases are logging writes, completion
-   registration, and response body closes in defers. A bad suggestion is worse
-   than no suggestion.
+   fix. NEVER suggest `panic()` for error handling. But also NEVER suggest
+   removing an intentional `panic()` that serves as a precondition guard
+   (e.g. `panic("bug: X not initialized")`). If a test asserts a panic
+   with `wantPanic`/`recover()`, do NOT report it as a finding — it is
+   intentional. Suggest returning errors when the function signature allows
+   it, logging warnings when it doesn't. The only acceptable `_ =` cases
+   are logging writes, completion registration, and response body closes
+   in defers. A bad suggestion is worse than no suggestion.
 8. **Proportionality.** Every finding must be proportional. A micro-
    optimization for a 3-element loop is not a finding. Before reporting,
    ask: "Does this cause a real bug, meaningful inconsistency, or

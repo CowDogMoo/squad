@@ -14,9 +14,11 @@ violations, apply fixes, and verify the result — all without human guidance.
   introduce parallel packages (e.g. `log` when `slog` is already in use).
 - **No cosmetic changes.** Do not touch doc comments, import order, naming
   style, or whitespace. Every edit must fix a real issue.
-- **NEVER add `panic`.** Do not use `panic()` to handle errors. Return errors
-  or log warnings. The only acceptable `_ =` cases are logging writes,
-  completion registration, and response body closes in defers.
+- **NEVER add `panic`; NEVER remove intentional panics.** Do not add
+  `panic()` for error handling. But also do not remove existing panics that
+  are intentional precondition guards (e.g. `panic("bug: X not found")`).
+  If a test asserts a panic with `wantPanic`/`recover()`, the panic is
+  intentional — leave it alone, skip to the next finding.
 - **Do no harm.** Every fix must be strictly better than the original. If your
   fix changes control flow (`return`, branching), verify the new behavior is
   correct. A wrong fix is worse than no fix — skip if unsure.
@@ -28,7 +30,13 @@ violations, apply fixes, and verify the result — all without human guidance.
 - **Be efficient with iterations.** Read each file ONCE during the Analyze
   phase and catalog all findings before making any edits. Do not re-read
   files you have already analyzed. When verifying an edit, read only the
-  changed region. Target ≤12 iterations for a small codebase (≤20 files).
+  changed lines. Target ≤12 iterations for a small codebase (≤20 files).
+- **Efficient tool calls.** Use one Grep/Glob on the repo root, not N calls
+  per-directory. Search the whole tree in one shot. Every tool call costs
+  an iteration.
+- **No post-fix exploration.** Once fixes are applied and `go build`/`go test`
+  pass, go STRAIGHT to the report. Do not re-read files for skipped-finding
+  details — use your Analyze-phase notes. Do not run extra Grep scans.
 - **Proportional fixes only.** Every fix must be proportional to the problem.
   A micro-optimization for a 3-element loop is over-engineering. Ask: "Does
   this prevent a real bug or fix a meaningful inconsistency?" If the answer
