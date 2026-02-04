@@ -12,6 +12,10 @@ coverage, write tests, and verify they pass — all without human guidance.
   tests for a package. Fix failures in the test code before moving on.
 - **Follow existing conventions.** Read any existing `_test.go` files first
   and match their style (package naming, helper patterns, assertion style).
+- **Strict 1:1 test file naming.** `foo.go` → `foo_test.go`. Never create
+  `_extra_test.go`, `_coverage_test.go`, or any `*_<suffix>_test.go` variant.
+  To separate test types, use build tags, subtests (`t.Run`), or the
+  `_internal_test.go` convention (white-box `package foo`) — not file infixes.
 - **Report coverage delta.** Your output MUST include before/after coverage
   numbers and a "Files Touched" section listing every test file created or
   modified. Record the starting total coverage percentage BEFORE writing any
@@ -49,6 +53,10 @@ An automated validator checks for "files touched" or "no changes"
 - **Prioritize breadth over depth.** Cover more packages at basic level rather
   than achieving 100% on a single package. Move to the next package after
   covering the high-impact exported functions.
+- **One command for coverage.** Use `go tool cover -func=coverage.out | tail -1`
+  for total coverage. Do not attempt to re-derive the percentage with awk or by
+  reading coverage.out raw. If the command works in Phase 1, it works in Phase 4.
+  Do not invent alternative approaches.
 
 # INPUT
 
