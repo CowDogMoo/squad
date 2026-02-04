@@ -19,8 +19,6 @@ vars:
 
   # Judge pipeline configuration
   NUM_WORKERS: '{{.NUM_WORKERS | default "3"}}'
-  REVIEW_TARGET: '{{.REVIEW_TARGET | default "cmd/squad/tools.go"}}'
-
   # Internal: conditionally include --base-url flag
   _BASE_URL_FLAG: '{{if .BASE_URL}}--base-url {{.BASE_URL}}{{end}}'
 
@@ -60,183 +58,66 @@ tasks:
           --out {{.OUT}}
 
   run:go-review:
-    desc: Run the go-review agent to review Go code quality
+    desc: "Run the go-review agent to autonomously fix Go code quality issues"
     silent: true
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Review cmd/squad/tools.go for Go best practices. Use Read to inspect the file, then provide a structured review. If you find issues, use the Edit tool to fix them. Run 'go build ./...' after edits to verify." \
+          "Review and fix all Go code quality issues in this codebase.
+
+        Start by using Glob with '**/*.go' to discover all Go source files.
+        Read each file (skip _test.go and vendor/).
+        Cross-reference between files for consistency issues.
+        Apply fixes via Edit tool, highest severity first.
+        Run 'go build ./...' after each batch of edits.
+
+        IMPORTANT CONSTRAINTS (repeat from system prompt):
+        - No cosmetic changes (doc comments, import ordering, naming style)
+        - No new dependencies
+        - Skip fixes needing 50+ lines or new files
+        - Preserve backwards compatibility — no API surface changes
+        - Every file touched must appear in the output report" \
           --agent go-review \
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
+          --require-actionable=true \
+          --temperature 0.3 \
           --out /tmp/squad-go-review.txt
-      - echo "Review written to /tmp/squad-go-review.txt"
-
-  run:judge-review:
-    desc: "Multi-run judge pipeline: N workers review in parallel, judge applies consensus fixes"
-    silent: true
-    cmds:
-      - rm -f /tmp/squad-worker-*.txt /tmp/squad-judge.txt /tmp/squad-workers-combined.txt
-      - task: _run-workers
-      - |
-        # Check quorum: at least 2 workers must have produced usable output
-        count=0
-        for i in $(seq 1 {{.NUM_WORKERS}}); do
-          if [ -s "/tmp/squad-worker-${i}.txt" ]; then
-            findings=$(grep -c '^\*\*Severity:\*\*\|^### ' "/tmp/squad-worker-${i}.txt" 2>/dev/null || echo 0)
-            if [ "$findings" -ge 2 ]; then
-              count=$((count + 1))
-            else
-              echo "WARNING: Worker ${i} output has fewer than 2 findings — excluding from quorum."
-            fi
-          fi
-        done
-        if [ "$count" -lt 2 ]; then
-          echo "ERROR: Only ${count} worker(s) produced usable output. Need at least 2 for quorum."
-          exit 1
-        fi
-        echo "Quorum met: ${count}/{{.NUM_WORKERS}} workers produced usable output."
-      - task: _run-judge
+      - echo "Review output written to /tmp/squad-go-review.txt"
       - |
         echo ""
-        echo "=== Pipeline complete ==="
-        echo "Worker outputs: /tmp/squad-worker-{1..{{.NUM_WORKERS}}}.txt"
-        echo "Judge output:   /tmp/squad-judge.txt"
-        echo ""
-        echo "Running build verification..."
+        echo "Running final verification..."
       - go build ./...
       - echo "go build ./... PASSED"
 
-  _run-workers:
-    desc: "Internal: spawn N review workers in parallel"
-    internal: true
+  run:go-review-analyze:
+    desc: "Run the go-review agent in readonly mode to analyze Go code quality without applying fixes"
     silent: true
     cmds:
       - |
-        echo "Starting {{.NUM_WORKERS}} review workers in parallel..."
-        pids=""
-        for i in $(seq 1 {{.NUM_WORKERS}}); do
-          (
-            go run ./cmd/squad run -v \
-              "Review {{.REVIEW_TARGET}} using ALL 12 review categories from go-review-criteria.md.
-
-        For each category, Read the file and check for issues. You MUST use the Read tool and Grep tool to inspect the actual code — do not guess.
-
-        Report every finding with: severity, category, file, line number, description, and suggested fix. If a category has no issues, skip it.
-
-        Do NOT edit any files. Do NOT use the Edit or Write tools." \
-              --agent go-review --mode readonly \
-              --working-dir {{.WORKING_DIR}} \
-              --api-key {{.API_KEY}} \
-              --provider {{.PROVIDER}} \
-              {{._BASE_URL_FLAG}} \
-              --model {{.MODEL}} \
-              --require-actionable=false \
-              --temperature 0.7 \
-              --out "/tmp/squad-worker-${i}.txt" \
-              --print=false \
-              2>"/tmp/squad-worker-${i}.log"
-            echo "Worker ${i} finished."
-          ) &
-          pids="${pids} $!"
-        done
-        echo "Waiting for all workers to complete... (logs: /tmp/squad-worker-{1..{{.NUM_WORKERS}}}.log)"
-        for pid in ${pids}; do
-          wait ${pid} 2>/dev/null || true
-        done
-        echo "All workers complete."
-        for i in $(seq 1 {{.NUM_WORKERS}}); do
-          if [ -s "/tmp/squad-worker-${i}.txt" ]; then
-            lines=$(wc -l < "/tmp/squad-worker-${i}.txt")
-            findings=$(grep -c '^\*\*Severity:\*\*\|^### ' "/tmp/squad-worker-${i}.txt" 2>/dev/null || echo 0)
-            echo "  Worker ${i}: ${lines} lines, ${findings} findings"
-            if [ "$findings" -lt 2 ]; then
-              echo "  Worker ${i}: WARNING — fewer than 2 findings, output may be low quality"
-            fi
-          else
-            echo "  Worker ${i}: EMPTY (failed)"
-          fi
-        done
-
-  _run-judge:
-    desc: "Internal: combine worker outputs and run judge agent"
-    internal: true
-    silent: true
-    cmds:
-      - |
-        echo "Combining worker outputs for judge..."
-        > /tmp/squad-workers-combined.txt
-        for i in $(seq 1 {{.NUM_WORKERS}}); do
-          if [ -s "/tmp/squad-worker-${i}.txt" ]; then
-            echo "--- WORKER ${i} ---" >> /tmp/squad-workers-combined.txt
-            cat "/tmp/squad-worker-${i}.txt" >> /tmp/squad-workers-combined.txt
-            echo "" >> /tmp/squad-workers-combined.txt
-          fi
-        done
-        echo "Running judge agent..."
-        WORKER_CONTENT=$(cat /tmp/squad-workers-combined.txt)
         go run ./cmd/squad run -v \
-          "You are judging {{.NUM_WORKERS}} independent reviews of {{.REVIEW_TARGET}}.
+          "Analyze this codebase for Go code quality issues.
 
-        Here are the worker outputs:
+        Use Glob with '**/*.go' to discover all Go source files.
+        Read each file (skip _test.go and vendor/).
+        Cross-reference between files for consistency issues.
+        Produce a prioritized report of all findings.
 
-        ${WORKER_CONTENT}
-
-        Now read {{.REVIEW_TARGET}} yourself, tally findings across workers, validate each finding against the actual code, apply consensus fixes per your severity gating rules, verify with 'go build ./...', and produce your judge report.
-
-        IMPORTANT: Doc comments, import ordering, and pure whitespace changes are NOT eligible — skip those. Everything else the workers flagged is fair game if you can verify it and the fix compiles. Apply idiomatic refactors — that is the whole point of this review.
-
-        MANDATORY: If workers flagged 'business logic in cmd/' or 'global mutable flag state', you MUST fix them. Follow the Mandatory Refactor Playbook in your system prompt. Create new packages/files as needed. Do NOT skip for size. Do NOT use internal/ packages." \
-          --agent go-review-judge \
+        Do NOT write or modify any files." \
+          --agent go-review --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
-          --num-ctx 32768 \
-          --temperature 0.2 \
-          --require-actionable=true \
-          --apply \
-          --out /tmp/squad-judge.txt
-        echo "Judge output written to /tmp/squad-judge.txt"
-
-  run:judge-codebase:
-    desc: "Run judge-review pipeline across the entire Go codebase"
-    silent: true
-    cmds:
-      - rm -f /tmp/squad-worker-*.txt /tmp/squad-judge.txt /tmp/squad-workers-combined.txt
-      - task: _run-codebase-workers
-      - |
-        # Check quorum: at least 2 workers must have produced usable output
-        count=0
-        for i in $(seq 1 {{.NUM_WORKERS}}); do
-          if [ -s "/tmp/squad-worker-${i}.txt" ]; then
-            findings=$(grep -c '^\*\*Severity:\*\*\|^### ' "/tmp/squad-worker-${i}.txt" 2>/dev/null || echo 0)
-            if [ "$findings" -ge 2 ]; then
-              count=$((count + 1))
-            else
-              echo "WARNING: Worker ${i} output has fewer than 2 findings — excluding from quorum."
-            fi
-          fi
-        done
-        if [ "$count" -lt 2 ]; then
-          echo "ERROR: Only ${count} worker(s) produced usable output. Need at least 2 for quorum."
-          exit 1
-        fi
-        echo "Quorum met: ${count}/{{.NUM_WORKERS}} workers produced usable output."
-      - task: _run-codebase-judge
-      - |
-        echo ""
-        echo "=== Codebase Review Complete ==="
-        echo "Worker outputs: /tmp/squad-worker-{1..{{.NUM_WORKERS}}}.txt"
-        echo "Judge output:   /tmp/squad-judge.txt"
-        echo ""
-        echo "Running build verification..."
-      - go build ./...
-      - echo "go build ./... PASSED"
+          --require-actionable=false \
+          --temperature 0.3 \
+          --print=false \
+          --out /tmp/squad-go-review-analysis.txt
+      - echo "Go review analysis written to /tmp/squad-go-review-analysis.txt"
 
   _run-codebase-workers:
     desc: "Internal: spawn N workers to review entire codebase"
@@ -301,51 +182,6 @@ tasks:
             echo "  Worker ${i}: EMPTY (failed)"
           fi
         done
-
-  _run-codebase-judge:
-    desc: "Internal: combine codebase worker outputs and run judge agent"
-    internal: true
-    silent: true
-    cmds:
-      - |
-        echo "Combining worker outputs for judge..."
-        > /tmp/squad-workers-combined.txt
-        for i in $(seq 1 {{.NUM_WORKERS}}); do
-          if [ -s "/tmp/squad-worker-${i}.txt" ]; then
-            echo "--- WORKER ${i} ---" >> /tmp/squad-workers-combined.txt
-            cat "/tmp/squad-worker-${i}.txt" >> /tmp/squad-workers-combined.txt
-            echo "" >> /tmp/squad-workers-combined.txt
-          fi
-        done
-        echo "Running judge agent..."
-        WORKER_CONTENT=$(cat /tmp/squad-workers-combined.txt)
-        go run ./cmd/squad run -v \
-          "You are judging {{.NUM_WORKERS}} independent reviews of the ENTIRE Go codebase.
-
-        Here are the worker outputs:
-
-        ${WORKER_CONTENT}
-
-        Now use Glob to discover all Go files, Read each one the workers referenced, tally findings across workers, validate each finding against the actual code, apply consensus fixes per your severity gating rules, and produce your judge report.
-
-        Use the Edit tool for every fix. If you make any edits, include a "Files Touched" section. If no edits are made, include a "No changes" section.
-        Large refactors are allowed if required to fix consensus findings. You may create new files/packages or move code when needed, but keep changes idiomatic and ensure the build passes.
-
-        IMPORTANT: Doc comments, import ordering, and pure whitespace changes are NOT eligible — skip those. Everything else the workers flagged is fair game if you can verify it and the fix compiles. Apply idiomatic refactors — that is the whole point of this review.
-
-        MANDATORY: If workers flagged 'business logic in cmd/' or 'global mutable flag state', you MUST fix them. Do NOT skip by labeling them 'architectural' or 'too large'. Follow the Mandatory Refactor Playbook in your system prompt. Do global-flag-state first, then business-logic extraction. Create new packages/files as needed. Do NOT use internal/ packages." \
-          --agent go-review-judge \
-          --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
-          --provider {{.PROVIDER}} \
-          {{._BASE_URL_FLAG}} \
-          --model {{.MODEL}} \
-          --num-ctx 32768 \
-          --temperature 0.2 \
-          --require-actionable=true \
-          --apply \
-          --out /tmp/squad-judge.txt
-        echo "Judge output written to /tmp/squad-judge.txt"
 
   _run-scoped-judge:
     desc: "Internal: combine worker outputs and run judge with a scoped mode"
@@ -555,6 +391,7 @@ tasks:
     silent: true
     vars:
       COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
+      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
     cmds:
       - |
         go run ./cmd/squad run -v \
@@ -573,7 +410,7 @@ tasks:
         Cap 20 iterations per package. Wind down early if needed — a partial
         report with before/after numbers is better than no report." \
           --agent go-tests \
-          --working-dir {{.WORKING_DIR}} \
+          --working-dir {{.TARGET_REPO}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
@@ -586,7 +423,7 @@ tasks:
       - |
         echo ""
         echo "Running final verification..."
-      - go test ./...
+      - cd {{.TARGET_REPO}} && go test ./...
       - echo "go test ./... PASSED"
 
   run:go-tests-analyze:
@@ -594,6 +431,7 @@ tasks:
     silent: true
     vars:
       COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
+      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
     cmds:
       - |
         go run ./cmd/squad run -v \
@@ -604,7 +442,7 @@ tasks:
 
         Do NOT write or modify any files." \
           --agent go-tests --mode readonly \
-          --working-dir {{.WORKING_DIR}} \
+          --working-dir {{.TARGET_REPO}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
