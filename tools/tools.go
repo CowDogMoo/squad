@@ -23,7 +23,7 @@ const maxToolOutput = 64 * 1024
 const maxSameToolRepeat = 10
 const maxMutatingToolRepeat = 50
 
-var editsUsed bool
+type editsKeyType struct{}
 
 // mutatingTools are tools that legitimately chain in long sequences.
 var mutatingTools = map[string]bool{
@@ -37,19 +37,32 @@ var highRepeatTools = map[string]bool{
 	"Grep": true,
 }
 
-// ResetEditsApplied resets the edit tracking state.
-func ResetEditsApplied() {
-	editsUsed = false
+// InitEdits initializes edit tracking in the context.
+func InitEdits(ctx context.Context) context.Context {
+	b := false
+	return context.WithValue(ctx, editsKeyType{}, &b)
 }
 
-// MarkEditsApplied marks that tool-based edits were made.
-func MarkEditsApplied() {
-	editsUsed = true
+// ResetEditsApplied resets the edit tracking state on the context.
+func ResetEditsApplied(ctx context.Context) {
+	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
+		*b = false
+	}
 }
 
-// EditsApplied returns whether tool-based edits were made.
-func EditsApplied() bool {
-	return editsUsed
+// MarkEditsApplied marks that tool-based edits were made on the context.
+func MarkEditsApplied(ctx context.Context) {
+	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
+		*b = true
+	}
+}
+
+// EditsApplied returns whether tool-based edits were made on the context.
+func EditsApplied(ctx context.Context) bool {
+	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
+		return *b
+	}
+	return false
 }
 
 // Handler wraps a tool definition and its implementation function.
@@ -284,7 +297,7 @@ func trackEdits(call func(ctx context.Context, rawArgs []byte) (string, error)) 
 	return func(ctx context.Context, rawArgs []byte) (string, error) {
 		result, err := call(ctx, rawArgs)
 		if err == nil {
-			MarkEditsApplied()
+			MarkEditsApplied(ctx)
 		}
 		return result, err
 	}

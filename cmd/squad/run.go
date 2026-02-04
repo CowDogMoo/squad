@@ -265,7 +265,9 @@ func executeRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 		return nil // dry-run
 	}
 
-	tools.ResetEditsApplied()
+	ctx := tools.InitEdits(cmd.Context())
+	cmd.SetContext(ctx)
+	tools.ResetEditsApplied(ctx)
 	response, err := invokeModel(cmd, opts, bundle)
 	if err != nil {
 		return err
@@ -331,7 +333,7 @@ func invokeModel(cmd *cobra.Command, opts *RunOptions, bundle *agent.Bundle) (st
 // handleResponse validates, applies, and writes the model response.
 func handleResponse(cmd *cobra.Command, opts *RunOptions, response, workingDir string) error {
 	if opts.RequireActionable {
-		if err := validateActionableResponse(response); err != nil {
+		if err := validateActionableResponse(cmd.Context(), response); err != nil {
 			return err
 		}
 	}
@@ -418,13 +420,13 @@ func applyResponseDiff(ctx context.Context, response, workingDir string, fallbac
 			logging.InfoContext(ctx, "no changes reported; skipping apply")
 			return nil
 		}
-		if tools.EditsApplied() {
+		if tools.EditsApplied(ctx) {
 			logging.InfoContext(ctx, "edits already applied via tools; skipping diff apply")
 			return nil
 		}
 		return err
 	}
-	if tools.EditsApplied() {
+	if tools.EditsApplied(ctx) {
 		logging.InfoContext(ctx, "edits already applied via tools; skipping diff apply")
 		return nil
 	}
@@ -588,8 +590,8 @@ func isOpenAICompatProvider(provider string) bool {
 	return provider == "" || provider == "openai"
 }
 
-func validateActionableResponse(response string) error {
-	if tools.EditsApplied() {
+func validateActionableResponse(ctx context.Context, response string) error {
+	if tools.EditsApplied(ctx) {
 		return nil
 	}
 	if _, err := extractUnifiedDiff(response); err == nil {
