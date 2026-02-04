@@ -1,11 +1,14 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 func TestDefaults(t *testing.T) {
@@ -110,4 +113,54 @@ func contains(values []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func TestLoadInvalidConfigFile(t *testing.T) {
+	baseDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", baseDir)
+	t.Setenv("HOME", baseDir)
+	t.Setenv("USERPROFILE", baseDir)
+
+	configPath := filepath.Join(baseDir, "squad", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), DirPermReadWriteExec); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("log: ["), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "config load failed") {
+		t.Fatalf("error = %q, want config load failed", err.Error())
+	}
+}
+
+func TestLoadFromPathInvalidConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("model: ["), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := LoadFromPath(configPath)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "config load failed") {
+		t.Fatalf("error = %q, want config load failed", err.Error())
+	}
+}
+
+func TestLoadConfigWithViperSetupError(t *testing.T) {
+	_, err := loadConfigWithViper(func(*viper.Viper) error {
+		return fmt.Errorf("boom")
+	})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "config load failed") {
+		t.Fatalf("error = %q, want config load failed", err.Error())
+	}
 }

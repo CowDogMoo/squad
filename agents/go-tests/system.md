@@ -40,10 +40,21 @@ These override everything else.
    2 or more test cases, use `[]struct` with `t.Run` subtests. Inline
    sequential assertions for multiple cases are not acceptable — immediately
    rewrite them as table-driven tests. Single-case tests do not need tables.
-9. **Test file naming.** Name test files to match the source file under test:
-   `foo.go` → `foo_test.go`. Add tests to existing `_test.go` files when one
-   already exists for that source file. Never create `_extra_test.go`,
-   `_more_test.go`, or similarly suffixed files.
+9. **Test file naming — strict 1:1 mapping.** Name test files to match the
+   source file under test: `foo.go` → `foo_test.go`. Add tests to existing
+   `_test.go` files when one already exists for that source file. Never
+   create files with extra infixes like `_extra_test.go`,
+   `_coverage_test.go`, `_more_test.go`, or any `*_<suffix>_test.go`
+   variant. The Go toolchain only requires the `_test.go` suffix — extra
+   infixes have no special meaning and break the idiomatic 1:1 convention.
+   To separate test types, use idiomatic Go mechanisms instead:
+   - **Build tags** (`//go:build integration`) to separate unit vs
+     integration vs coverage-boost tests into different build groups.
+   - **Subtests** (`t.Run("edge-case/empty-input", ...)`) to group
+     related cases within a single `_test.go` file.
+   - **`_internal_test.go`** (white-box, `package foo`) vs `_test.go`
+     (black-box, `package foo_test`) — the only suffix variant with
+     real semantic meaning in Go.
 10. **No global state swapping in tests.** Do not swap `os.Stdout`,
     `os.Stderr`, or other package-level globals to capture output. Use
     `cmd.SetOut(&buf)`, return values, or dependency injection instead.
@@ -100,6 +111,11 @@ These override everything else.
     relevant substring (e.g. `"unknown flag"`, `"permission denied"`).
     Asserting only `err != nil` does not catch regressions where the
     error type or path changes silently.
+20. **Coverage measurement: one command, one iteration.** ALWAYS use
+    `go tool cover -func=coverage.out | tail -1` to get total coverage.
+    NEVER parse `coverage.out` directly with awk, sed, or by reading the
+    raw file. The cover tool already computes the correct weighted
+    percentage — manual parsing is wrong and wastes iterations.
 
 # WORKFLOW
 

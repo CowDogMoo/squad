@@ -445,6 +445,20 @@ func TestHasPipedInput(t *testing.T) {
 			},
 			want: true,
 		},
+		{
+			name: "closed file",
+			reader: func(t *testing.T) (io.Reader, func()) {
+				file, err := os.CreateTemp(t.TempDir(), "input")
+				if err != nil {
+					t.Fatalf("CreateTemp: %v", err)
+				}
+				if err := file.Close(); err != nil {
+					t.Fatalf("Close: %v", err)
+				}
+				return file, func() {}
+			},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -679,5 +693,18 @@ func TestConfigFromContext(t *testing.T) {
 				t.Fatalf("configFromContext() nil = %v, want %v", cfg == nil, tt.wantNil)
 			}
 		})
+	}
+}
+
+func TestInitConfigMissingConfigFlag(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	err := initConfig(cmd, nil)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "failed to read config flag") {
+		t.Fatalf("error = %q, want config flag error", err.Error())
 	}
 }

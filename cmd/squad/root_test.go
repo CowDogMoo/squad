@@ -2,7 +2,10 @@ package main
 
 import (
 	"os"
+	"reflect"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestExecuteVersion(t *testing.T) {
@@ -17,5 +20,40 @@ func TestExecuteVersion(t *testing.T) {
 
 	if err := Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestRootFlagCompletionFuncs(t *testing.T) {
+	root := NewRootCmd()
+	tests := []struct {
+		name string
+		flag string
+		want []string
+	}{
+		{
+			name: "log level",
+			flag: "log-level",
+			want: []string{"debug", "info", "warn", "error"},
+		},
+		{
+			name: "log format",
+			flag: "log-format",
+			want: []string{"text", "json", "color"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compFunc, ok := root.GetFlagCompletionFunc(tt.flag)
+			if !ok {
+				t.Fatalf("expected completion func for %s", tt.flag)
+			}
+			values, directive := compFunc(root, nil, "")
+			if directive != cobra.ShellCompDirectiveNoFileComp {
+				t.Fatalf("directive = %v, want %v", directive, cobra.ShellCompDirectiveNoFileComp)
+			}
+			if !reflect.DeepEqual(values, tt.want) {
+				t.Fatalf("values = %v, want %v", values, tt.want)
+			}
+		})
 	}
 }

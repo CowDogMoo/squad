@@ -102,3 +102,36 @@ func TestGetConfigDirsXDGConfigDirs(t *testing.T) {
 		}
 	}
 }
+
+func TestGetConfigDirsSkipsEmptyXDGDirs(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "freebsd" && runtime.GOOS != "openbsd" {
+		t.Skip("xdg config dirs only applies to unix-like OS")
+	}
+	baseDir := t.TempDir()
+	configHome := filepath.Join(baseDir, "config")
+	first := filepath.Join(baseDir, "first")
+	second := filepath.Join(baseDir, "second")
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("XDG_CONFIG_DIRS", strings.Join([]string{first, "", second}, string(filepath.ListSeparator)))
+
+	dirs := GetConfigDirs()
+	unexpected := filepath.Join("", "squad")
+	for _, dir := range dirs {
+		if dir == unexpected {
+			t.Fatalf("unexpected empty dir entry: %v", dirs)
+		}
+	}
+	wantDirs := []string{filepath.Join(first, "squad"), filepath.Join(second, "squad")}
+	for _, want := range wantDirs {
+		found := false
+		for _, dir := range dirs {
+			if dir == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected %q in dirs, got %v", want, dirs)
+		}
+	}
+}
