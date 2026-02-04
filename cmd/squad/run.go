@@ -45,33 +45,6 @@ import (
 	"github.com/tmc/langchaingo/llms/openai"
 )
 
-var (
-	runAgent             string
-	runAgentsDir         string
-	runWorkingDir        string
-	runAPIKey            string
-	runBaseURL           string
-	runOrg               string
-	runAPIVersion        string
-	runAPIType           string
-	runOpenAICompatMax   bool
-	runProvider          string
-	runModel             string
-	runTemperature       float64
-	runMaxTokens         int
-	runSystem            string
-	runOutput            string
-	runPrint             bool
-	runBundleOut         string
-	runPrintBundle       bool
-	runDryRun            bool
-	runRequireActionable bool
-	runApply             bool
-	runApplyFallback     bool
-	runNumCtx            int
-	runMode              string
-)
-
 // RunOptions holds the resolved configuration for a single run invocation.
 type RunOptions struct {
 	Agent             string
@@ -100,54 +73,50 @@ type RunOptions struct {
 	Mode              string
 }
 
-// newRunOptions creates a RunOptions by copying from the current CLI flag globals.
-func newRunOptions() *RunOptions {
+// newRunOptions creates a RunOptions by reading resolved values from flags and Viper.
+func newRunOptions(cmd *cobra.Command) *RunOptions {
 	v := appViper
-	apiKey := v.GetString("provider.token")
-	if runAPIKey != "" {
-		apiKey = runAPIKey
-	}
-	provider := v.GetString("provider.default")
-	if runProvider != "" {
-		provider = runProvider
-	}
-	model := v.GetString("model.default")
-	if runModel != "" {
-		model = runModel
-	}
-	temp := v.GetFloat64("model.temperature")
-	if runTemperature >= 0 {
-		temp = runTemperature
-	}
-	maxT := v.GetInt("model.max_tokens")
-	if runMaxTokens >= 0 {
-		maxT = runMaxTokens
-	}
+	flags := cmd.Flags()
+
+	agent, _ := flags.GetString("agent")
+	agentsDir, _ := flags.GetString("agents-dir")
+	workingDir, _ := flags.GetString("working-dir")
+	system, _ := flags.GetString("system")
+	output, _ := flags.GetString("out")
+	printOut, _ := flags.GetBool("print")
+	bundleOut, _ := flags.GetString("bundle-out")
+	printBundle, _ := flags.GetBool("print-bundle")
+	dryRun, _ := flags.GetBool("dry-run")
+	requireActionable, _ := flags.GetBool("require-actionable")
+	apply, _ := flags.GetBool("apply")
+	applyFallback, _ := flags.GetBool("apply-fallback")
+	mode, _ := flags.GetString("mode")
+
 	return &RunOptions{
-		Agent:             runAgent,
-		AgentsDir:         runAgentsDir,
-		WorkingDir:        runWorkingDir,
-		APIKey:            apiKey,
+		Agent:             agent,
+		AgentsDir:         agentsDir,
+		WorkingDir:        workingDir,
+		APIKey:            v.GetString("provider.token"),
 		BaseURL:           v.GetString("provider.base_url"),
 		Org:               v.GetString("provider.organization"),
 		APIVersion:        v.GetString("provider.api_version"),
 		APIType:           v.GetString("provider.api_type"),
 		OpenAICompatMax:   v.GetBool("provider.openai_compat_max_tokens"),
-		Provider:          provider,
-		Model:             model,
-		Temperature:       temp,
-		MaxTokens:         maxT,
-		System:            runSystem,
-		Output:            runOutput,
-		Print:             runPrint,
-		BundleOut:         runBundleOut,
-		PrintBundle:       runPrintBundle,
-		DryRun:            runDryRun,
-		RequireActionable: runRequireActionable,
-		Apply:             runApply,
-		ApplyFallback:     runApplyFallback,
+		Provider:          v.GetString("provider.default"),
+		Model:             v.GetString("model.default"),
+		Temperature:       v.GetFloat64("model.temperature"),
+		MaxTokens:         v.GetInt("model.max_tokens"),
+		System:            system,
+		Output:            output,
+		Print:             printOut,
+		BundleOut:         bundleOut,
+		PrintBundle:       printBundle,
+		DryRun:            dryRun,
+		RequireActionable: requireActionable,
+		Apply:             apply,
+		ApplyFallback:     applyFallback,
 		NumCtx:            v.GetInt("provider.num_ctx"),
-		Mode:              runMode,
+		Mode:              mode,
 	}
 }
 
@@ -208,39 +177,39 @@ var runCmd = &cobra.Command{
 		return fmt.Errorf("prompt is required (pass args or pipe stdin)")
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		opts := newRunOptions()
+		opts := newRunOptions(cmd)
 		return executeRun(cmd, args, opts)
 	},
 }
 
 func init() {
-	runCmd.Flags().StringVar(&runAgent, "agent", "", "Agent name (e.g. go-cobra)")
+	runCmd.Flags().String("agent", "", "Agent name (e.g. go-cobra)")
 	if err := runCmd.MarkFlagRequired("agent"); err != nil {
 		panic(err)
 	}
-	runCmd.Flags().StringVar(&runAgentsDir, "agents-dir", "", "Agents directory (default: ./agents, then ~/.config/squad/agents)")
-	runCmd.Flags().StringVar(&runWorkingDir, "working-dir", "", "Working directory (default: current working directory)")
-	runCmd.Flags().StringVar(&runAPIKey, "api-key", "", "API key (overrides env/config)")
-	runCmd.Flags().StringVar(&runBaseURL, "base-url", "", "Base URL override for provider")
-	runCmd.Flags().StringVar(&runOrg, "organization", "", "Organization ID (OpenAI-compatible)")
-	runCmd.Flags().StringVar(&runAPIVersion, "api-version", "", "API version (Azure/OpenAI-compatible)")
-	runCmd.Flags().StringVar(&runAPIType, "api-type", "", "API type (openai or azure)")
-	runCmd.Flags().BoolVar(&runOpenAICompatMax, "openai-compat-max-tokens", false, "Use max_tokens for OpenAI-compatible endpoints")
-	runCmd.Flags().StringVar(&runProvider, "provider", "", "Model provider (openai, anthropic, gemini, ollama, etc)")
-	runCmd.Flags().StringVar(&runModel, "model", "", "Model name")
-	runCmd.Flags().Float64Var(&runTemperature, "temperature", -1, "Sampling temperature (default from config)")
-	runCmd.Flags().IntVar(&runMaxTokens, "max-tokens", -1, "Max output tokens (default from config)")
-	runCmd.Flags().StringVar(&runSystem, "system", "", "System prompt override")
-	runCmd.Flags().StringVar(&runOutput, "out", "", "Write response to a file")
-	runCmd.Flags().BoolVar(&runPrint, "print", true, "Print response to stdout")
-	runCmd.Flags().StringVar(&runBundleOut, "bundle-out", "", "Write agent bundle to a file")
-	runCmd.Flags().BoolVar(&runPrintBundle, "print-bundle", false, "Print agent bundle to stdout")
-	runCmd.Flags().BoolVar(&runDryRun, "dry-run", false, "Build bundle and exit without calling the model")
-	runCmd.Flags().BoolVar(&runRequireActionable, "require-actionable", true, "Require actionable output (diff/files/no changes)")
-	runCmd.Flags().BoolVar(&runApply, "apply", false, "Apply unified diff from the response to the working directory")
-	runCmd.Flags().BoolVar(&runApplyFallback, "apply-fallback", false, "Fallback to patch(1) if git apply fails (may create .rej/.orig)")
-	runCmd.Flags().IntVar(&runNumCtx, "num-ctx", 32768, "Context window size for Ollama models")
-	runCmd.Flags().StringVar(&runMode, "mode", "", "Agent mode override (e.g. readonly)")
+	runCmd.Flags().String("agents-dir", "", "Agents directory (default: ./agents, then ~/.config/squad/agents)")
+	runCmd.Flags().String("working-dir", "", "Working directory (default: current working directory)")
+	runCmd.Flags().String("api-key", "", "API key (overrides env/config)")
+	runCmd.Flags().String("base-url", "", "Base URL override for provider")
+	runCmd.Flags().String("organization", "", "Organization ID (OpenAI-compatible)")
+	runCmd.Flags().String("api-version", "", "API version (Azure/OpenAI-compatible)")
+	runCmd.Flags().String("api-type", "", "API type (openai or azure)")
+	runCmd.Flags().Bool("openai-compat-max-tokens", false, "Use max_tokens for OpenAI-compatible endpoints")
+	runCmd.Flags().String("provider", "", "Model provider (openai, anthropic, gemini, ollama, etc)")
+	runCmd.Flags().String("model", "", "Model name")
+	runCmd.Flags().Float64("temperature", -1, "Sampling temperature (default from config)")
+	runCmd.Flags().Int("max-tokens", -1, "Max output tokens (default from config)")
+	runCmd.Flags().String("system", "", "System prompt override")
+	runCmd.Flags().String("out", "", "Write response to a file")
+	runCmd.Flags().Bool("print", true, "Print response to stdout")
+	runCmd.Flags().String("bundle-out", "", "Write agent bundle to a file")
+	runCmd.Flags().Bool("print-bundle", false, "Print agent bundle to stdout")
+	runCmd.Flags().Bool("dry-run", false, "Build bundle and exit without calling the model")
+	runCmd.Flags().Bool("require-actionable", true, "Require actionable output (diff/files/no changes)")
+	runCmd.Flags().Bool("apply", false, "Apply unified diff from the response to the working directory")
+	runCmd.Flags().Bool("apply-fallback", false, "Fallback to patch(1) if git apply fails (may create .rej/.orig)")
+	runCmd.Flags().Int("num-ctx", 32768, "Context window size for Ollama models")
+	runCmd.Flags().String("mode", "", "Agent mode override (e.g. readonly)")
 
 	runCmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 
