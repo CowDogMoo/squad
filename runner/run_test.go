@@ -153,7 +153,7 @@ func TestResolveAgentsDir(t *testing.T) {
 		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
-		defer os.RemoveAll(agentsDir)
+		t.Cleanup(func() { _ = os.RemoveAll(agentsDir) })
 		agentsAbs, _ := filepath.Abs(agentsDir)
 		resolved, err := resolveAgentsDir("")
 		if err != nil {
