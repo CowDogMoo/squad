@@ -51,9 +51,11 @@ These override everything else.
    a new file, note it in the report and move on.
 8. **Follow existing conventions.** Read surrounding code before editing.
    Match the existing style for error messages, variable naming, and
-   code organization. When a file already imports a package (e.g. `slog`),
-   use that package — do not introduce a parallel one (e.g. `log`) for the
-   same purpose. Check existing imports before adding new ones.
+   code organization. When the codebase uses a logging package (e.g. a
+   custom `logging` package or `slog`), ALL files should use that — flag
+   any file that imports a different logging package (e.g. `log`) as a
+   consistency violation. This is a MEDIUM-severity finding, not cosmetic.
+   Check existing imports before adding new ones.
 9. **Preserve backwards compatibility.** Do not rename exported functions,
    change function signatures, remove exported types, or alter the public API
    surface. If something is wrong but published, note it — do not change it.
@@ -96,7 +98,18 @@ These override everything else.
     response body in a defer), leave it alone. Only fix `_ =` when the
     ignored error can cause incorrect behavior, data loss, or silent
     failures that a user would care about.
-18. **Understand the caller's error contract.** Before changing `return nil`
+18. **Proportionality.** Every fix must be proportional to the problem. A
+    micro-optimization for a 3-element loop is over-engineering, not a fix.
+    Before applying a change, ask: "Does this prevent a real bug, fix a
+    meaningful inconsistency, or improve correctness under realistic
+    conditions?" If the answer is "it's a theoretical improvement that adds
+    complexity," skip it and move to higher-value findings.
+19. **Efficiency with iterations.** Read each file ONCE and take notes. Do
+    not re-read files you have already analyzed. Batch your analysis of all
+    files first, then apply fixes. If you need to verify an edit, read only
+    the edited region, not the whole file again. Target: finish in ≤12
+    iterations for a small codebase (≤20 files).
+20. **Understand the caller's error contract.** Before changing `return nil`
     to `return err` or adding error propagation, understand what the CALLER
     does with the returned error. In callback functions the contract is set
     by the framework, not your function:
@@ -205,7 +218,9 @@ These are the anti-patterns you MUST fix when found:
 - Errors both logged AND returned — handle once, not twice
 - Missing error wrapping (`fmt.Errorf` with `%w` for context)
 - Deep nesting (3+ levels of if/for) — refactor with early returns
-- String concatenation in loops (`+=` instead of `strings.Builder`)
+- String concatenation in HOT loops (`+=` instead of `strings.Builder`) —
+  only when the loop iterates many times (dozens+). A 1-5 element loop
+  does not benefit from a Builder; the added complexity is worse than `+=`
 - Integer types for time values (`int` seconds instead of `time.Duration`)
 - Pointers to interfaces (almost always wrong in Go)
 - Inconsistent method receivers (mix of pointer and value receivers on the
@@ -223,6 +238,9 @@ These are the anti-patterns you MUST fix when found:
   lock patterns)
 - Redundant or dead code (duplicate function calls where the first result
   is already available, unreachable branches, unused assignments)
+- Inconsistent logging package — if the codebase has a custom `logging`
+  package or uses `slog`, flag files that import `"log"` instead. Replace
+  `log.Printf(...)` with the codebase's logging functions
 
 # HOW TO FIX — CORRECT PATTERNS
 
@@ -244,6 +262,9 @@ When you find an issue, use the RIGHT fix. Wrong fixes are worse than no fix.
   callback type. If `return nil` means "skip and continue" (e.g.
   `filepath.WalkFunc`, `fs.WalkDirFunc`), leave it alone unless the error
   truly should abort the operation.
+- **Inconsistent logging package:** If the codebase has a `logging` package
+  or uses `slog`, replace `log.Printf(...)` calls with the codebase's
+  logging functions. Add the correct import if needed, remove `"log"`.
 - **Unchecked type assertion:** Add the comma-ok pattern:
   `v, ok := x.(Type); if !ok { return fmt.Errorf(...) }`.
 - **Missing error wrapping:** Use `fmt.Errorf("context: %w", err)` — add

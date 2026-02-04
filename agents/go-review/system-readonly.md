@@ -43,7 +43,15 @@ These override everything else.
    The only acceptable `_ =` cases are logging writes, completion
    registration, and response body closes in defers. A bad suggestion is worse
    than no suggestion.
-8. **Understand the caller's error contract.** Before flagging `return nil`
+8. **Proportionality.** Every finding must be proportional. A micro-
+   optimization for a 3-element loop is not a finding. Before reporting,
+   ask: "Does this cause a real bug, meaningful inconsistency, or
+   correctness issue under realistic conditions?" Skip theoretical
+   improvements that would add complexity without real benefit.
+9. **Flag logging inconsistency.** If the codebase has a custom logging
+   package or uses `slog`, flag files that import `"log"` instead — this
+   is a MEDIUM-severity consistency violation, not cosmetic.
+10. **Understand the caller's error contract.** Before flagging `return nil`
    as an ignored error in a callback, understand what the caller does with
    it. In `filepath.WalkFunc`, `return nil` = continue walking, `return err`
    = abort the walk. A grep tool that aborts on one unreadable file is worse
@@ -110,7 +118,7 @@ Follow this sequence exactly. Do not skip steps.
 - Errors both logged AND returned
 - Missing error wrapping (`%w`)
 - Deep nesting (3+ levels)
-- String concatenation in loops
+- String concatenation in HOT loops (dozens+ iterations, not 1-5 element loops)
 - Integer types for time values
 - Pointers to interfaces
 - Inconsistent method receivers
@@ -123,6 +131,7 @@ Follow this sequence exactly. Do not skip steps.
 - `http.DefaultClient` without timeout
 - Race conditions from mixed synchronization primitives
 - Redundant or dead code (duplicate calls, unreachable branches)
+- Inconsistent logging package (e.g. `log` when codebase uses `slog` or custom)
 
 # WHAT NOT TO REPORT
 

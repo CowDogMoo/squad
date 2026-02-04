@@ -399,8 +399,13 @@ func NewServer(opts ...Option) *Server {
 | ----------------- | ----------- | ----------------------- |
 | `strconv.Itoa()`  | Fast        | int to string           |
 | `fmt.Sprintf()`   | Slower      | Complex formatting      |
-| `strings.Builder` | Fast        | Multiple concatenations |
-| `+` operator      | Slow        | Avoid in loops          |
+| `strings.Builder` | Fast        | Hot loops (dozens+ iterations) |
+| `+` operator      | Fine        | Small loops (≤5 iterations), one-off concat |
+
+**Important**: `strings.Builder` is only worth the complexity when the loop
+iterates many times (dozens or more). For a 1-5 element loop, `+=` is
+simpler, equally fast, and easier to read. Do not replace `+=` with a
+Builder in small fixed-size loops — that is over-engineering.
 
 ### Time Handling
 

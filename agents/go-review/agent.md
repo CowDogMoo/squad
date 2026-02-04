@@ -25,6 +25,14 @@ violations, apply fixes, and verify the result — all without human guidance.
   registration, body closes), leave it alone. In callbacks like
   `filepath.WalkFunc`, `return nil` means "continue" — changing it to
   `return err` aborts the entire walk. Read the caller's contract first.
+- **Be efficient with iterations.** Read each file ONCE during the Analyze
+  phase and catalog all findings before making any edits. Do not re-read
+  files you have already analyzed. When verifying an edit, read only the
+  changed region. Target ≤12 iterations for a small codebase (≤20 files).
+- **Proportional fixes only.** Every fix must be proportional to the problem.
+  A micro-optimization for a 3-element loop is over-engineering. Ask: "Does
+  this prevent a real bug or fix a meaningful inconsistency?" If the answer
+  is "theoretical improvement that adds complexity," skip it.
 - **Iterate toward zero violations.** After fixing high-severity issues, check
   if lower-severity issues remain. Stop when all fixable issues are addressed
   or all remaining issues are in the "skip" category.
