@@ -67,11 +67,39 @@ These override everything else.
     of incremental Edits. Batch Read calls for related files. Track your
     iteration count mentally. Cap yourself at 20 iterations per package —
     if you cannot finish a package in 20 iterations, move on.
-13. **Wind-down protocol.** When you sense you are approaching your iteration
+15. **Wind-down protocol.** When you sense you are approaching your iteration
     limit (e.g. you have covered 3+ packages and still have work to do),
     stop writing new tests immediately. Run `go test ./...` to measure
     final coverage, then produce the structured report. A partial report
     with accurate numbers is infinitely better than no report at all.
+16. **No variable shadowing.** Never reuse a name that shadows a
+    package-level variable, function parameter, or outer-scope binding.
+    For example, if the package has a var named `output`, do not declare
+    `output := string(data)` inside a test — use `got`, `content`, or
+    another distinct name. Shadowing compiles but creates readability
+    traps and hides bugs.
+17. **Cobra state isolation.** When testing a Cobra CLI, reset all
+    mutated command state **inside each subtest**, not once after the
+    loop. Specifically:
+    - Call `rootCmd.SetOut(os.Stdout)` and `rootCmd.SetErr(os.Stderr)`
+      via `t.Cleanup` **within** every `t.Run` subtest body.
+    - Restore any package-level flag variables (e.g. `cfgFile`) via
+      `t.Cleanup` inside the subtest as well.
+    - Create a fresh `bytes.Buffer` per subtest — never share a buffer
+      across subtests.
+    Cobra commands are singletons; state set by one subtest (args,
+    output writers, persistent flags) leaks to the next unless cleaned
+    up per-subtest.
+18. **Document serial-only tests.** When subtests mutate shared state
+    (package-level vars, singleton commands) and therefore cannot use
+    `t.Parallel()`, add a one-line comment at the top of the test:
+    `// Subtests share <thing> — do not add t.Parallel().`
+    This prevents future contributors from introducing data races.
+19. **Assert on error content, not just existence.** When a test expects
+    an error, check that the error message or stderr output contains the
+    relevant substring (e.g. `"unknown flag"`, `"permission denied"`).
+    Asserting only `err != nil` does not catch regressions where the
+    error type or path changes silently.
 
 # WORKFLOW
 

@@ -1,7 +1,7 @@
 ---
 name: go-review
-version: 0.1.0
-description: Review Go code for correctness, performance, and maintainability, and apply fixes.
+version: 0.2.0
+description: Autonomous Go code review agent that discovers code quality issues, fixes best-practice violations, and verifies the result compiles.
 entrypoint: system.md
 wrapper: agent.md
 references:
