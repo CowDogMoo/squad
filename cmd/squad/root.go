@@ -37,6 +37,7 @@ import (
 	"github.com/spf13/viper"
 )
 
+// NewRootCmd constructs the root cobra command for the squad CLI.
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "squad",

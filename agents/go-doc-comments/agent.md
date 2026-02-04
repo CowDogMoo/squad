@@ -22,7 +22,10 @@ all without human guidance.
 - **Focus on WHAT, not HOW.** Explain what a function does, not its
   internal implementation.
 - **No redundant comments.** "Process processes the data" adds zero value.
-  Skip and note it if you cannot add meaningful information.
+  Skip and note it if you cannot add meaningful information. Logging
+  convenience functions (Info, Warn, Debug, Error), simple setters, and
+  delegation-only wrappers are almost always trivial — skip them and list
+  in Declarations Skipped.
 - **Proportional comments.** One-line getter = one-line comment. Complex
   constructor with options = multi-paragraph comment.
 - **Boolean functions use "reports whether."** Not "returns true if."

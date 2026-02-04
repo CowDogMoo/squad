@@ -57,7 +57,15 @@ These override everything else.
    user with the given ID" is right.
 9. **No redundant comments.** "Process processes the data" adds zero value.
    If you cannot add meaningful information beyond what the signature already
-   communicates, skip the declaration and note it.
+   communicates, skip the declaration and note it in the Declarations Skipped
+   table. Common examples of redundant comments:
+   - `// Info logs an informational message.` on a function named `Info`
+   - `// Warn logs a warning message.` on a function named `Warn`
+   - `// Close closes the connection.` on a function named `Close`
+   Thin wrappers that only delegate to another function (e.g. package-level
+   convenience functions that call a method on a global) are almost always
+   trivial — skip them unless the comment adds something the name doesn't
+   already say (like "using the global logger" or "with a default timeout").
 10. **Respect existing good comments.** If a declaration already has a correct,
     well-formed doc comment, leave it alone. Only improve comments that are
     missing, incomplete, or violate Go conventions.
@@ -89,7 +97,11 @@ These override everything else.
     trivial getter like `func (c *Config) Name() string` needs one line:
     `// Name returns the configuration name.` A complex constructor with
     options, defaults, and error conditions needs a multi-paragraph comment.
-    Do not write 5-line comments for 1-line functions.
+    Do not write 5-line comments for 1-line functions. Better yet, if a
+    one-line function has a self-documenting name (Info, Warn, Close, etc.),
+    skip it entirely — it needs NO comment. The key test: "Does this
+    comment tell the reader something the name doesn't already say?" If
+    no, skip and add to Declarations Skipped.
 20. **Efficiency with iterations.** Read each file ONCE and take notes on all
     missing/deficient doc comments. Batch your analysis of all files first,
     then apply fixes. If you need to verify an edit, read only the edited
@@ -134,6 +146,8 @@ Follow this sequence exactly. Do not skip steps.
    - Has a redundant comment (just restates the name)
    - Has a doc comment with incorrect format (blank line before declaration,
      wrong pattern for bool functions, etc.)
+   - Has a boolean function/method whose comment says "returns true" or
+     "checks if" instead of "reports whether" — these MUST be corrected
    - Is missing concurrency safety, error condition, or cleanup documentation
      when that information is non-obvious
 6. Check if the package has a package comment. Note which file should get it.
@@ -197,7 +211,10 @@ These are the doc comment issues you MUST fix when found:
 - Comment is a fragment, not a complete sentence
 - Redundant comment that adds no value beyond the signature
 - Blank line between comment and declaration (godoc drops these)
-- Boolean function using "returns true if" instead of "reports whether"
+- Boolean function using "returns true if", "returns true when", "checks if",
+  or "checks whether" instead of "reports whether" — this applies to EXISTING
+  comments too, not just missing ones. Grep for `returns true` and `checks if`
+  across all doc comments to catch these
 - Missing concurrency safety note on types with mutex/atomic fields
 - Missing error documentation on functions that return sentinel errors
 - Missing cleanup documentation on types that hold resources (files, conns)
@@ -214,8 +231,15 @@ Skip these entirely — do not report them, do not fix them:
 - Whitespace or formatting outside of comments
 - Test files
 - Trivial exported declarations where a meaningful comment would just
-  restate the signature (e.g., `func (c *Config) String() string` on a
-  type that implements `fmt.Stringer` — the interface contract is the doc)
+  restate the signature. Common examples:
+  - `func (c *Config) String() string` — interface contract is the doc
+  - Logging convenience methods: `Info`, `Warn`, `Debug`, `Error` on a
+    logger type — the method name IS the documentation
+  - Package-level delegation functions that just call a method on a global
+    (e.g. `func Info(msg string) { globalLogger.Info(msg) }`) — the
+    function name + the type-level method doc are sufficient
+  - Simple setters: `func SetX(v T)` where the name fully describes it
+  List these in the Declarations Skipped table with reason "trivial"
 - Comments on interface method declarations within the interface block
   (the interface doc comment covers these)
 - Vendor directory files

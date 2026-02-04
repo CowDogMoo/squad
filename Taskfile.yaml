@@ -552,8 +552,11 @@ tasks:
         - Complete sentences with proper punctuation
         - Focus on WHAT, not HOW — no implementation details
         - No redundant comments ('Process processes the data' = skip)
-        - Boolean functions use 'reports whether' pattern
-        - Proportional: one-line getter = one-line comment
+        - SKIP trivial wrappers: Info/Warn/Debug/Error on loggers, simple setters, delegation functions
+        - Key test: 'Does this comment tell the reader something the name does not?' If no → skip
+        - Boolean functions use 'reports whether' (fix EXISTING 'returns true' comments too)
+        - Grep for 'returns true' in existing comments — these are format violations to fix
+        - Proportional: one-line getter = one-line comment, trivial = NO comment
         - Exported declarations only — skip unexported names
         - Read each file ONCE, catalog all findings, then fix — target ≤15 iterations
         - Use ONE Grep/Glob on repo root, not per-directory — minimize tool calls

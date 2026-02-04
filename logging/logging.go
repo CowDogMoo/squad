@@ -20,6 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
+// Package logging provides configurable logging utilities for squad.
 package logging
 
 import (
@@ -39,20 +40,29 @@ var (
 	loggerMu sync.RWMutex
 )
 
+// LogLevel represents the supported log severity levels.
 type LogLevel int
 
+// OutputType defines the available logger output formats.
 type OutputType int
 
 const (
+	// PlainOutput emits uncolored text output.
 	PlainOutput OutputType = iota
+	// ColorOutput emits ANSI-colored text output.
 	ColorOutput
+	// JSONOutput emits structured JSON output.
 	JSONOutput
 )
 
 const (
+	// InfoLevel emits informational log entries.
 	InfoLevel LogLevel = iota
+	// WarnLevel emits warning log entries.
 	WarnLevel
+	// DebugLevel emits verbose debug log entries.
 	DebugLevel
+	// ErrorLevel emits error log entries.
 	ErrorLevel
 )
 
@@ -123,6 +133,7 @@ func (l *CustomLogger) log(level LogLevel, message string, args ...interface{}) 
 	}
 }
 
+// NewCustomLogger creates a logger with the provided minimum slog level.
 func NewCustomLogger(level slog.Level) *CustomLogger {
 	return &CustomLogger{
 		LogLevel:      level,
@@ -152,6 +163,7 @@ func (l *CustomLogger) outputWriter() io.Writer {
 	return os.Stdout
 }
 
+// Output writes data using the logger's configured output format.
 func (l *CustomLogger) Output(data interface{}) {
 	w := l.outputWriter()
 	switch l.OutputType {
@@ -194,6 +206,7 @@ func (l *CustomLogger) Error(firstArg interface{}, args ...interface{}) {
 	l.log(ErrorLevel, "%s", format)
 }
 
+// DetermineLogLevel maps a string level to its slog equivalent.
 func DetermineLogLevel(levelStr string) slog.Level {
 	switch levelStr {
 	case "debug":
@@ -267,6 +280,7 @@ func Info(message string, args ...interface{}) {
 	logGlobal(InfoLevel, message, args...)
 }
 
+// Output writes data using the global logger's output format.
 func Output(data interface{}) {
 	ensureLogger()
 	loggerMu.RLock()
@@ -296,6 +310,7 @@ func SetQuiet(quiet bool) {
 	logger.SetQuiet(quiet)
 }
 
+// IsQuiet reports whether the global logger suppresses non-error output.
 func IsQuiet() bool {
 	ensureLogger()
 	loggerMu.RLock()
@@ -316,10 +331,12 @@ type loggerKeyType struct{}
 
 var loggerKey = loggerKeyType{}
 
+// WithLogger returns a context that carries the provided logger.
 func WithLogger(ctx context.Context, l *CustomLogger) context.Context {
 	return context.WithValue(ctx, loggerKey, l)
 }
 
+// FromContext returns the logger stored in ctx or the global logger.
 func FromContext(ctx context.Context) *CustomLogger {
 	if ctx == nil {
 		ensureLogger()

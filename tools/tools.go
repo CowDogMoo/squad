@@ -1,3 +1,4 @@
+// Package tools defines tool handlers and execution helpers for agents.
 package tools
 
 import (
@@ -18,6 +19,7 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
+// MaxToolIterations is the default iteration limit for tool loops.
 const MaxToolIterations = 100
 const maxToolOutput = 64 * 1024
 const maxSameToolRepeat = 10
@@ -96,7 +98,7 @@ func (t *RepeatTracker) Update(calls []llms.ToolCall) {
 	}
 }
 
-// Exceeded returns true if the repetition limit has been hit.
+// Exceeded reports whether the repetition limit has been hit.
 func (t *RepeatTracker) Exceeded() bool {
 	limit := maxSameToolRepeat
 	if highRepeatTools[t.LastName] {
