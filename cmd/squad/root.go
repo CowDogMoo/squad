@@ -53,6 +53,13 @@ It provides a clean config + logging foundation for agent workflows.`,
 	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "Quiet mode - only show errors")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Verbose mode - show debug output")
 
+	_ = rootCmd.RegisterFlagCompletionFunc("log-level", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"debug", "info", "warn", "error"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = rootCmd.RegisterFlagCompletionFunc("log-format", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"text", "json", "color"}, cobra.ShellCompDirectiveNoFileComp
+	})
+
 	rootCmd.AddCommand(newRunCmd())
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(versionCmd)
