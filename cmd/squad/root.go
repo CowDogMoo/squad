@@ -74,7 +74,10 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	var cfg *config.Config
 	var err error
 	// Resolve config file path directly from flags to avoid global mutable flag state
-	configPath, _ := cmd.Root().PersistentFlags().GetString("config")
+	configPath, err := cmd.Root().PersistentFlags().GetString("config")
+	if err != nil {
+		return fmt.Errorf("failed to read config flag: %w", err)
+	}
 	if configPath != "" {
 		cfg, err = config.LoadFromPath(configPath)
 	} else {

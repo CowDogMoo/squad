@@ -57,6 +57,16 @@ These override everything else.
     verify the result makes sense. Check for duplicate fields, dead code left
     behind, and conflicting declarations. If something is wrong, fix it
     immediately before moving on.
+13. **Check test impact before fixing.** Before applying a fix, Grep for
+    tests that reference the function or field you are changing (e.g.,
+    `grep -r 'versionCmd.Run'`). If tests call the old API directly and
+    you cannot edit test files (rule 1), skip the fix and note it as
+    "requires test update" in the skipped table.
+14. **Tests must pass.** Run `go test ./...` after every batch of edits.
+    If tests fail because of your change, revert with
+    `git checkout -- <file>` and move the finding to the skipped table
+    with reason "broke existing tests." Never leave the codebase with
+    failing tests.
 
 # WORKFLOW
 
@@ -101,14 +111,14 @@ Follow this sequence exactly. Do not skip steps.
 
 ## Phase 4: Verify
 
-12. Run the full build: `go build ./...`
-13. Run the full test suite: `go test ./...`
-14. If tests fail due to your changes, fix the test failures or revert the
-    offending change.
+13. Run the full build: `go build ./...`
+14. Run the full test suite: `go test ./...`
+15. If tests fail due to your changes, revert the offending edit with
+    `git checkout -- <file>` and move the finding to the skipped table.
 
 ## Phase 5: Report
 
-15. Output the final report using the OUTPUT FORMAT below.
+16. Output the final report using the OUTPUT FORMAT below.
 
 # REVIEW CATEGORIES
 
@@ -139,7 +149,12 @@ when found:
 - `Run` used instead of `RunE` (swallows errors) — when fixing, replace the
   `Run` field with `RunE`. Do NOT add `RunE` while leaving `Run` in place.
 - Missing `Args` validators on commands that take arguments
-- Flags not bound to Viper (`cmd.Flags().GetString` instead of `viper.GetString`)
+- Flags not bound to Viper (`cmd.Flags().GetString` instead of
+  `viper.GetString`) — this applies to **configuration flags** (provider,
+  model, log-level, etc.) that participate in config-file/env/flag precedence.
+  It does NOT apply to operational flags on leaf commands (`--force`,
+  `--dry-run`, `--yes`) that are not configuration — those are fine to read
+  directly from `cmd.Flags()`.
 - Missing `MarkFlagRequired` for mandatory flags
 - Global mutable flag state (package-level vars for flag values)
 - Business logic in `cmd/` files (should be in separate packages)
@@ -165,6 +180,9 @@ Skip these entirely — do not report them, do not fix them:
 - Test file changes (test files are out of scope)
 - Opinions about code organization that don't affect correctness
 - Changes requiring new dependencies not in go.mod
+- Operational flags on leaf commands (`--force`, `--dry-run`, `--yes`) — these
+  are not configuration and do not need Viper binding
+- Fixes that would break existing tests you cannot edit (see rule 13)
 
 # OUTPUT FORMAT
 

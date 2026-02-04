@@ -94,7 +94,10 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 	flags := cmd.Flags()
 	bind := func(key string, f string) error {
-		return v.BindPFlag(key, flags.Lookup(f))
+		if err := v.BindPFlag(key, flags.Lookup(f)); err != nil {
+			return fmt.Errorf("failed to bind flag %q to %q: %w", f, key, err)
+		}
+		return nil
 	}
 	if err := bind("provider.default", "provider"); err != nil {
 		return err
