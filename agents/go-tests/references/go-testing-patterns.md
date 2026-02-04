@@ -501,23 +501,19 @@ func (s *Service) CreateUser(u *User) error {
 ### Test File Naming
 
 - `foo.go` → `foo_test.go` (strict 1:1 mapping)
+- `foo_internal_test.go` (`package foo`) for white-box tests needing
+  unexported access — the only meaningful suffix variant in Go
 - Test functions: `TestXxx(t *testing.T)`
 - Benchmarks: `BenchmarkXxx(b *testing.B)`
 - Examples: `ExampleXxx()`
 
-Never create files with extra infixes like `_extra_test.go`,
-`_coverage_test.go`, or any `*_<suffix>_test.go` variant — these have no
-special meaning in the Go toolchain and are not an idiomatic convention.
+To separate test types (unit, integration, coverage-boost), use:
 
-To separate test types, use these community-standard mechanisms:
-
-- **Build tags** (`//go:build integration`) to separate unit vs integration
-  vs coverage-boost tests into different build groups.
+- **Build tags** (`//go:build integration`) to gate tests by category.
 - **Subtests** (`t.Run("edge-case/empty-input", ...)`) to group related
   cases within a single `_test.go` file.
 - **`_internal_test.go`** (`package foo`) vs `_test.go` (`package foo_test`)
-  — the only suffix variant with real semantic meaning in Go, distinguishing
-  white-box from black-box tests.
+  to distinguish white-box from black-box tests.
 
 ### Common Assertions
 
