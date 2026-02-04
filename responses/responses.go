@@ -1,3 +1,4 @@
+// Package responses integrates OpenAI's Responses API workflows.
 package responses
 
 import (
@@ -51,13 +52,13 @@ func (rc *Config) applyOptionals(params *oairesponses.ResponseNewParams) {
 	}
 }
 
-// IsReasoningModel returns true for models that emit reasoning tokens
-// (e.g. gpt-5*) which require a larger output-token budget.
+// IsReasoningModel reports whether a model emits reasoning tokens
+// (e.g. gpt-5*) that require a larger output-token budget.
 func IsReasoningModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5")
 }
 
-// UseResponsesAPI returns true when the Responses API path should be used.
+// UseResponsesAPI reports whether the Responses API path should be used.
 func UseResponsesAPI(provider, model string) bool {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "openai-responses" {

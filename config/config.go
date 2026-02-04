@@ -20,6 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
+// Package config loads and validates squad configuration settings.
 package config
 
 import (
@@ -30,7 +31,9 @@ import (
 )
 
 const (
-	FilePermReadWrite    = 0o644
+	// FilePermReadWrite is the file mode used for config files.
+	FilePermReadWrite = 0o644
+	// DirPermReadWriteExec is the directory mode used for config folders.
 	DirPermReadWriteExec = 0o755
 )
 

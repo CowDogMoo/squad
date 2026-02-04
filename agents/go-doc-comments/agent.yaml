@@ -1,8 +1,12 @@
 ---
 name: go-doc-comments
-version: 0.1.0
-description: Generate or improve Go documentation comments following official Go Doc Comments specification.
+version: 0.2.0
+description: Autonomous Go documentation agent that discovers exported declarations, adds or improves doc comments following the Go Doc Comments spec, and verifies compilation.
 entrypoint: system.md
 wrapper: agent.md
 references:
   - references/go-documentation-standards.md
+modes:
+  readonly:
+    entrypoint: system-readonly.md
+    wrapper: agent-readonly.md
