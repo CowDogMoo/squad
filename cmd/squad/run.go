@@ -74,8 +74,15 @@ type RunOptions struct {
 }
 
 // newRunOptions creates a RunOptions by reading resolved values from flags and Viper.
+func viperFromContext(cmd *cobra.Command) *viper.Viper {
+	if v, ok := cmd.Context().Value(viperKey).(*viper.Viper); ok {
+		return v
+	}
+	return viper.New()
+}
+
 func newRunOptions(cmd *cobra.Command) *RunOptions {
-	v := appViper
+	v := viperFromContext(cmd)
 	flags := cmd.Flags()
 
 	agent, _ := flags.GetString("agent")
@@ -122,8 +129,8 @@ func newRunOptions(cmd *cobra.Command) *RunOptions {
 
 // bindRunFlags binds the run command's flags to Viper keys so that env vars
 // and config file values participate in precedence resolution.
-func bindRunFlags(v *viper.Viper) error {
-	flags := runCmd.Flags()
+func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
+	flags := cmd.Flags()
 	bind := func(key string, f string) error {
 		return v.BindPFlag(key, flags.Lookup(f))
 	}
@@ -163,65 +170,67 @@ func bindRunFlags(v *viper.Viper) error {
 	return nil
 }
 
-var runCmd = &cobra.Command{
-	Use:     "run [prompt]",
-	Aliases: []string{"r"},
-	Short:   "Run an agent workflow",
-	Args: func(cmd *cobra.Command, args []string) error {
-		if len(args) > 0 {
-			return nil
-		}
-		if hasPipedInput(cmd.InOrStdin()) {
-			return nil
-		}
-		return fmt.Errorf("prompt is required (pass args or pipe stdin)")
-	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		opts := newRunOptions(cmd)
-		return executeRun(cmd, args, opts)
-	},
-}
+func newRunCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "run [prompt]",
+		Aliases: []string{"r"},
+		Short:   "Run an agent workflow",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return nil
+			}
+			if hasPipedInput(cmd.InOrStdin()) {
+				return nil
+			}
+			return fmt.Errorf("prompt is required (pass args or pipe stdin)")
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts := newRunOptions(cmd)
+			return executeRun(cmd, args, opts)
+		},
+	}
 
-func init() {
-	runCmd.Flags().String("agent", "", "Agent name (e.g. go-cobra)")
-	if err := runCmd.MarkFlagRequired("agent"); err != nil {
+	cmd.Flags().String("agent", "", "Agent name (e.g. go-cobra)")
+	if err := cmd.MarkFlagRequired("agent"); err != nil {
 		panic(err)
 	}
-	runCmd.Flags().String("agents-dir", "", "Agents directory (default: ./agents, then ~/.config/squad/agents)")
-	runCmd.Flags().String("working-dir", "", "Working directory (default: current working directory)")
-	runCmd.Flags().String("api-key", "", "API key (overrides env/config)")
-	runCmd.Flags().String("base-url", "", "Base URL override for provider")
-	runCmd.Flags().String("organization", "", "Organization ID (OpenAI-compatible)")
-	runCmd.Flags().String("api-version", "", "API version (Azure/OpenAI-compatible)")
-	runCmd.Flags().String("api-type", "", "API type (openai or azure)")
-	runCmd.Flags().Bool("openai-compat-max-tokens", false, "Use max_tokens for OpenAI-compatible endpoints")
-	runCmd.Flags().String("provider", "", "Model provider (openai, anthropic, gemini, ollama, etc)")
-	runCmd.Flags().String("model", "", "Model name")
-	runCmd.Flags().Float64("temperature", -1, "Sampling temperature (default from config)")
-	runCmd.Flags().Int("max-tokens", -1, "Max output tokens (default from config)")
-	runCmd.Flags().String("system", "", "System prompt override")
-	runCmd.Flags().String("out", "", "Write response to a file")
-	runCmd.Flags().Bool("print", true, "Print response to stdout")
-	runCmd.Flags().String("bundle-out", "", "Write agent bundle to a file")
-	runCmd.Flags().Bool("print-bundle", false, "Print agent bundle to stdout")
-	runCmd.Flags().Bool("dry-run", false, "Build bundle and exit without calling the model")
-	runCmd.Flags().Bool("require-actionable", true, "Require actionable output (diff/files/no changes)")
-	runCmd.Flags().Bool("apply", false, "Apply unified diff from the response to the working directory")
-	runCmd.Flags().Bool("apply-fallback", false, "Fallback to patch(1) if git apply fails (may create .rej/.orig)")
-	runCmd.Flags().Int("num-ctx", 32768, "Context window size for Ollama models")
-	runCmd.Flags().String("mode", "", "Agent mode override (e.g. readonly)")
+	cmd.Flags().String("agents-dir", "", "Agents directory (default: ./agents, then ~/.config/squad/agents)")
+	cmd.Flags().String("working-dir", "", "Working directory (default: current working directory)")
+	cmd.Flags().String("api-key", "", "API key (overrides env/config)")
+	cmd.Flags().String("base-url", "", "Base URL override for provider")
+	cmd.Flags().String("organization", "", "Organization ID (OpenAI-compatible)")
+	cmd.Flags().String("api-version", "", "API version (Azure/OpenAI-compatible)")
+	cmd.Flags().String("api-type", "", "API type (openai or azure)")
+	cmd.Flags().Bool("openai-compat-max-tokens", false, "Use max_tokens for OpenAI-compatible endpoints")
+	cmd.Flags().String("provider", "", "Model provider (openai, anthropic, gemini, ollama, etc)")
+	cmd.Flags().String("model", "", "Model name")
+	cmd.Flags().Float64("temperature", -1, "Sampling temperature (default from config)")
+	cmd.Flags().Int("max-tokens", -1, "Max output tokens (default from config)")
+	cmd.Flags().String("system", "", "System prompt override")
+	cmd.Flags().String("out", "", "Write response to a file")
+	cmd.Flags().Bool("print", true, "Print response to stdout")
+	cmd.Flags().String("bundle-out", "", "Write agent bundle to a file")
+	cmd.Flags().Bool("print-bundle", false, "Print agent bundle to stdout")
+	cmd.Flags().Bool("dry-run", false, "Build bundle and exit without calling the model")
+	cmd.Flags().Bool("require-actionable", true, "Require actionable output (diff/files/no changes)")
+	cmd.Flags().Bool("apply", false, "Apply unified diff from the response to the working directory")
+	cmd.Flags().Bool("apply-fallback", false, "Fallback to patch(1) if git apply fails (may create .rej/.orig)")
+	cmd.Flags().Int("num-ctx", 32768, "Context window size for Ollama models")
+	cmd.Flags().String("mode", "", "Agent mode override (e.g. readonly)")
 
-	runCmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
+	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 
 	// Dynamic completions for --agent (scan agents directories).
-	_ = runCmd.RegisterFlagCompletionFunc("agent", completeAgentNames)
+	_ = cmd.RegisterFlagCompletionFunc("agent", completeAgentNames)
 	// Static completions for --provider.
-	_ = runCmd.RegisterFlagCompletionFunc("provider", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	_ = cmd.RegisterFlagCompletionFunc("provider", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"openai", "openai-responses", "anthropic", "ollama", "gemini"}, cobra.ShellCompDirectiveNoFileComp
 	})
-	_ = runCmd.RegisterFlagCompletionFunc("model", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	_ = cmd.RegisterFlagCompletionFunc("model", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	})
+
+	return cmd
 }
 
 // executeRun contains the full run command logic, parameterized by RunOptions.
@@ -293,7 +302,7 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 
 // invokeModel resolves provider settings and calls the appropriate model backend.
 func invokeModel(cmd *cobra.Command, opts *RunOptions, bundle *agent.Bundle) (string, error) {
-	v := appViper
+	v := viperFromContext(cmd)
 	provider := normalizeProvider(opts.Provider)
 	model := opts.Model
 	temperature := opts.Temperature
@@ -354,7 +363,7 @@ func callResponsesAPI(ctx context.Context, v *viper.Viper, model, systemPrompt s
 
 // callLangChainLLM runs the prompt via a LangChain-compatible LLM.
 func callLangChainLLM(ctx context.Context, v *viper.Viper, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int) (string, error) {
-	llm, err := buildLLM(provider, model)
+	llm, err := buildLLM(v, provider, model)
 	if err != nil {
 		return "", err
 	}
@@ -485,22 +494,21 @@ func resolveAgentsDir(explicit string) (string, error) {
 }
 
 // buildLLM constructs an LLM model instance based on the provider and configuration.
-func buildLLM(provider, model string) (llms.Model, error) {
+func buildLLM(v *viper.Viper, provider, model string) (llms.Model, error) {
 	provider = normalizeProvider(provider)
 	switch provider {
 	case "ollama":
-		return buildNativeOllamaLLM(model), nil
+		return buildNativeOllamaLLM(v, model), nil
 	case "openai", "":
-		return buildOpenAICompatLLM(provider, model)
+		return buildOpenAICompatLLM(v, provider, model)
 	case "anthropic":
-		return buildAnthropicLLM(model)
+		return buildAnthropicLLM(v, model)
 	default:
 		return nil, fmt.Errorf("provider not implemented: %s", provider)
 	}
 }
 
-func buildOpenAICompatLLM(provider, model string) (llms.Model, error) {
-	v := appViper
+func buildOpenAICompatLLM(v *viper.Viper, provider, model string) (llms.Model, error) {
 	oaiOpts := []openai.Option{}
 	if model != "" {
 		oaiOpts = append(oaiOpts, openai.WithModel(model))
@@ -531,8 +539,7 @@ func buildOpenAICompatLLM(provider, model string) (llms.Model, error) {
 	return openai.New(oaiOpts...)
 }
 
-func buildAnthropicLLM(model string) (llms.Model, error) {
-	v := appViper
+func buildAnthropicLLM(v *viper.Viper, model string) (llms.Model, error) {
 	aOpts := []anthropic.Option{}
 	if model != "" {
 		aOpts = append(aOpts, anthropic.WithModel(model))
@@ -553,13 +560,12 @@ func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
 }
 
-func buildNativeOllamaLLM(model string) llms.Model {
-	v := appViper
+func buildNativeOllamaLLM(v *viper.Viper, model string) llms.Model {
 	baseURL := v.GetString("provider.base_url")
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
 	}
-	numCtx := appViper.GetInt("provider.num_ctx")
+	numCtx := v.GetInt("provider.num_ctx")
 	if numCtx <= 0 {
 		numCtx = 32768
 	}

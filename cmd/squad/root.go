@@ -37,13 +37,13 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Context key type for storing config.
+// Context key types for storing config and viper instance.
 type configKeyType struct{}
+type viperKeyType struct{}
 
 var (
 	configKey = configKeyType{}
-	cfgFile   string
-	appViper  *viper.Viper
+	viperKey  = viperKeyType{}
 )
 
 var rootCmd = &cobra.Command{
@@ -56,13 +56,13 @@ It provides a clean config + logging foundation for agent workflows.`,
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "Config file (default is $HOME/.config/squad/config.yaml)")
+	rootCmd.PersistentFlags().StringP("config", "c", "", "Config file (default is $HOME/.config/squad/config.yaml)")
 	rootCmd.PersistentFlags().String("log-level", "", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().String("log-format", "", "Log format (text, json, color)")
 	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "Quiet mode - only show errors")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Verbose mode - show debug output")
 
-	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(newRunCmd())
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(completionCmd)
@@ -86,8 +86,10 @@ func configFromContext(cmd *cobra.Command) *config.Config {
 func initConfig(cmd *cobra.Command, _ []string) error {
 	var cfg *config.Config
 	var err error
-	if cfgFile != "" {
-		cfg, err = config.LoadFromPath(cfgFile)
+	// Resolve config file path via Viper to avoid global mutable flag state
+	configPath := viper.GetString("config")
+	if configPath != "" {
+		cfg, err = config.LoadFromPath(configPath)
 	} else {
 		cfg, err = config.Load()
 	}
@@ -98,7 +100,6 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	v := viper.New()
-	appViper = v
 
 	v.SetDefault("log.level", cfg.Log.Level)
 	v.SetDefault("log.format", cfg.Log.Format)
@@ -136,7 +137,11 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Bind run command flags so Viper can resolve them via env/config.
-	if err := bindRunFlags(v); err != nil {
+	runCmd := findRunCmd(cmd.Root())
+	if runCmd == nil {
+		return fmt.Errorf("run command not found for flag binding")
+	}
+	if err := bindRunFlags(runCmd, v); err != nil {
 		return err
 	}
 
@@ -169,8 +174,18 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 
 	logger := logging.FromContext(cmd.Context())
 	ctx := context.WithValue(cmd.Context(), configKey, cfg)
+	ctx = context.WithValue(ctx, viperKey, v)
 	ctx = logging.WithLogger(ctx, logger)
 	cmd.SetContext(ctx)
 
+	return nil
+}
+
+func findRunCmd(root *cobra.Command) *cobra.Command {
+	for _, sub := range root.Commands() {
+		if sub.Name() == "run" {
+			return sub
+		}
+	}
 	return nil
 }
