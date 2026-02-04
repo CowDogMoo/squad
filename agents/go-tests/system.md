@@ -52,7 +52,17 @@ These override everything else.
     Go version. If Go 1.22+, range loop variables are per-iteration and
     `tt := tt` is dead code — do not include it. If below 1.22, you MUST
     add `tt := tt` before `t.Run` in parallel table-driven tests.
-12. **Budget awareness.** You have a limited iteration budget. Prefer Write
+12. **Never close over the outer `t` in table-driven setup functions.** When
+    a test table has a `setup` or `mutate` callback, it MUST accept `t
+    *testing.T` as a parameter and use that — not the `t` from the outer
+    test function. Closing over the outer `t` breaks if subtests run in
+    parallel and makes failures report against the wrong subtest.
+13. **Test helper types must be goroutine-safe.** If you create a struct
+    that implements `io.Writer`, `io.Reader`, or similar interfaces for
+    use in tests, use `sync/atomic` or `sync.Mutex` for any mutable
+    fields (counters, flags). Tests may run concurrently even if not
+    explicitly parallel today.
+14. **Budget awareness.** You have a limited iteration budget. Prefer Write
     over Edit when creating new test files — one Write call replaces dozens
     of incremental Edits. Batch Read calls for related files. Track your
     iteration count mentally. Cap yourself at 20 iterations per package —

@@ -199,6 +199,27 @@ func TestConvertResponse(t *testing.T) {
 			0,
 			3,
 		},
+		{
+			"tool call args marshal error",
+			chatResponse{
+				Message: &ollamaMessage{
+					Content: "hello",
+					ToolCalls: []ollamaToolCall{{
+						Function: ollamaFunctionCall{
+							Name: "Bad",
+							Arguments: map[string]any{
+								"bad": func() {},
+							},
+						},
+					}},
+				},
+				PromptEvalCount: 1,
+				EvalCount:       1,
+			},
+			"hello",
+			0,
+			2,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -337,5 +358,25 @@ func TestGenerateContentErrors(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tt.wantErrMsg)
 			}
 		})
+	}
+}
+
+func TestCallUsesGenerateFromSinglePrompt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"mistral","message":{"role":"assistant","content":"hello"},"done":true}`))
+	}))
+	defer server.Close()
+
+	llm := New(server.URL, "mistral", 256)
+	resp, err := llm.Call(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if resp != "hello" {
+		t.Fatalf("response = %q, want %q", resp, "hello")
 	}
 }

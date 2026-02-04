@@ -3,6 +3,8 @@ package runner
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -365,5 +367,62 @@ func TestExecuteRunDryRun(t *testing.T) {
 	}
 	if err := ExecuteRun(cmd, []string{"hello"}, opts); err != nil {
 		t.Fatalf("ExecuteRun() error = %v", err)
+	}
+}
+
+func TestExecuteRunPromptError(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetIn(strings.NewReader(""))
+	opts := &RunOptions{Agent: "go-tests", AgentsDir: filepath.Join("..", "agents")}
+	if err := ExecuteRun(cmd, nil, opts); err == nil {
+		t.Fatalf("expected error")
+	}
+}
+
+func TestExecuteRunInvokeModelError(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	opts := &RunOptions{
+		Agent:           "go-tests",
+		AgentsDir:       filepath.Join("..", "agents"),
+		Provider:        "openai-responses",
+		Model:           "gpt-5",
+		MaxIterations:   1,
+		ConfigAvailable: true,
+	}
+	if err := ExecuteRun(cmd, []string{"hello"}, opts); err == nil {
+		t.Fatalf("expected error")
+	}
+}
+
+func TestExecuteRunSuccessOllama(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"mistral","message":{"role":"assistant","content":"ok"},"done":true}`))
+	}))
+	defer server.Close()
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	opts := &RunOptions{
+		Agent:           "go-tests",
+		AgentsDir:       filepath.Join("..", "agents"),
+		Provider:        "ollama",
+		Model:           "mistral",
+		BaseURL:         server.URL,
+		MaxIterations:   1,
+		ConfigAvailable: true,
+	}
+	if err := ExecuteRun(cmd, []string{"hello"}, opts); err != nil {
+		t.Fatalf("ExecuteRun() error = %v", err)
+	}
+	if !strings.Contains(buf.String(), "ok") {
+		t.Fatalf("expected response output, got %q", buf.String())
 	}
 }

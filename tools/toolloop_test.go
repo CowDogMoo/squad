@@ -15,6 +15,11 @@ type fakeLLM struct {
 	calls     int
 }
 
+type stubLLM struct {
+	resp *llms.ContentResponse
+	err  error
+}
+
 func (f *fakeLLM) GenerateContent(_ context.Context, _ []llms.MessageContent, _ ...llms.CallOption) (*llms.ContentResponse, error) {
 	if f.calls >= len(f.responses) {
 		return nil, errors.New("no response")
@@ -25,6 +30,14 @@ func (f *fakeLLM) GenerateContent(_ context.Context, _ []llms.MessageContent, _ 
 }
 
 func (f *fakeLLM) Call(context.Context, string, ...llms.CallOption) (string, error) {
+	return "", nil
+}
+
+func (s *stubLLM) GenerateContent(_ context.Context, _ []llms.MessageContent, _ ...llms.CallOption) (*llms.ContentResponse, error) {
+	return s.resp, s.err
+}
+
+func (s *stubLLM) Call(context.Context, string, ...llms.CallOption) (string, error) {
 	return "", nil
 }
 
@@ -206,5 +219,54 @@ func TestFinishToolLoopFallback(t *testing.T) {
 	}
 	if out != "partial" {
 		t.Fatalf("output = %q, want %q", out, "partial")
+	}
+}
+
+func TestRunWithToolsErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		llm  llms.Model
+	}{
+		{
+			name: "generate error",
+			llm:  &stubLLM{err: errors.New("boom")},
+		},
+		{
+			name: "nil response",
+			llm:  &stubLLM{resp: nil},
+		},
+		{
+			name: "empty choices",
+			llm:  &stubLLM{resp: &llms.ContentResponse{Choices: nil}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := RunWithTools(context.Background(), tt.llm, "", "user", t.TempDir(), 1, nil)
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+		})
+	}
+}
+
+func TestFinishToolLoopFinalContent(t *testing.T) {
+	llm := &stubLLM{
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
+	}
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, nil)
+	if err != nil {
+		t.Fatalf("finishToolLoop() error = %v", err)
+	}
+	if out != "final" {
+		t.Fatalf("output = %q, want %q", out, "final")
+	}
+}
+
+func TestFinishToolLoopErrorNoContent(t *testing.T) {
+	llm := &stubLLM{err: errors.New("boom")}
+	_, err := finishToolLoop(context.Background(), llm, nil, "", 1, nil)
+	if err == nil {
+		t.Fatalf("expected error")
 	}
 }
