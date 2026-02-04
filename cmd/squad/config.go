@@ -134,7 +134,10 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 
 	ctx := cmd.Context()
 	if _, err := os.Stat(configPath); err == nil {
-		force, _ := cmd.Flags().GetBool("force")
+		force, err := cmd.Flags().GetBool("force")
+		if err != nil {
+			return fmt.Errorf("failed to get force flag: %w", err)
+		}
 		if !force {
 			return fmt.Errorf("config file already exists at %s (use --force to overwrite)", configPath)
 		}

@@ -6,3 +6,8 @@ entrypoint: system.md
 wrapper: agent.md
 references:
   - references/go-review-criteria.md
+modes:
+  phase-flags:
+    entrypoint: system-phase-flags.md
+  phase-extract:
+    entrypoint: system-phase-extract.md
