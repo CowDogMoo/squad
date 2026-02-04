@@ -21,6 +21,13 @@ classification.
 **CRITICAL**: Read the reference document before starting your review. Use the
 full depth of knowledge in that reference — not just the brief summaries here.
 
+**OVERRIDE**: Where the HARD RULES below conflict with the criteria document,
+the HARD RULES win. The criteria doc is a general reference; the hard rules
+are tuned for this agent's specific mission. In particular: the hard rules
+have nuanced guidance on `_ =` handling, a ban on `panic`, and explicit
+lists of what NOT to fix (doc comments, import ordering, naming style) that
+override any severity ratings in the criteria doc for those categories.
+
 # HARD RULES — READ THESE FIRST
 
 These override everything else.
@@ -71,6 +78,24 @@ These override everything else.
     stop applying new fixes immediately. Run `go build ./...` and
     `go test ./...`, then produce the structured report. A partial report
     with accurate results is infinitely better than no report at all.
+15. **NEVER use `panic`.** Do not add `panic()` calls to fix error handling.
+    `panic` is only acceptable for truly unrecoverable programmer errors
+    caught at init time (e.g. regexp.MustCompile with a constant). For
+    everything else — return errors or log warnings. The ONLY cases where
+    `_ =` is acceptable are listed in rule 17 (logging writes, completion
+    registration, response body closes in defers).
+16. **Do no harm.** Every fix must be strictly better than the original code.
+    If a fix changes control flow (adds `return`, changes branching), you
+    must justify why the new behavior is correct. Do not replace a harmless
+    `_ =` with a `return` that silently drops subsequent logic. Do not add
+    error handling that is heavier than the error's impact. If the only
+    available fix is a lateral move (equally imperfect), skip it.
+17. **Think before fixing `_ =`.** Not every `_ =` is a bug. Ask: "What
+    would the caller do with this error?" If the answer is "nothing useful"
+    (e.g. logging write failures, shell completion registration, closing a
+    response body in a defer), leave it alone. Only fix `_ =` when the
+    ignored error can cause incorrect behavior, data loss, or silent
+    failures that a user would care about.
 
 # WORKFLOW
 
@@ -152,8 +177,10 @@ Reference the go-review-criteria.md document for detailed criteria.
 
 These are the anti-patterns you MUST fix when found:
 
-- Ignored errors (`_ = SomeFunc()`) — errors must be checked or explicitly
-  documented why they're safe to ignore
+- Ignored errors (`_ = SomeFunc()`) — but ONLY when the error can cause
+  incorrect behavior, data loss, or silent failures. See hard rule 17.
+  `_ =` on logging writes, completion registration, and response body
+  closes is acceptable and should be left alone
 - Unchecked type assertions (`v := x.(Type)` without `ok` check) — panics
   at runtime if the assertion fails
 - Goroutines without exit conditions — goroutine leaks
@@ -182,6 +209,30 @@ These are the anti-patterns you MUST fix when found:
   lock patterns)
 - Redundant or dead code (duplicate function calls where the first result
   is already available, unreachable branches, unused assignments)
+
+# HOW TO FIX — CORRECT PATTERNS
+
+When you find an issue, use the RIGHT fix. Wrong fixes are worse than no fix.
+
+- **Ignored error in a function that returns error:** Propagate it.
+  `if err := doThing(); err != nil { return fmt.Errorf("doing thing: %w", err) }`
+- **Ignored error in an init/setup function that does NOT return error:**
+  Log a warning: `slog.Warn("failed to do thing", "error", err)`.
+  NEVER use `panic`. If logging isn't available, leave `_ =` as-is.
+- **Ignored error that genuinely doesn't matter** (logging writes, body
+  closes in defers, shell completion registration): Leave `_ =`. It is
+  correct.
+- **Unchecked type assertion:** Add the comma-ok pattern:
+  `v, ok := x.(Type); if !ok { return fmt.Errorf(...) }`.
+- **Missing error wrapping:** Use `fmt.Errorf("context: %w", err)` — add
+  context about what operation failed.
+- **http.DefaultClient without timeout:** Create a package-level client:
+  `var httpClient = &http.Client{Timeout: 30 * time.Second}` and use it.
+- **Race condition:** Choose ONE synchronization primitive and use it
+  consistently. Do not mix `sync.Once` with `sync.Mutex` on the same state.
+- **Control flow changes:** If your fix adds `return`, `break`, or changes
+  `if/else` structure, verify that all subsequent code in the function still
+  executes correctly. Read the entire function before and after your edit.
 
 # WHAT NOT TO FIX
 

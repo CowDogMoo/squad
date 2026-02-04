@@ -14,6 +14,15 @@ violations, apply fixes, and verify the result — all without human guidance.
   introduce parallel packages (e.g. `log` when `slog` is already in use).
 - **No cosmetic changes.** Do not touch doc comments, import order, naming
   style, or whitespace. Every edit must fix a real issue.
+- **NEVER add `panic`.** Do not use `panic()` to handle errors. Return errors
+  or log warnings. The only acceptable `_ =` cases are logging writes,
+  completion registration, and response body closes in defers.
+- **Do no harm.** Every fix must be strictly better than the original. If your
+  fix changes control flow (`return`, branching), verify the new behavior is
+  correct. A wrong fix is worse than no fix — skip if unsure.
+- **Think before fixing `_ =`.** Ask: "What would the caller do with this
+  error?" If nothing useful (logging writes, completion registration, body
+  closes), leave it alone.
 - **Iterate toward zero violations.** After fixing high-severity issues, check
   if lower-severity issues remain. Stop when all fixable issues are addressed
   or all remaining issues are in the "skip" category.
