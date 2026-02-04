@@ -52,6 +52,13 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 	applyFallback := v.GetBool("run.apply_fallback")
 	mode := v.GetString("run.mode")
 
+	maxIter := v.GetInt("run.max_iterations")
+	if maxIter < 10 {
+		maxIter = 10
+	} else if maxIter > 1000 {
+		maxIter = 1000
+	}
+
 	return &runner.RunOptions{
 		Agent:             agent,
 		AgentsDir:         agentsDir,
@@ -76,6 +83,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		Apply:             apply,
 		ApplyFallback:     applyFallback,
 		NumCtx:            v.GetInt("provider.num_ctx"),
+		MaxIterations:     maxIter,
 		Mode:              mode,
 		ConfigAvailable:   configFromContext(cmd) != nil,
 	}
@@ -136,6 +144,7 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 		{"run.apply", "apply"},
 		{"run.apply_fallback", "apply-fallback"},
 		{"run.mode", "mode"},
+		{"run.max_iterations", "max-iterations"},
 	} {
 		if err := bind(pair[0], pair[1]); err != nil {
 			return err
@@ -188,6 +197,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().Bool("apply-fallback", false, "Fallback to patch(1) if git apply fails (may create .rej/.orig)")
 	cmd.Flags().Int("num-ctx", 32768, "Context window size for Ollama models")
 	cmd.Flags().String("mode", "", "Agent mode override (e.g. readonly)")
+	cmd.Flags().Int("max-iterations", 100, "Maximum tool-calling iterations (range: 10-1000)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 

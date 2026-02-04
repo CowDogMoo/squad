@@ -66,9 +66,12 @@ func UseResponsesAPI(provider, model string) bool {
 }
 
 // RunWithTools drives a tool-calling loop using the OpenAI Responses API.
-func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens int) (string, error) {
+func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations int, taskCfg *tools.TaskConfig) (string, error) {
 	client := newClient(apiKey, baseURL, organization)
-	handlers, toolDefs := tools.BuildHandlers(workingDir)
+	handlers, toolDefs := tools.BuildHandlers(workingDir, taskCfg)
+	if maxIterations <= 0 {
+		maxIterations = tools.MaxToolIterations
+	}
 	rc := Config{
 		Model:       model,
 		Tools:       ConvertTools(toolDefs),
@@ -97,7 +100,7 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 	}
 	logOutputItems(ctx, resp, "initial")
 
-	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc)
+	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc, maxIterations)
 	if err != nil {
 		return text, err
 	}
@@ -126,9 +129,9 @@ func newClient(apiKey, baseURL, organization string) openai.Client {
 	return openai.NewClient(clientOpts...)
 }
 
-func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config) (*oairesponses.Response, string, error) {
+func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config, maxIter int) (*oairesponses.Response, string, error) {
 	var repeat tools.RepeatTracker
-	for i := 0; i < tools.MaxToolIterations; i++ {
+	for i := 0; i < maxIter; i++ {
 		calls := ExtractFunctionCalls(resp)
 		if len(calls) == 0 {
 			text := resp.OutputText()

@@ -76,6 +76,13 @@ Follow this sequence exactly. Do not skip steps.
 
 ## Phase 3: Write Tests
 
+**Task tool:** When working on multiple independent packages, you can use
+the `Task` tool to spawn child agent runs for parallel coverage work. Call
+`Task` with `agent: "go-tests"` and a prompt scoping the child to a single
+package. The child inherits your provider/model settings and tools. Max
+nesting depth is 3. Use this when you have 3+ packages to cover and they
+are independent of each other.
+
 6. For each priority package (highest-impact first):
    a. Use Glob to find all `.go` files in the package (skip `_test.go`).
    b. Read each source file to understand types, functions, and

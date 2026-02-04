@@ -12,14 +12,13 @@ import (
 	"github.com/cowdogmoo/squad/ollama"
 	"github.com/cowdogmoo/squad/responses"
 	"github.com/cowdogmoo/squad/tools"
-	"github.com/spf13/cobra"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
 	"github.com/tmc/langchaingo/llms/openai"
 )
 
 // invokeModel resolves provider settings and calls the appropriate model backend.
-func invokeModel(cmd *cobra.Command, opts *RunOptions, bundle *agent.Bundle) (string, error) {
+func invokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (string, error) {
 	provider := normalizeProvider(opts.Provider)
 	model := opts.Model
 	temperature := opts.Temperature
@@ -30,19 +29,20 @@ func invokeModel(cmd *cobra.Command, opts *RunOptions, bundle *agent.Bundle) (st
 		systemPrompt += "\n\n## System Override\n\n" + strings.TrimSpace(opts.System) + "\n"
 	}
 
-	return callModel(cmd.Context(), opts, provider, model, systemPrompt, bundle, temperature, maxTokens)
+	taskCfg := buildTaskConfig(opts)
+	return callModel(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg)
 }
 
 // callModel dispatches the prompt to the appropriate model backend and returns the response.
-func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int) (string, error) {
+func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, error) {
 	if responses.UseResponsesAPI(provider, model) {
-		return callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens)
+		return callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens, taskCfg)
 	}
-	return callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens)
+	return callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg)
 }
 
 // callResponsesAPI runs the prompt via the OpenAI Responses API.
-func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int) (string, error) {
+func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, error) {
 	apiKey := opts.APIKey
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_API_KEY")
@@ -62,7 +62,7 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 
 	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
 	modelStart := time.Now()
-	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens)
+	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens, opts.MaxIterations, taskCfg)
 	if err != nil {
 		return "", fmt.Errorf("model call failed: %w", err)
 	}
@@ -71,7 +71,7 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 }
 
 // callLangChainLLM runs the prompt via a LangChain-compatible LLM.
-func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int) (string, error) {
+func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, error) {
 	llm, err := buildLLM(opts, provider, model)
 	if err != nil {
 		return "", err
@@ -81,7 +81,7 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
 	modelStart := time.Now()
-	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, callOpts...)
+	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, opts.MaxIterations, taskCfg, callOpts...)
 	if err != nil {
 		return "", fmt.Errorf("model call failed: %w", err)
 	}
@@ -188,4 +188,28 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 
 func isOpenAICompatProvider(provider string) bool {
 	return provider == "" || provider == "openai"
+}
+
+// buildTaskConfig creates a TaskConfig for the Task tool from RunOptions.
+func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
+	return &tools.TaskConfig{
+		AgentsDir:     opts.AgentsDir,
+		WorkingDir:    opts.WorkingDir,
+		MaxIterations: opts.MaxIterations,
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error) {
+			childBundle, err := agent.BuildBundle(agentsDir, agentName, prompt, workingDir, mode)
+			if err != nil {
+				return "", fmt.Errorf("failed to build child agent bundle: %w", err)
+			}
+
+			childOpts := *opts
+			childOpts.Agent = agentName
+			childOpts.AgentsDir = agentsDir
+			childOpts.WorkingDir = workingDir
+			childOpts.Mode = mode
+			childOpts.System = ""
+
+			return invokeModel(ctx, &childOpts, childBundle)
+		},
+	}
 }

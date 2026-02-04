@@ -39,6 +39,7 @@ type RunOptions struct {
 	Apply             bool
 	ApplyFallback     bool
 	NumCtx            int
+	MaxIterations     int
 	Mode              string
 	ConfigAvailable   bool
 }
@@ -63,10 +64,13 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 		return nil // dry-run
 	}
 
+	// Ensure resolved paths are available for TaskConfig.
+	opts.WorkingDir = workingDir
+
 	ctx := tools.InitEdits(cmd.Context())
 	cmd.SetContext(ctx)
 	tools.ResetEditsApplied(ctx)
-	response, err := invokeModel(cmd, opts, bundle)
+	response, err := invokeModel(ctx, opts, bundle)
 	if err != nil {
 		return err
 	}
@@ -80,6 +84,7 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 	if err != nil {
 		return nil, err
 	}
+	opts.AgentsDir = agentsDir
 
 	bundle, err := agent.BuildBundle(agentsDir, opts.Agent, prompt, workingDir, opts.Mode)
 	if err != nil {
