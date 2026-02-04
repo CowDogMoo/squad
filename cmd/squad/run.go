@@ -83,21 +83,19 @@ func viperFromContext(cmd *cobra.Command) *viper.Viper {
 
 func newRunOptions(cmd *cobra.Command) *RunOptions {
 	v := viperFromContext(cmd)
-	flags := cmd.Flags()
-
-	agent, _ := flags.GetString("agent")
-	agentsDir, _ := flags.GetString("agents-dir")
-	workingDir, _ := flags.GetString("working-dir")
-	system, _ := flags.GetString("system")
-	output, _ := flags.GetString("out")
-	printOut, _ := flags.GetBool("print")
-	bundleOut, _ := flags.GetString("bundle-out")
-	printBundle, _ := flags.GetBool("print-bundle")
-	dryRun, _ := flags.GetBool("dry-run")
-	requireActionable, _ := flags.GetBool("require-actionable")
-	apply, _ := flags.GetBool("apply")
-	applyFallback, _ := flags.GetBool("apply-fallback")
-	mode, _ := flags.GetString("mode")
+	agent := v.GetString("run.agent")
+	agentsDir := v.GetString("run.agents_dir")
+	workingDir := v.GetString("run.working_dir")
+	system := v.GetString("run.system")
+	output := v.GetString("run.out")
+	printOut := v.GetBool("run.print")
+	bundleOut := v.GetString("run.bundle_out")
+	printBundle := v.GetBool("run.print_bundle")
+	dryRun := v.GetBool("run.dry_run")
+	requireActionable := v.GetBool("run.require_actionable")
+	apply := v.GetBool("run.apply")
+	applyFallback := v.GetBool("run.apply_fallback")
+	mode := v.GetString("run.mode")
 
 	return &RunOptions{
 		Agent:             agent,
@@ -167,6 +165,20 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 	if err := bind("provider.num_ctx", "num-ctx"); err != nil {
 		return err
 	}
+	// run-scoped flags
+	_ = bind("run.agent", "agent")
+	_ = bind("run.agents_dir", "agents-dir")
+	_ = bind("run.working_dir", "working-dir")
+	_ = bind("run.system", "system")
+	_ = bind("run.out", "out")
+	_ = bind("run.print", "print")
+	_ = bind("run.bundle_out", "bundle-out")
+	_ = bind("run.print_bundle", "print-bundle")
+	_ = bind("run.dry_run", "dry-run")
+	_ = bind("run.require_actionable", "require-actionable")
+	_ = bind("run.apply", "apply")
+	_ = bind("run.apply_fallback", "apply-fallback")
+	_ = bind("run.mode", "mode")
 	return nil
 }
 
