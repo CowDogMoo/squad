@@ -1,3 +1,4 @@
+// Package ollama provides an Ollama-backed LLM implementation.
 package ollama
 
 import (

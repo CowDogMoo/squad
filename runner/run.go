@@ -1,3 +1,4 @@
+// Package runner orchestrates agent execution workflows and model calls.
 package runner
 
 import (

@@ -1,3 +1,4 @@
+// Package agent assembles agent prompt bundles and configuration metadata.
 package agent
 
 import (

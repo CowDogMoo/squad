@@ -1,104 +1,102 @@
 # go-doc-comments
 
-Generate or improve Go documentation comments following the official Go Doc Comments specification.
+Autonomous Go documentation agent that discovers exported declarations, adds
+or improves doc comments following the official Go Doc Comments specification,
+and verifies compilation.
 
 ## Overview
 
-This agent specializes in creating high-quality Go documentation comments that follow:
+This agent specializes in creating high-quality Go documentation comments
+that follow:
 
 - Official [Go Doc Comments specification](https://go.dev/doc/comment)
 - Go community conventions and idioms
 - Modern doc comment features (Go 1.19+)
 - 80-character line length limit
 
-## Capabilities
+## Modes
 
-- **Add missing documentation** for all exported declarations
-- **Improve existing comments** to follow Go conventions
-- **Use modern features** like headings, links, lists, and code blocks
-- **Document concurrency**, error conditions, and cleanup requirements
-- **Preserve code logic** - only modifies comments
+### Normal (edit) mode
 
-## Usage
+Discovers all Go source files, catalogs missing or deficient doc comments on
+exported declarations, applies fixes, verifies compilation, and reports results.
 
 ```bash
-# Document a single file
-squad run go-doc-comments path/to/file.go
+task run:go-doc-comments
+task run:go-doc-comments TARGET_REPO=/path/to/repo
+```
 
-# Document multiple files
-squad run go-doc-comments path/to/*.go
+### Readonly (analysis) mode
 
-# Document entire package
-squad run go-doc-comments path/to/package/
+Produces a prioritized report of doc comment gaps without modifying any files.
+
+```bash
+task run:go-doc-comments-analyze
+task run:go-doc-comments-analyze TARGET_REPO=/path/to/repo
 ```
 
 ## What Gets Documented
 
 The agent documents all exported (capitalized) declarations:
 
-- **Packages** - Overview and usage
-- **Functions** - Behavior, parameters, returns
-- **Types** - Purpose and zero value behavior
-- **Methods** - Receiver methods
-- **Constants** - Purpose and value
-- **Variables** - Purpose and usage
+- **Packages** — "Package [name]" format, one per package
+- **Functions** — start with function name, describe behavior
+- **Types** — "A [Type] represents..." or "[Type] is..."
+- **Methods** — start with method name, describe behavior
+- **Constants/Variables** — purpose and usage
+- **Boolean functions** — "reports whether" pattern
+- **Error variables** — when returned and how to check
+- **Concurrency safety** — thread safety when non-obvious
+- **Cleanup requirements** — resource release needs
 
-## Documentation Standards
+## What Gets Skipped
 
-The agent follows these key principles:
+- Unexported (lowercase) declarations
+- Code logic, signatures, or behavior (only comments are modified)
+- Test files and vendor directories
+- Trivial exports where a comment would just restate the signature
+- Generated code files
+- Interface method declarations (interface doc covers these)
 
-1. **Complete sentences** starting with the declared name
-2. **User focus** - explain what, not how
-3. **Concurrency safety** - document thread safety when relevant
-4. **Error conditions** - document when errors are returned
-5. **Cleanup requirements** - document resource management
-6. **Modern syntax** - uses Go 1.19+ features appropriately
+## Hard Rules
 
-## Examples
+Key constraints that prevent common failure modes:
 
-### Before
+1. **Only modify doc comments** — never change code logic
+2. **No blank line between comment and declaration** — godoc drops these
+3. **Start with the declared name** — godoc indexes by first word
+4. **Complete sentences** — fragments are not doc comments
+5. **No redundant comments** — "Process processes the data" = skip
+6. **Proportional** — match comment length to declaration complexity
+7. **Focus on WHAT, not HOW** — no implementation details
+8. **Boolean functions use "reports whether"** — not "returns true if"
 
-```go
-type Config struct {
-    Timeout int
-}
+## Output Format
 
-func NewConfig() *Config {
-    return &Config{Timeout: 30}
-}
-```
+### Normal mode
 
-### After
+- Changes Summary
+- Doc Comments Added (with file, line, category, comment, reason)
+- Doc Comments Improved (with before/after)
+- Declarations Skipped (table with reasons)
+- Files Touched
+- Validation (`go build ./...`)
 
-```go
-// Config holds connection configuration settings.
-// A Config must not be copied after first use.
-type Config struct {
-    // Timeout specifies the maximum wait time in seconds.
-    Timeout int
-}
+### Readonly mode
 
-// NewConfig creates a Config with sensible defaults.
-// The default timeout is 30 seconds.
-func NewConfig() *Config {
-    return &Config{Timeout: 30}
-}
-```
+- Analysis Summary (files analyzed, finding counts by severity)
+- Findings (with severity, category, file, line, suggested comment)
+- Priority Order (ranked by impact)
+- Recommendations
 
 ## Reference
 
-The agent uses a comprehensive knowledge base covering:
-
-- Package, function, type, constant, and variable documentation
-- Modern doc comment features (headings, links, lists, code blocks)
-- Concurrency, error, and cleanup documentation patterns
-- Common mistakes and anti-patterns
-- Quality checklist
-
-See [references/go-documentation-standards.md](references/go-documentation-standards.md) for the complete reference.
+See [references/go-documentation-standards.md](references/go-documentation-standards.md)
+for the complete knowledge base covering syntax by declaration type, modern
+doc comment features, common mistakes, and quality checklist.
 
 ## Related Agents
 
-- **go-review** - Review Go code for best practices
-- **go-refactor** - Refactor Go code to idiomatic patterns
-- **go-tests** - Generate Go tests
+- **go-review** — review Go code for best practices
+- **go-cobra** — fix Cobra/Viper CLI violations
+- **go-tests** — increase test coverage
