@@ -30,14 +30,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cowdogmoo/squad/runlogic"
+	"github.com/cowdogmoo/squad/runner"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
 // newRunOptions creates a RunOptions by reading resolved values from flags and Viper.
-func newRunOptions(cmd *cobra.Command) *runlogic.RunOptions {
-	v := runlogic.ViperFromContext(cmd)
+func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
+	v := viperFromContext(cmd)
 	agent := v.GetString("run.agent")
 	agentsDir := v.GetString("run.agents_dir")
 	workingDir := v.GetString("run.working_dir")
@@ -52,7 +52,7 @@ func newRunOptions(cmd *cobra.Command) *runlogic.RunOptions {
 	applyFallback := v.GetBool("run.apply_fallback")
 	mode := v.GetString("run.mode")
 
-	return &runlogic.RunOptions{
+	return &runner.RunOptions{
 		Agent:             agent,
 		AgentsDir:         agentsDir,
 		WorkingDir:        workingDir,
@@ -77,6 +77,7 @@ func newRunOptions(cmd *cobra.Command) *runlogic.RunOptions {
 		ApplyFallback:     applyFallback,
 		NumCtx:            v.GetInt("provider.num_ctx"),
 		Mode:              mode,
+		ConfigAvailable:   configFromContext(cmd) != nil,
 	}
 }
 
@@ -121,19 +122,25 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 		return err
 	}
 	// run-scoped flags
-	_ = bind("run.agent", "agent")
-	_ = bind("run.agents_dir", "agents-dir")
-	_ = bind("run.working_dir", "working-dir")
-	_ = bind("run.system", "system")
-	_ = bind("run.out", "out")
-	_ = bind("run.print", "print")
-	_ = bind("run.bundle_out", "bundle-out")
-	_ = bind("run.print_bundle", "print-bundle")
-	_ = bind("run.dry_run", "dry-run")
-	_ = bind("run.require_actionable", "require-actionable")
-	_ = bind("run.apply", "apply")
-	_ = bind("run.apply_fallback", "apply-fallback")
-	_ = bind("run.mode", "mode")
+	for _, pair := range [][2]string{
+		{"run.agent", "agent"},
+		{"run.agents_dir", "agents-dir"},
+		{"run.working_dir", "working-dir"},
+		{"run.system", "system"},
+		{"run.out", "out"},
+		{"run.print", "print"},
+		{"run.bundle_out", "bundle-out"},
+		{"run.print_bundle", "print-bundle"},
+		{"run.dry_run", "dry-run"},
+		{"run.require_actionable", "require-actionable"},
+		{"run.apply", "apply"},
+		{"run.apply_fallback", "apply-fallback"},
+		{"run.mode", "mode"},
+	} {
+		if err := bind(pair[0], pair[1]); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -153,7 +160,7 @@ func newRunCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := newRunOptions(cmd)
-			return runlogic.ExecuteRun(cmd, args, opts)
+			return runner.ExecuteRun(cmd, args, opts)
 		},
 	}
 

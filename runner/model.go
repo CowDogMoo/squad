@@ -1,0 +1,182 @@
+package runner
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/ollama"
+	"github.com/cowdogmoo/squad/openairesponses"
+	"github.com/cowdogmoo/squad/tools"
+	"github.com/spf13/cobra"
+	"github.com/tmc/langchaingo/llms"
+	"github.com/tmc/langchaingo/llms/anthropic"
+	"github.com/tmc/langchaingo/llms/openai"
+)
+
+// invokeModel resolves provider settings and calls the appropriate model backend.
+func invokeModel(cmd *cobra.Command, opts *RunOptions, bundle *agent.Bundle) (string, error) {
+	provider := normalizeProvider(opts.Provider)
+	model := opts.Model
+	temperature := opts.Temperature
+	maxTokens := opts.MaxTokens
+
+	systemPrompt := bundle.System
+	if opts.System != "" {
+		systemPrompt += "\n\n## System Override\n\n" + strings.TrimSpace(opts.System) + "\n"
+	}
+
+	return callModel(cmd.Context(), opts, provider, model, systemPrompt, bundle, temperature, maxTokens)
+}
+
+// callModel dispatches the prompt to the appropriate model backend and returns the response.
+func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int) (string, error) {
+	if openairesponses.UseResponsesAPI(provider, model) {
+		return callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens)
+	}
+	return callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens)
+}
+
+// callResponsesAPI runs the prompt via the OpenAI Responses API.
+func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int) (string, error) {
+	apiKey := opts.APIKey
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+	if apiKey == "" {
+		return "", fmt.Errorf("API key required for OpenAI Responses API: use --api-key, config provider.token, or OPENAI_API_KEY env var")
+	}
+
+	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
+	modelStart := time.Now()
+	response, err := openairesponses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens)
+	if err != nil {
+		return "", fmt.Errorf("model call failed: %w", err)
+	}
+	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", time.Since(modelStart).Round(time.Millisecond), len(response))
+	return response, nil
+}
+
+// callLangChainLLM runs the prompt via a LangChain-compatible LLM.
+func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int) (string, error) {
+	llm, err := buildLLM(opts, provider, model)
+	if err != nil {
+		return "", err
+	}
+
+	callOpts := buildCallOpts(opts, provider, temperature, maxTokens)
+
+	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
+	modelStart := time.Now()
+	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, callOpts...)
+	if err != nil {
+		return "", fmt.Errorf("model call failed: %w", err)
+	}
+	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", time.Since(modelStart).Round(time.Millisecond), len(response))
+	return response, nil
+}
+
+// buildCallOpts constructs LLM call options from provider settings.
+func buildCallOpts(opts *RunOptions, provider string, temperature float64, maxTokens int) []llms.CallOption {
+	callOpts := []llms.CallOption{}
+	if temperature >= 0 {
+		callOpts = append(callOpts, llms.WithTemperature(temperature))
+	}
+	if maxTokens <= 0 {
+		return callOpts
+	}
+	if !isOpenAICompatProvider(provider) {
+		return append(callOpts, llms.WithMaxTokens(maxTokens))
+	}
+	useLegacy := provider != "openai" || opts.OpenAICompatMax
+	if useLegacy {
+		return append(callOpts, llms.WithMaxTokens(maxTokens), openai.WithLegacyMaxTokensField())
+	}
+	return append(callOpts, openai.WithMaxCompletionTokens(maxTokens))
+}
+
+// buildLLM constructs an LLM model instance based on the provider and configuration.
+func buildLLM(opts *RunOptions, provider, model string) (llms.Model, error) {
+	switch provider {
+	case "ollama":
+		return buildNativeOllamaLLM(opts, model), nil
+	case "openai", "":
+		return buildOpenAICompatLLM(opts, provider, model)
+	case "anthropic":
+		return buildAnthropicLLM(opts, model)
+	default:
+		return nil, fmt.Errorf("provider not implemented: %s", provider)
+	}
+}
+
+func buildOpenAICompatLLM(opts *RunOptions, provider, model string) (llms.Model, error) {
+	oaiOpts := []openai.Option{}
+	if model != "" {
+		oaiOpts = append(oaiOpts, openai.WithModel(model))
+	}
+
+	if opts.BaseURL != "" {
+		oaiOpts = append(oaiOpts, openai.WithBaseURL(opts.BaseURL))
+	}
+
+	if opts.APIKey != "" {
+		oaiOpts = append(oaiOpts, openai.WithToken(opts.APIKey))
+	}
+
+	if provider == "openai" || provider == "" {
+		if opts.Org != "" {
+			oaiOpts = append(oaiOpts, openai.WithOrganization(opts.Org))
+		}
+
+		if opts.APIVersion != "" {
+			oaiOpts = append(oaiOpts, openai.WithAPIVersion(opts.APIVersion))
+		}
+
+		if apiType := strings.ToLower(opts.APIType); apiType == "azure" {
+			oaiOpts = append(oaiOpts, openai.WithAPIType(openai.APITypeAzure))
+		}
+	}
+
+	return openai.New(oaiOpts...)
+}
+
+func buildAnthropicLLM(opts *RunOptions, model string) (llms.Model, error) {
+	aOpts := []anthropic.Option{}
+	if model != "" {
+		aOpts = append(aOpts, anthropic.WithModel(model))
+	}
+
+	if opts.APIKey != "" {
+		aOpts = append(aOpts, anthropic.WithToken(opts.APIKey))
+	}
+
+	if opts.BaseURL != "" {
+		aOpts = append(aOpts, anthropic.WithBaseURL(opts.BaseURL))
+	}
+
+	return anthropic.New(aOpts...)
+}
+
+func normalizeProvider(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
+	baseURL := opts.BaseURL
+	if baseURL == "" {
+		baseURL = "http://localhost:11434"
+	}
+	numCtx := opts.NumCtx
+	if numCtx <= 0 {
+		numCtx = 32768
+	}
+	return ollama.New(baseURL, model, numCtx)
+}
+
+func isOpenAICompatProvider(provider string) bool {
+	return provider == "" || provider == "openai"
+}

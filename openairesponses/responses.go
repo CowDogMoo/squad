@@ -117,7 +117,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *responses.Respons
 		}
 
 		logging.InfoContext(ctx, "responses API: iteration %d with %d tool call(s)", i+1, len(calls))
-		if checkRepeat(&repeat, calls, ctx) {
+		if checkRepeat(ctx, &repeat, calls) {
 			break
 		}
 
@@ -147,7 +147,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *responses.Respons
 	return resp, text, nil
 }
 
-func checkRepeat(repeat *tools.RepeatTracker, calls []FunctionCall, ctx context.Context) bool {
+func checkRepeat(ctx context.Context, repeat *tools.RepeatTracker, calls []FunctionCall) bool {
 	fakeToolCalls := make([]llms.ToolCall, len(calls))
 	for j, c := range calls {
 		fakeToolCalls[j] = llms.ToolCall{

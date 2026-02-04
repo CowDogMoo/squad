@@ -35,9 +35,8 @@ import (
 )
 
 var (
-	logger     *CustomLogger
-	loggerOnce sync.Once
-	loggerMu   sync.RWMutex
+	logger   *CustomLogger
+	loggerMu sync.RWMutex
 )
 
 type LogLevel int
@@ -175,7 +174,7 @@ func (l *CustomLogger) Error(firstArg interface{}, args ...interface{}) {
 		// Treat error as a value, not a format string
 		format = v.Error()
 		if len(args) > 0 {
-			format = fmt.Sprintf("%s %v", format, args)
+			format = fmt.Sprintf("%s %v", format, fmt.Sprint(args...))
 		}
 	case string:
 		format = v
@@ -234,8 +233,10 @@ func Initialize(logLevelStr, outputFormat string, quiet, verbose bool) error {
 	return nil
 }
 
-func ensureLogger() error {
-	loggerOnce.Do(func() {
+func ensureLogger() {
+	loggerMu.Lock()
+	defer loggerMu.Unlock()
+	if logger == nil {
 		logger = &CustomLogger{
 			LogLevel:      slog.LevelInfo,
 			OutputType:    PlainOutput,
@@ -243,15 +244,11 @@ func ensureLogger() error {
 			ConsoleWriter: os.Stderr,
 			Verbose:       false,
 		}
-	})
-	return nil
+	}
 }
 
 func logGlobal(level LogLevel, message string, args ...interface{}) {
-	if err := ensureLogger(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
-		return
-	}
+	ensureLogger()
 	loggerMu.RLock()
 	defer loggerMu.RUnlock()
 	logger.log(level, message, args...)
@@ -262,10 +259,7 @@ func Info(message string, args ...interface{}) {
 }
 
 func Output(data interface{}) {
-	if err := ensureLogger(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
-		return
-	}
+	ensureLogger()
 	loggerMu.RLock()
 	defer loggerMu.RUnlock()
 	logger.Output(data)
@@ -276,11 +270,7 @@ func Warn(message string, args ...interface{}) {
 }
 
 func Error(firstArg interface{}, args ...interface{}) {
-	if err := ensureLogger(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
-		return
-	}
-
+	ensureLogger()
 	loggerMu.RLock()
 	defer loggerMu.RUnlock()
 	logger.Error(firstArg, args...)
@@ -291,29 +281,21 @@ func Debug(message string, args ...interface{}) {
 }
 
 func SetQuiet(quiet bool) {
-	if err := ensureLogger(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
-		return
-	}
+	ensureLogger()
 	loggerMu.Lock()
 	defer loggerMu.Unlock()
 	logger.SetQuiet(quiet)
 }
 
 func IsQuiet() bool {
-	if err := ensureLogger(); err != nil {
-		return false
-	}
+	ensureLogger()
 	loggerMu.RLock()
 	defer loggerMu.RUnlock()
 	return logger.Quiet
 }
 
 func SetVerbose(verbose bool) {
-	if err := ensureLogger(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
-		return
-	}
+	ensureLogger()
 	loggerMu.Lock()
 	defer loggerMu.Unlock()
 	logger.SetVerbose(verbose)
@@ -331,9 +313,7 @@ func WithLogger(ctx context.Context, l *CustomLogger) context.Context {
 
 func FromContext(ctx context.Context) *CustomLogger {
 	if ctx == nil {
-		if err := ensureLogger(); err != nil {
-			return NewCustomLogger(slog.LevelInfo)
-		}
+		ensureLogger()
 		loggerMu.RLock()
 		defer loggerMu.RUnlock()
 		return logger
@@ -343,9 +323,7 @@ func FromContext(ctx context.Context) *CustomLogger {
 		return l
 	}
 
-	if err := ensureLogger(); err != nil {
-		return NewCustomLogger(slog.LevelInfo)
-	}
+	ensureLogger()
 	loggerMu.RLock()
 	defer loggerMu.RUnlock()
 	return logger

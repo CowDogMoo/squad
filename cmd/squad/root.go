@@ -33,7 +33,6 @@ import (
 
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
-	"github.com/cowdogmoo/squad/runlogic"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -161,8 +160,8 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	cfg.Model.MaxTokens = v.GetInt("model.max_tokens")
 
 	logger := logging.FromContext(cmd.Context())
-	ctx := runlogic.WithConfig(cmd.Context(), cfg)
-	ctx = runlogic.WithViper(ctx, v)
+	ctx := withConfig(cmd.Context(), cfg)
+	ctx = withViper(ctx, v)
 	ctx = logging.WithLogger(ctx, logger)
 	cmd.SetContext(ctx)
 

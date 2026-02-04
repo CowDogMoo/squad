@@ -450,20 +450,20 @@ tasks:
         fi
         # Phase B validation: ensure real extraction occurred (not a stub)
         if [ "{{.SCOPE_MODE}}" = "phase-extract" ]; then
-          if [ ! -d runlogic ]; then
-            echo "ERROR: Phase B check failed — expected runlogic/ package to exist."
+          if [ ! -d runner ]; then
+            echo "ERROR: Phase B check failed — expected runner/ package to exist."
             exit 1
           fi
-          if [ ! -s runlogic/run.go ]; then
-            echo "ERROR: Phase B check failed — runlogic/run.go is missing."
+          if [ ! -s runner/run.go ]; then
+            echo "ERROR: Phase B check failed — runner/run.go is missing."
             exit 1
           fi
-          if rg -n "TODO: full content omitted" runlogic/run.go >/dev/null 2>&1; then
-            echo "ERROR: Phase B check failed — runlogic/run.go is a stub."
+          if rg -n "TODO: full content omitted" runner/run.go >/dev/null 2>&1; then
+            echo "ERROR: Phase B check failed — runner/run.go is a stub."
             exit 1
           fi
-          if ! rg -n "func ExecuteRun\\(" runlogic/run.go >/dev/null 2>&1; then
-            echo "ERROR: Phase B check failed — runlogic.ExecuteRun not found."
+          if ! rg -n "func ExecuteRun\\(" runner/run.go >/dev/null 2>&1; then
+            echo "ERROR: Phase B check failed — runner.ExecuteRun not found."
             exit 1
           fi
           if rg -n "func (executeRun|prepareBundle|invokeModel|applyUnifiedDiff|extractUnifiedDiff|validateActionableResponse)" cmd/squad/run.go >/dev/null 2>&1; then
@@ -537,11 +537,11 @@ tasks:
           SCOPE_MODE: phase-extract
           SCOPE_PROMPT: "Focus ONLY on business logic extraction from cmd/squad/run.go.
 
-        EXACT PATH REQUIREMENT: You MUST create the file runlogic/run.go (relative to repo root). The package declaration MUST be 'package runlogic'. Do NOT use pkg/runlogic, internal/runlogic, runner/, or any other path. The ONLY acceptable path is runlogic/run.go.
+        EXACT PATH REQUIREMENT: You MUST create the file runner/run.go (relative to repo root). The package declaration MUST be 'package runner'. Do NOT use pkg/runner, internal/runner, runner/, or any other path. The ONLY acceptable path is runner/run.go.
 
         Step 1: Read cmd/squad/run.go in full.
         Step 2: Read go.mod to get the module path.
-        Step 3: Use the Write tool to create runlogic/run.go with package runlogic
+        Step 3: Use the Write tool to create runner/run.go with package runner
         and the COMPLETE bodies of these functions (export each — capitalize first letter):
         executeRun, prepareBundle, invokeModel, handleResponse, callModel,
         callResponsesAPI, callLangChainLLM, buildCallOpts, buildLLM,
@@ -551,7 +551,7 @@ tasks:
         extractUnifiedDiff, looksLikeDiff, applyUnifiedDiff,
         applyWithGit, applyWithPatch.
         Copy full function bodies — no stubs, no TODOs, no abbreviations.
-        Step 4: Edit cmd/squad/run.go to remove those function definitions and update RunE to call runlogic.ExecuteRun. Add the runlogic import. Remove unused imports.
+        Step 4: Edit cmd/squad/run.go to remove those function definitions and update RunE to call runner.ExecuteRun. Add the runner import. Remove unused imports.
         Step 5: Run go build ./... and fix any errors.
 
         Global flag state is already fixed — do NOT touch it. IGNORE all other findings. Skip them with reason 'out of scope for Phase B'. Do NOT use internal/ packages."
