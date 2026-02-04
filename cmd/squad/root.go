@@ -33,29 +33,21 @@ import (
 
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/runlogic"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-// Context key types for storing config and viper instance.
-type configKeyType struct{}
-type viperKeyType struct{}
-
-var (
-	configKey = configKeyType{}
-	viperKey  = viperKeyType{}
-)
-
-var rootCmd = &cobra.Command{
-	Use:   "squad",
-	Short: "squad - model-agnostic agent CLI",
-	Long: `squad is a model-agnostic agent CLI built on LangChainGo.
+func NewRootCmd() *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:   "squad",
+		Short: "squad - model-agnostic agent CLI",
+		Long: `squad is a model-agnostic agent CLI built on LangChainGo.
 It provides a clean config + logging foundation for agent workflows.`,
-	Version:           version,
-	PersistentPreRunE: initConfig,
-}
+		Version:           version,
+		PersistentPreRunE: initConfig,
+	}
 
-func init() {
 	rootCmd.PersistentFlags().StringP("config", "c", "", "Config file (default is $HOME/.config/squad/config.yaml)")
 	rootCmd.PersistentFlags().String("log-level", "", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().String("log-format", "", "Log format (text, json, color)")
@@ -66,28 +58,24 @@ func init() {
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(completionCmd)
+
+	return rootCmd
 }
 
 // Execute runs the root command.
 func Execute() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	rootCmd := NewRootCmd()
 	rootCmd.SetContext(ctx)
 	return rootCmd.Execute()
-}
-
-func configFromContext(cmd *cobra.Command) *config.Config {
-	if cfg, ok := cmd.Context().Value(configKey).(*config.Config); ok {
-		return cfg
-	}
-	return nil
 }
 
 func initConfig(cmd *cobra.Command, _ []string) error {
 	var cfg *config.Config
 	var err error
-	// Resolve config file path via Viper to avoid global mutable flag state
-	configPath := viper.GetString("config")
+	// Resolve config file path directly from flags to avoid global mutable flag state
+	configPath, _ := cmd.Root().PersistentFlags().GetString("config")
 	if configPath != "" {
 		cfg, err = config.LoadFromPath(configPath)
 	} else {
@@ -173,8 +161,8 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	cfg.Model.MaxTokens = v.GetInt("model.max_tokens")
 
 	logger := logging.FromContext(cmd.Context())
-	ctx := context.WithValue(cmd.Context(), configKey, cfg)
-	ctx = context.WithValue(ctx, viperKey, v)
+	ctx := runlogic.WithConfig(cmd.Context(), cfg)
+	ctx = runlogic.WithViper(ctx, v)
 	ctx = logging.WithLogger(ctx, logger)
 	cmd.SetContext(ctx)
 

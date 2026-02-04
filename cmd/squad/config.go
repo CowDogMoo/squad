@@ -30,6 +30,7 @@ import (
 
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/runlogic"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
@@ -151,7 +152,7 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	cfg := configFromContext(cmd)
+	cfg := runlogic.ConfigFromContext(cmd)
 	if cfg == nil {
 		return fmt.Errorf("config not available in context")
 	}
@@ -175,7 +176,7 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 }
 
 func runConfigShow(cmd *cobra.Command, args []string) error {
-	cfg := configFromContext(cmd)
+	cfg := runlogic.ConfigFromContext(cmd)
 	if cfg == nil {
 		return fmt.Errorf("config not available in context")
 	}
@@ -252,7 +253,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 }
 
 func runConfigGet(cmd *cobra.Command, args []string) error {
-	cfg := configFromContext(cmd)
+	cfg := runlogic.ConfigFromContext(cmd)
 	if cfg == nil {
 		return fmt.Errorf("config not available in context")
 	}
