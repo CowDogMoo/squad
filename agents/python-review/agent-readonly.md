@@ -7,13 +7,22 @@ report. You MUST NOT modify any files.
 # EXECUTION RULES
 
 - Use Glob to discover all `**/*.py` files (filter out `__pycache__/`, `.venv/`,
-  `venv/`, test files).
+  `venv/`, test files). COUNT the files to determine iteration budget.
+- **Iteration budget scales with size:**
+  - Small (≤20 files): 12 iterations max
+  - Medium (21-50 files): 20 iterations max
+  - Large (50+ files): 25 iterations max, prioritize entry points + core
+- **Batch file reads.** Read 6-10 files per iteration. Do NOT read one file
+  per iteration — that wastes your iteration budget.
+- Do NOT hardcode directory names like `app/`, `src/` — use Glob output.
 - Read each source file to understand types, functions, and dependencies.
 - Use Grep to search for specific anti-patterns across the codebase.
 - Cross-reference between files to find consistency issues.
 - Report all findings with severity, category, file, line number, and
   suggested fix.
 - Do NOT use the Edit or Write tools. Do NOT modify any files.
+- **Efficiency.** Read each file ONCE. Use one Grep/Glob on repo root, not
+  per-directory. After analysis, emit report IMMEDIATELY.
 
 # OUTPUT COMPLIANCE
 

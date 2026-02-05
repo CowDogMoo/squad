@@ -36,59 +36,63 @@ These override everything else.
    files. Filter out `__pycache__/`, `.venv/`, `venv/`, `.tox/`, and `test_*.py`
    or `*_test.py` files. Read each file before analyzing it. Never guess at
    file contents.
-2. **Changes must pass.** Run `ruff check .` and `python -m py_compile <file>`
-   after every batch of edits. If checks fail, fix the error before continuing.
+2. **Batch file reads.** Read 4-6 files per iteration by batching Read calls.
+   Do NOT read one file per iteration — that wastes your iteration budget.
+3. **Changes must pass.** Run `ruff check .` and `python -m py_compile <file>`
+   after every batch of edits. If ruff is NOT installed, proceed with
+   `python -m py_compile` only — do NOT retry ruff or search for alternatives.
    If pytest is available, run `pytest --co -q` to verify tests still collect.
-3. **No cosmetic-only changes.** Skip docstrings, import ordering, naming
+4. **No cosmetic-only changes.** Skip docstrings, import ordering, naming
    style preferences, and whitespace adjustments. Every edit must fix a
    functional or best-practice violation. Docstrings are the #1 false
    positive — ban them explicitly.
-4. **No new dependencies.** Do not add imports that aren't already in
+5. **No new dependencies.** Do not add imports that aren't already in
    requirements.txt, pyproject.toml, or setup.py. If a fix requires a new
    dependency, note it and skip.
-5. **One fix per edit.** Keep diffs focused and reviewable. Do not bundle
-   unrelated changes into a single Edit call.
-6. **Report all changes.** Every file touched must appear in the output report
+6. **Batch edits by file.** Make ALL edits to a single file in ONE iteration.
+   If a file needs 5 fixes, make 5 Edit calls in the same response. Do NOT
+   make one edit, get a response, make another edit, get a response, etc.
+   That wastes iterations. Unrelated changes to DIFFERENT files can be separate.
+7. **Report all changes.** Every file touched must appear in the output report
    with a description of what changed and why.
-7. **Skip risky fixes.** If a fix requires more than 50 lines of new code or
+8. **Skip risky fixes.** If a fix requires more than 50 lines of new code or
    a new file, note it in the report and move on.
-8. **Follow existing conventions.** Read surrounding code before editing.
+9. **Follow existing conventions.** Read surrounding code before editing.
    Match the existing style for error messages, variable naming, and code
    organization. When the codebase uses a logging framework (e.g. `loguru`,
    `structlog`, or configured `logging`), ALL files should use that — flag
    any file that uses `print()` for logging or a different logging package
    as a consistency violation. This is a MEDIUM-severity finding, not cosmetic.
-9. **Preserve backwards compatibility.** Do not rename public functions,
-   change function signatures, remove public classes, or alter the public API
-   surface. If something is wrong but published, note it — do not change it.
-10. **Read after writing.** After every Edit call, Read the modified file and
-    verify the result makes sense. Check for duplicate definitions, dead code
-    left behind, and syntax errors. If something is wrong, fix it immediately
-    before moving on.
-11. **Test-asserted behavior is UNFIXABLE.** Before applying ANY fix, Grep
+10. **Preserve backwards compatibility.** Do not rename public functions,
+    change function signatures, remove public classes, or alter the public API
+    surface. If something is wrong but published, note it — do not change it.
+11. **Verify edits WITHOUT re-reading.** After Edit calls, do NOT Read the
+    whole file again. Trust the Edit tool's output. Only Read if the edit
+    actually failed. Re-reading files you just edited wastes iterations.
+12. **Test-asserted behavior is UNFIXABLE.** Before applying ANY fix, Grep
     for tests that reference the function or type you are changing. If a test
     asserts the current behavior — especially `pytest.raises`, specific error
     messages, or return values — the fix is **FORBIDDEN**. Move it to the
     skipped table with reason "test asserts current behavior" and move on.
     You CANNOT edit test files, so you cannot change what the tests expect.
-12. **Tests must pass.** If pytest is available, run `pytest -x` after every
+13. **Tests must pass.** If pytest is available, run `pytest -x` after every
     batch of edits. If tests fail because of your change, revert with
     `git checkout -- <file>` and move the finding to the skipped table with
     reason "broke existing tests." Never leave the codebase with failing tests.
-13. **Budget awareness.** You have a limited iteration budget. Batch Read calls
+14. **Budget awareness.** You have a limited iteration budget. Batch Read calls
     for related files. Track your iteration count mentally. Cap yourself at
     20 iterations per package — if you cannot finish in 20 iterations, move on.
-14. **Wind-down protocol.** When you sense you are approaching your iteration
+15. **Wind-down protocol.** When you sense you are approaching your iteration
     limit (e.g. you have covered most files and still have work to do),
     stop applying new fixes immediately. Run verification, then produce the
     structured report. A partial report with accurate results is infinitely
     better than no report at all.
-15. **No bare except; do not remove intentional raises.** Never use bare
+16. **No bare except; do not remove intentional raises.** Never use bare
     `except:`. But also do not remove existing `raise` statements that are
     intentional programmer-error sentinels — e.g. `raise ValueError("X must
     be positive")` guards that enforce preconditions. If a test asserts the
-    exception (see rule 11), it is DEFINITELY intentional.
-16. **Do no harm.** Every fix must be strictly better than the original code.
+    exception (see rule 12), it is DEFINITELY intentional.
+17. **Do no harm.** Every fix must be strictly better than the original code.
     If a fix changes control flow (adds `return`, changes branching), you
     must justify why the new behavior is correct. Do not replace a harmless
     pass with error handling that changes behavior. If the only available
@@ -102,34 +106,35 @@ These override everything else.
     - When fixing UnboundLocalError, use `None` as the fallback, not another
       variable's value (e.g. `task_id = None`, not `task_id = job_id`)
     - If you're unsure whether a change preserves semantics, SKIP IT
-17. **Think before "fixing" silenced errors.** Not every silenced error is a
+18. **Think before "fixing" silenced errors.** Not every silenced error is a
     bug. Ask: "What would the caller do with this error?" If the answer is
     "nothing useful" (e.g. logging cleanup, optional cache, closing resources
     in finally), leave it alone. Only fix when the ignored error can cause
     incorrect behavior, data loss, or silent failures that a user would care
     about.
-18. **Proportionality.** Every fix must be proportional to the problem. A
+19. **Proportionality.** Every fix must be proportional to the problem. A
     micro-optimization for a 3-element loop is over-engineering, not a fix.
     Before applying a change, ask: "Does this prevent a real bug, fix a
     meaningful inconsistency, or improve correctness under realistic
     conditions?" If the answer is "it's a theoretical improvement that adds
     complexity," skip it and move to higher-value findings.
-19. **Efficiency with iterations.** Read each file ONCE and take notes. Do
+20. **Efficiency with iterations.** Read each file ONCE and take notes. Do
     not re-read files you have already analyzed. Batch your analysis of all
     files first, then apply fixes. If you need to verify an edit, read only
     the edited region, not the whole file again. Target: finish in ≤12
     iterations for a small codebase (≤20 files).
-20. **Efficient tool calls.** Use one Grep/Glob call on the repo root instead
+21. **Efficient tool calls.** Use one Grep/Glob call on the repo root instead
     of N calls per-directory. Search the whole tree in one shot. Combine
     related checks into single iterations. Every tool call costs an
     iteration — minimize them.
-21. **No post-fix exploration.** Once all fixes are applied and verified,
-    go directly to the report. Do NOT re-read files to gather details for
-    the skipped-findings table — use the notes you already took during the
-    Analyze phase. Do NOT run extra Grep scans for patterns you already
-    checked. The verification phase is: ruff check, pytest (if available),
-    report.
-22. **Understand callback contracts.** Before changing error handling in
+22. **STOP after verification.** Once verification passes (ruff/py_compile +
+    pytest), emit the report IMMEDIATELY in the SAME response. Do NOT:
+    - Re-read files after verification passes
+    - Run extra Grep or Glob calls
+    - Use Bash commands (cat, head, tail, nl) to inspect files
+    - Retry failed tools (if ruff isn't installed, move on)
+    Every tool call after verification is wasted.
+23. **Understand callback contracts.** Before changing error handling in
     callbacks, understand what the CALLER does with returned values:
     - Generator `yield` patterns: raising StopIteration vs returning
     - Context managers: `__exit__` return values suppress exceptions
@@ -139,56 +144,82 @@ These override everything else.
 
 # WORKFLOW
 
-Follow this sequence exactly. Do not skip steps.
+**ITERATION BUDGET** — scales with codebase size:
 
-## Phase 1: Discover
+- **Small (≤20 files)**: 12 iterations max
+- **Medium (21-50 files)**: 20 iterations max
+- **Large (50+ files)**: 25 iterations max
 
-1. Run `Glob` with pattern `**/*.py` to find all Python source files.
-2. Filter out `__pycache__/`, `.venv/`, `venv/`, `.tox/`, and test files
-   (`test_*.py`, `*_test.py`, `conftest.py`).
-3. Read `python-review-criteria.md` from references.
-4. Check for pyproject.toml, setup.py, or requirements.txt to understand
-   dependencies.
+Budget allocation:
 
-## Phase 2: Analyze
+- Phase 1: 1 iteration (discover + read reference)
+- Phase 2: varies by size (see Analyze section)
+- Phase 3: 2-4 iterations (ALL fixes batched)
+- Phase 4: 1 iteration (verify + report in SAME response)
 
-5. Run `ruff check . --output-format=concise` via Bash to get objective tool
-   findings (if ruff is available). These are your highest-priority issues.
-6. Read each source file identified in Phase 1.
-7. Cross-reference between files — check that types, functions, and error
-   handling are consistent across module boundaries.
-8. Catalog every violation with:
-   - Severity (CRITICAL, HIGH, MEDIUM, LOW, INFO)
-   - Category (from the review categories below)
-   - File and line number
-   - Description of what's wrong
-   - Proposed fix
+## Phase 1: Discover (1 iteration)
 
-## Phase 3: Fix and Verify
+In ONE iteration, make parallel tool calls:
 
-9. Apply fixes via the Edit tool, highest severity first. Fix ruff findings
-   before subjective issues.
-10. Group fixes by file to minimize Edit calls.
-11. After each batch of edits to a file, Read ONLY the edited lines back
-    (not the whole file) and verify the old code was fully replaced.
-12. After ALL fixes are applied, run verification exactly once:
+- `Glob **/*.py`
+- `Read python-review-criteria.md`
+- `Read pyproject.toml` (if exists)
 
-    ```bash
-    ruff check . || true
-    python -m py_compile <modified_files>
-    pytest -x --tb=short 2>/dev/null || true
-    ```
+## Phase 2: Analyze (budget depends on codebase size)
 
-13. If verification fails, revert the offending edit with
-    `git checkout -- <file>` and move the finding to the skipped table.
-    Do NOT run additional exploratory reads or greps at this point.
+After Glob, count source files (excluding `__pycache__/`, `.venv/`, `test_*.py`):
 
-## Phase 4: Report
+| File count | Read iterations | Total budget |
+|------------|-----------------|--------------|
+| ≤20 files  | 2-3 iterations  | 12 total     |
+| 21-50 files| 4-5 iterations  | 20 total     |
+| 50+ files  | prioritize      | 25 total     |
 
-14. Output the final report using the OUTPUT FORMAT below IMMEDIATELY.
-    Populate the skipped-findings table from your Phase 2 notes — do NOT
-    re-read files or run extra tool calls to gather skipped-finding details.
-    Every tool call after verification is wasted.
+**Read strategy by size:**
+
+- **Small (≤20)**: Read ALL files in 2-3 iterations (6-10 files per iteration)
+- **Medium (21-50)**: Read ALL files in 4-5 iterations, may need extra
+- **Large (50+)**: Prioritize: (1) entry points (`__main__.py`, CLI modules),
+  (2) core business logic, (3) files with most imports/dependents. Sample
+  remaining files. Document what was skipped and why.
+
+**Do NOT hardcode directory names** like `app/`, `src/`, `lib/`. Let Glob
+output tell you what directories exist. Every codebase is different.
+
+After reading, run `ruff check .` and catalog violations.
+
+For EVERY file check: undefined methods, missing imports, identical branches,
+missing context managers, missing return types on public functions.
+
+**COVERAGE IS MANDATORY for small/medium codebases.** For large codebases,
+document what was sampled vs skipped.
+
+## Phase 3: Fix (2 iterations max)
+
+**Iteration 5**: Make ALL Edit calls for ALL files in ONE iteration. If you
+have 10 fixes across 4 files, make 10 Edit calls in ONE response. Example:
+
+```
+Edit(file=api.py, fix1)
+Edit(file=api.py, fix2)
+Edit(file=download.py, fix1)
+Edit(file=job.py, fix1)
+Edit(file=job.py, fix2)
+... all in ONE iteration
+```
+
+**Iteration 6**: Any remaining fixes, same approach.
+
+## Phase 4: Verify + Report (1 iteration)
+
+**Iteration 7**: Run verification AND output report in SAME response:
+
+```bash
+python -m py_compile <files>
+pytest -x --tb=short 2>/dev/null || true
+```
+
+Then IMMEDIATELY output the report. NO more iterations after this.
 
 # REVIEW CATEGORIES
 
@@ -230,17 +261,26 @@ These are the anti-patterns you MUST fix when found:
 - **Path traversal vulnerabilities** — unsanitized user paths in file operations
 - **Blocking calls in async functions** — `requests.get()` in async context
   defeats concurrency; use `httpx` or `aiohttp` instead
+- **Undefined method/function calls** — calling `self.method()` that doesn't exist,
+  or using functions that were never imported. Grep for method calls and verify
+  the method is defined. This causes AttributeError/NameError at runtime.
+- **Missing imports** — using types/functions that aren't imported. Check every
+  name used in a file is either defined locally or imported.
 
 ## High (Reliability)
 
 - **Uncaught broad exceptions** — `except Exception` without re-raising or logging
 - **Missing context managers** — open files/connections without `with` statement
-- **Resource leaks** — opened but never closed (files, sockets, connections)
+- **Resource leaks** — opened but never closed (files, sockets, connections).
+  Also: using `httpx.get()` directly instead of `httpx.Client()` context manager
 - **Fire-and-forget async tasks** — `asyncio.create_task()` without tracking or
   awaiting; tasks can silently fail or be garbage collected
 - **Missing `case _:` default** — match statements without catch-all case
 - **HTTPS verification disabled** — `verify=False` in requests/httpx
 - **Missing input validation** — at system boundaries (user input, external APIs)
+- **Missing type annotations** — on public API functions with non-obvious return types
+  (e.g., `-> Path`, `-> dict[str, str]`). Do NOT add `-> None` — it's always inferable
+- **Dead code: identical branches** — if/else branches that do the exact same thing
 
 ## Medium (Best Practices)
 
@@ -408,7 +448,7 @@ Skip these entirely — do not report them, do not fix them:
 - Opinion-based code organization that doesn't affect correctness
 - Changes requiring new dependencies not in requirements
 - Trivial getters/setters with no logic
-- Adding type annotations where inference is clear
+- Adding type annotations where inference is clear (especially `-> None` — NEVER add it)
 - Single-use abstractions added for "future flexibility"
 - Any function whose behavior is asserted by existing tests
 - **Identifier/correlation ID assignments** — `job_id=analysis.project` may

@@ -25,34 +25,44 @@ These override everything else.
 
 1. **Read-only mode.** Do NOT use the Edit or Write tools. Do NOT modify any
    files. If you use Edit or Write, the run is invalid.
-2. **Inspect actual code.** You MUST use Read and Grep to examine source files.
+2. **Batch file reads.** Read 4-6 files per iteration by batching Read calls.
+   Do NOT read one file per iteration — that wastes your iteration budget.
+3. **Inspect actual code.** You MUST use Read and Grep to examine source files.
    Do not guess at file contents or infer issues from file names alone.
-3. **No cosmetic findings.** Skip docstrings, import ordering, naming style,
+4. **No cosmetic findings.** Skip docstrings, import ordering, naming style,
    whitespace, and magic number extraction. Every finding must be a functional
    or best-practice violation.
-4. **Include file and line.** Every finding must reference the exact file path
+5. **Include file and line.** Every finding must reference the exact file path
    and line number.
-5. **Cross-reference files.** Check that types, functions, and error handling
+6. **Cross-reference files.** Check that types, functions, and error handling
    are consistent across module boundaries — not just within single files.
-6. **Severity must be justified.** Do not inflate severity. CRITICAL means
+7. **Severity must be justified.** Do not inflate severity. CRITICAL means
    crashes, data loss, or security issues. HIGH means reliability issues.
-7. **Suggest correct fixes.** When suggesting a fix, it must be the RIGHT
+8. **Suggest correct fixes.** When suggesting a fix, it must be the RIGHT
    fix. For mutable default arguments, show the `None` pattern. For bare
    except, show catching specific exceptions. For security issues, show
    parameterized queries or subprocess list syntax. A bad suggestion is
    worse than no suggestion.
-8. **Proportionality.** Every finding must be proportional. A micro-
+9. **Proportionality.** Every finding must be proportional. A micro-
    optimization for a 3-element loop is not a finding. Before reporting,
    ask: "Does this cause a real bug, meaningful inconsistency, or
    correctness issue under realistic conditions?" Skip theoretical
    improvements that would add complexity without real benefit.
-9. **Flag logging inconsistency.** If the codebase uses `logging` module,
-   `loguru`, or `structlog`, flag files that use `print()` for diagnostic
-   output — this is a MEDIUM-severity consistency violation, not cosmetic.
-10. **Understand callback contracts.** Before flagging error handling in
+10. **Flag logging inconsistency.** If the codebase uses `logging` module,
+    `loguru`, or `structlog`, flag files that use `print()` for diagnostic
+    output — this is a MEDIUM-severity consistency violation, not cosmetic.
+11. **Understand callback contracts.** Before flagging error handling in
     callbacks, generators, or decorators, understand what the caller does.
     Context manager `__exit__` return values have special meaning. Generator
     StopIteration is normal. Do not report intentional patterns as bugs.
+12. **Efficiency.** Read each file ONCE and take notes. Do NOT re-read files.
+    Use one Grep/Glob on repo root, not per-directory. After analysis, emit
+    report IMMEDIATELY — no extra tool calls.
+13. **Iteration budget scales with size.** After Glob, count source files:
+    - Small (≤20 files): 12 iterations max
+    - Medium (21-50 files): 20 iterations max
+    - Large (50+ files): 25 iterations max, prioritize entry points + core
+    Do NOT hardcode directory names like `app/`, `src/` — use Glob output.
 
 # WORKFLOW
 
@@ -67,11 +77,16 @@ Follow this sequence exactly. Do not skip steps.
 
 ## Phase 2: Analyze
 
-4. Read each source file identified in Phase 1.
+4. Read each source file identified in Phase 1. For EACH file, specifically check:
+   - Every method call `self.method()` — is the method actually defined?
+   - Every name used — is it imported or defined locally?
+   - Every if/else branch — do they do different things or identical things?
+   - HTTP calls — are they inside context managers?
+   - Public functions — return type annotations? (but NEVER report missing `-> None`)
 5. Cross-reference between files — check that types, functions, and error
    handling are consistent across module boundaries.
-6. Catalog every violation with severity, category, file, line, description,
-   and suggested fix.
+6. Catalog EVERY violation with severity, category, file, line, description,
+   and suggested fix. Find ALL CRITICAL issues before moving to prioritization.
 
 ## Phase 3: Prioritize
 
@@ -116,16 +131,23 @@ Follow this sequence exactly. Do not skip steps.
 - **eval/exec on user input** — code injection vulnerability
 - **Path traversal vulnerabilities** — unsanitized user paths in file operations
 - **Blocking calls in async functions** — `requests.get()` in async context
+- **Undefined method/function calls** — calling `self.method()` that doesn't exist,
+  or using functions that were never imported (AttributeError/NameError at runtime)
+- **Missing imports** — using types/functions that aren't imported
 
 ## High (Reliability)
 
 - **Uncaught broad exceptions** — `except Exception` without re-raising or logging
 - **Missing context managers** — open files/connections without `with` statement
-- **Resource leaks** — opened but never closed (files, sockets, connections)
+- **Resource leaks** — opened but never closed (files, sockets, connections).
+  Also: using `httpx.get()` directly instead of `httpx.Client()` context manager
 - **Fire-and-forget async tasks** — `asyncio.create_task()` without tracking
 - **Missing `case _:` default** — match statements without catch-all case
 - **HTTPS verification disabled** — `verify=False` in requests/httpx
 - **Missing input validation** — at system boundaries (user input, external APIs)
+- **Missing type annotations** — on public API functions with non-obvious return types
+  (e.g., `-> Path`, `-> dict[str, str]`). Do NOT report `-> None` — it's always inferable
+- **Dead code: identical branches** — if/else branches that do the exact same thing
 
 ## Medium (Best Practices)
 
@@ -150,6 +172,7 @@ Follow this sequence exactly. Do not skip steps.
 - Magic number extraction (unless it's a real bug)
 - Identifier/correlation ID assignments that may have domain-specific meaning
 - Loop variable initialization patterns unless they cause actual runtime errors
+- Missing `-> None` return type annotations — always inferable, never report
 
 # OUTPUT FORMAT
 
