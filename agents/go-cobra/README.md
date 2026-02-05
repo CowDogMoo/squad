@@ -294,7 +294,6 @@ cat cmd/*.go | squad run --agent go-cobra
 ## Related Agents
 
 - **go-review** - General Go code review (non-CLI specific)
-- **go-refactor** - Transform code (action, not analysis)
 - **go-tests** - Generate tests for Go code
 
 ## References

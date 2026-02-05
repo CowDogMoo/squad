@@ -155,10 +155,12 @@ Follow this sequence exactly. Do not skip steps.
 
 ## Phase 2: Analyze
 
-4. Read each source file identified in Phase 1.
-5. Cross-reference between files — check that types, functions, and error
+4. Run `go vet ./...` via Bash to get objective tool findings. These are
+   your highest-priority issues — fix them before subjective findings.
+5. Read each source file identified in Phase 1.
+6. Cross-reference between files — check that types, functions, and error
    handling are consistent across package boundaries.
-6. Catalog every violation with:
+7. Catalog every violation with:
    - Severity (CRITICAL, HIGH, MEDIUM, LOW, INFO)
    - Category (from the review categories below)
    - File and line number
@@ -167,24 +169,25 @@ Follow this sequence exactly. Do not skip steps.
 
 ## Phase 3: Fix and Verify
 
-7. Apply fixes via the Edit tool, highest severity first.
-8. Group fixes by file to minimize Edit calls.
-9. After each batch of edits to a file, Read ONLY the edited lines back
-   (not the whole file) and verify the old code was fully replaced.
-10. After ALL fixes are applied, run build and tests exactly once:
+8. Apply fixes via the Edit tool, highest severity first. Fix `go vet`
+   findings before subjective issues.
+9. Group fixes by file to minimize Edit calls.
+10. After each batch of edits to a file, Read ONLY the edited lines back
+    (not the whole file) and verify the old code was fully replaced.
+11. After ALL fixes are applied, run build and tests exactly once:
 
     ```bash
     go build ./...
     go test ./...
     ```
 
-11. If build or tests fail, revert the offending edit with
+12. If build or tests fail, revert the offending edit with
     `git checkout -- <file>` and move the finding to the skipped table.
     Do NOT run additional exploratory reads or greps at this point.
 
 ## Phase 4: Report
 
-12. Output the final report using the OUTPUT FORMAT below IMMEDIATELY.
+13. Output the final report using the OUTPUT FORMAT below IMMEDIATELY.
     Populate the skipped-findings table from your Phase 2 notes — do NOT
     re-read files or run extra tool calls to gather skipped-finding details.
     Every tool call after verification is wasted.

@@ -323,7 +323,6 @@ cat myfile.go | fabric --pattern go-review | grep -A 20 "## Critical Issues"
 
 ## Related Patterns
 
-- **go-refactor** - Transform code (action, not analysis)
 - **go-tests** - Generate tests for Go code
 - **go-doc-comments** - Generate documentation comments
 

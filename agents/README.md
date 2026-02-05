@@ -12,7 +12,6 @@ Each agent includes:
 
 - `ansible-review`
 - `go-cobra`
-- `go-refactor`
 - `go-review`
 - `go-security-audit`
 - `go-taskfile`

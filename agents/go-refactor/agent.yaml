@@ -1,8 +1,0 @@
----
-name: go-refactor
-version: 0.1.0
-description: Refactor Go code to idiomatic, maintainable Go while preserving behavior.
-entrypoint: system.md
-wrapper: agent.md
-references:
-  - references/go-best-practices.md

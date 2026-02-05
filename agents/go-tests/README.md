@@ -268,7 +268,6 @@ Edit the `# OUTPUT FORMAT` section in `system.md` to customize test structure.
 
 ## Related Patterns
 
-- **go-refactor** - Refactor Go code
 - **go-review** - Review Go code (checks test coverage)
 - **go-doc-comments** - Document Go code
 
