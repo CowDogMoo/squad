@@ -10,22 +10,24 @@ vars:
   PROVIDER: '{{.PROVIDER | default "ollama"}}'
   BASE_URL: '{{.BASE_URL | default ""}}'
   MODEL: '{{.MODEL | default "qwen3-coder:30b"}}'
-  API_KEY: '{{.API_KEY | default "ollama"}}'
+  API_KEY: '{{.API_KEY | default ""}}'
 
   # Agent configuration
   AGENT: '{{.AGENT | default "go-cobra"}}'
   WORKING_DIR: '{{.WORKING_DIR | default "."}}'
-  OUT: '{{.OUT | default "/tmp/squad-response.txt"}}'
+  OUT_DIR: '{{.OUT_DIR | default "/tmp"}}'
+  OUT: '{{.OUT | default (print .OUT_DIR "/squad-response.txt")}}'
 
   # Internal: conditionally include --base-url flag
   _BASE_URL_FLAG: '{{if .BASE_URL}}--base-url {{.BASE_URL}}{{end}}'
+  _API_KEY_FLAG: '{{if .API_KEY}}--api-key {{.API_KEY}}{{end}}'
 
 includes:
   go:
     taskfile: "https://raw.githubusercontent.com/CowDogMoo/taskfile-templates/main/go/Taskfile.yaml"
     vars:
-      BINARY_NAME: squad
-      CMD_PATH: ./cmd/squad
+      BINARY_NAME: '{{.BINARY_NAME}}'
+      CMD_PATH: '{{.CMD_PATH}}'
   pre-commit:
     taskfile: "https://raw.githubusercontent.com/CowDogMoo/taskfile-templates/main/pre-commit/Taskfile.yaml"
 
@@ -49,7 +51,7 @@ tasks:
           "{{.PROMPT}}" \
           --agent {{.AGENT}} \
           --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
+          {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
@@ -84,14 +86,14 @@ tasks:
         - Every file touched must appear in the output report" \
           --agent go-review \
           --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
+          {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --require-actionable=true \
           --temperature 0.3 \
-          --out /tmp/squad-go-review.txt
-      - echo "Review output written to /tmp/squad-go-review.txt"
+          --out {{.OUT_DIR}}/squad-go-review.txt
+      - echo "Review output written to {{.OUT_DIR}}/squad-go-review.txt"
       - |
         echo ""
         echo "Running final verification..."
@@ -114,15 +116,15 @@ tasks:
         Do NOT write or modify any files." \
           --agent go-review --mode readonly \
           --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
+          {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --require-actionable=false \
           --temperature 0.3 \
           --print=false \
-          --out /tmp/squad-go-review-analysis.txt
-      - echo "Go review analysis written to /tmp/squad-go-review-analysis.txt"
+          --out {{.OUT_DIR}}/squad-go-review-analysis.txt
+      - echo "Go review analysis written to {{.OUT_DIR}}/squad-go-review-analysis.txt"
 
   run:go-tests:
     desc: "Run the go-tests agent to autonomously increase test coverage to a target"
@@ -154,15 +156,15 @@ tasks:
         One command, one iteration." \
           --agent go-tests \
           --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
+          {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --require-actionable=true \
           --temperature 0.3 \
           --max-iterations 200 \
-          --out /tmp/squad-go-tests.txt
-      - echo "Test coverage output written to /tmp/squad-go-tests.txt"
+          --out {{.OUT_DIR}}/squad-go-tests.txt
+      - echo "Test coverage output written to {{.OUT_DIR}}/squad-go-tests.txt"
       - |
         echo ""
         echo "Running final verification..."
@@ -185,15 +187,15 @@ tasks:
         Do NOT write or modify any files." \
           --agent go-tests --mode readonly \
           --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
+          {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --require-actionable=false \
           --temperature 0.3 \
           --print=false \
-          --out /tmp/squad-go-tests-analysis.txt
-      - echo "Coverage analysis written to /tmp/squad-go-tests-analysis.txt"
+          --out {{.OUT_DIR}}/squad-go-tests-analysis.txt
+      - echo "Coverage analysis written to {{.OUT_DIR}}/squad-go-tests-analysis.txt"
 
   run:go-cobra:
     desc: "Run the go-cobra agent to autonomously fix Cobra/Viper best-practice violations"
@@ -218,14 +220,14 @@ tasks:
         - Every file touched must appear in the output report" \
           --agent go-cobra \
           --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
+          {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --require-actionable=true \
           --temperature 0.3 \
-          --out /tmp/squad-go-cobra.txt
-      - echo "Cobra review output written to /tmp/squad-go-cobra.txt"
+          --out {{.OUT_DIR}}/squad-go-cobra.txt
+      - echo "Cobra review output written to {{.OUT_DIR}}/squad-go-cobra.txt"
       - |
         echo ""
         echo "Running final verification..."
@@ -248,15 +250,15 @@ tasks:
         Do NOT write or modify any files." \
           --agent go-cobra --mode readonly \
           --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
+          {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --require-actionable=false \
           --temperature 0.3 \
           --print=false \
-          --out /tmp/squad-go-cobra-analysis.txt
-      - echo "Cobra analysis written to /tmp/squad-go-cobra-analysis.txt"
+          --out {{.OUT_DIR}}/squad-go-cobra-analysis.txt
+      - echo "Cobra analysis written to {{.OUT_DIR}}/squad-go-cobra-analysis.txt"
 
   run:go-doc-comments:
     desc: "Run the go-doc-comments agent to autonomously add/improve Go doc comments"
@@ -291,14 +293,14 @@ tasks:
         - Every file touched must appear in the output report" \
           --agent go-doc-comments \
           --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
+          {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --require-actionable=true \
           --temperature 0.3 \
-          --out /tmp/squad-go-doc-comments.txt
-      - echo "Doc comments output written to /tmp/squad-go-doc-comments.txt"
+          --out {{.OUT_DIR}}/squad-go-doc-comments.txt
+      - echo "Doc comments output written to {{.OUT_DIR}}/squad-go-doc-comments.txt"
       - |
         echo ""
         echo "Running final verification..."
@@ -321,15 +323,15 @@ tasks:
         Do NOT write or modify any files." \
           --agent go-doc-comments --mode readonly \
           --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
+          {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --require-actionable=false \
           --temperature 0.3 \
           --print=false \
-          --out /tmp/squad-go-doc-comments-analysis.txt
-      - echo "Doc comments analysis written to /tmp/squad-go-doc-comments-analysis.txt"
+          --out {{.OUT_DIR}}/squad-go-doc-comments-analysis.txt
+      - echo "Doc comments analysis written to {{.OUT_DIR}}/squad-go-doc-comments-analysis.txt"
 
   run:go-security-audit:
     desc: "Run the go-security-audit agent to autonomously fix Go security vulnerabilities"
@@ -367,14 +369,14 @@ tasks:
         - Every file touched must appear in the output report" \
           --agent go-security-audit \
           --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
+          {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --require-actionable=true \
           --temperature 0.3 \
-          --out /tmp/squad-go-security-audit.txt
-      - echo "Security audit output written to /tmp/squad-go-security-audit.txt"
+          --out {{.OUT_DIR}}/squad-go-security-audit.txt
+      - echo "Security audit output written to {{.OUT_DIR}}/squad-go-security-audit.txt"
       - |
         echo ""
         echo "Running final verification..."
@@ -406,18 +408,94 @@ tasks:
         Do NOT write or modify any files." \
           --agent go-security-audit --mode readonly \
           --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
+          {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
           --model {{.MODEL}} \
           --require-actionable=false \
           --temperature 0.3 \
           --print=false \
-          --out /tmp/squad-go-security-audit-analysis.txt
-      - echo "Security audit analysis written to /tmp/squad-go-security-audit-analysis.txt"
+          --out {{.OUT_DIR}}/squad-go-security-audit-analysis.txt
+      - echo "Security audit analysis written to {{.OUT_DIR}}/squad-go-security-audit-analysis.txt"
+
+  run:go-taskfile:
+    desc: "Run the go-taskfile agent to autonomously fix Taskfile.yaml best-practice violations"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Review and fix all Taskfile.yaml best-practice violations in this codebase.
+
+        Start by using Glob with '**/Taskfile.yaml' and '**/Taskfile.yml' to discover all Taskfiles.
+        Read each Taskfile to understand structure and conventions.
+        Cross-reference between files for include and variable consistency.
+        Apply fixes via Edit tool, highest severity first.
+        Run 'task --list' after each batch of edits.
+
+        IMPORTANT CONSTRAINTS (repeat from system prompt):
+        - No cosmetic changes (comment style, whitespace, task ordering)
+        - Skip fixes needing restructuring of 3+ tasks or new includes
+        - Preserve backwards compatibility — no task renames without noting breaking change
+        - NEVER add hardcoded secrets — use environment variables with no default
+        - Every fix must be PROPORTIONAL — no complex preconditions for trivial edge cases
+        - Path traversal validation: ONLY add for variables with NO default or unsafe defaults.
+          Skip for variables with safe defaults like /tmp — local task runners don't need it
+        - Read each file ONCE, catalog all findings, then fix — target ≤10 iterations
+        - Use ONE Glob on repo root, not per-directory — minimize tool calls
+        - After task --list passes, emit report IMMEDIATELY — no post-fix exploration
+        - Every file touched must appear in the output report" \
+          --agent go-taskfile \
+          --working-dir {{.WORKING_DIR}} \
+          {{._API_KEY_FLAG}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=true \
+          --temperature 0.3 \
+          --out {{.OUT_DIR}}/squad-go-taskfile.txt
+      - echo "Taskfile review output written to {{.OUT_DIR}}/squad-go-taskfile.txt"
+      - |
+        echo ""
+        echo "Running final verification..."
+      - task --list
+      - echo "task --list PASSED"
+
+  run:go-taskfile-analyze:
+    desc: "Run the go-taskfile agent in readonly mode to analyze Taskfile violations without applying fixes"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Analyze this codebase for Taskfile.yaml best-practice violations.
+
+        Use Glob with '**/Taskfile.yaml' and '**/Taskfile.yml' to discover all Taskfiles.
+        Read each file to understand structure and conventions.
+        Cross-reference between files for include and variable consistency.
+        Produce a prioritized report of all findings.
+
+        No cosmetic findings — skip comment style, whitespace, task ordering.
+        No false positives — every finding must reference actual file and line.
+        Flag security issues (hardcoded secrets, unvalidated input) as CRITICAL.
+        Path traversal: ONLY flag for variables with NO default or unsafe defaults.
+        Skip for variables with safe defaults like /tmp — proportionality applies.
+        Read each file ONCE — target ≤10 iterations.
+        After analysis, emit report IMMEDIATELY — no re-reading files.
+
+        Do NOT write or modify any files." \
+          --agent go-taskfile --mode readonly \
+          --working-dir {{.WORKING_DIR}} \
+          {{._API_KEY_FLAG}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=false \
+          --temperature 0.3 \
+          --print=false \
+          --out {{.OUT_DIR}}/squad-go-taskfile-analysis.txt
+      - echo "Taskfile analysis written to {{.OUT_DIR}}/squad-go-taskfile-analysis.txt"
 
   clean:
     desc: Clean build artifacts and temp files
     cmds:
       - task: go:clean
-      - rm -f /tmp/squad-*.txt
+      - rm -f {{.OUT_DIR}}/squad-*.txt
