@@ -12,6 +12,17 @@ This document serves as the knowledge base for Python testing conventions and pa
 4. **Arrange-Act-Assert**: Structure tests clearly with setup, execution, verification
 5. **One concept per test**: Each test should verify one thing
 
+### Testing Tools (2026)
+
+| Tool             | Use Case                              |
+| ---------------- | ------------------------------------- |
+| `pytest`         | Primary test framework (standard)     |
+| `pytest-cov`     | Coverage reporting                    |
+| `pytest-asyncio` | Async test support                    |
+| `pytest-xdist`   | Parallel test execution (`-n auto`)   |
+| `pytest-mock`    | Mocking support (`mocker` fixture)    |
+| `hypothesis`     | Property-based testing                |
+
 ## Parametrized Tests
 
 ### Basic Structure
@@ -339,6 +350,37 @@ async def test_async_timeout():
         await fetch_with_timeout(timeout=0.001)
 ```
 
+### Concurrent Tests with TaskGroup (Python 3.11+)
+
+```python
+@pytest.mark.asyncio
+async def test_concurrent_fetches() -> None:
+    """Test multiple concurrent fetches."""
+    async with asyncio.TaskGroup() as tg:
+        task1 = tg.create_task(fetch_user(1))
+        task2 = tg.create_task(fetch_user(2))
+
+    assert task1.result().id == 1
+    assert task2.result().id == 2
+```
+
+### Async Database Fixture Pattern
+
+```python
+# conftest.py
+from collections.abc import AsyncIterator
+
+@pytest.fixture
+async def db_session() -> AsyncIterator[AsyncSession]:
+    """Provide a database session that rolls back after test."""
+    async with engine.begin() as conn:
+        session = AsyncSession(bind=conn)
+        try:
+            yield session
+        finally:
+            await session.rollback()
+```
+
 ## Test Markers
 
 ### Skip Tests
@@ -496,6 +538,43 @@ def test_file_writing(tmp_path):
 
     assert output_file.read_text() == "a\nb\nc\n"
 ```
+
+## conftest.py Organization
+
+Place shared fixtures in `conftest.py` at the appropriate level:
+
+```python
+# tests/conftest.py
+import pytest
+from collections.abc import AsyncIterator
+
+@pytest.fixture
+def sample_user() -> User:
+    """Create a sample user for testing."""
+    return User(id=1, name="Test User", email="test@example.com")
+
+@pytest.fixture(scope="module")
+def api_client() -> TestClient:
+    """Shared test client for the module."""
+    return TestClient(app)
+
+@pytest.fixture
+async def db_session() -> AsyncIterator[AsyncSession]:
+    """Provide a database session that rolls back after test."""
+    async with engine.begin() as conn:
+        session = AsyncSession(bind=conn)
+        try:
+            yield session
+        finally:
+            await session.rollback()
+```
+
+**Fixture scope hierarchy:**
+
+- `function` (default): New instance per test
+- `class`: Shared across test class
+- `module`: Shared across test module
+- `session`: Shared across entire test run
 
 ## What NOT to Test
 

@@ -5,19 +5,23 @@ A comprehensive guide to reviewing Python code for quality, correctness, perform
 ## Table of Contents
 
 1. [Review Philosophy](#review-philosophy)
-2. [Code Formatting and Style](#code-formatting-and-style)
-3. [Error and Exception Handling](#error-and-exception-handling)
-4. [Type Annotations](#type-annotations)
-5. [Data Structures](#data-structures)
-6. [Function and Class Design](#function-and-class-design)
-7. [Code Structure](#code-structure)
-8. [API Design Patterns](#api-design-patterns)
-9. [Performance](#performance)
-10. [Module Organization](#module-organization)
-11. [Documentation](#documentation)
-12. [Security Considerations](#security-considerations)
-13. [Testing](#testing)
-14. [Severity Classification](#severity-classification)
+2. [Python 3.12-3.13 Features](#python-312-313-features)
+3. [Code Formatting and Style](#code-formatting-and-style)
+4. [Error and Exception Handling](#error-and-exception-handling)
+5. [Type Annotations](#type-annotations)
+6. [Structural Pattern Matching](#structural-pattern-matching)
+7. [Data Structures](#data-structures)
+8. [Dataclasses, Pydantic, and attrs](#dataclasses-pydantic-and-attrs)
+9. [Function and Class Design](#function-and-class-design)
+10. [Async/Await Patterns](#asyncawait-patterns)
+11. [Code Structure](#code-structure)
+12. [API Design Patterns](#api-design-patterns)
+13. [Performance](#performance)
+14. [Module Organization](#module-organization)
+15. [Project Structure and Tooling](#project-structure-and-tooling)
+16. [Documentation](#documentation)
+17. [Security Considerations](#security-considerations)
+18. [Severity Classification](#severity-classification)
 
 ---
 
@@ -48,6 +52,77 @@ Choose straightforward solutions. If something is hard to explain, it's probably
 1. **PEP 8** - Python's official style guide (baseline)
 2. **Google Python Style Guide** - Additional recommendations for enterprise code
 3. **Project-specific conventions** - Local team standards
+
+---
+
+## Python 3.12-3.13 Features
+
+### Python 3.12 Key Features
+
+| Feature                        | PEP     | Impact                                    |
+| ------------------------------ | ------- | ----------------------------------------- |
+| Relaxed f-strings              | PEP 701 | Nested quotes, multiline, comments        |
+| Per-interpreter GIL            | PEP 684 | True multi-core with sub-interpreters     |
+| `type` statement for aliases   | PEP 695 | Cleaner type alias syntax                 |
+| Improved error messages        | —       | Better tracebacks with suggestions        |
+
+**Relaxed f-strings (PEP 701):**
+
+```python
+# Python 3.12+ - nested quotes, multiline, comments allowed
+name = "world"
+message = f"Hello {
+    name.upper()  # Can include comments now
+}"
+
+# Nested quotes without escaping
+data = f"User: {user['name']}"  # Previously required: user[\"name\"]
+
+# Multiline expressions
+report = f"""
+Total: {
+    sum(
+        item.price
+        for item in items
+    )
+}
+"""
+```
+
+**Type statement (PEP 695):**
+
+```python
+# Python 3.12+ - cleaner type alias syntax
+type Vector = list[float]
+type UserID = int
+type Callback[T] = Callable[[T], None]
+
+# Generic type aliases
+type ListOrSet[T] = list[T] | set[T]
+```
+
+### Python 3.13 Key Features
+
+| Feature                   | PEP     | Impact                            |
+| ------------------------- | ------- | --------------------------------- |
+| Free-threaded mode        | PEP 703 | Experimental no-GIL builds        |
+| JIT compiler              | PEP 744 | Experimental performance boost    |
+| Improved REPL             | —       | Multiline editing, colors         |
+| `locals()` defined semantics | PEP 667 | Predictable mutation behavior  |
+| Dead batteries removed    | —       | Legacy modules fully removed      |
+
+**New REPL features:**
+
+- Multiline editing with history preservation
+- Direct support for `help`, `exit`, `quit` without parentheses
+- Color prompts and tracebacks by default
+
+**Removed modules (dead batteries):**
+
+The following were deprecated in 3.11-3.12 and removed in 3.13:
+`aifc`, `audioop`, `cgi`, `cgitb`, `chunk`, `crypt`, `imghdr`, `mailcap`,
+`msilib`, `nis`, `nntplib`, `ossaudiodev`, `pipes`, `sndhdr`, `spwd`,
+`sunau`, `telnetlib`, `uu`, `xdrlib`
 
 ---
 
@@ -276,6 +351,66 @@ except FileNotFoundError as e:
     raise ConfigurationError(f"Config file not found: {path}") from e
 ```
 
+### Exception Notes (Python 3.11+)
+
+Add contextual information as exceptions propagate:
+
+```python
+def process_file(path: str) -> dict:
+    try:
+        return parse_config(path)
+    except ValueError as e:
+        e.add_note(f"While processing: {path}")
+        e.add_note(f"Check file format and encoding")
+        raise
+```
+
+### Exception Groups (Python 3.11+)
+
+Handle multiple exceptions from concurrent operations:
+
+```python
+# Catching exception groups
+try:
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(fetch_user(1))
+        tg.create_task(fetch_user(2))
+except* ConnectionError as eg:
+    for exc in eg.exceptions:
+        logger.error(f"Connection failed: {exc}")
+except* ValueError as eg:
+    for exc in eg.exceptions:
+        logger.error(f"Invalid data: {exc}")
+```
+
+### Error Handling Strategy
+
+**"Raise low, catch high":**
+
+- Lower-level functions raise specific exceptions
+- Catch and handle at application boundaries (CLI, web handlers, event loops)
+- Add context as exceptions bubble up
+
+```python
+# Low level - raise specific error
+def parse_user_id(raw: str) -> int:
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise InvalidUserIDError(f"Invalid user ID: {raw!r}") from e
+
+# High level - catch at boundary
+def handle_request(request: Request) -> Response:
+    try:
+        user_id = parse_user_id(request.params["id"])
+        user = fetch_user(user_id)
+        return Response.ok(user)
+    except InvalidUserIDError as e:
+        return Response.bad_request(str(e))
+    except UserNotFoundError:
+        return Response.not_found("User not found")
+```
+
 ---
 
 ## Type Annotations
@@ -332,6 +467,138 @@ T = TypeVar('T')
 
 def first_or_none(items: Sequence[T]) -> T | None:
     return items[0] if items else None
+```
+
+### Modern Type Hints (Python 3.9-3.12)
+
+**Use built-in generics, not typing aliases:**
+
+```python
+# Good (Python 3.9+)
+def process(items: list[str], config: dict[str, int]) -> tuple[str, int]:
+    pass
+
+# Avoid (legacy)
+from typing import List, Dict, Tuple
+def process(items: List[str], config: Dict[str, int]) -> Tuple[str, int]:
+    pass
+```
+
+**Use union syntax, not Union/Optional:**
+
+```python
+# Good (Python 3.10+)
+def fetch(id: int | str) -> User | None:
+    pass
+
+# Avoid (legacy)
+from typing import Union, Optional
+def fetch(id: Union[int, str]) -> Optional[User]:
+    pass
+```
+
+**Type aliases with `type` statement (Python 3.12+):**
+
+```python
+# Good (Python 3.12+)
+type UserID = int
+type UserMapping = dict[UserID, User]
+
+# Alternative for older Python
+from typing import TypeAlias
+UserID: TypeAlias = int
+```
+
+---
+
+## Structural Pattern Matching
+
+### Overview (PEP 634-636, Python 3.10+)
+
+Structural pattern matching allows matching on the **structure** of data, not just values.
+
+### Basic Patterns
+
+```python
+def handle_command(command: list[str]) -> str:
+    match command:
+        case ["quit"]:
+            return "Goodbye"
+        case ["hello", name]:
+            return f"Hello, {name}!"
+        case ["add", *numbers]:
+            return str(sum(int(n) for n in numbers))
+        case _:
+            return "Unknown command"
+```
+
+### Object Patterns
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    x: float
+    y: float
+
+def describe_point(point: Point) -> str:
+    match point:
+        case Point(x=0, y=0):
+            return "Origin"
+        case Point(x=0, y=y):
+            return f"On Y-axis at {y}"
+        case Point(x=x, y=0):
+            return f"On X-axis at {x}"
+        case Point(x=x, y=y) if x == y:
+            return f"On diagonal at {x}"
+        case _:
+            return f"Point at ({point.x}, {point.y})"
+```
+
+### Guard Clauses
+
+```python
+def classify_number(n: int) -> str:
+    match n:
+        case x if x < 0:
+            return "negative"
+        case 0:
+            return "zero"
+        case x if x % 2 == 0:
+            return "positive even"
+        case _:
+            return "positive odd"
+```
+
+### Best Practices
+
+| Practice                        | Severity | Rationale                              |
+| ------------------------------- | -------- | -------------------------------------- |
+| Always include `case _:` default | HIGH    | Handles unexpected input               |
+| Order specific before general   | HIGH     | First match wins                       |
+| Use guards for conditions       | MEDIUM   | Express relationships between captures |
+| Validate external data at edges | MEDIUM   | Match on typed objects internally      |
+
+**When to use match vs if/elif:**
+
+- **Use match**: Destructuring, multiple patterns, type-based dispatch
+- **Use if/elif**: Simple boolean conditions, range checks
+
+**Avoid:**
+
+```python
+# Bad - using match for simple conditions
+match x:
+    case x if x > 0:
+        return "positive"
+    case _:
+        return "non-positive"
+
+# Better - use if/else
+if x > 0:
+    return "positive"
+return "non-positive"
 ```
 
 ---
@@ -411,6 +678,104 @@ class DataHolder:
     def items(self) -> list[str]:
         return list(self._items)  # Return copy
 ```
+
+---
+
+## Dataclasses, Pydantic, and attrs
+
+### When to Use Each
+
+| Tool        | Use Case                                    | Key Strength                |
+| ----------- | ------------------------------------------- | --------------------------- |
+| `dataclass` | Simple internal data grouping               | Built-in, no dependencies   |
+| `attrs`     | Performance + custom validation             | Fine-grained control, fast  |
+| `Pydantic`  | API validation, serialization, settings     | Comprehensive validation    |
+
+### Dataclasses (stdlib)
+
+**Best for:** Internal data transfer objects, configuration, simple records.
+
+```python
+from dataclasses import dataclass, field
+
+# Modern dataclass with slots (Python 3.10+)
+@dataclass(slots=True, frozen=True)
+class Point:
+    x: float
+    y: float
+
+# With defaults and factory
+@dataclass
+class Config:
+    name: str
+    tags: list[str] = field(default_factory=list)
+    timeout: int = 30
+
+    def __post_init__(self) -> None:
+        if self.timeout < 0:
+            raise ValueError("timeout must be non-negative")
+```
+
+**Key options:**
+
+| Option     | Effect                                |
+| ---------- | ------------------------------------- |
+| `slots`    | Memory efficient, faster attr access  |
+| `frozen`   | Immutable (hashable)                  |
+| `kw_only`  | All fields keyword-only (3.10+)       |
+| `order`    | Generate comparison methods           |
+
+### attrs
+
+**Best for:** Performance-critical code, complex validation without JSON serialization.
+
+```python
+import attrs
+
+@attrs.define
+class User:
+    name: str = attrs.field(validator=attrs.validators.instance_of(str))
+    age: int = attrs.field(validator=[
+        attrs.validators.instance_of(int),
+        attrs.validators.ge(0),
+    ])
+    email: str = attrs.field()
+
+    @email.validator
+    def _validate_email(self, attribute, value):
+        if "@" not in value:
+            raise ValueError(f"Invalid email: {value}")
+```
+
+### Pydantic
+
+**Best for:** API request/response models, settings management, JSON serialization.
+
+```python
+from pydantic import BaseModel, Field, field_validator
+
+class UserCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    email: str
+    age: int = Field(..., ge=0, le=150)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        if "@" not in v:
+            raise ValueError("Invalid email format")
+        return v.lower()
+
+    model_config = {"str_strip_whitespace": True}
+```
+
+### Performance Comparison
+
+Performance differences are minimal for most use cases. Choose based on features needed:
+
+- **Fastest:** `attrs` or `dataclass` without validation
+- **Most features:** Pydantic (validation, serialization, settings)
+- **No dependencies:** `dataclass`
 
 ---
 
@@ -510,6 +875,159 @@ class Circle:
     def area(self) -> float:
         """Calculate area (cheap computation)."""
         return math.pi * self._radius ** 2
+```
+
+---
+
+## Async/Await Patterns
+
+### Core Concepts
+
+Python's `asyncio` enables concurrent I/O-bound operations without threads.
+
+### Best Practices
+
+| Practice                              | Severity | Rationale                           |
+| ------------------------------------- | -------- | ----------------------------------- |
+| Use `asyncio.run()` as entry point    | HIGH     | Proper event loop management        |
+| Use `TaskGroup` for concurrent tasks  | HIGH     | Structured concurrency (3.11+)      |
+| Use `async with` for resources        | HIGH     | Proper async cleanup                |
+| Don't block the event loop            | CRITICAL | Defeats purpose of async            |
+
+### Entry Point
+
+```python
+import asyncio
+
+async def main() -> None:
+    result = await fetch_data()
+    await process_data(result)
+
+# Always use asyncio.run() to start
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### TaskGroup (Python 3.11+, Recommended)
+
+**Good - structured concurrency:**
+
+```python
+async def fetch_all_users(user_ids: list[int]) -> list[User]:
+    async with asyncio.TaskGroup() as tg:
+        tasks = [tg.create_task(fetch_user(uid)) for uid in user_ids]
+    return [task.result() for task in tasks]
+```
+
+TaskGroup advantages:
+
+- Automatic task lifecycle management
+- Proper exception handling (cancels remaining on failure)
+- Cleaner than `asyncio.gather()`
+
+**Legacy approach (avoid in new code):**
+
+```python
+# Less safe - exceptions can leave tasks running
+results = await asyncio.gather(
+    fetch_user(1),
+    fetch_user(2),
+    return_exceptions=True,
+)
+```
+
+### Async Context Managers
+
+```python
+import aiofiles
+
+async def read_config(path: str) -> dict:
+    async with aiofiles.open(path) as f:
+        content = await f.read()
+    return json.loads(content)
+```
+
+### Async Generators
+
+```python
+async def fetch_pages(url: str) -> AsyncIterator[dict]:
+    """Fetch paginated data lazily."""
+    page = 1
+    while True:
+        data = await fetch_page(url, page)
+        if not data["items"]:
+            break
+        for item in data["items"]:
+            yield item
+        page += 1
+
+# Usage
+async for item in fetch_pages(api_url):
+    process(item)
+```
+
+### CPU-Bound Work
+
+**Never block the event loop with CPU-bound operations:**
+
+```python
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
+
+async def process_image(image_path: str) -> bytes:
+    loop = asyncio.get_running_loop()
+    # Offload CPU-bound work to process pool
+    with ProcessPoolExecutor() as pool:
+        result = await loop.run_in_executor(
+            pool, cpu_intensive_transform, image_path
+        )
+    return result
+```
+
+### Exception Groups (Python 3.11+)
+
+Handle multiple concurrent failures:
+
+```python
+async def fetch_all(urls: list[str]) -> list[Response]:
+    try:
+        async with asyncio.TaskGroup() as tg:
+            tasks = [tg.create_task(fetch(url)) for url in urls]
+        return [t.result() for t in tasks]
+    except* ConnectionError as eg:
+        # Handle all ConnectionErrors from the group
+        for exc in eg.exceptions:
+            logger.error(f"Connection failed: {exc}")
+        raise
+    except* TimeoutError as eg:
+        logger.warning(f"{len(eg.exceptions)} requests timed out")
+        raise
+```
+
+### Common Anti-Patterns
+
+```python
+# Bad - blocking call in async function
+async def bad_fetch(url: str) -> str:
+    return requests.get(url).text  # Blocks event loop!
+
+# Good - use async HTTP client
+async def good_fetch(url: str) -> str:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            return await response.text()
+
+# Bad - fire-and-forget tasks
+async def bad_background():
+    asyncio.create_task(some_task())  # No await, no tracking!
+
+# Good - track background tasks
+async def good_background():
+    task = asyncio.create_task(some_task())
+    try:
+        await do_main_work()
+    finally:
+        await task  # Ensure task completes
 ```
 
 ---
@@ -795,6 +1313,168 @@ def get_cached(key: str) -> Any:
 
 ---
 
+## Project Structure and Tooling
+
+### Modern Project Structure (2026)
+
+```
+my-project/
+├── pyproject.toml          # Single source of truth
+├── uv.lock                  # Lockfile (auto-generated by uv)
+├── src/
+│   └── mypackage/
+│       ├── __init__.py
+│       ├── core.py
+│       └── utils.py
+├── tests/
+│   ├── conftest.py
+│   └── test_core.py
+└── README.md
+```
+
+### pyproject.toml (PEP 621)
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mypackage"
+version = "1.0.0"
+description = "My awesome package"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+    "pytest-asyncio>=0.23",
+    "mypy>=1.8",
+    "ruff>=0.3",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+```
+
+### uv - Modern Package Manager (2024+)
+
+**uv** is a Rust-based package manager that's 10-100x faster than pip:
+
+```bash
+# Create new project
+uv init my-project
+cd my-project
+
+# Add dependencies
+uv add httpx pydantic
+uv add --dev pytest ruff mypy
+
+# Run commands in virtual environment
+uv run pytest
+uv run python -m mypackage
+
+# Sync dependencies from lockfile
+uv sync
+```
+
+**Key benefits:**
+
+- 10-100x faster than pip
+- Automatic virtual environment management
+- Cross-platform lockfile (`uv.lock`)
+- Drop-in pip replacement
+
+### Ruff - Linter and Formatter (2024+)
+
+**Ruff replaces:** Flake8, Black, isort, pyupgrade, autoflake, pydocstyle
+
+```bash
+# Check for issues
+ruff check .
+
+# Auto-fix issues
+ruff check --fix .
+
+# Format code (Black-compatible)
+ruff format .
+```
+
+**Key rule categories:**
+
+| Code | Category         | Examples                           |
+| ---- | ---------------- | ---------------------------------- |
+| E/W  | pycodestyle      | Whitespace, line length            |
+| F    | Pyflakes         | Unused imports, undefined names    |
+| I    | isort            | Import sorting                     |
+| UP   | pyupgrade        | Modern Python syntax               |
+| B    | flake8-bugbear   | Common bugs                        |
+| SIM  | flake8-simplify  | Code simplification                |
+| ASYNC| flake8-async     | Async anti-patterns                |
+
+### Type Checking with mypy
+
+```bash
+# Run type checker
+mypy src/
+
+# With strict mode (recommended)
+mypy --strict src/
+```
+
+**Common mypy configuration:**
+
+```toml
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+```
+
+### Pre-commit Hooks
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        additional_dependencies: [pydantic]
+```
+
+---
+
 ## Documentation
 
 ### Docstring Format (Google Style)
@@ -974,83 +1654,6 @@ API_KEY = "sk-1234567890abcdef"  # Never do this!
 
 ---
 
-## Testing
-
-### Coverage Expectations
-
-| Type              | Target         | Priority |
-| ----------------- | -------------- | -------- |
-| Unit tests        | 80%+           | HIGH     |
-| Integration tests | Critical paths | MEDIUM   |
-| Property tests    | Edge cases     | LOW      |
-
-### Testing Tools (2026)
-
-| Tool          | Use Case               |
-| ------------- | ---------------------- |
-| `pytest`      | Primary test framework |
-| `pytest-cov`  | Coverage reporting     |
-| `pytest-mock` | Mocking support        |
-| `hypothesis`  | Property-based testing |
-| `mypy`        | Static type checking   |
-| `ruff`        | Linting and formatting |
-
-### Test Quality
-
-```python
-import pytest
-from unittest.mock import Mock, patch
-
-class TestUserService:
-    """Tests for UserService."""
-
-    @pytest.fixture
-    def service(self) -> UserService:
-        """Create a UserService with mock repository."""
-        repository = Mock(spec=UserRepository)
-        return UserService(repository)
-
-    def test_get_user_returns_user_when_found(
-        self,
-        service: UserService,
-    ) -> None:
-        """Should return user when ID exists."""
-        expected = User(id=1, name="Test")
-        service._repository.find_by_id.return_value = expected
-
-        result = service.get_user(1)
-
-        assert result == expected
-        service._repository.find_by_id.assert_called_once_with(1)
-
-    def test_get_user_returns_none_when_not_found(
-        self,
-        service: UserService,
-    ) -> None:
-        """Should return None when ID doesn't exist."""
-        service._repository.find_by_id.return_value = None
-
-        result = service.get_user(999)
-
-        assert result is None
-
-    @pytest.mark.parametrize("user_id,expected_error", [
-        (-1, ValueError),
-        (0, ValueError),
-    ])
-    def test_get_user_raises_for_invalid_id(
-        self,
-        service: UserService,
-        user_id: int,
-        expected_error: type,
-    ) -> None:
-        """Should raise ValueError for invalid IDs."""
-        with pytest.raises(expected_error):
-            service.get_user(user_id)
-```
-
----
-
 ## Severity Classification
 
 ### CRITICAL
@@ -1058,21 +1661,26 @@ class TestUserService:
 Issues that affect correctness, security, or cause crashes:
 
 - SQL injection vulnerabilities
-- Command injection vulnerabilities
-- Bare `except:` clauses
+- Command injection vulnerabilities (`shell=True`, `os.system`)
+- Bare `except:` clauses (catches `SystemExit`, `KeyboardInterrupt`)
 - Mutable default arguments
 - Unhandled exceptions in critical paths
 - Security credential exposure
+- Blocking calls in async event loop
+- Path traversal vulnerabilities
 
 ### HIGH
 
 Significant issues affecting reliability or maintainability:
 
 - Missing type annotations on public APIs
-- Poor error handling
-- Resource leaks (unclosed files, connections)
+- Poor error handling (swallowing exceptions, no context)
+- Resource leaks (unclosed files, connections, sessions)
 - Global mutable state
 - Missing critical tests
+- Fire-and-forget async tasks
+- Missing `case _:` default in match statements
+- HTTPS verification disabled
 
 ### MEDIUM
 
@@ -1082,8 +1690,10 @@ Best practice violations:
 - Google Style Guide violations
 - Missing docstrings
 - Inconsistent naming
-- Complex comprehensions
+- Complex comprehensions (3+ nested)
 - Magic numbers
+- Legacy type syntax (`List`, `Optional`, `Union`)
+- Using `asyncio.gather()` instead of `TaskGroup` (3.11+)
 
 ### LOW
 
@@ -1093,15 +1703,17 @@ Minor improvements:
 - Whitespace issues
 - Comment quality
 - Code organization
-- Additional type hints
+- Additional type hints on internal functions
+- Could use newer Python features
 
 ### INFO
 
 Suggestions for optimization:
 
 - Performance improvements
-- Alternative patterns
-- Tooling recommendations
+- Alternative patterns (dataclass vs attrs vs Pydantic)
+- Tooling recommendations (ruff, uv, mypy)
+- Modern Python feature adoption
 
 ---
 
@@ -1109,37 +1721,129 @@ Suggestions for optimization:
 
 ### Before Approving
 
-- [ ] All tests pass
+- [ ] All tests pass (including async tests)
 - [ ] No critical or high severity issues
-- [ ] Error handling is complete
+- [ ] Error handling is complete and specific
 - [ ] Resources are properly managed (context managers)
-- [ ] Public API is documented
+- [ ] Public API is documented (Google-style docstrings)
 - [ ] No security vulnerabilities
-- [ ] Type hints on public functions
-- [ ] Code passes linting (ruff, mypy)
+- [ ] Type hints on public functions (modern syntax)
+- [ ] Code passes linting (`ruff check`, `ruff format`, `mypy --strict`)
+- [ ] Uses modern Python features where appropriate (3.12+)
 
 ### Common Issues to Watch
 
-1. Mutable default arguments
-2. Bare `except:` clauses
-3. SQL/command injection vulnerabilities
+1. Mutable default arguments (`def f(items=[]): ...`)
+2. Bare `except:` clauses (catches `SystemExit`, `KeyboardInterrupt`)
+3. SQL/command injection vulnerabilities (`shell=True`, f-string SQL)
 4. Deep nesting instead of early returns
 5. Missing context managers for resources
 6. Global mutable state
-7. Missing type annotations
+7. Missing or legacy type annotations (`List` instead of `list`)
 8. Hardcoded secrets/credentials
+9. Blocking calls in async functions (defeats concurrency)
+10. Fire-and-forget tasks without tracking
+11. Using `Optional[X]` instead of `X | None` (Python 3.10+)
+12. Missing `case _:` default in match statements
+13. String concatenation in hot loops (use `"".join()`)
+14. Over-complex comprehensions (3+ nested for/if)
+
+---
+
+## Anti-Patterns to Avoid
+
+### Critical Anti-Patterns
+
+| Anti-Pattern                    | Severity | Fix                                      |
+| ------------------------------- | -------- | ---------------------------------------- |
+| Mutable default arguments       | CRITICAL | Use `None` with initialization           |
+| Bare `except:`                  | CRITICAL | Catch specific exceptions                |
+| `from module import *`          | HIGH     | Use explicit imports                     |
+| Inconsistent return types       | HIGH     | Single return type + exceptions          |
+| `try/except` as control flow    | MEDIUM   | Use proper conditionals                  |
+| String `+` in loops             | MEDIUM   | Use `"".join()` or f-strings             |
+| 3+ nested comprehensions        | MEDIUM   | Use explicit loops                       |
+
+### Examples
+
+```python
+# Bad - mutable default
+def add_item(item, items=[]):  # Bug: shared list!
+    items.append(item)
+    return items
+
+# Good
+def add_item(item, items=None):
+    if items is None:
+        items = []
+    items.append(item)
+    return items
+
+# Bad - bare except
+try:
+    risky_operation()
+except:  # Catches SystemExit, KeyboardInterrupt!
+    pass
+
+# Good
+try:
+    risky_operation()
+except SpecificError as e:
+    logger.error("Operation failed: %s", e)
+    raise
+
+# Bad - inconsistent returns
+def find_user(user_id):
+    if user_id < 0:
+        return "Invalid ID"  # str
+    user = db.find(user_id)
+    if user:
+        return user  # User object
+    return None  # None
+
+# Good - consistent return type
+def find_user(user_id: int) -> User | None:
+    if user_id < 0:
+        raise ValueError(f"Invalid user ID: {user_id}")
+    return db.find(user_id)
+```
 
 ---
 
 ## References
 
+### Official Documentation
+
 - [PEP 8 - Style Guide for Python Code](https://peps.python.org/pep-0008/)
-- [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
+- [PEP 20 - The Zen of Python](https://peps.python.org/pep-0020/)
 - [PEP 257 - Docstring Conventions](https://peps.python.org/pep-0257/)
 - [PEP 484 - Type Hints](https://peps.python.org/pep-0484/)
-- [PEP 20 - The Zen of Python](https://peps.python.org/pep-0020/)
+- [PEP 636 - Structural Pattern Matching Tutorial](https://peps.python.org/pep-0636/)
+- [PEP 695 - Type Parameter Syntax](https://peps.python.org/pep-0695/)
+- [What's New in Python 3.12](https://docs.python.org/3/whatsnew/3.12.html)
+- [What's New in Python 3.13](https://docs.python.org/3/whatsnew/3.13.html)
+- [Typing Best Practices](https://typing.python.org/en/latest/reference/best_practices.html)
+- [asyncio Documentation](https://docs.python.org/3/library/asyncio.html)
+
+### Style Guides
+
+- [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
+- [The Hitchhiker's Guide to Python](https://docs.python-guide.org/)
+
+### Tooling
+
+- [Ruff Documentation](https://docs.astral.sh/ruff/)
+- [uv Documentation](https://docs.astral.sh/uv/)
+- [mypy Documentation](https://mypy.readthedocs.io/)
+- [pytest Documentation](https://docs.pytest.org/)
+
+### Additional Resources
+
 - [Real Python - Code Quality](https://realpython.com/python-code-quality/)
+- [Real Python - Pytest Testing](https://realpython.com/pytest-python-testing/)
+- [Python Anti-Patterns](https://docs.quantifiedcode.com/python-anti-patterns/)
+- [The State of Python Packaging in 2026](https://learn.repoforge.io/posts/the-state-of-python-packaging-in-2026/)
 
 ---
 
-_Last updated: 2026-01-18_
+_Last updated: 2026-02-04_

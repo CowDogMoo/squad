@@ -494,6 +494,86 @@ tasks:
           --out {{.OUT_DIR}}/squad-go-taskfile-analysis.txt
       - echo "Taskfile analysis written to {{.OUT_DIR}}/squad-go-taskfile-analysis.txt"
 
+  run:python-review:
+    desc: "Run the python-review agent to autonomously fix Python code quality issues"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Review and fix all Python code quality issues in this codebase.
+
+        Start by using Glob with '**/*.py' to discover all Python source files.
+        Read each file (skip __pycache__/, .venv/, venv/, test_*.py, *_test.py).
+        Cross-reference between files for consistency issues.
+        Apply fixes via Edit tool, highest severity first.
+        Run 'ruff check .' after each batch of edits (if ruff available).
+
+        IMPORTANT CONSTRAINTS (repeat from system prompt):
+        - No cosmetic changes (docstrings, import ordering, naming style)
+        - No new dependencies
+        - Skip fixes needing 50+ lines or new files
+        - Preserve backwards compatibility — no API surface changes
+        - NEVER change functions whose behavior is asserted by tests (pytest.raises)
+        - NEVER remove intentional raise statements — they are precondition guards
+        - Every fix must be PROPORTIONAL — no micro-optimizations for small loops
+        - Flag inconsistent imports (e.g. print() when codebase uses logging)
+        - Flag async anti-patterns: fire-and-forget tasks, blocking calls in async functions
+        - Flag legacy type syntax (Optional[X], List[str]) — use modern X | None, list[str]
+        - Read each file ONCE, catalog all findings, then fix — target ≤12 iterations
+        - Use ONE Grep/Glob on repo root, not per-directory — minimize tool calls
+        - After verification passes, emit report IMMEDIATELY — no post-fix exploration
+        - Every file touched must appear in the output report" \
+          --agent python-review \
+          --working-dir {{.WORKING_DIR}} \
+          {{._API_KEY_FLAG}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=true \
+          --temperature 0.3 \
+          --out {{.OUT_DIR}}/squad-python-review.txt
+      - echo "Python review output written to {{.OUT_DIR}}/squad-python-review.txt"
+      - |
+        echo ""
+        echo "Running final verification..."
+      - cd {{.WORKING_DIR}} && ruff check . || true
+      - echo "Verification complete"
+
+  run:python-review-analyze:
+    desc: "Run the python-review agent in readonly mode to analyze Python code quality without applying fixes"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Analyze this codebase for Python code quality issues.
+
+        Use Glob with '**/*.py' to discover all Python source files.
+        Read each file (skip __pycache__/, .venv/, venv/, test_*.py, *_test.py).
+        Cross-reference between files for consistency issues.
+        Produce a prioritized report of all findings.
+
+        No cosmetic findings — skip docstrings, import ordering, naming style.
+        No false positives — every finding must reference actual file and line.
+        Flag security issues (SQL injection, shell=True, hardcoded secrets) as CRITICAL.
+        Flag mutable default arguments, bare except, blocking calls in async as CRITICAL.
+        Flag fire-and-forget async tasks, missing match defaults as HIGH.
+        Flag legacy type syntax (Optional, List, Union) as MEDIUM.
+        Read each file ONCE — target ≤12 iterations.
+        After analysis, emit report IMMEDIATELY — no re-reading files.
+
+        Do NOT write or modify any files." \
+          --agent python-review --mode readonly \
+          --working-dir {{.WORKING_DIR}} \
+          {{._API_KEY_FLAG}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=false \
+          --temperature 0.3 \
+          --print=false \
+          --out {{.OUT_DIR}}/squad-python-review-analysis.txt
+      - echo "Python review analysis written to {{.OUT_DIR}}/squad-python-review-analysis.txt"
+
   clean:
     desc: Clean build artifacts and temp files
     cmds:
