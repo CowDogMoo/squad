@@ -1,8 +1,0 @@
----
-name: python-refactor
-version: 0.1.0
-description: Refactor Python code to clean, idiomatic Python while preserving behavior.
-entrypoint: system.md
-wrapper: agent.md
-references:
-  - references/python-best-practices.md

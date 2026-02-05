@@ -166,5 +166,4 @@ See [references/python-documentation-standards.md](references/python-documentati
 ## Related Agents
 
 - **python-review** - Review Python code for best practices
-- **python-refactor** - Refactor Python code to clean patterns
 - **python-tests** - Generate Python tests

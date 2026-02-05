@@ -16,7 +16,6 @@ Each agent includes:
 - `go-security-audit`
 - `go-taskfile`
 - `go-tests`
-- `python-refactor`
 - `python-review`
 - `python-tests`
 

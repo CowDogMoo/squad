@@ -339,7 +339,6 @@ cat myfile.py | fabric --pattern python-review | grep -A 20 "## Critical Issues"
 
 ## Related Patterns
 
-- **python-refactor** - Transform code (action, not analysis)
 - **python-tests** - Generate tests for Python code
 - **python-doc-comments** - Generate documentation comments
 
