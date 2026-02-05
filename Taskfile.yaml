@@ -625,6 +625,124 @@ tasks:
           --out {{.OUT_DIR}}/squad-python-review-analysis.txt
       - echo "Python review analysis written to {{.OUT_DIR}}/squad-python-review-analysis.txt"
 
+  run:python-tests:
+    desc: "Run the python-tests agent to autonomously increase Python test coverage"
+    silent: true
+    vars:
+      COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Get this Python codebase to {{.COVERAGE_TARGET}}% test coverage.
+
+        Start by checking for pytest-cov: pip show pytest-cov 2>/dev/null || echo 'NOT INSTALLED'
+        If pytest-cov is available, measure baseline with 'pytest --cov --cov-report=term-missing -q'.
+        Use Glob **/*.py to discover all source files. Filter out __pycache__, .venv, test_*.py.
+        Prioritize modules by impact — most functions/classes first.
+        Write tests for each priority module, verify they pass, and iterate.
+
+        Target: {{.COVERAGE_TARGET}}% total coverage.
+        Use @pytest.mark.parametrize for any function with 2+ test cases.
+        Only create or modify test_*.py files. Never edit source code.
+        TEST FILE LOCATION: ALWAYS place tests in tests/ directory. Create tests/ if it
+        does not exist. Mirror source structure: <pkg>/tasks/foo.py → tests/tasks/test_foo.py.
+        Discover actual source dir from Glob (could be src/, app/, lib/, or package name).
+
+        MOCK STRATEGY:
+        - Mock HTTP clients (httpx, requests) with unittest.mock.patch
+        - Mock file I/O by using tmp_path fixture
+        - Mock time with freezegun or mock time.time()
+        - Do NOT mock internal classes — test through public API
+
+        ASYNC TESTS:
+        - Use @pytest.mark.asyncio for async functions
+        - If pytest-asyncio not available, note in report and skip async tests
+
+        ITERATION BUDGET (CRITICAL — do NOT exceed):
+        - Small codebase (≤15 source files): 15 iterations MAX
+        - Medium (16-30 files): 25 iterations MAX
+        - Large (30+ files): 35 iterations MAX
+
+        Phase allocation for small codebase:
+        - Phase 1 (2 iter): Glob + coverage measurement
+        - Phase 2 (2-3 iter): Read ALL sources (batch 4-6 files per iteration)
+        - Phase 3 (4-6 iter): Write ALL test files (use Write, not Edit)
+        - Phase 4 (1-2 iter): Verify + report in SAME response
+
+        HARD EFFICIENCY REQUIREMENTS:
+        - Batch Read: 4-6 source files per iteration. Do NOT read one file per iteration.
+        - Use Write for new test files. One Write = complete file. No incremental Edit.
+        - Write multiple test files in parallel in same iteration.
+        - STOP after pytest passes — emit report in SAME response, NO more iterations.
+        - Every tool call after tests pass is WASTED.
+
+        COVERAGE MEASUREMENT: Use 'pytest --cov --cov-branch --cov-report=term-missing -q'.
+        Branch coverage is more meaningful than line coverage. Parse the TOTAL line.
+        If pytest-cov not installed, use basic pytest.
+
+        MOCKING: Always use autospec=True when patching. Use AsyncMock for async functions.
+
+        REPORT REQUIREMENTS (mandatory):
+        - Coverage Report section with Before/After/Delta
+        - Modules Tested table
+        - Tests Written with descriptions
+        - Skipped Functions with reasons
+        - Files Touched listing all test_*.py files
+        - Validation with pytest results" \
+          --agent python-tests \
+          --working-dir {{.WORKING_DIR}} \
+          {{._API_KEY_FLAG}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=true \
+          --temperature 0.3 \
+          --max-iterations 200 \
+          --out {{.OUT_DIR}}/squad-python-tests.txt
+      - echo "Python test coverage output written to {{.OUT_DIR}}/squad-python-tests.txt"
+      - |
+        echo ""
+        echo "Running final verification..."
+      - cd {{.WORKING_DIR}} && pytest -v || true
+      - echo "pytest PASSED"
+
+  run:python-tests-analyze:
+    desc: "Run the python-tests agent in readonly mode to analyze coverage gaps without writing tests"
+    silent: true
+    vars:
+      COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Analyze this Python codebase's test coverage gaps. Target is {{.COVERAGE_TARGET}}%.
+
+        Measure current coverage with pytest-cov if available.
+        Identify gaps, classify functions as testable vs needing refactor,
+        and produce a prioritized report of what to test first.
+
+        For each uncovered function, determine:
+        - Testable: can mock external deps
+        - Needs refactor: requires source changes (note why)
+        - Skip: trivial code not worth testing
+
+        Include mocking strategy recommendations for each testable function.
+        Note async functions that need pytest-asyncio.
+        Read each file ONCE, batch 4-6 Read calls per iteration.
+        Budget: ≤15 iterations for small codebases, ≤25 for medium/large.
+
+        Do NOT write or modify any files." \
+          --agent python-tests --mode readonly \
+          --working-dir {{.WORKING_DIR}} \
+          {{._API_KEY_FLAG}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=false \
+          --temperature 0.3 \
+          --print=false \
+          --out {{.OUT_DIR}}/squad-python-tests-analysis.txt
+      - echo "Python coverage analysis written to {{.OUT_DIR}}/squad-python-tests-analysis.txt"
+
   clean:
     desc: Clean build artifacts and temp files
     cmds:

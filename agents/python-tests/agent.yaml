@@ -1,0 +1,12 @@
+---
+name: python-tests
+version: 0.2.0
+description: Autonomously increase Python test coverage using pytest.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/python-testing-patterns.md
+modes:
+  readonly:
+    entrypoint: system-readonly.md
+    wrapper: agent-readonly.md
