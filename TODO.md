@@ -1,0 +1,3 @@
+- Remove reliance on taskfile for prompts
+- Update docs
+- Document process to create new agents - make sure it's relavtively easy and painless
