@@ -166,7 +166,6 @@ The pattern focuses on common cases. Review generated tests and add domain-speci
 
 - `go-tests` - Generate Go tests
 - `python-review` - Review Python code for best practices
-- `python-refactor` - Refactor Python code
 
 ## Version
 
