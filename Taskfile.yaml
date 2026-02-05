@@ -129,7 +129,6 @@ tasks:
     silent: true
     vars:
       COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
-      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
     cmds:
       - |
         go run ./cmd/squad run -v \
@@ -154,7 +153,7 @@ tasks:
         for total coverage. Never parse coverage.out manually with awk or read it raw.
         One command, one iteration." \
           --agent go-tests \
-          --working-dir {{.TARGET_REPO}} \
+          --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
@@ -167,7 +166,7 @@ tasks:
       - |
         echo ""
         echo "Running final verification..."
-      - cd {{.TARGET_REPO}} && go test ./...
+      - cd {{.WORKING_DIR}} && go test ./...
       - echo "go test ./... PASSED"
 
   run:go-tests-analyze:
@@ -175,7 +174,6 @@ tasks:
     silent: true
     vars:
       COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
-      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
     cmds:
       - |
         go run ./cmd/squad run -v \
@@ -186,7 +184,7 @@ tasks:
 
         Do NOT write or modify any files." \
           --agent go-tests --mode readonly \
-          --working-dir {{.TARGET_REPO}} \
+          --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
@@ -263,8 +261,6 @@ tasks:
   run:go-doc-comments:
     desc: "Run the go-doc-comments agent to autonomously add/improve Go doc comments"
     silent: true
-    vars:
-      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
     cmds:
       - |
         go run ./cmd/squad run -v \
@@ -294,7 +290,7 @@ tasks:
         - After go build passes, emit report IMMEDIATELY — no post-fix exploration
         - Every file touched must appear in the output report" \
           --agent go-doc-comments \
-          --working-dir {{.TARGET_REPO}} \
+          --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
@@ -306,14 +302,12 @@ tasks:
       - |
         echo ""
         echo "Running final verification..."
-      - cd {{.TARGET_REPO}} && go build ./...
+      - cd {{.WORKING_DIR}} && go build ./...
       - echo "go build ./... PASSED"
 
   run:go-doc-comments-analyze:
     desc: "Run the go-doc-comments agent in readonly mode to analyze doc comment gaps without applying fixes"
     silent: true
-    vars:
-      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
     cmds:
       - |
         go run ./cmd/squad run -v \
@@ -326,7 +320,7 @@ tasks:
 
         Do NOT write or modify any files." \
           --agent go-doc-comments --mode readonly \
-          --working-dir {{.TARGET_REPO}} \
+          --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
@@ -336,6 +330,91 @@ tasks:
           --print=false \
           --out /tmp/squad-go-doc-comments-analysis.txt
       - echo "Doc comments analysis written to /tmp/squad-go-doc-comments-analysis.txt"
+
+  run:go-security-audit:
+    desc: "Run the go-security-audit agent to autonomously fix Go security vulnerabilities"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Audit and fix all security vulnerabilities in this Go codebase.
+
+        Start by using Glob with '**/*.go' to discover all Go source files.
+        Read each file (skip _test.go and vendor/).
+        Read go.mod for dependency and Go version info.
+        Cross-reference between files for inconsistent security practices.
+        Apply fixes via Edit tool, highest severity first.
+        Run 'go build ./...' after each batch of edits.
+
+        IMPORTANT CONSTRAINTS (repeat from system prompt):
+        - SECURITY FOCUS ONLY — skip code quality, doc comments, naming style
+        - No new dependencies
+        - Skip fixes needing 50+ lines or new files
+        - Preserve backwards compatibility — no API surface changes
+        - NEVER change functions whose behavior is asserted by tests
+        - NEVER remove intentional panic() calls — they are precondition guards
+        - Every fix must be PROPORTIONAL — ask 'could an attacker exploit this?'
+        - Theoretical vulnerabilities in internal-only code are INFO, not fixes
+        - No false positives — every finding must reference actual code with file:line
+        - Include CWE IDs where applicable
+        - Read each file ONCE, catalog all findings, then fix — target ≤12 iterations
+        - Batch ALL edits for the same file in one iteration — do NOT make separate Edit calls
+        - ALWAYS pass glob='*.go' when using Grep — NEVER grep without a glob filter
+        - NEVER fall back to per-directory Grep calls — that wastes iterations
+        - If Grep fails with 'token too long', skip it and use your Read-phase notes
+        - STOP after go build + go test BOTH pass — emit report IMMEDIATELY in the SAME response
+        - Do NOT re-read files after verification — no nl, sed, cat, Bash, Grep after tests pass
+        - Every file touched must appear in the output report" \
+          --agent go-security-audit \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=true \
+          --temperature 0.3 \
+          --out /tmp/squad-go-security-audit.txt
+      - echo "Security audit output written to /tmp/squad-go-security-audit.txt"
+      - |
+        echo ""
+        echo "Running final verification..."
+      - go build ./...
+      - echo "go build ./... PASSED"
+
+  run:go-security-audit-analyze:
+    desc: "Run the go-security-audit agent in readonly mode to analyze security without applying fixes"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Analyze this Go codebase for security vulnerabilities.
+
+        Use Glob with '**/*.go' to discover all Go source files.
+        Read each file (skip _test.go and vendor/).
+        Read go.mod for dependency and Go version info.
+        Cross-reference between files for inconsistent security practices.
+        Produce a prioritized report of all security findings.
+
+        SECURITY FOCUS ONLY — skip code quality, doc comments, naming style.
+        No false positives — every finding must reference actual code.
+        Include CWE IDs where applicable.
+        Read each file ONCE, batch 4-6 Read calls per iteration — target ≤12 iterations.
+        ALWAYS pass glob='*.go' when using Grep — NEVER grep without a glob filter.
+        NEVER fall back to per-directory Grep calls — that wastes iterations.
+        After analysis, emit report IMMEDIATELY — no re-reading files.
+
+        Do NOT write or modify any files." \
+          --agent go-security-audit --mode readonly \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=false \
+          --temperature 0.3 \
+          --print=false \
+          --out /tmp/squad-go-security-audit-analysis.txt
+      - echo "Security audit analysis written to /tmp/squad-go-security-audit-analysis.txt"
 
   clean:
     desc: Clean build artifacts and temp files

@@ -32,9 +32,9 @@ import (
 
 const (
 	// FilePermReadWrite is the file mode used for config files.
-	FilePermReadWrite = 0o644
+	FilePermReadWrite = 0o600
 	// DirPermReadWriteExec is the directory mode used for config folders.
-	DirPermReadWriteExec = 0o755
+	DirPermReadWriteExec = 0o700
 )
 
 // Config represents the global squad configuration.

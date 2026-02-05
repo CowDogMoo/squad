@@ -164,10 +164,10 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(configPath), config.DirPermReadWriteExec); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
-	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+	if err := os.WriteFile(configPath, data, config.FilePermReadWrite); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
@@ -252,10 +252,10 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to marshal updated config: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(configPath), config.DirPermReadWriteExec); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
-	if err := os.WriteFile(configPath, out, 0o644); err != nil {
+	if err := os.WriteFile(configPath, out, config.FilePermReadWrite); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 
