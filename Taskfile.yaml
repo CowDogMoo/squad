@@ -17,8 +17,6 @@ vars:
   WORKING_DIR: '{{.WORKING_DIR | default "."}}'
   OUT: '{{.OUT | default "/tmp/squad-response.txt"}}'
 
-  # Judge pipeline configuration
-  NUM_WORKERS: '{{.NUM_WORKERS | default "3"}}'
   # Internal: conditionally include --base-url flag
   _BASE_URL_FLAG: '{{if .BASE_URL}}--base-url {{.BASE_URL}}{{end}}'
 
@@ -126,279 +124,11 @@ tasks:
           --out /tmp/squad-go-review-analysis.txt
       - echo "Go review analysis written to /tmp/squad-go-review-analysis.txt"
 
-  _run-codebase-workers:
-    desc: "Internal: spawn N workers to review entire codebase"
-    internal: true
-    silent: true
-    cmds:
-      - |
-        echo "Starting {{.NUM_WORKERS}} codebase review workers (agent={{.AGENT}}) in parallel..."
-        pids=""
-        for i in $(seq 1 {{.NUM_WORKERS}}); do
-          (
-            go run ./cmd/squad run -v \
-              "Review the ENTIRE Go codebase.
-
-        Start by running Glob with pattern '**/*.go' to discover all Go source files. Then Read each file (skip *_test.go files).
-
-        For each file, check for Cobra/Viper best‑practice violations and functional issues against your review criteria. Cross-reference between files — check that types, functions, and interfaces are used correctly across package boundaries.
-
-        Report every finding with: severity, category, file, line number, description, and suggested fix. If a file has no issues, skip it silently.
-
-        Report Cobra/Viper best‑practice violations AND functional issues:
-        - Flag binding: flags not bound to Viper, bypassing config precedence
-        - Args validators: missing or inadequate
-        - MarkFlagRequired: missing where required
-        - Command aliases: missing
-        - Dynamic completions: missing for flags like --agent, --provider, --model
-        - Signal handling: gaps in graceful shutdown
-        - Business logic in cmd/: code that should be in internal packages
-        - Global mutable flag state: package-level vars for flags
-        - Config precedence errors
-        - Error handling gaps (missing wrapping, ignored errors)
-        - Bugs, incorrect logic, wrong return values
-
-        Do NOT report cosmetic issues (missing doc comments, import ordering, naming style, magic numbers).
-        Do NOT edit any files. Do NOT use the Edit or Write tools." \
-              --agent {{.AGENT}} --mode readonly \
-              --working-dir {{.WORKING_DIR}} \
-              --api-key {{.API_KEY}} \
-              --provider {{.PROVIDER}} \
-              {{._BASE_URL_FLAG}} \
-              --model {{.MODEL}} \
-              --require-actionable=false \
-              --temperature 0.7 \
-              --out "/tmp/squad-worker-${i}.txt" \
-              --print=false \
-              2>"/tmp/squad-worker-${i}.log"
-            echo "Worker ${i} finished."
-          ) &
-          pids="${pids} $!"
-        done
-        echo "Waiting for all workers to complete... (logs: /tmp/squad-worker-{1..{{.NUM_WORKERS}}}.log)"
-        for pid in ${pids}; do
-          wait ${pid} 2>/dev/null || true
-        done
-        echo "All workers complete."
-        for i in $(seq 1 {{.NUM_WORKERS}}); do
-          if [ -s "/tmp/squad-worker-${i}.txt" ]; then
-            lines=$(wc -l < "/tmp/squad-worker-${i}.txt")
-            findings=$(grep -c '^\*\*Severity:\*\*\|^### ' "/tmp/squad-worker-${i}.txt" 2>/dev/null || echo 0)
-            echo "  Worker ${i}: ${lines} lines, ${findings} findings"
-          else
-            echo "  Worker ${i}: EMPTY (failed)"
-          fi
-        done
-
-  _run-scoped-judge:
-    desc: "Internal: combine worker outputs and run judge with a scoped mode"
-    internal: true
-    silent: true
-    vars:
-      SCOPE_MODE: '{{.SCOPE_MODE}}'
-      SCOPE_PROMPT: '{{.SCOPE_PROMPT}}'
-    cmds:
-      - |
-        echo "Combining worker outputs for scoped judge (mode={{.SCOPE_MODE}})..."
-        > /tmp/squad-workers-combined.txt
-        for i in $(seq 1 {{.NUM_WORKERS}}); do
-          if [ -s "/tmp/squad-worker-${i}.txt" ]; then
-            echo "--- WORKER ${i} ---" >> /tmp/squad-workers-combined.txt
-            cat "/tmp/squad-worker-${i}.txt" >> /tmp/squad-workers-combined.txt
-            echo "" >> /tmp/squad-workers-combined.txt
-          fi
-        done
-        echo "Running judge agent (mode={{.SCOPE_MODE}})..."
-        WORKER_CONTENT=$(cat /tmp/squad-workers-combined.txt)
-        go run ./cmd/squad run -v \
-          "You are judging {{.NUM_WORKERS}} independent reviews of the ENTIRE Go codebase.
-
-        Here are the worker outputs:
-
-        ${WORKER_CONTENT}
-
-        Now use Glob to discover all Go files, Read each one the workers referenced, tally findings across workers, validate each finding against the actual code, apply consensus fixes per your severity gating rules, and produce your judge report.
-
-        Use the Edit tool for every fix. If you make any edits, include a 'Files Touched' section. If no edits are made, include a 'No changes' section.
-
-        {{.SCOPE_PROMPT}}" \
-          --agent go-review-judge --mode {{.SCOPE_MODE}} \
-          --working-dir {{.WORKING_DIR}} \
-          --api-key {{.API_KEY}} \
-          --provider {{.PROVIDER}} \
-          {{._BASE_URL_FLAG}} \
-          --model {{.MODEL}} \
-          --num-ctx 32768 \
-          --temperature 0.2 \
-          --require-actionable=false \
-          --out /tmp/squad-judge.txt
-        echo "Judge output written to /tmp/squad-judge.txt"
-        # Validate that the judge produced actionable output
-        has_files_touched=$(grep -qi 'files touched' /tmp/squad-judge.txt && echo yes || echo no)
-        has_no_changes=$(grep -qi 'no changes' /tmp/squad-judge.txt && echo yes || echo no)
-        if [ "$has_files_touched" = "yes" ]; then
-          echo "Judge made edits (Files Touched found)."
-        elif [ "$has_no_changes" = "yes" ]; then
-          if [ "{{.SCOPE_MODE}}" = "phase-flags" ]; then
-            echo "Judge reported 'No changes' — allowing for Phase A if checks pass."
-          else
-            echo "ERROR: Judge reported 'No changes' — expected edits for this phase."
-            exit 1
-          fi
-        else
-          echo "ERROR: Judge output missing both 'Files Touched' and 'No changes' — invalid report."
-          exit 1
-        fi
-        # Phase A validation: ensure global flag vars are removed
-        if [ "{{.SCOPE_MODE}}" = "phase-flags" ]; then
-          if rg -n "run[A-Za-z0-9_]+\\s+(string|int|bool|float64)" cmd/squad/run.go >/dev/null 2>&1; then
-            echo "ERROR: Phase A check failed — run* global vars still declared in cmd/squad/run.go"
-            exit 1
-          fi
-          if rg -n "(StringVar|BoolVar|IntVar|Float64Var)\\(&run" cmd/squad/run.go >/dev/null 2>&1; then
-            echo "ERROR: Phase A check failed — flags still bound to run* globals in cmd/squad/run.go"
-            exit 1
-          fi
-          echo "Phase A check passed — no run* global var block found."
-        fi
-        # Phase B validation: ensure real extraction occurred (not a stub)
-        if [ "{{.SCOPE_MODE}}" = "phase-extract" ]; then
-          if [ ! -d runner ]; then
-            echo "ERROR: Phase B check failed — expected runner/ package to exist."
-            exit 1
-          fi
-          if [ ! -s runner/run.go ]; then
-            echo "ERROR: Phase B check failed — runner/run.go is missing."
-            exit 1
-          fi
-          if rg -n "TODO: full content omitted" runner/run.go >/dev/null 2>&1; then
-            echo "ERROR: Phase B check failed — runner/run.go is a stub."
-            exit 1
-          fi
-          if ! rg -n "func ExecuteRun\\(" runner/run.go >/dev/null 2>&1; then
-            echo "ERROR: Phase B check failed — runner.ExecuteRun not found."
-            exit 1
-          fi
-          if rg -n "func (executeRun|prepareBundle|invokeModel|applyUnifiedDiff|extractUnifiedDiff|validateActionableResponse)" cmd/squad/run.go >/dev/null 2>&1; then
-            echo "ERROR: Phase B check failed — business logic still present in cmd/squad/run.go"
-            exit 1
-          fi
-          echo "Phase B check passed — business logic moved out of cmd/squad/run.go."
-        fi
-
-  run:refactor-flags:
-    desc: "Phase A: Refactor global mutable flag state only"
-    silent: true
-    cmds:
-      - rm -f /tmp/squad-worker-*.txt /tmp/squad-judge.txt /tmp/squad-workers-combined.txt
-      - task: _run-codebase-workers
-      - |
-        count=0
-        for i in $(seq 1 {{.NUM_WORKERS}}); do
-          if [ -s "/tmp/squad-worker-${i}.txt" ]; then
-            findings=$(grep -c '^\*\*Severity:\*\*\|^### ' "/tmp/squad-worker-${i}.txt" 2>/dev/null || echo 0)
-            if [ "$findings" -ge 2 ]; then
-              count=$((count + 1))
-            else
-              echo "WARNING: Worker ${i} output has fewer than 2 findings — excluding from quorum."
-            fi
-          fi
-        done
-        if [ "$count" -lt 2 ]; then
-          echo "ERROR: Only ${count} worker(s) produced usable output. Need at least 2 for quorum."
-          exit 1
-        fi
-        echo "Quorum met: ${count}/{{.NUM_WORKERS}} workers produced usable output."
-      - task: _run-scoped-judge
-        vars:
-          SCOPE_MODE: phase-flags
-          SCOPE_PROMPT: "Focus ONLY on global mutable flag state. Follow the Mandatory Refactor Playbook for flag state. IGNORE all other findings including business-logic extraction, error handling, framework misuse. Skip them with reason 'out of scope for Phase A'. Do NOT use internal/ packages."
-      - |
-        echo ""
-        echo "=== Phase A (Flag State Refactor) Complete ==="
-        echo "Judge output: /tmp/squad-judge.txt"
-        echo ""
-        echo "Running build verification..."
-      - go build ./...
-      - echo "go build ./... PASSED"
-
-  run:refactor-extract:
-    desc: "Phase B: Extract business logic from cmd/ only"
-    silent: true
-    cmds:
-      - rm -f /tmp/squad-worker-*.txt /tmp/squad-judge.txt /tmp/squad-workers-combined.txt
-      - task: _run-codebase-workers
-      - |
-        count=0
-        for i in $(seq 1 {{.NUM_WORKERS}}); do
-          if [ -s "/tmp/squad-worker-${i}.txt" ]; then
-            findings=$(grep -c '^\*\*Severity:\*\*\|^### ' "/tmp/squad-worker-${i}.txt" 2>/dev/null || echo 0)
-            if [ "$findings" -ge 2 ]; then
-              count=$((count + 1))
-            else
-              echo "WARNING: Worker ${i} output has fewer than 2 findings — excluding from quorum."
-            fi
-          fi
-        done
-        if [ "$count" -lt 2 ]; then
-          echo "ERROR: Only ${count} worker(s) produced usable output. Need at least 2 for quorum."
-          exit 1
-        fi
-        echo "Quorum met: ${count}/{{.NUM_WORKERS}} workers produced usable output."
-      - task: _run-scoped-judge
-        vars:
-          SCOPE_MODE: phase-extract
-          SCOPE_PROMPT: "Focus ONLY on business logic extraction from cmd/squad/run.go.
-
-        EXACT PATH REQUIREMENT: You MUST create the file runner/run.go (relative to repo root). The package declaration MUST be 'package runner'. Do NOT use pkg/runner, internal/runner, runner/, or any other path. The ONLY acceptable path is runner/run.go.
-
-        Step 1: Read cmd/squad/run.go in full.
-        Step 2: Read go.mod to get the module path.
-        Step 3: Use the Write tool to create runner/run.go with package runner
-        and the COMPLETE bodies of these functions (export each — capitalize first letter):
-        executeRun, prepareBundle, invokeModel, handleResponse, callModel,
-        callResponsesAPI, callLangChainLLM, buildCallOpts, buildLLM,
-        buildOpenAICompatLLM, buildAnthropicLLM, buildNativeOllamaLLM,
-        normalizeProvider, isOpenAICompatProvider, applyResponseDiff,
-        validateActionableResponse, responseIndicatesNoChanges,
-        extractUnifiedDiff, looksLikeDiff, applyUnifiedDiff,
-        applyWithGit, applyWithPatch.
-        Copy full function bodies — no stubs, no TODOs, no abbreviations.
-        Step 4: Edit cmd/squad/run.go to remove those function definitions and update RunE to call runner.ExecuteRun. Add the runner import. Remove unused imports.
-        Step 5: Run go build ./... and fix any errors.
-
-        Global flag state is already fixed — do NOT touch it. IGNORE all other findings. Skip them with reason 'out of scope for Phase B'. Do NOT use internal/ packages."
-      - |
-        echo ""
-        echo "=== Phase B (Business Logic Extraction) Complete ==="
-        echo "Judge output: /tmp/squad-judge.txt"
-        echo ""
-        echo "Running build verification..."
-      - go build ./...
-      - echo "go build ./... PASSED"
-
-  run:refactor-all:
-    desc: "Run both refactor phases sequentially: flags first, then extraction"
-    silent: true
-    cmds:
-      - |
-        echo "=== Starting Phase A: Global Mutable Flag State ==="
-      - task: run:refactor-flags
-      - |
-        echo ""
-        echo "=== Phase A complete. Starting Phase B: Business Logic Extraction ==="
-        echo ""
-      - task: run:refactor-extract
-      - |
-        echo ""
-        echo "=== Both refactor phases complete ==="
-
   run:go-tests:
     desc: "Run the go-tests agent to autonomously increase test coverage to a target"
     silent: true
     vars:
       COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
-      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
     cmds:
       - |
         go run ./cmd/squad run -v \
@@ -423,7 +153,7 @@ tasks:
         for total coverage. Never parse coverage.out manually with awk or read it raw.
         One command, one iteration." \
           --agent go-tests \
-          --working-dir {{.TARGET_REPO}} \
+          --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
@@ -436,7 +166,7 @@ tasks:
       - |
         echo ""
         echo "Running final verification..."
-      - cd {{.TARGET_REPO}} && go test ./...
+      - cd {{.WORKING_DIR}} && go test ./...
       - echo "go test ./... PASSED"
 
   run:go-tests-analyze:
@@ -444,7 +174,6 @@ tasks:
     silent: true
     vars:
       COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
-      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
     cmds:
       - |
         go run ./cmd/squad run -v \
@@ -455,7 +184,7 @@ tasks:
 
         Do NOT write or modify any files." \
           --agent go-tests --mode readonly \
-          --working-dir {{.TARGET_REPO}} \
+          --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
@@ -532,8 +261,6 @@ tasks:
   run:go-doc-comments:
     desc: "Run the go-doc-comments agent to autonomously add/improve Go doc comments"
     silent: true
-    vars:
-      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
     cmds:
       - |
         go run ./cmd/squad run -v \
@@ -563,7 +290,7 @@ tasks:
         - After go build passes, emit report IMMEDIATELY — no post-fix exploration
         - Every file touched must appear in the output report" \
           --agent go-doc-comments \
-          --working-dir {{.TARGET_REPO}} \
+          --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
@@ -575,14 +302,12 @@ tasks:
       - |
         echo ""
         echo "Running final verification..."
-      - cd {{.TARGET_REPO}} && go build ./...
+      - cd {{.WORKING_DIR}} && go build ./...
       - echo "go build ./... PASSED"
 
   run:go-doc-comments-analyze:
     desc: "Run the go-doc-comments agent in readonly mode to analyze doc comment gaps without applying fixes"
     silent: true
-    vars:
-      TARGET_REPO: '{{.TARGET_REPO | default "."}}'
     cmds:
       - |
         go run ./cmd/squad run -v \
@@ -595,7 +320,7 @@ tasks:
 
         Do NOT write or modify any files." \
           --agent go-doc-comments --mode readonly \
-          --working-dir {{.TARGET_REPO}} \
+          --working-dir {{.WORKING_DIR}} \
           --api-key {{.API_KEY}} \
           --provider {{.PROVIDER}} \
           {{._BASE_URL_FLAG}} \
@@ -605,6 +330,91 @@ tasks:
           --print=false \
           --out /tmp/squad-go-doc-comments-analysis.txt
       - echo "Doc comments analysis written to /tmp/squad-go-doc-comments-analysis.txt"
+
+  run:go-security-audit:
+    desc: "Run the go-security-audit agent to autonomously fix Go security vulnerabilities"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Audit and fix all security vulnerabilities in this Go codebase.
+
+        Start by using Glob with '**/*.go' to discover all Go source files.
+        Read each file (skip _test.go and vendor/).
+        Read go.mod for dependency and Go version info.
+        Cross-reference between files for inconsistent security practices.
+        Apply fixes via Edit tool, highest severity first.
+        Run 'go build ./...' after each batch of edits.
+
+        IMPORTANT CONSTRAINTS (repeat from system prompt):
+        - SECURITY FOCUS ONLY — skip code quality, doc comments, naming style
+        - No new dependencies
+        - Skip fixes needing 50+ lines or new files
+        - Preserve backwards compatibility — no API surface changes
+        - NEVER change functions whose behavior is asserted by tests
+        - NEVER remove intentional panic() calls — they are precondition guards
+        - Every fix must be PROPORTIONAL — ask 'could an attacker exploit this?'
+        - Theoretical vulnerabilities in internal-only code are INFO, not fixes
+        - No false positives — every finding must reference actual code with file:line
+        - Include CWE IDs where applicable
+        - Read each file ONCE, catalog all findings, then fix — target ≤12 iterations
+        - Batch ALL edits for the same file in one iteration — do NOT make separate Edit calls
+        - ALWAYS pass glob='*.go' when using Grep — NEVER grep without a glob filter
+        - NEVER fall back to per-directory Grep calls — that wastes iterations
+        - If Grep fails with 'token too long', skip it and use your Read-phase notes
+        - STOP after go build + go test BOTH pass — emit report IMMEDIATELY in the SAME response
+        - Do NOT re-read files after verification — no nl, sed, cat, Bash, Grep after tests pass
+        - Every file touched must appear in the output report" \
+          --agent go-security-audit \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=true \
+          --temperature 0.3 \
+          --out /tmp/squad-go-security-audit.txt
+      - echo "Security audit output written to /tmp/squad-go-security-audit.txt"
+      - |
+        echo ""
+        echo "Running final verification..."
+      - go build ./...
+      - echo "go build ./... PASSED"
+
+  run:go-security-audit-analyze:
+    desc: "Run the go-security-audit agent in readonly mode to analyze security without applying fixes"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Analyze this Go codebase for security vulnerabilities.
+
+        Use Glob with '**/*.go' to discover all Go source files.
+        Read each file (skip _test.go and vendor/).
+        Read go.mod for dependency and Go version info.
+        Cross-reference between files for inconsistent security practices.
+        Produce a prioritized report of all security findings.
+
+        SECURITY FOCUS ONLY — skip code quality, doc comments, naming style.
+        No false positives — every finding must reference actual code.
+        Include CWE IDs where applicable.
+        Read each file ONCE, batch 4-6 Read calls per iteration — target ≤12 iterations.
+        ALWAYS pass glob='*.go' when using Grep — NEVER grep without a glob filter.
+        NEVER fall back to per-directory Grep calls — that wastes iterations.
+        After analysis, emit report IMMEDIATELY — no re-reading files.
+
+        Do NOT write or modify any files." \
+          --agent go-security-audit --mode readonly \
+          --working-dir {{.WORKING_DIR}} \
+          --api-key {{.API_KEY}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=false \
+          --temperature 0.3 \
+          --print=false \
+          --out /tmp/squad-go-security-audit-analysis.txt
+      - echo "Security audit analysis written to /tmp/squad-go-security-audit-analysis.txt"
 
   clean:
     desc: Clean build artifacts and temp files
