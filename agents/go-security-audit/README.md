@@ -348,7 +348,6 @@ The pattern is designed to be thorough. Review each finding in context - some ma
 ## Related Patterns
 
 - **go-review**: General code quality review for Go
-- **go-refactor**: Refactoring Go code to idiomatic standards
 - **go-tests**: Generate comprehensive tests for Go code
 
 ## Knowledge Base
