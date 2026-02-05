@@ -148,6 +148,8 @@ Follow this sequence exactly. Do not skip steps.
 - Variable or function naming style (unless actively misleading)
 - Whitespace or formatting preferences
 - Magic number extraction (unless it's a real bug)
+- Identifier/correlation ID assignments that may have domain-specific meaning
+- Loop variable initialization patterns unless they cause actual runtime errors
 
 # OUTPUT FORMAT
 

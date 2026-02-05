@@ -516,6 +516,8 @@ tasks:
         - NEVER change functions whose behavior is asserted by tests (pytest.raises)
         - NEVER remove intentional raise statements — they are precondition guards
         - Every fix must be PROPORTIONAL — no micro-optimizations for small loops
+        - NEVER change identifier/correlation ID assignments (job_id=x.project may be intentional)
+        - When fixing UnboundLocalError, use None as fallback, NOT another variable's value
         - Flag inconsistent imports (e.g. print() when codebase uses logging)
         - Flag async anti-patterns: fire-and-forget tasks, blocking calls in async functions
         - Flag legacy type syntax (Optional[X], List[str]) — use modern X | None, list[str]

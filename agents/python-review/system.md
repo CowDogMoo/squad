@@ -93,6 +93,15 @@ These override everything else.
     must justify why the new behavior is correct. Do not replace a harmless
     pass with error handling that changes behavior. If the only available
     fix is a lateral move (equally imperfect), skip it.
+
+    **Semantic preservation is paramount:**
+    - Do NOT change what values are assigned to variables (e.g. changing
+      `job_id=analysis.project` to `job_id=job_id` changes the semantics)
+    - Do NOT "fix" identifier/correlation ID assignments — these often have
+      domain-specific meaning you don't understand
+    - When fixing UnboundLocalError, use `None` as the fallback, not another
+      variable's value (e.g. `task_id = None`, not `task_id = job_id`)
+    - If you're unsure whether a change preserves semantics, SKIP IT
 17. **Think before "fixing" silenced errors.** Not every silenced error is a
     bug. Ask: "What would the caller do with this error?" If the answer is
     "nothing useful" (e.g. logging cleanup, optional cache, closing resources
@@ -402,6 +411,10 @@ Skip these entirely — do not report them, do not fix them:
 - Adding type annotations where inference is clear
 - Single-use abstractions added for "future flexibility"
 - Any function whose behavior is asserted by existing tests
+- **Identifier/correlation ID assignments** — `job_id=analysis.project` may
+  look "wrong" but often has domain-specific meaning; don't change it
+- **Loop variable initialization "fixes"** that change semantics — if fixing
+  UnboundLocalError, use `var = None`, not `var = other_var`
 
 # OUTPUT FORMAT
 
