@@ -148,6 +148,8 @@ Follow this sequence exactly. Do not skip steps.
 - **Missing type annotations** — on public API functions with non-obvious return types
   (e.g., `-> Path`, `-> dict[str, str]`). Do NOT report `-> None` — it's always inferable
 - **Dead code: identical branches** — if/else branches that do the exact same thing
+- **Overly large files** — files exceeding ~1000 lines are difficult to maintain
+  and test; ideal module size is 200-500 lines. Report with suggested split points
 
 ## Medium (Best Practices)
 
