@@ -1,8 +1,13 @@
 ---
 name: go-taskfile
-version: 0.1.0
-description: Create or refactor Taskfile setups using best practices.
+version: 0.2.0
+description: Autonomous Taskfile review agent that discovers configuration issues, fixes best-practice violations, and verifies the result parses correctly.
 entrypoint: system.md
 wrapper: agent.md
 references:
+  - references/taskfile-best-practices.md
   - references/go-taskfile-standards.md
+modes:
+  readonly:
+    entrypoint: system-readonly.md
+    wrapper: agent-readonly.md
