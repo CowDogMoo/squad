@@ -109,6 +109,9 @@ Follow this sequence exactly. Do not skip steps.
 - Missing schema comment
 - Circular task dependencies
 - Commands that fail silently
+- User-controlled paths in dangerous commands (rm -rf, chmod, etc.) - path
+  traversal risk. **Only flag if the variable has no default or an unsafe
+  default.** Variables with safe defaults like `/tmp` are LOW priority.
 
 # WHAT NOT TO REPORT
 
@@ -117,6 +120,8 @@ Follow this sequence exactly. Do not skip steps.
 - Variable or task naming style (unless actively misleading)
 - Adding optional fields like `summary:` when `desc:` is adequate
 - Reordering tasks or variables for aesthetic reasons
+- Path traversal validation for variables with safe defaults (e.g., `/tmp`) -
+  the threat model for local task runners doesn't justify the complexity
 
 # OUTPUT FORMAT
 

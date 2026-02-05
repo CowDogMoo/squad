@@ -166,6 +166,10 @@ These are the anti-patterns you MUST fix when found:
 - Missing schema comment - no IDE validation
 - Circular task dependencies - infinite loops
 - Commands that fail silently without error handling
+- User-controlled paths in dangerous commands (rm -rf, chmod, etc.) without
+  validation - path traversal risk. **Only flag if the variable has no default
+  or an unsafe default.** Variables with safe defaults like `/tmp` are LOW
+  priority - skip unless the variable is explicitly documented as user input.
 
 # HOW TO FIX - CORRECT PATTERNS
 
@@ -185,6 +189,16 @@ These are the anti-patterns you MUST fix when found:
 - **Unquoted templates:** Quote the value: `VAR: '{{.OTHER_VAR}}'`
 - **Missing silent:** Add `silent: true` to tasks that run other programs
 - **Inconsistent naming:** Use lowercase with colons: `namespace:action`
+- **User-controlled paths:** Add precondition to validate paths don't traverse,
+  but ONLY if the variable lacks a safe default:
+
+  ```yaml
+  # Only add this if the variable has no default or an unsafe default
+  # Skip if the variable defaults to a safe path like /tmp
+  preconditions:
+    - sh: echo "{{.USER_PATH}}" | grep -qv '\.\.'
+      msg: "USER_PATH cannot contain path traversal (..)"
+  ```
 
 # WHAT NOT TO FIX
 
@@ -197,6 +211,8 @@ Skip these entirely - do not report them, do not fix them:
 - Adding optional fields like `summary:` when `desc:` is adequate
 - Reordering tasks or variables for aesthetic reasons
 - Adding unnecessary preconditions for unlikely edge cases
+- Path traversal validation for variables with safe defaults (e.g., `/tmp`) -
+  the threat model for local task runners doesn't justify the complexity
 - Changes requiring new external dependencies
 - Restructuring that would change task behavior without clear benefit
 
