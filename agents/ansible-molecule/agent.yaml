@@ -1,0 +1,12 @@
+---
+name: ansible-molecule
+version: 0.1.0
+description: Autonomous Ansible Molecule testing agent that discovers roles, creates test scenarios, writes verification playbooks, and runs molecule test.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/molecule-testing-guide.md
+modes:
+  readonly:
+    entrypoint: system-readonly.md
+    wrapper: agent-readonly.md
