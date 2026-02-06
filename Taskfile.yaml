@@ -1021,6 +1021,135 @@ tasks:
           --out {{.OUT_DIR}}/squad-ansible-review-analysis.txt
       - echo "Ansible review analysis written to {{.OUT_DIR}}/squad-ansible-review-analysis.txt"
 
+  run:ansible-molecule:
+    desc: "Run the ansible-molecule agent to autonomously fix Molecule test quality issues"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Review and fix all Molecule test quality issues in this codebase.
+
+        Start by using Glob with '**/molecule/**/*.yml' and '**/molecule.yml' to discover all Molecule files.
+        Filter to Molecule-specific files: molecule.yml, converge.yml, verify.yml, prepare.yml, cleanup.yml.
+        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
+        Cross-reference between files for consistency issues.
+        Apply fixes via Edit tool, highest severity first.
+        Run 'ansible-lint molecule/' after each batch of edits (if available).
+
+        ANALYSIS CHECKLIST (check each file for these):
+        - verify.yml — does it have assertions (ansible.builtin.assert or failed_when)? (CRITICAL if missing)
+        - molecule.yml — does test_sequence include idempotence? (HIGH if missing)
+        - molecule.yml — multiple platforms if role supports multiple OS families? (HIGH if single platform)
+        - converge.yml/verify.yml — all modules use FQCN? (MEDIUM if short names)
+        - verify.yml — gather_facts enabled when using ansible_facts? (MEDIUM if missing)
+        - verify.yml — check_mode on read-only verification tasks? (LOW if missing)
+
+        PRIORITY (mandatory order):
+        - Fix ALL CRITICAL (no assertions, broken tests) before ANY HIGH
+        - Fix ALL HIGH (missing idempotence, single platform) before ANY MEDIUM
+
+        CONSTRAINTS:
+        - No cosmetic changes (whitespace, comment style, YAML formatting)
+        - Skip fixes needing 50+ lines or new files
+        - Preserve test semantics — if a test asserts specific behavior, don't change it
+        - FQCN is mandatory in all test playbooks
+        - Every fix must IMPROVE test reliability, coverage, or correctness
+
+        ITERATION BUDGET — scales with codebase size (count after Glob):
+        - Small (≤15 files): 12 iterations max
+        - Medium (16-35 files): 20 iterations max
+        - Large (35+ files): 25 iterations max
+
+        Phase allocation:
+        - Phase 1 (1 iter): Glob to discover files, COUNT source files
+        - Phase 2 (varies): Read files with 4-6 parallel Reads per iteration
+        - Phase 3 (2-4 iter): ALL Edit calls batched (10 fixes = 10 Edit calls in ONE response)
+        - Phase 4 (1 iter): Verify + report in SAME response
+
+        Do NOT hardcode directory names like roles/myrole/molecule/ — use Glob output.
+        Do NOT try to read reference files — they are bundled in your context.
+        COVERAGE IS MANDATORY for small/medium. For large codebases, document sampling.
+
+        HARD REQUIREMENTS:
+        - Do NOT read one file per iteration — batch 4-6 Read calls per iteration
+        - Do NOT edit-wait-edit-wait — batch ALL edits into ONE iteration
+        - Do NOT re-read files after editing — trust Edit output
+        - STOP after verification — emit report in SAME response, NO more iterations
+        - If ansible-lint not installed, proceed with syntax check only
+        - Every file touched must appear in the output report" \
+          --agent ansible-molecule \
+          --working-dir {{.WORKING_DIR}} \
+          {{._API_KEY_FLAG}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=true \
+          --temperature 0.3 \
+          --out {{.OUT_DIR}}/squad-ansible-molecule.txt
+      - echo "Ansible Molecule review output written to {{.OUT_DIR}}/squad-ansible-molecule.txt"
+      - |
+        echo ""
+        echo "Running final verification..."
+      - cd {{.WORKING_DIR}} && ansible-lint molecule/ 2>/dev/null || true
+      - echo "Verification complete"
+
+  run:ansible-molecule-analyze:
+    desc: "Run the ansible-molecule agent in readonly mode to analyze Molecule test quality without applying fixes"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Analyze this codebase for Molecule test quality issues.
+
+        Use Glob with '**/molecule/**/*.yml' and '**/molecule.yml' to discover all Molecule files.
+        Filter to Molecule-specific files: molecule.yml, converge.yml, verify.yml, prepare.yml, cleanup.yml.
+        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
+        Cross-reference between files for consistency issues.
+        Produce a prioritized report of all findings.
+
+        ANALYSIS CHECKLIST (check each file for these):
+        - verify.yml — does it have assertions? (CRITICAL if missing)
+        - molecule.yml — does test_sequence include idempotence? (HIGH if missing)
+        - molecule.yml — multiple platforms if role supports multiple OS families? (HIGH if single)
+        - converge.yml/verify.yml — all modules use FQCN? (MEDIUM if short names)
+        - verify.yml — gather_facts enabled when using ansible_facts? (MEDIUM if missing)
+        - verify.yml — check_mode on read-only verification tasks? (LOW if missing)
+
+        SEVERITY GUIDE:
+        - CRITICAL: no assertions in verify.yml, syntax errors, broken role inclusion
+        - HIGH: missing idempotence in test_sequence, single platform on multi-platform role
+        - MEDIUM: missing FQCN, weak assertions (check existence only)
+        - LOW: non-descriptive task names, missing comments
+
+        No cosmetic findings — skip whitespace, comment style, YAML formatting.
+        No false positives — every finding must reference actual file and line.
+
+        ITERATION BUDGET — scales with codebase size (count after Glob):
+        - Small (≤15 files): 12 iterations max
+        - Medium (16-35 files): 20 iterations max
+        - Large (35+ files): 25 iterations max
+
+        EFFICIENCY (must follow):
+        - Batch reads: 4-6 files per iteration, not one file per iteration
+        - Do NOT hardcode directory names like roles/myrole/molecule/ — use Glob output
+        - Do NOT try to read reference files — they are bundled in your context
+        - Small/medium: read ALL files. Large: prioritize molecule.yml + verify.yml
+        - Use ONE Grep/Glob on repo root — do NOT run per-directory searches
+        - After analysis is complete, emit report IMMEDIATELY — no re-reading files
+
+        Do NOT write or modify any files." \
+          --agent ansible-molecule --mode readonly \
+          --working-dir {{.WORKING_DIR}} \
+          {{._API_KEY_FLAG}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=false \
+          --temperature 0.3 \
+          --print=false \
+          --out {{.OUT_DIR}}/squad-ansible-molecule-analysis.txt
+      - echo "Ansible Molecule analysis written to {{.OUT_DIR}}/squad-ansible-molecule-analysis.txt"
+
   clean:
     desc: Clean build artifacts and temp files
     cmds:
