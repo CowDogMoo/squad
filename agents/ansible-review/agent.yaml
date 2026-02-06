@@ -1,0 +1,13 @@
+---
+name: ansible-review
+version: 0.2.0
+description: Autonomous Ansible code review agent that discovers quality issues, security anti-patterns, and best-practice violations in playbooks, roles, and collections.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/ansible-standards.md
+  - references/ansible-review-criteria.md
+modes:
+  readonly:
+    entrypoint: system-readonly.md
+    wrapper: agent-readonly.md

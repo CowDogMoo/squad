@@ -886,6 +886,141 @@ tasks:
           --out {{.OUT_DIR}}/squad-python-doc-comments-analysis.txt
       - echo "Python doc comments analysis written to {{.OUT_DIR}}/squad-python-doc-comments-analysis.txt"
 
+  run:ansible-review:
+    desc: "Run the ansible-review agent to autonomously fix Ansible code quality issues"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Review and fix all Ansible code quality issues in this codebase.
+
+        Start by using Glob with '**/*.yml' and '**/*.yaml' to discover all YAML files.
+        Filter to Ansible-relevant files: playbooks, tasks, handlers, vars, defaults, meta, molecule.
+        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
+        Cross-reference between files for consistency issues.
+        Apply fixes via Edit tool, highest severity first.
+        Run 'ansible-lint .' after each batch of edits (if available).
+
+        ANALYSIS CHECKLIST (check each file for these):
+        - FQCN usage — all modules MUST use fully qualified names (ansible.builtin.x, not x:)
+        - Task names — every task MUST have a descriptive name: field
+        - Handlers — are notifies matched by handler names?
+        - Idempotency — command/shell tasks have creates/removes or changed_when?
+          BUT: only for IDEMPOTENT commands. For state-changing commands (execute,
+          run, mv), use changed_when: true, NOT changed_when: false.
+          CRITICAL: NEVER remove changed_when entirely — ansible-lint REQUIRES it
+          on ALL command/shell tasks. Fix: change 'false' to 'true', don't delete.
+        - Security — no_log on credential tasks? vault for secrets?
+        - Variables — role-prefixed names? defaults vs vars usage correct?
+
+        PRIORITY (mandatory order):
+        - Fix ALL CRITICAL (security, correctness) before ANY HIGH
+        - Fix ALL HIGH (idempotency, reliability) before ANY MEDIUM
+
+        CONSTRAINTS:
+        - No cosmetic changes (import ordering, whitespace, comment style)
+        - Skip fixes needing 50+ lines or new files
+        - Preserve backwards compatibility — no variable renames, no role restructuring
+        - NEVER change functions whose behavior is asserted by Molecule tests
+        - Every fix must be PROPORTIONAL — no theoretical improvements without real impact
+
+        ITERATION BUDGET — scales with codebase size (count after Glob):
+        - Small (≤20 files): 12 iterations max
+        - Medium (21-50 files): 20 iterations max
+        - Large (50+ files): 25 iterations max
+
+        Phase allocation:
+        - Phase 1 (1 iter): Glob to discover files, COUNT source files
+        - Phase 2 (varies): Read files with 4-6 parallel Reads per iteration
+        - Phase 3 (2-4 iter): ALL Edit calls batched (10 fixes = 10 Edit calls in ONE response)
+        - Phase 4 (1 iter): Verify + report in SAME response
+
+        Do NOT hardcode directory names like roles/, playbooks/ — use Glob output.
+        Do NOT try to read reference files — they are bundled in your context.
+        COVERAGE IS MANDATORY for small/medium. For large codebases, document sampling.
+
+        HARD REQUIREMENTS:
+        - Do NOT read one file per iteration — batch 4-6 Read calls per iteration
+        - Do NOT edit-wait-edit-wait — batch ALL edits into ONE iteration
+        - Do NOT re-read files after editing — trust Edit output
+        - STOP after verification — emit report in SAME response, NO more iterations
+        - If ansible-lint not installed, proceed with syntax check only
+        - Every file touched must appear in the output report" \
+          --agent ansible-review \
+          --working-dir {{.WORKING_DIR}} \
+          {{._API_KEY_FLAG}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=true \
+          --temperature 0.3 \
+          --out {{.OUT_DIR}}/squad-ansible-review.txt
+      - echo "Ansible review output written to {{.OUT_DIR}}/squad-ansible-review.txt"
+      - |
+        echo ""
+        echo "Running final verification..."
+      - cd {{.WORKING_DIR}} && ansible-lint . 2>/dev/null || true
+      - echo "Verification complete"
+
+  run:ansible-review-analyze:
+    desc: "Run the ansible-review agent in readonly mode to analyze Ansible code quality without applying fixes"
+    silent: true
+    cmds:
+      - |
+        go run ./cmd/squad run -v \
+          "Analyze this codebase for Ansible code quality issues.
+
+        Use Glob with '**/*.yml' and '**/*.yaml' to discover all YAML files.
+        Filter to Ansible-relevant files: playbooks, tasks, handlers, vars, defaults, meta, molecule.
+        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
+        Cross-reference between files for consistency issues.
+        Produce a prioritized report of all findings.
+
+        ANALYSIS CHECKLIST (check each file for these):
+        - FQCN usage — all modules MUST use fully qualified names (MEDIUM if missing)
+        - Task names — every task MUST have a descriptive name: field (LOW if missing)
+        - Handlers — are notifies matched by handler names? (HIGH if orphaned)
+        - Idempotency — command/shell tasks have guards? (HIGH if not idempotent)
+          For state-changing commands, suggest changed_when: true, NOT removal.
+          ansible-lint REQUIRES changed_when on ALL command/shell tasks.
+        - Security — no_log on credentials? vault for secrets? (CRITICAL if exposed)
+        - Variables — role-prefixed? correct precedence usage? (MEDIUM if wrong)
+
+        SEVERITY GUIDE:
+        - CRITICAL: hardcoded secrets, missing no_log on credentials, command injection
+        - HIGH: non-idempotent tasks, orphaned handlers, missing check_mode support
+        - MEDIUM: missing FQCN, poor variable naming, missing argument_specs
+        - LOW: missing task names, inconsistent YAML style
+
+        No cosmetic findings — skip comment style, whitespace, import ordering.
+        No false positives — every finding must reference actual file and line.
+
+        ITERATION BUDGET — scales with codebase size (count after Glob):
+        - Small (≤20 files): 12 iterations max
+        - Medium (21-50 files): 20 iterations max
+        - Large (50+ files): 25 iterations max
+
+        EFFICIENCY (must follow):
+        - Batch reads: 4-6 files per iteration, not one file per iteration
+        - Do NOT hardcode directory names like roles/, playbooks/ — use Glob output
+        - Do NOT try to read reference files — they are bundled in your context
+        - Small/medium: read ALL files. Large: prioritize entry points + core roles
+        - Use ONE Grep/Glob on repo root — do NOT run per-directory searches
+        - After analysis is complete, emit report IMMEDIATELY — no re-reading files
+
+        Do NOT write or modify any files." \
+          --agent ansible-review --mode readonly \
+          --working-dir {{.WORKING_DIR}} \
+          {{._API_KEY_FLAG}} \
+          --provider {{.PROVIDER}} \
+          {{._BASE_URL_FLAG}} \
+          --model {{.MODEL}} \
+          --require-actionable=false \
+          --temperature 0.3 \
+          --print=false \
+          --out {{.OUT_DIR}}/squad-ansible-review-analysis.txt
+      - echo "Ansible review analysis written to {{.OUT_DIR}}/squad-ansible-review-analysis.txt"
+
   clean:
     desc: Clean build artifacts and temp files
     cmds:
