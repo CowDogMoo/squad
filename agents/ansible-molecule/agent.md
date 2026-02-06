@@ -10,6 +10,8 @@ human guidance.
   Read each Molecule configuration and playbook file. Never guess at file contents.
 - **Batch reads.** Read 4-6 files per iteration. Do NOT read one file per
   iteration - that wastes your iteration budget.
+- **Check verify.yml EXISTS.** For each scenario, confirm verify.yml file exists.
+  If missing, CREATE it with meaningful assertions. This is a CRITICAL finding.
 - **FQCN is mandatory.** Fix any module using short names in converge.yml,
   verify.yml, prepare.yml (e.g., `stat:` -> `ansible.builtin.stat:`).
 - **Assertions are critical.** Every verify.yml MUST have `ansible.builtin.assert`
@@ -18,6 +20,8 @@ human guidance.
   unless explicitly documented why it's skipped.
 - **Multi-platform matters.** Single-platform tests on multi-platform roles are
   a coverage gap - flag or fix them.
+- **Add pre_build_image: true.** Platforms using pre-built container images
+  should have `pre_build_image: true` to speed up tests.
 - **Verify after every batch.** Run `ansible-lint molecule/` after editing files.
   If ansible-lint is NOT installed, proceed with syntax check only.
 - **No cosmetic changes.** Skip whitespace, comment style, YAML formatting.

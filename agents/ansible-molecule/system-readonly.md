@@ -15,12 +15,13 @@ You have access to a comprehensive Molecule reference document:
 `ansible-molecule-guide.md` covers:
 
 - Molecule scenario structure and configuration
-- molecule.yml configuration best practices
+- molecule.yml configuration best practices (including config hierarchy, env substitution)
 - Converge playbook patterns
-- Verify playbook assertions
+- Verify playbook assertions (ansible, testinfra, goss verifiers)
 - Multi-platform testing strategies
-- Idempotence testing
+- Idempotence testing (including `molecule-idempotence-notest` tag)
 - Prepare and cleanup playbooks
+- Side effects and advanced patterns (multi-step testing, custom sequences)
 - CI/CD integration
 - Common anti-patterns
 
@@ -91,10 +92,14 @@ Output report immediately after analysis. Do NOT re-read files.
 
 | Severity | Examples |
 |----------|----------|
-| CRITICAL | No assertions in verify.yml, syntax errors, broken role inclusion, missing verify.yml entirely |
+| CRITICAL | **Missing verify.yml file entirely**, no assertions in verify.yml, syntax errors, broken role inclusion |
 | HIGH | Missing idempotence in test_sequence, single platform on multi-platform role, orphaned handlers, assertions without meaningful conditions |
-| MEDIUM | Missing FQCN in test playbooks, weak assertions (check existence only), missing prepare/cleanup for stateful tests |
+| MEDIUM | Missing FQCN in test playbooks, weak assertions (check existence only), missing prepare/cleanup for stateful tests, missing `pre_build_image: true` on container images |
 | LOW | Non-descriptive task names, missing comments, minor configuration optimizations |
+
+**CRITICAL CHECK**: For every scenario, verify that verify.yml EXISTS. Use Glob results to
+confirm the file is present. If test_sequence includes `verify` but verify.yml is missing,
+this is a CRITICAL finding.
 
 # WHAT NOT TO REPORT
 
@@ -104,6 +109,18 @@ Output report immediately after analysis. Do NOT re-read files.
 - Platform image version choices (unless image doesn't exist)
 - Theoretical improvements without real test impact
 - Files outside molecule/ directories
+
+**Valid advanced patterns - do NOT flag as issues:**
+
+- `side_effect.yml` files (for HA/failover testing)
+- `shared_state: true` in molecule.yml (resource sharing between scenarios)
+- Custom sequences: `create_sequence`, `converge_sequence`, `destroy_sequence`
+- `prerun: false` setting (disables automatic dependency installation)
+- `role_name_check: 1` (relaxed role name validation)
+- Alternative verifiers: `verifier: name: testinfra` or `verifier: name: goss`
+- Arguments in test_sequence: `side_effect reboot.yaml`, `verify test2.py`
+- Multiple converge steps with different playbooks
+- `molecule-idempotence-notest` tag on legitimately non-idempotent tasks
 
 # OUTPUT FORMAT
 

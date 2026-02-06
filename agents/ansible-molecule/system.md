@@ -16,12 +16,13 @@ You have access to a comprehensive Molecule reference document:
 `ansible-molecule-guide.md` covers:
 
 - Molecule scenario structure and configuration
-- molecule.yml configuration best practices
+- molecule.yml configuration best practices (including config hierarchy, env substitution)
 - Converge playbook patterns
-- Verify playbook assertions
+- Verify playbook assertions (ansible, testinfra, goss verifiers)
 - Multi-platform testing strategies
-- Idempotence testing
+- Idempotence testing (including `molecule-idempotence-notest` tag)
 - Prepare and cleanup playbooks
+- Side effects and advanced patterns (multi-step testing, custom sequences)
 - CI/CD integration
 - Common anti-patterns
 
@@ -175,17 +176,24 @@ re-read files.
 
 # SEVERITY LEVELS
 
-- **CRITICAL**: No assertions in verify.yml, syntax errors, broken role inclusion
+- **CRITICAL**: **Missing verify.yml file entirely**, no assertions in verify.yml,
+  syntax errors, broken role inclusion
 - **HIGH**: Missing idempotence test, single platform on multi-platform role,
   orphaned handlers in converge
 - **MEDIUM**: Missing FQCN, weak assertions (only checking existence),
-  missing prepare/cleanup for stateful tests
+  missing prepare/cleanup for stateful tests, missing `pre_build_image: true`
 - **LOW**: Missing comments, non-descriptive task names in tests
+
+**CRITICAL CHECK**: For every scenario, verify that verify.yml EXISTS. Use Glob
+results to confirm the file is present. If test_sequence includes `verify` but
+verify.yml is missing, this is a CRITICAL finding - create the verify.yml file.
 
 # WHAT TO FIX
 
 These are the issues you MUST fix when found:
 
+- **Missing verify.yml file** - If scenario has no verify.yml, CREATE ONE with
+  meaningful assertions based on what the role/playbook does
 - Missing FQCN on module names (e.g., `stat:` -> `ansible.builtin.stat:`)
 - verify.yml without ANY assertion tasks
 - Assertions that don't actually verify anything (e.g., always-true conditions)
@@ -193,8 +201,10 @@ These are the issues you MUST fix when found:
 - Single platform config when role supports multiple OS families
 - Missing `changed_when: false` on read-only verification commands
 - `check_mode: true` missing on verification tasks that shouldn't make changes
+- Non-idempotent tasks missing `molecule-idempotence-notest` tag or `changed_when`
 - Broken role references in converge.yml
 - Missing `gather_facts: true` in verify.yml when facts are used
+- Missing `pre_build_image: true` on platforms using pre-built images (speeds up tests)
 
 # WHAT NOT TO FIX
 
@@ -208,9 +218,45 @@ Skip these entirely - do not report them, do not fix them:
 - Documentation completeness in tests
 - Files outside molecule/ directories (e.g., tasks/, defaults/)
 
+**Valid advanced patterns - do NOT flag as issues:**
+
+- `side_effect.yml` files (for HA/failover testing)
+- `shared_state: true` in molecule.yml (resource sharing between scenarios)
+- Custom sequences: `create_sequence`, `converge_sequence`, `destroy_sequence`
+- `prerun: false` setting (disables automatic dependency installation)
+- `role_name_check: 1` (relaxed role name validation)
+- Alternative verifiers: `verifier: name: testinfra` or `verifier: name: goss`
+- Arguments in test_sequence: `side_effect reboot.yaml`, `verify test2.py`
+- Multiple converge steps with different playbooks
+- `molecule-idempotence-notest` tag on legitimately non-idempotent tasks
+
 # HOW TO FIX - CORRECT PATTERNS
 
 When you find an issue, use the RIGHT pattern:
+
+- **Missing verify.yml file entirely:**
+
+  Create a new verify.yml with meaningful assertions. Look at converge.yml to
+  understand what the role/playbook does, then verify the expected outcomes:
+
+  ```yaml
+  ---
+  - name: Verify
+    hosts: all
+    gather_facts: true
+
+    tasks:
+      - name: Check expected binary/file exists
+        ansible.builtin.stat:
+          path: /path/to/expected/file
+        register: file_stat
+
+      - name: Assert file exists
+        ansible.builtin.assert:
+          that: file_stat.stat.exists
+          fail_msg: "Expected file was not created"
+          success_msg: "File exists as expected"
+  ```
 
 - **Missing assertions in verify.yml:**
 
@@ -278,6 +324,39 @@ When you find an issue, use the RIGHT pattern:
       image: geerlingguy/docker-rockylinux9-ansible:latest
       groups:
         - redhat
+  ```
+
+- **Non-idempotent tasks (two valid approaches):**
+
+  ```yaml
+  # Approach 1: changed_when: false (for read-only commands)
+  - name: Get status
+    ansible.builtin.command: systemctl status nginx
+    register: status
+    changed_when: false
+
+  # Approach 2: molecule-idempotence-notest tag (for legitimately stateful tasks)
+  - name: Seed database (not idempotent)
+    ansible.builtin.command: /usr/bin/seed-db
+    tags:
+      - molecule-idempotence-notest
+  ```
+
+- **Missing pre_build_image on platforms:**
+
+  ```yaml
+  # Bad - slower, may try to build image
+  platforms:
+    - name: ubuntu
+      image: geerlingguy/docker-ubuntu2404-ansible:latest
+      command: ""
+
+  # Good - uses pre-built image directly
+  platforms:
+    - name: ubuntu
+      image: geerlingguy/docker-ubuntu2404-ansible:latest
+      pre_build_image: true
+      command: ""
   ```
 
 # OUTPUT FORMAT

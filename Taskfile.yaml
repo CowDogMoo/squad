@@ -1037,9 +1037,11 @@ tasks:
         Run 'ansible-lint molecule/' after each batch of edits (if available).
 
         ANALYSIS CHECKLIST (check each file for these):
+        - verify.yml — does the file EXIST? (CRITICAL if scenario has no verify.yml — create one)
         - verify.yml — does it have assertions (ansible.builtin.assert or failed_when)? (CRITICAL if missing)
         - molecule.yml — does test_sequence include idempotence? (HIGH if missing)
         - molecule.yml — multiple platforms if role supports multiple OS families? (HIGH if single platform)
+        - molecule.yml — platforms using pre-built images have pre_build_image: true? (MEDIUM if missing)
         - converge.yml/verify.yml — all modules use FQCN? (MEDIUM if short names)
         - verify.yml — gather_facts enabled when using ansible_facts? (MEDIUM if missing)
         - verify.yml — check_mode on read-only verification tasks? (LOW if missing)
@@ -1050,10 +1052,11 @@ tasks:
 
         CONSTRAINTS:
         - No cosmetic changes (whitespace, comment style, YAML formatting)
-        - Skip fixes needing 50+ lines or new files
+        - Skip fixes needing 50+ lines (except: creating missing verify.yml is always allowed)
         - Preserve test semantics — if a test asserts specific behavior, don't change it
         - FQCN is mandatory in all test playbooks
         - Every fix must IMPROVE test reliability, coverage, or correctness
+        - When creating verify.yml, look at converge.yml to understand what to verify
 
         ITERATION BUDGET — scales with codebase size (count after Glob):
         - Small (≤15 files): 12 iterations max
@@ -1108,17 +1111,19 @@ tasks:
         Produce a prioritized report of all findings.
 
         ANALYSIS CHECKLIST (check each file for these):
+        - verify.yml — does the file EXIST? (CRITICAL if scenario has no verify.yml)
         - verify.yml — does it have assertions? (CRITICAL if missing)
         - molecule.yml — does test_sequence include idempotence? (HIGH if missing)
         - molecule.yml — multiple platforms if role supports multiple OS families? (HIGH if single)
+        - molecule.yml — platforms using pre-built images have pre_build_image: true? (MEDIUM if missing)
         - converge.yml/verify.yml — all modules use FQCN? (MEDIUM if short names)
         - verify.yml — gather_facts enabled when using ansible_facts? (MEDIUM if missing)
         - verify.yml — check_mode on read-only verification tasks? (LOW if missing)
 
         SEVERITY GUIDE:
-        - CRITICAL: no assertions in verify.yml, syntax errors, broken role inclusion
+        - CRITICAL: MISSING verify.yml file entirely, no assertions in verify.yml, syntax errors
         - HIGH: missing idempotence in test_sequence, single platform on multi-platform role
-        - MEDIUM: missing FQCN, weak assertions (check existence only)
+        - MEDIUM: missing FQCN, weak assertions, missing pre_build_image: true
         - LOW: non-descriptive task names, missing comments
 
         No cosmetic findings — skip whitespace, comment style, YAML formatting.

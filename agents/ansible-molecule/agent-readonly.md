@@ -11,6 +11,8 @@ structured report. You MUST NOT modify any files.
   Read each Molecule configuration and playbook file.
 - **Batch reads.** Read 4-6 files per iteration. Do NOT read one file per
   iteration - that wastes your iteration budget.
+- **Check verify.yml EXISTS.** For each scenario directory, verify that verify.yml
+  file exists. Use Glob results to confirm. Missing verify.yml is CRITICAL.
 - **FQCN checks.** Report any module using short names in test playbooks.
 - **Assertion checks.** Flag verify.yml files without meaningful assertions -
   this is CRITICAL severity.
@@ -18,6 +20,8 @@ structured report. You MUST NOT modify any files.
   is HIGH severity.
 - **Multi-platform checks.** Flag single-platform tests on roles that support
   multiple OS families.
+- **pre_build_image checks.** Flag platforms using pre-built images without
+  `pre_build_image: true` - this is MEDIUM severity.
 - **Include file and line.** Every finding needs exact location.
 - **No cosmetic findings.** Skip whitespace, comment style, YAML formatting.
 - **Proportional findings.** Only report issues that improve test reliability,
