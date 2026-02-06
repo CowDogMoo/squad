@@ -1027,59 +1027,57 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Review and fix all Molecule test quality issues in this codebase.
+          "Your PRIMARY MISSION is VERIFICATION DEPTH — ensuring verify.yml actually tests
+        everything the role does, not just file existence. 'Checking existence is NOT enough.'
 
-        Start by using Glob with '**/molecule/**/*.yml' and '**/molecule.yml' to discover all Molecule files.
-        Filter to Molecule-specific files: molecule.yml, converge.yml, verify.yml, prepare.yml, cleanup.yml.
-        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
-        Cross-reference between files for consistency issues.
-        Apply fixes via Edit tool, highest severity first.
-        Run 'ansible-lint molecule/' after each batch of edits (if available).
+        Start by using Glob with '**/molecule/**/*.yml', '**/molecule.yml', and '**/tasks/main.yml'.
+        You MUST read tasks/main.yml to understand what the role DOES (packages, files, permissions, env vars).
+        Batch Read calls: 4-6 files per iteration. Do NOT read one file per iteration.
 
-        ANALYSIS CHECKLIST (check each file for these):
-        - verify.yml — does the file EXIST? (CRITICAL if scenario has no verify.yml — create one)
-        - verify.yml — does it have assertions (ansible.builtin.assert or failed_when)? (CRITICAL if missing)
-        - molecule.yml — does test_sequence include idempotence? (HIGH if missing)
-        - molecule.yml — multiple platforms if role supports multiple OS families? (HIGH if single platform)
-        - molecule.yml — platforms using pre-built images have pre_build_image: true? (MEDIUM if missing)
-        - converge.yml/verify.yml — all modules use FQCN? (MEDIUM if short names)
-        - verify.yml — gather_facts enabled when using ansible_facts? (MEDIUM if missing)
-        - verify.yml — check_mode on read-only verification tasks? (LOW if missing)
+        VERIFICATION DEPTH CHECKLIST (THE #1 SOURCE OF MISSED FINDINGS):
+        For EACH thing the role tasks do, verify.yml MUST check it with STRONG assertions:
+        1. Binary with mode 0755? → verify MUST check stat.exists AND stat.executable AND stat.mode=='0755'
+           - If verify only checks 'exists' → HIGH severity weak assertion → ADD permission checks
+        2. Package installs (apt/dnf/package)? → verify MUST check with check_mode + failed_when: pkg.changed
+           - If packages not verified at all → HIGH severity → ADD package verification
+        3. Env vars set in /etc/environment? → verify MUST slurp file + assert vars present
+           - If env vars not verified → MEDIUM severity → ADD slurp + assert
+        4. Directories with permissions? → verify MUST check mode + owner, not just existence
+           - If only checks existence → MEDIUM severity → ADD mode/owner checks
+        5. Services enabled/started? → verify MUST check state=='running' + status=='enabled'
 
-        PRIORITY (mandatory order):
-        - Fix ALL CRITICAL (no assertions, broken tests) before ANY HIGH
-        - Fix ALL HIGH (missing idempotence, single platform) before ANY MEDIUM
+        DEAD CODE CHECK (MEDIUM severity):
+        - Look at molecule.yml platforms — what OS families are defined?
+        - Does verify.yml have conditions like 'when: ansible_os_family == Windows'?
+        - If NO Windows platform exists → that condition can NEVER be true → REMOVE the dead code block
+        - **IMPORTANT: Document removed platforms in Issues Skipped table** — e.g., 'Darwin/Windows
+          conditions removed — cannot be tested in Docker containers, only Debian/RedHat defined'
 
-        CONSTRAINTS:
-        - No cosmetic changes (whitespace, comment style, YAML formatting)
-        - Skip fixes needing 50+ lines (except: creating missing verify.yml is always allowed)
-        - Preserve test semantics — if a test asserts specific behavior, don't change it
-        - FQCN is mandatory in all test playbooks
-        - Every fix must IMPROVE test reliability, coverage, or correctness
-        - When creating verify.yml, look at converge.yml to understand what to verify
+        OTHER CHECKS (after verification depth):
+        - verify.yml EXISTS? (CRITICAL if missing)
+        - test_sequence includes idempotence? (HIGH if missing)
+        - FQCN on all modules? (MEDIUM if short names)
+        - pre_build_image: true on pre-built images? (MEDIUM if missing)
 
-        ITERATION BUDGET — scales with codebase size (count after Glob):
+        PRIORITY ORDER (mandatory):
+        1. Fix ALL verification depth issues (weak assertions, missing checks) FIRST
+        2. Fix dead code (unreachable conditions)
+        3. Fix config issues (idempotence, platforms)
+        4. Fix style (FQCN)
+
+        ITERATION BUDGET — scales with codebase size:
         - Small (≤15 files): 12 iterations max
         - Medium (16-35 files): 20 iterations max
         - Large (35+ files): 25 iterations max
 
-        Phase allocation:
-        - Phase 1 (1 iter): Glob to discover files, COUNT source files
-        - Phase 2 (varies): Read files with 4-6 parallel Reads per iteration
-        - Phase 3 (2-4 iter): ALL Edit calls batched (10 fixes = 10 Edit calls in ONE response)
-        - Phase 4 (1 iter): Verify + report in SAME response
-
-        Do NOT hardcode directory names like roles/myrole/molecule/ — use Glob output.
-        Do NOT try to read reference files — they are bundled in your context.
-        COVERAGE IS MANDATORY for small/medium. For large codebases, document sampling.
-
         HARD REQUIREMENTS:
-        - Do NOT read one file per iteration — batch 4-6 Read calls per iteration
-        - Do NOT edit-wait-edit-wait — batch ALL edits into ONE iteration
+        - Batch 4-6 Read calls per iteration, not one file per iteration
+        - Batch ALL Edit calls into ONE iteration (10 fixes = 10 Edit calls in ONE response)
         - Do NOT re-read files after editing — trust Edit output
         - STOP after verification — emit report in SAME response, NO more iterations
         - If ansible-lint not installed, proceed with syntax check only
-        - Every file touched must appear in the output report" \
+        - Every file touched must appear in the output report
+        - Do NOT hardcode directory names — use Glob output" \
           --agent ansible-molecule \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -1102,45 +1100,51 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Analyze this codebase for Molecule test quality issues.
+          "Your PRIMARY MISSION is VERIFICATION DEPTH — finding places where verify.yml
+        doesn't actually test everything the role does. 'Checking existence is NOT enough.'
 
-        Use Glob with '**/molecule/**/*.yml' and '**/molecule.yml' to discover all Molecule files.
-        Filter to Molecule-specific files: molecule.yml, converge.yml, verify.yml, prepare.yml, cleanup.yml.
-        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
-        Cross-reference between files for consistency issues.
-        Produce a prioritized report of all findings.
+        Use Glob with '**/molecule/**/*.yml', '**/molecule.yml', and '**/tasks/main.yml'.
+        You MUST read tasks/main.yml to understand what the role DOES (packages, files, permissions, env vars).
+        Batch Read calls: 4-6 files per iteration. Do NOT read one file per iteration.
 
-        ANALYSIS CHECKLIST (check each file for these):
-        - verify.yml — does the file EXIST? (CRITICAL if scenario has no verify.yml)
-        - verify.yml — does it have assertions? (CRITICAL if missing)
-        - molecule.yml — does test_sequence include idempotence? (HIGH if missing)
-        - molecule.yml — multiple platforms if role supports multiple OS families? (HIGH if single)
-        - molecule.yml — platforms using pre-built images have pre_build_image: true? (MEDIUM if missing)
-        - converge.yml/verify.yml — all modules use FQCN? (MEDIUM if short names)
-        - verify.yml — gather_facts enabled when using ansible_facts? (MEDIUM if missing)
-        - verify.yml — check_mode on read-only verification tasks? (LOW if missing)
+        VERIFICATION DEPTH CHECKLIST (THE #1 SOURCE OF MISSED FINDINGS):
+        For EACH thing the role tasks do, verify.yml MUST check it with STRONG assertions:
+        1. Binary with mode 0755? → verify MUST check stat.exists AND stat.executable AND stat.mode=='0755'
+           - If verify only checks 'exists' → HIGH severity weak assertion
+        2. Package installs (apt/dnf/package)? → verify MUST check with check_mode + failed_when: pkg.changed
+           - If packages not verified at all → HIGH severity
+        3. Env vars set in /etc/environment? → verify MUST slurp file + assert vars present
+           - If env vars not verified → MEDIUM severity
+        4. Directories with permissions? → verify MUST check mode + owner, not just existence
+           - If only checks existence → MEDIUM severity
+        5. Services enabled/started? → verify MUST check state=='running' + status=='enabled'
 
-        SEVERITY GUIDE:
-        - CRITICAL: MISSING verify.yml file entirely, no assertions in verify.yml, syntax errors
-        - HIGH: missing idempotence in test_sequence, single platform on multi-platform role
-        - MEDIUM: missing FQCN, weak assertions, missing pre_build_image: true
-        - LOW: non-descriptive task names, missing comments
+        DEAD CODE CHECK (MEDIUM severity):
+        - Look at molecule.yml platforms — what OS families are defined?
+        - Does verify.yml have conditions like 'when: ansible_os_family == Windows'?
+        - If NO Windows platform exists → that condition can NEVER be true → report as DEAD CODE
 
-        No cosmetic findings — skip whitespace, comment style, YAML formatting.
-        No false positives — every finding must reference actual file and line.
+        OTHER CHECKS (after verification depth):
+        - verify.yml EXISTS? (CRITICAL if missing)
+        - test_sequence includes idempotence? (HIGH if missing)
+        - FQCN on all modules? (MEDIUM if short names)
+        - pre_build_image: true on pre-built images? (MEDIUM if missing)
 
-        ITERATION BUDGET — scales with codebase size (count after Glob):
+        PRIORITY ORDER in report (mandatory):
+        1. Verification depth issues (weak assertions, missing checks)
+        2. Dead code (unreachable conditions)
+        3. Config issues (idempotence, platforms)
+        4. Style (FQCN)
+
+        ITERATION BUDGET — scales with codebase size:
         - Small (≤15 files): 12 iterations max
         - Medium (16-35 files): 20 iterations max
         - Large (35+ files): 25 iterations max
 
-        EFFICIENCY (must follow):
-        - Batch reads: 4-6 files per iteration, not one file per iteration
-        - Do NOT hardcode directory names like roles/myrole/molecule/ — use Glob output
-        - Do NOT try to read reference files — they are bundled in your context
-        - Small/medium: read ALL files. Large: prioritize molecule.yml + verify.yml
-        - Use ONE Grep/Glob on repo root — do NOT run per-directory searches
-        - After analysis is complete, emit report IMMEDIATELY — no re-reading files
+        EFFICIENCY:
+        - Batch 4-6 Read calls per iteration
+        - Do NOT hardcode directory names — use Glob output
+        - After analysis, emit report IMMEDIATELY — no re-reading files
 
         Do NOT write or modify any files." \
           --agent ansible-molecule --mode readonly \
