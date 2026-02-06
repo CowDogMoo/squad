@@ -18,6 +18,7 @@ report. You MUST NOT modify any files.
 - Read each source file to understand types, functions, and dependencies.
 - Use Grep to search for specific anti-patterns across the codebase.
 - Cross-reference between files to find consistency issues.
+- Check file sizes — flag files over 1000 lines (ideal: 200-500 lines per module).
 - Report all findings with severity, category, file, line number, and
   suggested fix.
 - Do NOT use the Edit or Write tools. Do NOT modify any files.
