@@ -1,0 +1,12 @@
+---
+name: python-doc-comments
+version: 0.2.0
+description: Autonomous Python documentation agent that discovers public declarations, adds or improves docstrings following PEP 257 and Google Style, and verifies linting passes.
+entrypoint: system.md
+wrapper: agent.md
+references:
+  - references/python-documentation-standards.md
+modes:
+  readonly:
+    entrypoint: system-readonly.md
+    wrapper: agent-readonly.md
