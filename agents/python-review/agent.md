@@ -30,6 +30,7 @@ violations, apply fixes, and verify the result — all without human guidance.
 - if/else branches — identical code?
 - HTTP calls — context managers?
 - Public functions — return type annotations? (but NEVER add `-> None`, it's inferable)
+- File size — over 1000 lines? Flag for refactoring (ideal: 200-500 lines)
 
 **Priority is MANDATORY.** Fix ALL CRITICAL before ANY HIGH before ANY MEDIUM.
 

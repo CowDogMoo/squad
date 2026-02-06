@@ -281,6 +281,9 @@ These are the anti-patterns you MUST fix when found:
 - **Missing type annotations** — on public API functions with non-obvious return types
   (e.g., `-> Path`, `-> dict[str, str]`). Do NOT add `-> None` — it's always inferable
 - **Dead code: identical branches** — if/else branches that do the exact same thing
+- **Overly large files** — files exceeding ~1000 lines are difficult to maintain
+  and test; ideal module size is 200-500 lines. Flag for refactoring but do NOT
+  attempt to split files automatically (too risky per rule 8)
 
 ## Medium (Best Practices)
 
