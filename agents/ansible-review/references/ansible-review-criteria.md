@@ -1241,7 +1241,7 @@ handlers:
       state: restarted
 ```
 
-Sources: [Ansible Anti-patterns](https://medium.com/@william.wheeler_87363/ansible-antipatterns-9606bccad018)
+Sources: [Ansible Lint Rules](https://docs.ansible.com/projects/lint/rules/)
 
 ---
 
