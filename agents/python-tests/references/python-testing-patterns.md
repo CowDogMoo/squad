@@ -11,6 +11,8 @@ This document serves as the knowledge base for Python testing conventions and pa
 3. **Avoid over-mocking**: Only mock external dependencies
 4. **Arrange-Act-Assert**: Structure tests clearly with setup, execution, verification
 5. **One concept per test**: Each test should verify one thing
+6. **DRY applies to test setup**: If stub/mock code appears in 2+ test files, extract to `conftest.py`
+7. **Self-documenting tests**: Each test function gets a one-line docstring stating what behavior it verifies
 
 ### F.I.R.S.T. Principles
 
@@ -400,6 +402,68 @@ async def test_async_side_effect(mocker):
 - Standard library functions (usually)
 - Internal implementation details
 - Code you're testing
+
+### Import-time Stubbing (sys.modules)
+
+When a module imports an unavailable package, stub the package BEFORE importing
+the module under test.
+
+**CRITICAL: For pytest, stubs MUST be at MODULE LEVEL in conftest.py, NOT inside
+fixtures.** pytest imports conftest.py BEFORE collecting test files. If stubs
+are inside fixtures, test file imports fail with `ModuleNotFoundError`.
+
+**CORRECT pattern — stubs at module level in conftest.py:**
+
+```python
+# tests/conftest.py
+import sys
+import types
+
+# ========== MODULE-LEVEL STUBS — MUST BE AT TOP ==========
+# Applied when conftest.py is imported (before test collection)
+# Add stubs for any unavailable packages the source code imports
+
+external_pkg = types.ModuleType("external_package")
+external_pkg.SomeClass = type("SomeClass", (), {})
+external_pkg.decorator = lambda *a, **k: lambda x: x
+sys.modules["external_package"] = external_pkg
+
+# For nested modules: parent.child
+parent = types.ModuleType("parent")
+child = types.ModuleType("parent.child")
+child.func = lambda *a, **k: None
+parent.child = child
+sys.modules["parent"] = parent
+sys.modules["parent.child"] = child
+
+# ========== END MODULE-LEVEL STUBS ==========
+
+import pytest
+
+# Fixtures go AFTER the stubs
+@pytest.fixture
+def sample_data():
+    return {"key": "value"}
+```
+
+**WRONG pattern — stubs inside fixtures (causes collection failures):**
+
+```python
+# tests/conftest.py — WRONG! Don't do this.
+import pytest
+
+@pytest.fixture
+def api_module(monkeypatch):
+    # TOO LATE! Test files already failed to import
+    import sys, types
+    pkg = types.ModuleType("external_package")
+    monkeypatch.setitem(sys.modules, "external_package", pkg)
+    from myapp import api  # This line never runs
+    return api
+```
+
+**Key insight:** Importing an unfamiliar package is NOT a reason to skip testing.
+Stub the import at module level in conftest.py and test the business logic.
 
 ## Async Testing
 
@@ -852,6 +916,17 @@ pytest -m "not slow"
 ```
 
 ## conftest.py Organization
+
+### When to Create conftest.py
+
+Create `tests/conftest.py` when ANY of these appear in 2+ test files:
+
+- Module stubs (`sys.modules` manipulation, fake classes for external deps)
+- Mock/stub class definitions (e.g., `DummyResponse`, `FakeClient`)
+- Complex fixture setup (database connections, API clients)
+- Shared test data factories
+
+**Signal**: If you copy-paste setup code between test files, stop and move it to conftest.py.
 
 ### Hierarchical Structure
 

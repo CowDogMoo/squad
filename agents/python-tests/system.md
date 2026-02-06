@@ -68,8 +68,10 @@ These override everything else.
     were skipped.
 15. **Coverage measurement: use pytest-cov with branch coverage.** Use
     `pytest --cov=<package> --cov-branch --cov-report=term-missing` to get
-    coverage. Branch coverage is more meaningful than line coverage alone.
-    Parse the final percentage from the output.
+    coverage. **You MUST specify the package** (e.g., `--cov=app`, `--cov=src`)
+    — bare `--cov` only measures imported code and will miss untested modules.
+    Discover the package name from Glob output. Branch coverage is more
+    meaningful than line coverage alone. Parse the TOTAL percentage from output.
 16. **Respect existing test patterns.** Read any existing test files first
     and match their style: fixture patterns, assertion style, test class vs
     function organization.
@@ -92,85 +94,157 @@ These override everything else.
 - **Medium (16-30 files)**: 25 iterations max
 - **Large (30+ files)**: 35 iterations max
 
-Budget allocation for small codebase:
+**CRITICAL: WRITE EARLY, WRITE OFTEN**
 
-- Phase 1: 2 iterations (Glob + coverage measurement)
-- Phase 2: 2-3 iterations (read ALL source files with batched Read calls)
-- Phase 3: 4-6 iterations (write ALL test files)
-- Phase 4: 2 iterations (verify + report in SAME response)
+Do NOT read all files before writing. Interleave reading and writing:
 
-**CRITICAL EFFICIENCY RULES:**
+- Read 2-3 files → Write tests for those → Read 2-3 more → Write tests → ...
+- This prevents token exhaustion from reasoning about too many files at once.
+- Reasoning models (o1, o3, codex) can hit output limits if they think too long
+  before acting. ACT QUICKLY — produce Write calls early and often.
 
-1. **Batch Read calls.** Read 4-6 source files in ONE iteration using parallel
-   Read calls. Do NOT read one file per iteration.
-2. **Use Write, not Edit.** When creating new test files, use Write with the
-   complete file content. One Write call is better than 10+ Edit calls.
-3. **Write multiple test files at once.** After reading sources, create ALL
-   test files in 1-2 iterations using multiple parallel Write calls.
-4. **STOP after verification.** Once pytest passes, emit the report in the
+**STRICT ITERATION SEQUENCE (follow exactly)**
+
+For a small codebase (≤15 files), you have 15 iterations total. Follow this exact sequence:
+
+```
+Iter 1:  Glob + pip show pytest-cov + pytest --cov (baseline)
+Iter 2:  Read 3 source files + pyproject.toml
+Iter 3:  Read remaining source files
+Iter 4:  Write conftest.py
+Iter 5:  Write 3 test files (parallel Write calls)
+Iter 6:  Write remaining test files (parallel Write calls)
+Iter 7:  pytest -v (FIRST and ideally ONLY pytest run)
+Iter 8:  If failures: Write ALL fixed test files (parallel)
+Iter 9:  pytest -v (SECOND pytest run if needed) + REPORT
+```
+
+**HARD RULES:**
+
+- pytest runs: MAXIMUM 2. Count them. Stop at 2.
+- After pytest passes: emit report IMMEDIATELY. No more tool calls.
+- Do NOT run pytest to "check progress" — only after ALL files are written.
+
+**EFFICIENCY RULES:**
+
+1. **Interleave reads and writes.** Read 2-3 source files, then IMMEDIATELY
+   Write tests for them before reading more. Do NOT accumulate 5+ files in
+   memory before writing.
+2. **ALWAYS use Write, NEVER Edit.** For EVERY test file including conftest.py,
+   use Write with the COMPLETE file content. Edit is FORBIDDEN for test files.
+   One Write call per file. If you need to modify a test file, Write the entire
+   new content — do NOT use Edit. Edit calls waste iterations.
+3. **Write conftest.py FIRST.** Before writing any test files, write a complete
+   conftest.py with ALL stubs you'll need (sys.modules stubs, fixtures).
+4. **Verify ALL tests at once.** Run `pytest -v` ONCE for all tests, not per-file.
+   Per-file verification wastes iterations.
+5. **STOP after verification.** Once pytest passes, emit the report in the
    SAME response. Do NOT re-read files, run additional commands, or explore.
-5. **No post-test exploration.** Every tool call after tests pass is wasted.
+6. **No post-test exploration.** Every tool call after tests pass is wasted.
 
-## Phase 1: Measure (2 iterations)
+## Phase 1: Measure (1-2 iterations)
 
 **Iteration 1:** In parallel:
 
 - `Glob **/*.py` to discover all files
 - Check pytest-cov: `pip show pytest-cov 2>/dev/null || echo "NOT INSTALLED"`
+- If pytest-cov available, run `pytest --cov=<pkg> --cov-branch --cov-report=term-missing -q || true`
+  where `<pkg>` is the source package discovered from Glob (e.g., `app`, `src`, package name).
+  **CRITICAL:** Do NOT use bare `--cov` — it only measures imported code.
+- Record baseline coverage percentage from the TOTAL line (0% if no tests exist)
 
-**Iteration 2:**
+## Phase 2-3: Read + Write (INTERLEAVED)
 
-- If pytest-cov available, run `pytest --cov --cov-report=term-missing -q`
-- Record baseline coverage percentage
+**DO NOT read all files before writing. Interleave:**
 
-## Phase 2: Read Sources (2-3 iterations)
+**Iteration 2:** Read first 2-3 source modules + pyproject.toml
+**Iteration 3:** Write conftest.py + tests for those 2-3 modules (parallel Write calls)
+**Iteration 4:** Read next 2-3 source modules
+**Iteration 5:** Write tests for those modules (parallel Write calls)
+**Iteration 6:** Read any remaining modules
+**Iteration 7:** Write remaining tests (parallel Write calls)
 
-Count source files (exclude `__pycache__/`, `.venv/`, `test_*.py`).
-Batch reads: 4-6 files per iteration.
-
-**Iteration 3-4:** Read ALL source files in 2 iterations:
-
-- First iteration: Read the first 4-6 source modules
-- Second iteration: Read remaining modules
-- Note: Read `pyproject.toml` in first batch for Python version
-
-While reading, catalog:
+**While reading each file, immediately note:**
 
 - Functions to test (public, has logic)
-- Functions to skip (trivial, requires live deps)
 - Dependencies to mock (HTTP, DB, file I/O)
+- Import stubs needed (ray, fastapi, dreadnode → sys.modules)
 
-## Phase 3: Write Tests (3-4 iterations)
-
-**Iteration 5-6:** Write ALL test files in 1-2 iterations:
+**When writing tests:**
 
 - Use Write tool with complete test file content
-- Multiple Write calls in same iteration for different modules
-- Follow design principles:
-  - `@pytest.mark.parametrize` with `pytest.param(..., id="name")` for clarity
+- **Write MULTIPLE test files in ONE iteration** using parallel Write calls
+- Extract common stubs to `tests/conftest.py` in first write iteration
+- Follow patterns:
+  - `@pytest.mark.parametrize` with `pytest.param(..., id="name")`
   - `tmp_path` fixture for file operations
-  - `unittest.mock.patch` with `autospec=True` for external deps
-  - `AsyncMock` for async dependencies
-  - `@pytest.mark.asyncio` for async test functions
+  - `unittest.mock.patch` with `autospec=True`
+  - `AsyncMock` + `@pytest.mark.asyncio` for async
 
-**Iteration 7-8:** If tests fail, fix in 1-2 more iterations.
+**CRITICAL: conftest.py STRUCTURE** — sys.modules stubs MUST be at MODULE LEVEL
+(not inside fixtures) so they're applied during pytest collection:
 
-## Phase 4: Verify + Report (1-2 iterations)
+```python
+# tests/conftest.py — CORRECT STRUCTURE
+import sys
+import types
 
-**Final iteration:** Run verification AND output report in SAME response:
+# ========== MODULE-LEVEL STUBS (applied at import time) ==========
+# These MUST be at top level, NOT inside fixtures
+# Add stubs for any unavailable packages the source code imports
 
-```bash
-pytest -v
+stub_pkg = types.ModuleType("unavailable_package")
+stub_pkg.SomeClass = type("SomeClass", (), {})
+stub_pkg.some_decorator = lambda *a, **k: lambda x: x
+sys.modules["unavailable_package"] = stub_pkg
+
+# ========== END MODULE-LEVEL STUBS ==========
+
+import pytest
+
+# Fixtures go AFTER the stubs
+@pytest.fixture
+def sample_fixture():
+    ...
 ```
 
-If pytest passes, IMMEDIATELY output the report. Do NOT:
+**WHY THIS MATTERS:** pytest imports conftest.py BEFORE collecting test files.
+If stubs are inside fixtures, they only run during test execution — too late!
+The test files will fail to import because the stubbed packages don't exist.
+
+**CRITICAL: Do NOT run pytest between write iterations.** Write ALL test files
+first, THEN run pytest ONCE at the end. Running pytest after each file wastes
+iterations.
+
+## Phase 4: Verify + Report (1-2 iterations MAX)
+
+**Final iteration:** Run pytest ONCE for ALL tests:
+
+```bash
+pytest -v --tb=short
+```
+
+**If tests PASS:** Emit the report in the SAME response. Done.
+
+**If tests FAIL:** Fix ALL failing tests in ONE iteration:
+
+- Identify ALL failures from pytest output
+- Rewrite ALL failing test files in parallel Write calls
+- Run pytest ONE more time
+- Emit report regardless of outcome
+
+**CRITICAL: Do NOT fix failures one file at a time.** If 3 files have failures,
+rewrite all 3 in ONE iteration with parallel Write calls. Running pytest after
+each fix wastes iterations.
+
+After verification, do NOT:
 
 - Re-read any files
-- Run additional Bash commands
+- Run pytest again (once passing)
+- Run coverage commands
 - Use Glob or Grep
-- Explore coverage details
 
-A passing test suite + report = done.
+Maximum 2 pytest runs total: once after writing, once after fixing failures.
 
 # WHAT TO TEST
 
@@ -189,13 +263,54 @@ A passing test suite + report = done.
 - Trivial `__init__` methods that only assign attributes
 - Functions that only delegate to another function with no transformation
 - `if __name__ == "__main__":` blocks
-- Functions that require live external services (APIs, databases) unless
-  you can mock the dependency
+- Functions that require live external services (APIs, databases) that
+  CANNOT be mocked — this is rare. Most dependencies CAN be mocked.
+  **Importing an unfamiliar package is NOT a reason to skip** — stub it.
 - Private helper functions fully exercised through public function tests
 - Type aliases and protocol definitions
 - Import statements and module-level constants
 
 # MOCKING STRATEGY
+
+## Import-time vs Runtime Dependencies
+
+**CRITICAL DISTINCTION:**
+
+- **Import-time dependencies** = packages the module imports (`ray`, `fastapi`,
+  `dreadnode`, `pythonnet`, etc.). These are ALWAYS stubbable via `sys.modules`.
+- **Runtime dependencies** = live network calls, database queries, file I/O to
+  external paths. These need mocking at call time.
+
+A module that imports `ray.serve` or `ICSharpCode.Decompiler` is NOT untestable.
+Stub the import before loading the module:
+
+```python
+# Stub before importing the module under test
+import sys
+import types
+
+ray_module = types.ModuleType("ray")
+serve_module = types.ModuleType("ray.serve")
+serve_module.deployment = lambda *a, **k: lambda x: x  # decorator stub
+ray_module.serve = serve_module
+sys.modules["ray"] = ray_module
+sys.modules["ray.serve"] = serve_module
+
+# NOW import the module that depends on ray.serve
+from app.api import MyClass  # This import will succeed
+```
+
+**Decision tree:**
+
+1. Module imports an unavailable package? → Stub it in `sys.modules`
+2. Function makes HTTP calls? → Mock the client or use `respx`/`responses`
+3. Function reads/writes files? → Use `tmp_path` fixture
+4. Function queries a database? → Mock the connection or use test DB
+
+**DO NOT skip a module just because it imports an unfamiliar package.**
+Stub the import and test the logic.
+
+## Runtime Mocking
 
 When a function depends on an external service:
 

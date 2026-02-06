@@ -29,6 +29,12 @@ These override everything else.
    - **Testable**: Can be tested with mocks for external dependencies
    - **Needs refactor**: Requires source changes to be testable (note why)
    - **Skip**: Trivial code not worth testing
+
+   **IMPORTANT:** Importing an unfamiliar package (ray, fastapi, dreadnode,
+   pythonnet, etc.) does NOT make a function untestable. Those imports can
+   be stubbed via `sys.modules`. Only mark as "Needs refactor" if the code
+   has a structural problem (e.g., global state, no injection points for
+   truly live services).
 5. **Prioritize by impact.** Rank functions by: (1) business logic complexity,
    (2) public API surface, (3) error handling paths.
 6. **No test generation.** Do not produce test code. Only produce analysis.

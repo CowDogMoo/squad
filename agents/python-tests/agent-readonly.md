@@ -9,11 +9,13 @@ coverage, and produce a prioritized testing plan — WITHOUT writing any tests.
   This run is for analysis only.
 - **Measure coverage.** Use pytest-cov if available to get baseline metrics.
 - **Analyze testability.** For each uncovered function, classify as testable,
-  needs refactor, or skip.
+  needs refactor, or skip. **Unfamiliar imports (ray, fastapi, dreadnode, etc.)
+  do NOT make code untestable** — those can be stubbed via `sys.modules`.
 - **Prioritize by impact.** Rank functions by business logic complexity and
   public API importance.
 - **Identify mocking needs.** Note which external dependencies (HTTP, DB, files)
-  would need to be mocked for each function.
+  would need to be mocked for each function. Include `sys.modules` stubbing for
+  unavailable packages.
 
 # OUTPUT COMPLIANCE
 
