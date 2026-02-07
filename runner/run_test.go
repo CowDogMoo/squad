@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/spf13/cobra"
 )
 
@@ -327,7 +328,7 @@ func TestInvokeModelMissingAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	opts := &RunOptions{Provider: "openai-responses", Model: "gpt-5"}
 	bundle := &agent.Bundle{System: "sys", User: "user", WorkDir: "."}
-	_, err := invokeModel(context.Background(), opts, bundle)
+	_, _, err := invokeModel(context.Background(), opts, bundle)
 	if err == nil {
 		t.Fatalf("expected error for missing API key")
 	}
@@ -424,5 +425,50 @@ func TestExecuteRunSuccessOllama(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "ok") {
 		t.Fatalf("expected response output, got %q", buf.String())
+	}
+}
+
+func TestPrintMetrics(t *testing.T) {
+	t.Parallel()
+	var errBuf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetErr(&errBuf)
+
+	m := metrics.New("openai", "gpt-4o")
+	m.AddTokens(1000, 500)
+	m.IncrementIterations()
+	m.Finish()
+
+	printMetrics(cmd, m)
+
+	output := errBuf.String()
+	if !strings.Contains(output, "Agent Metrics") {
+		t.Fatalf("printMetrics() missing header in output: %q", output)
+	}
+	if !strings.Contains(output, "gpt-4o") {
+		t.Fatalf("printMetrics() missing model in output: %q", output)
+	}
+	if !strings.Contains(output, "openai") {
+		t.Fatalf("printMetrics() missing provider in output: %q", output)
+	}
+	if !strings.Contains(output, "1000 input") {
+		t.Fatalf("printMetrics() missing input tokens in output: %q", output)
+	}
+	if !strings.Contains(output, "500 output") {
+		t.Fatalf("printMetrics() missing output tokens in output: %q", output)
+	}
+}
+
+func TestPrintMetricsNil(t *testing.T) {
+	t.Parallel()
+	var errBuf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetErr(&errBuf)
+
+	// Should not panic when metrics is nil
+	printMetrics(cmd, nil)
+
+	if errBuf.Len() != 0 {
+		t.Fatalf("printMetrics(nil) should not output anything, got: %q", errBuf.String())
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/tools"
 	openai "github.com/openai/openai-go/v3"
 	oairesponses "github.com/openai/openai-go/v3/responses"
@@ -349,6 +350,7 @@ func TestRunWithToolsNoToolCalls(t *testing.T) {
 		0,
 		1,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
@@ -365,7 +367,7 @@ func TestRequestFinalMissingID(t *testing.T) {
 	t.Parallel()
 	client := openai.NewClient()
 	cfg := &Config{Model: "gpt-4o"}
-	if _, err := requestFinal(context.Background(), client, "", "sys", cfg); err == nil {
+	if _, err := requestFinal(context.Background(), client, "", "sys", cfg, nil); err == nil {
 		t.Fatalf("expected error")
 	}
 }
@@ -462,6 +464,7 @@ func TestRunWithToolsExhaustedWithPendingCalls(t *testing.T) {
 		0,
 		1, // maxIterations=1 → loop exits with pending calls
 		&tools.TaskConfig{},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
@@ -560,6 +563,7 @@ func TestRunWithToolsFollowUp(t *testing.T) {
 		0,
 		2,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
@@ -657,6 +661,7 @@ func TestRequestFinal(t *testing.T) {
 				"resp-1",
 				"system",
 				cfg,
+				nil,
 			)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("requestFinal() error = %v, wantErr %v", err, tt.wantErr)
@@ -744,10 +749,83 @@ func TestRunWithToolsErrors(t *testing.T) {
 				0,
 				1,
 				&tools.TaskConfig{},
+				nil,
 			)
 			if err == nil {
 				t.Fatalf("expected error")
 			}
 		})
+	}
+}
+
+func TestTrackResponseMetricsNilMetrics(t *testing.T) {
+	t.Parallel()
+	// Should not panic when metrics is nil
+	trackResponseMetrics(nil, nil) // nil response and nil metrics
+}
+
+func TestTrackResponseMetricsNilResponse(t *testing.T) {
+	t.Parallel()
+	m := &metrics.Metrics{}
+	trackResponseMetrics(nil, m)
+	// Should not increment or add tokens when response is nil
+	if m.Iterations != 0 {
+		t.Fatalf("Iterations = %d, want 0", m.Iterations)
+	}
+}
+
+func TestTrackResponseMetricsWithUsage(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+
+	// Create a mock response with usage data
+	resp := &oairesponses.Response{
+		Usage: oairesponses.ResponseUsage{
+			InputTokens:  1000,
+			OutputTokens: 500,
+		},
+	}
+
+	trackResponseMetrics(resp, m)
+
+	if m.Iterations != 1 {
+		t.Fatalf("Iterations = %d, want 1", m.Iterations)
+	}
+	if m.InputTokens != 1000 {
+		t.Fatalf("InputTokens = %d, want 1000", m.InputTokens)
+	}
+	if m.OutputTokens != 500 {
+		t.Fatalf("OutputTokens = %d, want 500", m.OutputTokens)
+	}
+}
+
+func TestTrackResponseMetricsAccumulates(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+
+	resp1 := &oairesponses.Response{
+		Usage: oairesponses.ResponseUsage{
+			InputTokens:  100,
+			OutputTokens: 50,
+		},
+	}
+	resp2 := &oairesponses.Response{
+		Usage: oairesponses.ResponseUsage{
+			InputTokens:  200,
+			OutputTokens: 100,
+		},
+	}
+
+	trackResponseMetrics(resp1, m)
+	trackResponseMetrics(resp2, m)
+
+	if m.Iterations != 2 {
+		t.Fatalf("Iterations = %d, want 2", m.Iterations)
+	}
+	if m.InputTokens != 300 {
+		t.Fatalf("InputTokens = %d, want 300", m.InputTokens)
+	}
+	if m.OutputTokens != 150 {
+		t.Fatalf("OutputTokens = %d, want 150", m.OutputTokens)
 	}
 }

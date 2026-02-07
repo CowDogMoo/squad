@@ -169,7 +169,7 @@ func TestCallLangChainLLMWithOllama(t *testing.T) {
 
 	opts := &RunOptions{Provider: "ollama", BaseURL: server.URL, MaxIterations: 1}
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
-	response, err := callLangChainLLM(
+	response, _, err := callLangChainLLM(
 		context.Background(),
 		opts,
 		"ollama",
@@ -244,7 +244,7 @@ func TestCallResponsesAPIRoundTrip(t *testing.T) {
 
 	opts := &RunOptions{APIKey: "key", BaseURL: server.URL, MaxIterations: 1}
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
-	response, err := callResponsesAPI(
+	response, _, err := callResponsesAPI(
 		context.Background(),
 		opts,
 		"gpt-5",
@@ -313,7 +313,7 @@ func TestBuildTaskConfigCallModel(t *testing.T) {
 	if cfg == nil {
 		t.Fatalf("expected task config")
 	}
-	_, err := cfg.CallModel(
+	_, _, err := cfg.CallModel(
 		context.Background(),
 		agentsDir,
 		agentName,
@@ -405,7 +405,7 @@ func TestCallModelRoutes(t *testing.T) {
 			}
 
 			bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
-			got, err := callModel(
+			got, _, err := callModel(
 				context.Background(),
 				opts,
 				tt.provider,
@@ -429,7 +429,7 @@ func TestCallModelRoutes(t *testing.T) {
 func TestCallLangChainLLMUnknownProvider(t *testing.T) {
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
 	opts := &RunOptions{Provider: "unknown"}
-	_, err := callLangChainLLM(
+	_, _, err := callLangChainLLM(
 		context.Background(),
 		opts,
 		"unknown",

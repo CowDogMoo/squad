@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -111,7 +112,7 @@ func (t *RepeatTracker) Exceeded() bool {
 }
 
 // RunWithTools drives a tool-calling loop for LangChainGo-based models.
-func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations int, taskCfg *TaskConfig, callOpts ...llms.CallOption) (string, error) {
+func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations int, taskCfg *TaskConfig, m *metrics.Metrics, callOpts ...llms.CallOption) (string, error) {
 	handlers, toolDefs := BuildHandlers(workingDir, taskCfg)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
@@ -120,7 +121,7 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	}
 
 	messages := buildInitialMessages(systemPrompt, userPrompt)
-	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, maxIterations, callOpts)
+	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, maxIterations, m, callOpts)
 	if done {
 		return lastContent, nil
 	}
@@ -128,10 +129,10 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 		return lastContent, loopErr
 	}
 
-	return finishToolLoop(ctx, llm, messages, lastContent, maxIterations, callOpts)
+	return finishToolLoop(ctx, llm, messages, lastContent, maxIterations, m, callOpts)
 }
 
-func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter int, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
+func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter int, m *metrics.Metrics, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
 	var lastContent string
 	var repeat RepeatTracker
 	for i := 0; i < maxIter; i++ {
@@ -148,9 +149,16 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 			return lastContent, messages, fmt.Errorf("model returned empty response"), false
 		}
 
+		if m != nil {
+			m.IncrementIterations()
+		}
+
 		choice := response.Choices[0]
 		if gi := choice.GenerationInfo; gi != nil {
 			logging.DebugContext(ctx, "generation info: %v", gi)
+			if m != nil {
+				extractTokenUsage(gi, m)
+			}
 		}
 		if choice.Content != "" {
 			lastContent = choice.Content
@@ -173,16 +181,66 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 	return lastContent, messages, nil, false
 }
 
-func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, lastContent string, maxIter int, callOpts []llms.CallOption) (string, error) {
+// extractTokenUsage extracts token counts from GenerationInfo and adds them to metrics.
+func extractTokenUsage(gi map[string]any, m *metrics.Metrics) {
+	if m == nil {
+		return
+	}
+	inputKeys := []string{"PromptTokens", "prompt_tokens", "InputTokens", "input_tokens"}
+	outputKeys := []string{"CompletionTokens", "completion_tokens", "OutputTokens", "output_tokens"}
+
+	input := extractTokenValue(gi, inputKeys)
+	output := extractTokenValue(gi, outputKeys)
+
+	if input > 0 || output > 0 {
+		m.AddTokens(input, output)
+	}
+}
+
+// extractTokenValue tries to extract a token count from the map using the given keys.
+func extractTokenValue(gi map[string]any, keys []string) int64 {
+	for _, key := range keys {
+		if v, ok := gi[key]; ok {
+			if val := toInt64(v); val > 0 {
+				return val
+			}
+		}
+	}
+	return 0
+}
+
+// toInt64 converts various numeric types to int64.
+func toInt64(v any) int64 {
+	switch t := v.(type) {
+	case int:
+		return int64(t)
+	case int64:
+		return t
+	case float64:
+		return int64(t)
+	default:
+		return 0
+	}
+}
+
+func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, lastContent string, maxIter int, m *metrics.Metrics, callOpts []llms.CallOption) (string, error) {
 	logging.InfoContext(ctx, "tool loop ended, requesting final response with tool_choice=none")
 	finalOpts := make([]llms.CallOption, len(callOpts), len(callOpts)+1)
 	copy(finalOpts, callOpts)
 	finalOpts = append(finalOpts, llms.WithToolChoice("none"))
 
 	response, err := llm.GenerateContent(ctx, messages, finalOpts...)
-	if err == nil && response != nil && len(response.Choices) > 0 && response.Choices[0].Content != "" {
-		logging.InfoContext(ctx, "final call produced response (%d bytes)", len(response.Choices[0].Content))
-		return response.Choices[0].Content, nil
+	if err == nil && response != nil && len(response.Choices) > 0 {
+		if m != nil {
+			m.IncrementIterations()
+			if gi := response.Choices[0].GenerationInfo; gi != nil {
+				extractTokenUsage(gi, m)
+			}
+		}
+		if response.Choices[0].Content != "" {
+			logging.InfoContext(ctx, "final call produced response (%d bytes)", len(response.Choices[0].Content))
+			return response.Choices[0].Content, nil
+		}
 	}
 
 	if lastContent != "" {

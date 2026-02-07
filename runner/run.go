@@ -11,6 +11,7 @@ import (
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/tools"
 	"github.com/spf13/cobra"
 )
@@ -71,12 +72,33 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	ctx := tools.InitEdits(cmd.Context())
 	cmd.SetContext(ctx)
 	tools.ResetEditsApplied(ctx)
-	response, err := invokeModel(ctx, opts, bundle)
+	response, m, err := invokeModel(ctx, opts, bundle)
 	if err != nil {
+		if m != nil {
+			printMetrics(cmd, m)
+		}
 		return err
 	}
 
-	return handleResponse(cmd, opts, response, workingDir)
+	if err := handleResponse(cmd, opts, response, workingDir); err != nil {
+		if m != nil {
+			printMetrics(cmd, m)
+		}
+		return err
+	}
+
+	if m != nil {
+		printMetrics(cmd, m)
+	}
+	return nil
+}
+
+// printMetrics outputs the metrics summary to stderr.
+func printMetrics(cmd *cobra.Command, m *metrics.Metrics) {
+	if m == nil {
+		return
+	}
+	fmt.Fprintln(cmd.ErrOrStderr(), m.Summary())
 }
 
 // prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
