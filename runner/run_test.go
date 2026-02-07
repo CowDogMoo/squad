@@ -439,7 +439,9 @@ func TestPrintMetrics(t *testing.T) {
 	m.IncrementIterations()
 	m.Finish()
 
-	printMetrics(cmd, m)
+	if err := printMetrics(cmd, m); err != nil {
+		t.Fatalf("printMetrics() returned error: %v", err)
+	}
 
 	output := errBuf.String()
 	if !strings.Contains(output, "Agent Metrics") {
@@ -465,8 +467,9 @@ func TestPrintMetricsNil(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetErr(&errBuf)
 
-	// Should not panic when metrics is nil
-	printMetrics(cmd, nil)
+	if err := printMetrics(cmd, nil); err != nil {
+		t.Fatalf("printMetrics(nil) returned error: %v", err)
+	}
 
 	if errBuf.Len() != 0 {
 		t.Fatalf("printMetrics(nil) should not output anything, got: %q", errBuf.String())

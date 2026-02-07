@@ -74,31 +74,29 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	tools.ResetEditsApplied(ctx)
 	response, m, err := invokeModel(ctx, opts, bundle)
 	if err != nil {
-		if m != nil {
-			printMetrics(cmd, m)
+		if metricsErr := printMetrics(cmd, m); metricsErr != nil {
+			logging.Warn("failed to print metrics: %v", metricsErr)
 		}
 		return err
 	}
 
 	if err := handleResponse(cmd, opts, response, workingDir); err != nil {
-		if m != nil {
-			printMetrics(cmd, m)
+		if metricsErr := printMetrics(cmd, m); metricsErr != nil {
+			logging.Warn("failed to print metrics: %v", metricsErr)
 		}
 		return err
 	}
 
-	if m != nil {
-		printMetrics(cmd, m)
-	}
-	return nil
+	return printMetrics(cmd, m)
 }
 
 // printMetrics outputs the metrics summary to stderr.
-func printMetrics(cmd *cobra.Command, m *metrics.Metrics) {
+func printMetrics(cmd *cobra.Command, m *metrics.Metrics) error {
 	if m == nil {
-		return
+		return nil
 	}
-	_, _ = fmt.Fprintln(cmd.ErrOrStderr(), m.Summary())
+	_, err := fmt.Fprintln(cmd.ErrOrStderr(), m.Summary())
+	return err
 }
 
 // prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
