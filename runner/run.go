@@ -98,7 +98,7 @@ func printMetrics(cmd *cobra.Command, m *metrics.Metrics) {
 	if m == nil {
 		return
 	}
-	fmt.Fprintln(cmd.ErrOrStderr(), m.Summary())
+	_, _ = fmt.Fprintln(cmd.ErrOrStderr(), m.Summary())
 }
 
 // prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
