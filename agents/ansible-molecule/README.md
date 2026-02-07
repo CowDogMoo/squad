@@ -79,7 +79,7 @@ The agent uses these verification strategies based on role tasks:
 
 ## Knowledge Base
 
-The agent references `molecule-testing-guide.md` which covers:
+The agent references `ansible-molecule-guide.md` which covers:
 
 - Scenario structure and configuration
 - molecule.yml driver and platform options
