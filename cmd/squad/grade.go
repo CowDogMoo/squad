@@ -146,8 +146,8 @@ func runGrade(cmd *cobra.Command, args []string) error {
 		return outputJSON(cmd, result)
 	}
 
-	_, _ = fmt.Fprint(cmd.OutOrStdout(), grading.FormatResult(result))
-	return nil
+	_, err = fmt.Fprint(cmd.OutOrStdout(), grading.FormatResult(result))
+	return err
 }
 
 func displayHistory(cmd *cobra.Command, store *grading.Store, agent string, limit int, asJSON bool) error {
@@ -157,22 +157,26 @@ func displayHistory(cmd *cobra.Command, store *grading.Store, agent string, limi
 	}
 
 	if len(grades) == 0 {
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No grades found.")
-		return nil
+		_, err := fmt.Fprintln(cmd.OutOrStdout(), "No grades found.")
+		return err
 	}
 
 	if asJSON {
 		return outputJSON(cmd, grades)
 	}
 
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Grade History (showing %d of %d):\n\n", len(grades), len(grades))
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Grade History (showing %d of %d):\n\n", len(grades), len(grades)); err != nil {
+		return err
+	}
 	for _, g := range grades {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s  %-12s  Grade: %s  Score: %.0f%%  Iter: %d\n",
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  %s  %-12s  Grade: %s  Score: %.0f%%  Iter: %d\n",
 			g.Timestamp.Format("2006-01-02 15:04"),
 			g.Agent,
 			g.Grade,
 			g.TotalScore,
-			g.Iterations)
+			g.Iterations); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -188,17 +192,34 @@ func displayStats(cmd *cobra.Command, store *grading.Store, agent string, asJSON
 		return outputJSON(cmd, stats)
 	}
 
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Statistics for %s:\n\n", stats.Agent)
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Total Runs:    %d\n", stats.TotalRuns)
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Latest Grade:  %s\n", stats.LatestGrade)
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Avg Score:     %.1f%%\n", stats.AvgScore)
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Avg Report:    %.1f%%\n", stats.AvgReportQuality)
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Avg Efficiency: %.1f%%\n\n", stats.AvgIterationEfficiency)
+	w := cmd.OutOrStdout()
+	if _, err := fmt.Fprintf(w, "Statistics for %s:\n\n", stats.Agent); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  Total Runs:    %d\n", stats.TotalRuns); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  Latest Grade:  %s\n", stats.LatestGrade); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  Avg Score:     %.1f%%\n", stats.AvgScore); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  Avg Report:    %.1f%%\n", stats.AvgReportQuality); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  Avg Efficiency: %.1f%%\n\n", stats.AvgIterationEfficiency); err != nil {
+		return err
+	}
 
-	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  Grade Distribution:")
+	if _, err := fmt.Fprintln(w, "  Grade Distribution:"); err != nil {
+		return err
+	}
 	for _, grade := range []string{"A+", "A", "A-", "B+", "B", "B-", "C", "D", "F"} {
 		if count, ok := stats.GradeCounts[grade]; ok && count > 0 {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "    %s: %d\n", grade, count)
+			if _, err := fmt.Fprintf(w, "    %s: %d\n", grade, count); err != nil {
+				return err
+			}
 		}
 	}
 
