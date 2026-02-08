@@ -209,18 +209,7 @@ Follow this sequence exactly. Do not skip steps.
     messages, stack traces exposed to users, errors that bypass security
     checks
 
-# SEVERITY LEVELS
-
-- **CRITICAL**: Remote code execution, authentication bypass, SQL injection,
-  command injection, hardcoded credentials that are actually exploitable
-- **HIGH**: XSS, path traversal, weak cryptography in security-critical
-  paths, missing authentication, unsafe deserialization
-- **MEDIUM**: Missing input validation at boundaries, insecure configurations,
-  race conditions with security impact, HTTP client without timeout
-- **LOW**: Information disclosure, verbose error messages, missing security
-  headers, theoretical vulnerabilities with no realistic attack vector
-- **INFO**: Security hardening recommendations, best practices not yet
-  implemented, defense-in-depth suggestions
+{{include "severity/standard.md"}}
 
 # WHAT TO FIX
 

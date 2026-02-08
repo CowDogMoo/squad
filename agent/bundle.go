@@ -35,14 +35,37 @@ type TemplateData struct {
 	Mode string
 }
 
+// makeIncludeFunc creates an include function that reads from the _templates directory.
+// Templates can use {{include "hard-rules/universal.md"}} to include shared content.
+func makeIncludeFunc(agentsDir string) func(string) (string, error) {
+	return func(path string) (string, error) {
+		// Validate path doesn't escape _templates directory
+		if strings.Contains(path, "..") {
+			return "", fmt.Errorf("include path cannot contain '..': %s", path)
+		}
+
+		templatePath := filepath.Join(agentsDir, "_templates", path)
+		content, err := os.ReadFile(templatePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to include template %s: %w", path, err)
+		}
+		return strings.TrimSpace(string(content)), nil
+	}
+}
+
 // processTemplate executes a Go text/template with the given mode.
 // Templates can use {{if eq .Mode "edit"}}...{{end}} conditionals.
-func processTemplate(name, content, mode string) (string, error) {
+// Templates can use {{include "hard-rules/universal.md"}} to include shared content.
+func processTemplate(name, content, mode, agentsDir string) (string, error) {
 	if mode == "" {
 		mode = "edit"
 	}
 
-	tmpl, err := template.New(name).Parse(content)
+	funcMap := template.FuncMap{
+		"include": makeIncludeFunc(agentsDir),
+	}
+
+	tmpl, err := template.New(name).Funcs(funcMap).Parse(content)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse template %s: %w", name, err)
 	}
@@ -100,7 +123,7 @@ func loadManifest(agentPath string) (*Manifest, error) {
 }
 
 // loadAndProcessPrompts loads system, wrapper, and task files, then processes them as templates.
-func loadAndProcessPrompts(agentPath string, manifest *Manifest, mode string) (system, wrapper, task string, err error) {
+func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, mode string) (system, wrapper, task string, err error) {
 	systemData, err := os.ReadFile(filepath.Join(agentPath, manifest.EntryPoint))
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to read system prompt: %w", err)
@@ -114,16 +137,16 @@ func loadAndProcessPrompts(agentPath string, manifest *Manifest, mode string) (s
 		return "", "", "", err
 	}
 
-	system, err = processTemplate("system", string(systemData), mode)
+	system, err = processTemplate("system", string(systemData), mode, agentsDir)
 	if err != nil {
 		return "", "", "", err
 	}
-	wrapper, err = processTemplate("wrapper", string(wrapperData), mode)
+	wrapper, err = processTemplate("wrapper", string(wrapperData), mode, agentsDir)
 	if err != nil {
 		return "", "", "", err
 	}
 	if taskContent != "" {
-		task, err = processTemplate("task", taskContent, mode)
+		task, err = processTemplate("task", taskContent, mode, agentsDir)
 		if err != nil {
 			return "", "", "", err
 		}
@@ -147,7 +170,7 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string) (*Bundle
 		displayMode = "edit"
 	}
 
-	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(agentPath, manifest, mode)
+	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(agentPath, agentsDir, manifest, mode)
 	if err != nil {
 		return nil, err
 	}

@@ -221,16 +221,7 @@ re-read files.
 5. **Constant Docstrings** — Purpose and valid values
 6. **Type Hints** — Only non-obvious return types (NOT `-> None`)
 
-# SEVERITY LEVELS
-
-- **HIGH**: Missing docstring on a complex public function/class that users
-  need to understand (constructors, public API entry points, complex classes)
-- **MEDIUM**: Missing docstring on simpler public declarations, or incorrect
-  docstring format (not complete sentence, redundant)
-- **LOW**: Docstring improvement opportunities (missing Args/Returns, could
-  benefit from examples)
-- **INFO**: Style suggestions (could use a code example, could link to related
-  functions)
+{{include "severity/standard.md"}}
 
 # WHAT TO FIX
 

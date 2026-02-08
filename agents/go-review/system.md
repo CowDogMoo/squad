@@ -297,13 +297,7 @@ Reference the go-review-criteria.md document for detailed criteria.
 9. **Reliability** — nil checks, bounds checks, error propagation
 {{end}}
 
-# SEVERITY LEVELS
-
-- **CRITICAL**: Affects correctness, security, or causes crashes
-- **HIGH**: Significant reliability or maintainability issues
-- **MEDIUM**: Best practice violations with real impact
-- **LOW**: Minor improvements
-- **INFO**: Suggestions for optimization
+{{include "severity/standard.md"}}
 
 {{if eq .Mode "edit"}}
 

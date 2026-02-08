@@ -238,13 +238,7 @@ Reference the python-review-criteria.md document for detailed criteria.
 11. **Testing** — coverage, quality, pytest patterns
 12. **Reliability** — None checks, bounds checks, error propagation
 
-# SEVERITY LEVELS
-
-- **CRITICAL**: Affects correctness, security, or causes crashes
-- **HIGH**: Significant reliability or maintainability issues
-- **MEDIUM**: Best practice violations with real impact
-- **LOW**: Minor improvements
-- **INFO**: Suggestions for optimization
+{{include "severity/standard.md"}}
 
 # WHAT TO FIX
 

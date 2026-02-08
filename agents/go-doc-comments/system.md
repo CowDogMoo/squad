@@ -189,15 +189,7 @@ Follow this sequence exactly. Do not skip steps.
 9. **Cleanup Requirements** — document resource release needs
 10. **Modern Doc Features** — headings, doc links, lists, code blocks
 
-# SEVERITY LEVELS
-
-- **HIGH**: Missing doc comment on a complex exported function/type that users
-  need to understand (constructors, public API entry points, complex types)
-- **MEDIUM**: Missing doc comment on simpler exported declarations, or
-  incorrect comment format (wrong first word, fragment, redundant)
-- **LOW**: Comment improvement opportunities (missing error docs, missing
-  concurrency note, could use doc links)
-- **INFO**: Style suggestions (could use a list, could add a code example)
+{{include "severity/standard.md"}}
 
 # WHAT TO FIX
 

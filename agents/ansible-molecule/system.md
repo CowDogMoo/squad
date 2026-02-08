@@ -421,7 +421,7 @@ When you find an issue, use the RIGHT pattern:
   # Good - verify packages role installs
   - name: Check required packages installed
     ansible.builtin.package:
-      name: "{{ item }}"
+      name: "{{"{{" }} item }}"
       state: present
     check_mode: true
     register: pkg_check
