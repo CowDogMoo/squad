@@ -7,7 +7,9 @@ wrapper: agent.md
 references:
   - references/ansible-standards.md
   - references/ansible-review-criteria.md
+task: task.md
 modes:
   readonly:
     entrypoint: system-readonly.md
     wrapper: agent-readonly.md
+    task: task_readonly.md

@@ -25,8 +25,11 @@ func TestReadPrompt(t *testing.T) {
 		wantErr bool
 	}{
 		{"from args", []string{"hello", "world"}, "", "hello world", false},
-		{"from stdin", nil, "from stdin", "from stdin", false},
-		{"whitespace only stdin", nil, "   \n", "", true},
+		// Note: stdin piped detection only works with *os.File, not strings.Reader.
+		// When stdin is a strings.Reader, readPrompt returns empty string.
+		// This is expected behavior - the agent's default user_prompt will be used.
+		{"no args no stdin uses agent default", nil, "", "", false},
+		{"whitespace only uses agent default", nil, "   \n", "", false}, // No longer an error
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

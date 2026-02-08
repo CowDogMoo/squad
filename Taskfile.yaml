@@ -63,27 +63,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Review and fix all Go code quality issues in this codebase.
-
-        Start by using Glob with '**/*.go' to discover all Go source files.
-        Read each file (skip _test.go and vendor/).
-        Cross-reference between files for consistency issues.
-        Apply fixes via Edit tool, highest severity first.
-        Run 'go build ./...' after each batch of edits.
-
-        IMPORTANT CONSTRAINTS (repeat from system prompt):
-        - No cosmetic changes (doc comments, import ordering, naming style)
-        - No new dependencies
-        - Skip fixes needing 50+ lines or new files
-        - Preserve backwards compatibility — no API surface changes
-        - NEVER change functions whose behavior is asserted by tests (especially panics with wantPanic/recover)
-        - NEVER remove intentional panic() calls — they are precondition guards, not bugs
-        - Every fix must be PROPORTIONAL — no micro-optimizations for small loops
-        - Flag inconsistent imports (e.g. 'log' when codebase uses custom logging)
-        - Read each file ONCE, catalog all findings, then fix — target ≤12 iterations
-        - Use ONE Grep/Glob on repo root, not per-directory — minimize tool calls
-        - After go build + go test pass, emit report IMMEDIATELY — no post-fix exploration
-        - Every file touched must appear in the output report" \
           --agent go-review \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -106,14 +85,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Analyze this codebase for Go code quality issues.
-
-        Use Glob with '**/*.go' to discover all Go source files.
-        Read each file (skip _test.go and vendor/).
-        Cross-reference between files for consistency issues.
-        Produce a prioritized report of all findings.
-
-        Do NOT write or modify any files." \
           --agent go-review --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -134,26 +105,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Get this codebase to {{.COVERAGE_TARGET}}% test coverage.
-
-        Start by measuring current coverage with 'go test ./... -coverprofile=coverage.out -count=1'.
-        Analyze gaps with 'go tool cover -func=coverage.out'.
-        Prioritize packages by impact — most uncovered statements first.
-        Write tests for each priority package, verify they pass, and iterate.
-
-        Target: {{.COVERAGE_TARGET}}% total coverage.
-        Use table-driven tests ([]struct + t.Run) for any function with 2+ test cases.
-        Only create or modify _test.go files. Never edit source code.
-        TEST FILE NAMING: Strict 1:1 mapping — foo.go gets foo_test.go. Never create
-        _extra_test.go, _coverage_test.go, or any *_<suffix>_test.go variant.
-
-        BUDGET: You have 200 iterations. Use Write (not Edit) for new files.
-        Cap 20 iterations per package. Wind down early if needed — a partial
-        report with before/after numbers is better than no report.
-
-        COVERAGE MEASUREMENT: Always use 'go tool cover -func=coverage.out | tail -1'
-        for total coverage. Never parse coverage.out manually with awk or read it raw.
-        One command, one iteration." \
           --agent go-tests \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -179,12 +130,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Analyze this codebase's test coverage gaps. Target is {{.COVERAGE_TARGET}}%.
-
-        Measure current coverage, identify gaps, classify functions as testable vs
-        needing refactor, and produce a prioritized report of what to test first.
-
-        Do NOT write or modify any files." \
           --agent go-tests --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -203,21 +148,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Review and fix all Cobra/Viper best-practice violations in this codebase.
-
-        Start by using Glob with '**/*.go' to discover all Go source files.
-        Read each file in cmd/ and internal/ that imports cobra or viper.
-        Cross-reference between files for integration issues.
-        Apply fixes via Edit tool, highest severity first.
-        Run 'go build ./...' after each batch of edits.
-
-        IMPORTANT CONSTRAINTS (repeat from system prompt):
-        - Only modify files in cmd/ and internal/
-        - No cosmetic changes (doc comments, import ordering, naming style)
-        - No new dependencies
-        - Skip fixes needing 50+ lines or new files
-        - Preserve backwards compatibility — no flag renames or removals
-        - Every file touched must appear in the output report" \
           --agent go-cobra \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -240,14 +170,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Analyze this codebase for Cobra/Viper best-practice violations.
-
-        Use Glob with '**/*.go' to discover all Go source files.
-        Read each file in cmd/ and internal/ that imports cobra or viper.
-        Cross-reference between files for integration issues.
-        Produce a prioritized report of all findings.
-
-        Do NOT write or modify any files." \
           --agent go-cobra --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -266,31 +188,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Add or improve doc comments on all exported Go declarations in this codebase.
-
-        Start by using Glob with '**/*.go' to discover all Go source files.
-        Read each file (skip _test.go and vendor/).
-        Catalog every exported declaration that is missing a doc comment or has a deficient one.
-        Apply fixes via Edit tool, highest priority first.
-        Run 'go build ./...' after each batch of edits.
-
-        IMPORTANT CONSTRAINTS (repeat from system prompt):
-        - ONLY modify doc comments — never change code logic, signatures, or imports
-        - Start every comment with the declared name (godoc indexes by first word)
-        - No blank line between comment and declaration (godoc drops these)
-        - Complete sentences with proper punctuation
-        - Focus on WHAT, not HOW — no implementation details
-        - No redundant comments ('Process processes the data' = skip)
-        - SKIP trivial wrappers: Info/Warn/Debug/Error on loggers, simple setters, delegation functions
-        - Key test: 'Does this comment tell the reader something the name does not?' If no → skip
-        - Boolean functions use 'reports whether' (fix EXISTING 'returns true' comments too)
-        - Grep for 'returns true' in existing comments — these are format violations to fix
-        - Proportional: one-line getter = one-line comment, trivial = NO comment
-        - Exported declarations only — skip unexported names
-        - Read each file ONCE, catalog all findings, then fix — target ≤15 iterations
-        - Use ONE Grep/Glob on repo root, not per-directory — minimize tool calls
-        - After go build passes, emit report IMMEDIATELY — no post-fix exploration
-        - Every file touched must appear in the output report" \
           --agent go-doc-comments \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -313,14 +210,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Analyze this codebase for missing or deficient Go doc comments.
-
-        Use Glob with '**/*.go' to discover all Go source files.
-        Read each file (skip _test.go and vendor/).
-        Catalog every exported declaration that needs a doc comment.
-        Produce a prioritized report of all findings.
-
-        Do NOT write or modify any files." \
           --agent go-doc-comments --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -339,34 +228,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Audit and fix all security vulnerabilities in this Go codebase.
-
-        Start by using Glob with '**/*.go' to discover all Go source files.
-        Read each file (skip _test.go and vendor/).
-        Read go.mod for dependency and Go version info.
-        Cross-reference between files for inconsistent security practices.
-        Apply fixes via Edit tool, highest severity first.
-        Run 'go build ./...' after each batch of edits.
-
-        IMPORTANT CONSTRAINTS (repeat from system prompt):
-        - SECURITY FOCUS ONLY — skip code quality, doc comments, naming style
-        - No new dependencies
-        - Skip fixes needing 50+ lines or new files
-        - Preserve backwards compatibility — no API surface changes
-        - NEVER change functions whose behavior is asserted by tests
-        - NEVER remove intentional panic() calls — they are precondition guards
-        - Every fix must be PROPORTIONAL — ask 'could an attacker exploit this?'
-        - Theoretical vulnerabilities in internal-only code are INFO, not fixes
-        - No false positives — every finding must reference actual code with file:line
-        - Include CWE IDs where applicable
-        - Read each file ONCE, catalog all findings, then fix — target ≤12 iterations
-        - Batch ALL edits for the same file in one iteration — do NOT make separate Edit calls
-        - ALWAYS pass glob='*.go' when using Grep — NEVER grep without a glob filter
-        - NEVER fall back to per-directory Grep calls — that wastes iterations
-        - If Grep fails with 'token too long', skip it and use your Read-phase notes
-        - STOP after go build + go test BOTH pass — emit report IMMEDIATELY in the SAME response
-        - Do NOT re-read files after verification — no nl, sed, cat, Bash, Grep after tests pass
-        - Every file touched must appear in the output report" \
           --agent go-security-audit \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -389,23 +250,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Analyze this Go codebase for security vulnerabilities.
-
-        Use Glob with '**/*.go' to discover all Go source files.
-        Read each file (skip _test.go and vendor/).
-        Read go.mod for dependency and Go version info.
-        Cross-reference between files for inconsistent security practices.
-        Produce a prioritized report of all security findings.
-
-        SECURITY FOCUS ONLY — skip code quality, doc comments, naming style.
-        No false positives — every finding must reference actual code.
-        Include CWE IDs where applicable.
-        Read each file ONCE, batch 4-6 Read calls per iteration — target ≤12 iterations.
-        ALWAYS pass glob='*.go' when using Grep — NEVER grep without a glob filter.
-        NEVER fall back to per-directory Grep calls — that wastes iterations.
-        After analysis, emit report IMMEDIATELY — no re-reading files.
-
-        Do NOT write or modify any files." \
           --agent go-security-audit --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -424,26 +268,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Review and fix all Taskfile.yaml best-practice violations in this codebase.
-
-        Start by using Glob with '**/Taskfile.yaml' and '**/Taskfile.yml' to discover all Taskfiles.
-        Read each Taskfile to understand structure and conventions.
-        Cross-reference between files for include and variable consistency.
-        Apply fixes via Edit tool, highest severity first.
-        Run 'task --list' after each batch of edits.
-
-        IMPORTANT CONSTRAINTS (repeat from system prompt):
-        - No cosmetic changes (comment style, whitespace, task ordering)
-        - Skip fixes needing restructuring of 3+ tasks or new includes
-        - Preserve backwards compatibility — no task renames without noting breaking change
-        - NEVER add hardcoded secrets — use environment variables with no default
-        - Every fix must be PROPORTIONAL — no complex preconditions for trivial edge cases
-        - Path traversal validation: ONLY add for variables with NO default or unsafe defaults.
-          Skip for variables with safe defaults like /tmp — local task runners don't need it
-        - Read each file ONCE, catalog all findings, then fix — target ≤10 iterations
-        - Use ONE Glob on repo root, not per-directory — minimize tool calls
-        - After task --list passes, emit report IMMEDIATELY — no post-fix exploration
-        - Every file touched must appear in the output report" \
           --agent go-taskfile \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -466,22 +290,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Analyze this codebase for Taskfile.yaml best-practice violations.
-
-        Use Glob with '**/Taskfile.yaml' and '**/Taskfile.yml' to discover all Taskfiles.
-        Read each file to understand structure and conventions.
-        Cross-reference between files for include and variable consistency.
-        Produce a prioritized report of all findings.
-
-        No cosmetic findings — skip comment style, whitespace, task ordering.
-        No false positives — every finding must reference actual file and line.
-        Flag security issues (hardcoded secrets, unvalidated input) as CRITICAL.
-        Path traversal: ONLY flag for variables with NO default or unsafe defaults.
-        Skip for variables with safe defaults like /tmp — proportionality applies.
-        Read each file ONCE — target ≤10 iterations.
-        After analysis, emit report IMMEDIATELY — no re-reading files.
-
-        Do NOT write or modify any files." \
           --agent go-taskfile --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -500,62 +308,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Review and fix all Python code quality issues in this codebase.
-
-        Start by using Glob with '**/*.py' to discover all Python source files.
-        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
-        Cross-reference between files for consistency issues.
-        Apply fixes via Edit tool, highest severity first.
-        Run 'ruff check .' after edits. If ruff is NOT installed, use py_compile only.
-
-        ANALYSIS CHECKLIST (check each file for these):
-        - Method calls self.x() — is the method actually defined? (CRITICAL if not)
-        - Every name used — is it imported or defined? (CRITICAL if missing import)
-        - if/else branches — do they do different things or identical code? (HIGH if dead code)
-        - HTTP calls — inside context managers? (HIGH if httpx.get without Client())
-        - Public functions — return type annotations? (but NEVER add -> None, it's inferable)
-
-        PRIORITY (mandatory order):
-        - Fix ALL CRITICAL before ANY HIGH. Fix ALL HIGH before ANY MEDIUM.
-        - Do NOT skip CRITICAL/HIGH to fix easier MEDIUM issues.
-
-        CONSTRAINTS:
-        - No cosmetic changes (docstrings, import ordering, naming style)
-        - No new dependencies
-        - Skip fixes needing 50+ lines or new files
-        - Preserve backwards compatibility — no API surface changes
-        - NEVER change functions whose behavior is asserted by tests (pytest.raises)
-        - NEVER remove intentional raise statements — they are precondition guards
-        - Every fix must be PROPORTIONAL — no micro-optimizations for small loops
-        - NEVER change identifier/correlation ID assignments (job_id=x.project may be intentional)
-        - When fixing UnboundLocalError, use None as fallback, NOT another variable's value
-        - Flag inconsistent imports (e.g. print() when codebase uses logging)
-        - NEVER add -> None return annotations — they are always inferable
-
-        ITERATION BUDGET — scales with codebase size (count after Glob):
-        - Small (≤20 files): 12 iterations max
-        - Medium (21-50 files): 20 iterations max
-        - Large (50+ files): 25 iterations max
-
-        Phase allocation:
-        - Phase 1 (1 iter): Glob + Read reference in parallel, COUNT source files
-        - Phase 2 (varies): Read files with 6-10 parallel Reads per iteration
-          - Small: 2-3 iters to read ALL
-          - Medium: 4-5 iters to read ALL
-          - Large: prioritize entry points + core modules
-        - Phase 3 (2-4 iter): ALL Edit calls batched (10 fixes = 10 Edit calls in ONE response)
-        - Phase 4 (1 iter): Verify + report in SAME response
-
-        Do NOT hardcode directory names like app/, src/, lib/ — use Glob output.
-        COVERAGE IS MANDATORY for small/medium. For large codebases, document sampling.
-
-        HARD REQUIREMENTS:
-        - Do NOT read one file per iteration — batch 6-10 Read calls per iteration
-        - Do NOT edit-wait-edit-wait — batch ALL edits into ONE iteration
-        - Do NOT re-read files after editing — trust Edit output
-        - STOP after verification — emit report in SAME response, NO more iterations
-        - If ruff not installed, proceed with py_compile only
-        - Every file touched must appear in the output report" \
           --agent python-review \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -578,41 +330,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Analyze this codebase for Python code quality issues.
-
-        Use Glob with '**/*.py' to discover all Python source files.
-        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
-        Cross-reference between files for consistency issues.
-        Produce a prioritized report of all findings.
-
-        ANALYSIS CHECKLIST (check each file for these):
-        - Method calls self.x() — is the method actually defined? (CRITICAL if not)
-        - Every name used — is it imported or defined? (CRITICAL if missing import)
-        - if/else branches — do they do different things or identical code? (HIGH if dead code)
-        - HTTP calls — inside context managers? (HIGH if httpx.get without Client())
-        - Public functions — return type annotations? (but NEVER add -> None, it's inferable)
-
-        SEVERITY GUIDE:
-        - CRITICAL: syntax errors, undefined methods, missing imports, bare except, mutable defaults
-        - HIGH: broad except, resource leaks, missing type annotations, dead code, fire-and-forget
-        - MEDIUM: print() instead of logging, legacy type syntax, inconsistent styles
-
-        No cosmetic findings — skip docstrings, import ordering, naming style.
-        No false positives — every finding must reference actual file and line.
-
-        ITERATION BUDGET — scales with codebase size (count after Glob):
-        - Small (≤20 files): 12 iterations max
-        - Medium (21-50 files): 20 iterations max
-        - Large (50+ files): 25 iterations max
-
-        EFFICIENCY (must follow):
-        - Batch reads: 6-10 files per iteration, not one file per iteration
-        - Do NOT hardcode directory names like app/, src/ — use Glob output
-        - Small/medium: read ALL files. Large: prioritize entry points + core modules
-        - Use ONE Grep/Glob on repo root — do NOT run per-directory searches
-        - After analysis is complete, emit report IMMEDIATELY — no re-reading files
-
-        Do NOT write or modify any files." \
           --agent python-review --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -633,80 +350,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Get this Python codebase to {{.COVERAGE_TARGET}}% test coverage.
-
-        Start by running Glob **/*.py AND checking pytest-cov in parallel.
-        If pytest-cov available, measure baseline with 'pytest --cov=<pkg> --cov-branch --cov-report=term-missing -q || true'
-        where <pkg> is the source package discovered from Glob (e.g., app, src). 0% is fine if no tests exist.
-        Use Glob **/*.py to discover all source files. Filter out __pycache__, .venv, test_*.py.
-        Prioritize modules by impact — most functions/classes first.
-        Write tests for each priority module, verify they pass, and iterate.
-
-        Target: {{.COVERAGE_TARGET}}% total coverage.
-        Use @pytest.mark.parametrize for any function with 2+ test cases.
-        Only create or modify test_*.py files. Never edit source code.
-        TEST FILE LOCATION: ALWAYS place tests in tests/ directory. Create tests/ if it
-        does not exist. Mirror source structure: <pkg>/tasks/foo.py → tests/tasks/test_foo.py.
-        Discover actual source dir from Glob (could be src/, app/, lib/, or package name).
-
-        MOCK STRATEGY:
-        - Mock HTTP clients (httpx, requests) with unittest.mock.patch
-        - Mock file I/O by using tmp_path fixture
-        - Mock time with freezegun or mock time.time()
-        - Do NOT mock internal classes — test through public API
-
-        CONFTEST.PY STRUCTURE (CRITICAL):
-        - sys.modules stubs MUST be at MODULE LEVEL (top of file), NOT inside fixtures
-        - Reason: pytest imports conftest.py BEFORE collecting test files
-        - If stubs are in fixtures, test imports fail with ModuleNotFoundError
-        - Pattern: sys.modules stubs at top, then pytest import, then fixtures
-
-        ASYNC TESTS:
-        - Use @pytest.mark.asyncio for async functions
-        - If pytest-asyncio not available, note in report and skip async tests
-
-        ITERATION BUDGET (CRITICAL — do NOT exceed):
-        - Small codebase (≤15 source files): 15 iterations MAX
-        - Medium (16-30 files): 25 iterations MAX
-        - Large (30+ files): 35 iterations MAX
-
-        WRITE EARLY — CRITICAL FOR REASONING MODELS:
-        Do NOT read all files before writing. Interleave reading and writing:
-        - Iter 1: Glob + coverage measurement
-        - Iter 2: Read 2-3 source files + pyproject.toml
-        - Iter 3: Write tests for those files (use Write, not Edit)
-        - Iter 4: Read 2-3 more source files
-        - Iter 5: Write tests for those
-        - Repeat until done, then verify + report
-
-        Reasoning models (o1, o3, codex) can exhaust output tokens if they think
-        about too many files before acting. ACT QUICKLY — produce Write calls early.
-
-        PYTEST BUDGET: 2 RUNS MAXIMUM (HARD LIMIT)
-        - Run #1: After writing ALL test files
-        - Run #2: After fixing ALL failures in ONE iteration
-        - Running pytest more than twice = FAILURE. Count your pytest runs.
-
-        HARD EFFICIENCY REQUIREMENTS:
-        - INTERLEAVE reads and writes: Read 2-3 → Write multiple files → Read 2-3 → Write
-        - ALWAYS use Write, NEVER use Edit. Edit is FORBIDDEN for test files.
-        - Write MULTIPLE test files per iteration using parallel Write calls.
-        - If pytest fails, fix ALL failing files in ONE iteration (parallel Write).
-        - STOP after pytest passes — emit report in SAME response.
-
-        COVERAGE MEASUREMENT: Use 'pytest --cov=<pkg> --cov-branch --cov-report=term-missing -q || true'.
-        Branch coverage is more meaningful than line coverage. Parse the TOTAL line.
-        If pytest-cov not installed, use basic pytest.
-
-        MOCKING: Always use autospec=True when patching. Use AsyncMock for async functions.
-
-        REPORT REQUIREMENTS (mandatory):
-        - Coverage Report section with Before/After/Delta
-        - Modules Tested table
-        - Tests Written with descriptions
-        - Skipped Functions with reasons
-        - Files Touched listing all test_*.py files
-        - Validation with pytest results" \
           --agent python-tests \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -732,23 +375,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Analyze this Python codebase's test coverage gaps. Target is {{.COVERAGE_TARGET}}%.
-
-        Measure current coverage with pytest-cov if available.
-        Identify gaps, classify functions as testable vs needing refactor,
-        and produce a prioritized report of what to test first.
-
-        For each uncovered function, determine:
-        - Testable: can mock external deps
-        - Needs refactor: requires source changes (note why)
-        - Skip: trivial code not worth testing
-
-        Include mocking strategy recommendations for each testable function.
-        Note async functions that need pytest-asyncio.
-        Read each file ONCE, batch 4-6 Read calls per iteration.
-        Budget: ≤15 iterations for small codebases, ≤25 for medium/large.
-
-        Do NOT write or modify any files." \
           --agent python-tests --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -767,50 +393,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Add or improve docstrings on all public Python declarations in this codebase.
-
-        Start by using Glob with '**/*.py' to discover all Python source files.
-        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
-        Catalog every public declaration that is missing a docstring or has a deficient one.
-        Apply fixes via Edit tool, highest priority first.
-        Run 'python -m py_compile <files>' after each batch of edits.
-
-        IMPORTANT CONSTRAINTS (repeat from system prompt):
-        - ONLY modify docstrings — never change code logic, signatures, or imports
-        - Triple double quotes — always use \"\"\" for docstrings, never '''
-        - Start with summary line in imperative mood ('Return X' not 'Returns X')
-        - No blank line before docstring — docstring immediately follows def/class
-        - Complete sentences with proper punctuation
-        - Focus on WHAT, not HOW — no implementation details
-        - No redundant docstrings ('Process processes the data' = skip)
-        - SKIP trivial functions: close, get_value, simple wrappers — they need NO docstring
-        - Key test: 'Does this docstring tell the reader something the name does not?' If no → skip
-        - Proportional: one-line getter = one-line docstring, complex = multi-paragraph
-        - Public declarations only — skip private names (_foo)
-        - Match existing style (NumPy/Sphinx if present, else Google style)
-        - NEVER add -> None — it's always inferable
-
-        ITERATION BUDGET — scales with codebase size (count after Glob):
-        - Small (≤20 files): 12 iterations max
-        - Medium (21-50 files): 20 iterations max
-        - Large (50+ files): 25 iterations max
-
-        Phase allocation:
-        - Phase 1 (1 iter): Glob + Read reference in parallel, COUNT source files
-        - Phase 2 (varies): Read files with 4-6 parallel Reads per iteration
-        - Phase 3 (2-4 iter): ALL Edit calls batched (10 fixes = 10 Edit calls in ONE response)
-        - Phase 4 (1 iter): Verify + report in SAME response
-
-        Do NOT hardcode directory names like app/, src/, lib/ — use Glob output.
-        COVERAGE IS MANDATORY for small/medium. For large codebases, document sampling.
-
-        HARD REQUIREMENTS:
-        - Do NOT read one file per iteration — batch 4-6 Read calls per iteration
-        - Do NOT edit-wait-edit-wait — batch ALL edits into ONE iteration
-        - Do NOT re-read files after editing — trust Edit output
-        - STOP after verification — emit report in SAME response, NO more iterations
-        - If ruff not installed, proceed with py_compile only
-        - Every file touched must appear in the output report" \
           --agent python-doc-comments \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -833,47 +415,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Analyze this codebase for missing or deficient Python docstrings.
-
-        Use Glob with '**/*.py' to discover all Python source files.
-        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
-        Catalog every public declaration that needs a docstring.
-        Produce a prioritized report of all findings.
-
-        ANALYSIS CHECKLIST (check each file for these):
-        - Public functions/methods — do they have docstrings? (HIGH if missing on complex)
-        - Public classes — do they have docstrings with Attributes section? (HIGH if missing)
-        - Modules — do they have module docstrings? (MEDIUM if missing)
-        - Existing docstrings — are they complete sentences? (MEDIUM if fragments)
-        - Existing docstrings — do they use imperative mood? (LOW if not)
-        - Complex functions — do they have Args/Returns/Raises? (LOW if missing)
-
-        SEVERITY GUIDE:
-        - HIGH: missing docstring on complex public function/class
-        - MEDIUM: missing docstring on simpler exports, format violations
-        - LOW: improvement opportunities (missing Args/Returns, could use examples)
-
-        WHAT TO SKIP:
-        - Private names (_foo) — don't need docstrings
-        - Trivial functions (close, get_value, wrappers) — name is the doc
-        - -> None return annotations — always inferable, NEVER report as missing
-
-        No cosmetic findings — skip import ordering, naming style.
-        No false positives — every finding must reference actual file and line.
-
-        ITERATION BUDGET — scales with codebase size (count after Glob):
-        - Small (≤20 files): 12 iterations max
-        - Medium (21-50 files): 20 iterations max
-        - Large (50+ files): 25 iterations max
-
-        EFFICIENCY (must follow):
-        - Batch reads: 4-6 files per iteration, not one file per iteration
-        - Do NOT hardcode directory names like app/, src/ — use Glob output
-        - Small/medium: read ALL files. Large: prioritize entry points + core modules
-        - Use ONE Grep/Glob on repo root — do NOT run per-directory searches
-        - After analysis is complete, emit report IMMEDIATELY — no re-reading files
-
-        Do NOT write or modify any files." \
           --agent python-doc-comments --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -892,62 +433,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Review and fix all Ansible code quality issues in this codebase.
-
-        Start by using Glob with '**/*.yml' and '**/*.yaml' to discover all YAML files.
-        Filter to Ansible-relevant files: playbooks, tasks, handlers, vars, defaults, meta, molecule.
-        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
-        Cross-reference between files for consistency issues.
-        Apply fixes via Edit tool, highest severity first.
-        Run 'ansible-lint .' after each batch of edits (if available).
-
-        ANALYSIS CHECKLIST (check each file for these):
-        - FQCN usage — all modules MUST use fully qualified names (ansible.builtin.x, not x:)
-        - Task names — every task MUST have a descriptive name: field
-        - Handlers — are notifies matched by handler names?
-        - Idempotency — command/shell tasks have creates/removes or changed_when?
-          BUT: only for IDEMPOTENT commands. For state-changing commands (execute,
-          run, mv), use changed_when: true, NOT changed_when: false.
-          CRITICAL: NEVER remove changed_when entirely — ansible-lint REQUIRES it
-          on ALL command/shell tasks. Fix: change 'false' to 'true', don't delete.
-        - Security — no_log on credential tasks? vault for secrets?
-        - Variables — role-prefixed names? defaults vs vars usage correct?
-
-        PRIORITY (mandatory order):
-        - Fix ALL CRITICAL (security, correctness) before ANY HIGH
-        - Fix ALL HIGH (idempotency, reliability) before ANY MEDIUM
-
-        CONSTRAINTS:
-        - No cosmetic changes (import ordering, whitespace, comment style)
-        - Skip fixes needing 50+ lines or new files
-        - Preserve backwards compatibility — no variable renames, no role restructuring
-        - NEVER change functions whose behavior is asserted by Molecule tests
-        - Every fix must be PROPORTIONAL — no theoretical improvements without real impact
-
-        ITERATION BUDGET — scales with codebase size (count after Glob):
-        - Small (≤20 files): 12 iterations max
-        - Medium (21-50 files): 20 iterations max
-        - Large (50+ files): 25 iterations max
-
-        Phase allocation:
-        - Phase 1 (1 iter): Glob to discover files, COUNT source files
-        - Phase 2 (varies): Read files with 4-6 parallel Reads per iteration
-        - Phase 3 (2-4 iter): ALL Edit calls batched (10 fixes = 10 Edit calls in ONE response)
-        - Phase 4 (1 iter): Verify + report in SAME response
-
-        Do NOT hardcode directory names like roles/, playbooks/ — use Glob output.
-        Do NOT try to read reference files — they are bundled in your context.
-        COVERAGE IS MANDATORY for small/medium. For large codebases, document sampling.
-
-        HARD REQUIREMENTS:
-        - Do NOT read one file per iteration — batch 4-6 Read calls per iteration
-        - Do NOT edit-wait-edit-wait — batch ALL edits into ONE iteration
-        - Do NOT re-read files after editing — trust Edit output
-        - STOP after verification — emit report in SAME response, NO more iterations
-        - To check ansible-lint: run 'ansible-lint --version'. If it prints a version, USE IT.
-          WARNING messages about collection versions are NORMAL — they mean ansible-lint IS working.
-          Only 'command not found' means it's not installed (then use syntax-check only).
-        - Every file touched must appear in the output report" \
           --agent ansible-review \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -970,47 +455,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Analyze this codebase for Ansible code quality issues.
-
-        Use Glob with '**/*.yml' and '**/*.yaml' to discover all YAML files.
-        Filter to Ansible-relevant files: playbooks, tasks, handlers, vars, defaults, meta, molecule.
-        Batch Read calls: read 4-6 files per iteration. Do NOT read one file per iteration.
-        Cross-reference between files for consistency issues.
-        Produce a prioritized report of all findings.
-
-        ANALYSIS CHECKLIST (check each file for these):
-        - FQCN usage — all modules MUST use fully qualified names (MEDIUM if missing)
-        - Task names — every task MUST have a descriptive name: field (LOW if missing)
-        - Handlers — are notifies matched by handler names? (HIGH if orphaned)
-        - Idempotency — command/shell tasks have guards? (HIGH if not idempotent)
-          For state-changing commands, suggest changed_when: true, NOT removal.
-          ansible-lint REQUIRES changed_when on ALL command/shell tasks.
-        - Security — no_log on credentials? vault for secrets? (CRITICAL if exposed)
-        - Variables — role-prefixed? correct precedence usage? (MEDIUM if wrong)
-
-        SEVERITY GUIDE:
-        - CRITICAL: hardcoded secrets, missing no_log on credentials, command injection
-        - HIGH: non-idempotent tasks, orphaned handlers, missing check_mode support
-        - MEDIUM: missing FQCN, poor variable naming, missing argument_specs
-        - LOW: missing task names, inconsistent YAML style
-
-        No cosmetic findings — skip comment style, whitespace, import ordering.
-        No false positives — every finding must reference actual file and line.
-
-        ITERATION BUDGET — scales with codebase size (count after Glob):
-        - Small (≤20 files): 12 iterations max
-        - Medium (21-50 files): 20 iterations max
-        - Large (50+ files): 25 iterations max
-
-        EFFICIENCY (must follow):
-        - Batch reads: 4-6 files per iteration, not one file per iteration
-        - Do NOT hardcode directory names like roles/, playbooks/ — use Glob output
-        - Do NOT try to read reference files — they are bundled in your context
-        - Small/medium: read ALL files. Large: prioritize entry points + core roles
-        - Use ONE Grep/Glob on repo root — do NOT run per-directory searches
-        - After analysis is complete, emit report IMMEDIATELY — no re-reading files
-
-        Do NOT write or modify any files." \
           --agent ansible-review --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -1029,57 +473,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Your PRIMARY MISSION is VERIFICATION DEPTH — ensuring verify.yml actually tests
-        everything the role does, not just file existence. 'Checking existence is NOT enough.'
-
-        Start by using Glob with '**/molecule/**/*.yml', '**/molecule.yml', and '**/tasks/main.yml'.
-        You MUST read tasks/main.yml to understand what the role DOES (packages, files, permissions, env vars).
-        Batch Read calls: 4-6 files per iteration. Do NOT read one file per iteration.
-
-        VERIFICATION DEPTH CHECKLIST (THE #1 SOURCE OF MISSED FINDINGS):
-        For EACH thing the role tasks do, verify.yml MUST check it with STRONG assertions:
-        1. Binary with mode 0755? → verify MUST check stat.exists AND stat.executable AND stat.mode=='0755'
-           - If verify only checks 'exists' → HIGH severity weak assertion → ADD permission checks
-        2. Package installs (apt/dnf/package)? → verify MUST check with check_mode + failed_when: pkg.changed
-           - If packages not verified at all → HIGH severity → ADD package verification
-        3. Env vars set in /etc/environment? → verify MUST slurp file + assert vars present
-           - If env vars not verified → MEDIUM severity → ADD slurp + assert
-        4. Directories with permissions? → verify MUST check mode + owner, not just existence
-           - If only checks existence → MEDIUM severity → ADD mode/owner checks
-        5. Services enabled/started? → verify MUST check state=='running' + status=='enabled'
-
-        DEAD CODE CHECK (MEDIUM severity):
-        - Look at molecule.yml platforms — what OS families are defined?
-        - Does verify.yml have conditions like 'when: ansible_os_family == Windows'?
-        - If NO Windows platform exists → that condition can NEVER be true → REMOVE the dead code block
-        - **IMPORTANT: Document removed platforms in Issues Skipped table** — e.g., 'Darwin/Windows
-          conditions removed — cannot be tested in Docker containers, only Debian/RedHat defined'
-
-        OTHER CHECKS (after verification depth):
-        - verify.yml EXISTS? (CRITICAL if missing)
-        - test_sequence includes idempotence? (HIGH if missing)
-        - FQCN on all modules? (MEDIUM if short names)
-        - pre_build_image: true on pre-built images? (MEDIUM if missing)
-
-        PRIORITY ORDER (mandatory):
-        1. Fix ALL verification depth issues (weak assertions, missing checks) FIRST
-        2. Fix dead code (unreachable conditions)
-        3. Fix config issues (idempotence, platforms)
-        4. Fix style (FQCN)
-
-        ITERATION BUDGET — scales with codebase size:
-        - Small (≤15 files): 12 iterations max
-        - Medium (16-35 files): 20 iterations max
-        - Large (35+ files): 25 iterations max
-
-        HARD REQUIREMENTS:
-        - Batch 4-6 Read calls per iteration, not one file per iteration
-        - Batch ALL Edit calls into ONE iteration (10 fixes = 10 Edit calls in ONE response)
-        - Do NOT re-read files after editing — trust Edit output
-        - STOP after verification — emit report in SAME response, NO more iterations
-        - If ansible-lint not installed, proceed with syntax check only
-        - Every file touched must appear in the output report
-        - Do NOT hardcode directory names — use Glob output" \
           --agent ansible-molecule \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -1102,53 +495,6 @@ tasks:
     cmds:
       - |
         go run ./cmd/squad run -v \
-          "Your PRIMARY MISSION is VERIFICATION DEPTH — finding places where verify.yml
-        doesn't actually test everything the role does. 'Checking existence is NOT enough.'
-
-        Use Glob with '**/molecule/**/*.yml', '**/molecule.yml', and '**/tasks/main.yml'.
-        You MUST read tasks/main.yml to understand what the role DOES (packages, files, permissions, env vars).
-        Batch Read calls: 4-6 files per iteration. Do NOT read one file per iteration.
-
-        VERIFICATION DEPTH CHECKLIST (THE #1 SOURCE OF MISSED FINDINGS):
-        For EACH thing the role tasks do, verify.yml MUST check it with STRONG assertions:
-        1. Binary with mode 0755? → verify MUST check stat.exists AND stat.executable AND stat.mode=='0755'
-           - If verify only checks 'exists' → HIGH severity weak assertion
-        2. Package installs (apt/dnf/package)? → verify MUST check with check_mode + failed_when: pkg.changed
-           - If packages not verified at all → HIGH severity
-        3. Env vars set in /etc/environment? → verify MUST slurp file + assert vars present
-           - If env vars not verified → MEDIUM severity
-        4. Directories with permissions? → verify MUST check mode + owner, not just existence
-           - If only checks existence → MEDIUM severity
-        5. Services enabled/started? → verify MUST check state=='running' + status=='enabled'
-
-        DEAD CODE CHECK (MEDIUM severity):
-        - Look at molecule.yml platforms — what OS families are defined?
-        - Does verify.yml have conditions like 'when: ansible_os_family == Windows'?
-        - If NO Windows platform exists → that condition can NEVER be true → report as DEAD CODE
-
-        OTHER CHECKS (after verification depth):
-        - verify.yml EXISTS? (CRITICAL if missing)
-        - test_sequence includes idempotence? (HIGH if missing)
-        - FQCN on all modules? (MEDIUM if short names)
-        - pre_build_image: true on pre-built images? (MEDIUM if missing)
-
-        PRIORITY ORDER in report (mandatory):
-        1. Verification depth issues (weak assertions, missing checks)
-        2. Dead code (unreachable conditions)
-        3. Config issues (idempotence, platforms)
-        4. Style (FQCN)
-
-        ITERATION BUDGET — scales with codebase size:
-        - Small (≤15 files): 12 iterations max
-        - Medium (16-35 files): 20 iterations max
-        - Large (35+ files): 25 iterations max
-
-        EFFICIENCY:
-        - Batch 4-6 Read calls per iteration
-        - Do NOT hardcode directory names — use Glob output
-        - After analysis, emit report IMMEDIATELY — no re-reading files
-
-        Do NOT write or modify any files." \
           --agent ansible-molecule --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
