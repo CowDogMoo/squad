@@ -1,6 +1,5 @@
-- Remove reliance on taskfile for prompts
+- Consolidate readonly and normal agents - have readonly be a command line arg
 - Update docs
 - Document process to create new agents - make sure it's relavtively easy and painless
 - Make agents as easy as warpgate templates
-- Show time elapsed for running an agent at end and number of tokens + cost analysis based on model used
 - groq/moonshotai/kimi-k2-instruct-0905
