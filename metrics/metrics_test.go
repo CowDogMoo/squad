@@ -1,10 +1,36 @@
 package metrics
 
 import (
+	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 )
+
+type roundTripperFunc struct {
+	roundTrip func(*http.Request) (*http.Response, error)
+}
+
+func (rt roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return rt.roundTrip(req)
+}
+
+func getPricingState() (map[string]liteLLMModel, bool, error) {
+	pricingCacheMu.RLock()
+	defer pricingCacheMu.RUnlock()
+
+	return pricingCache, pricingFetched, pricingFetchErr
+}
+
+func setPricingState(cache map[string]liteLLMModel, fetched bool, fetchErr error) {
+	pricingCacheMu.Lock()
+	pricingCache = cache
+	pricingFetched = fetched
+	pricingFetchErr = fetchErr
+	pricingCacheMu.Unlock()
+}
 
 func TestNew(t *testing.T) {
 	t.Parallel()
@@ -398,5 +424,108 @@ func TestPricingStatus(t *testing.T) {
 		} else {
 			t.Logf("Pricing not loaded: %v", err)
 		}
+	}
+}
+
+func TestFetchPricingVariants(t *testing.T) {
+	// Subtests share pricing globals — do not add t.Parallel().
+	originalTransport := http.DefaultTransport
+	originalCache, originalFetched, originalErr := getPricingState()
+	t.Cleanup(func() {
+		http.DefaultTransport = originalTransport
+		setPricingState(originalCache, originalFetched, originalErr)
+	})
+
+	successBody := `{"azure/gpt-4o":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002}}`
+
+	tests := []struct {
+		name        string
+		roundTrip   func(*http.Request) (*http.Response, error)
+		wantErr     string
+		wantFetched bool
+		checkLookup bool
+	}{
+		{
+			name: "http error",
+			roundTrip: func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("network down")
+			},
+			wantErr:     "failed to fetch pricing data",
+			wantFetched: false,
+		},
+		{
+			name: "status error",
+			roundTrip: func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Body:       io.NopCloser(strings.NewReader("oops")),
+					Header:     make(http.Header),
+				}, nil
+			},
+			wantErr:     "pricing API returned status 500",
+			wantFetched: false,
+		},
+		{
+			name: "decode error",
+			roundTrip: func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("{")),
+					Header:     make(http.Header),
+				}, nil
+			},
+			wantErr:     "failed to parse pricing data",
+			wantFetched: false,
+		},
+		{
+			name: "success",
+			roundTrip: func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(successBody)),
+					Header:     make(http.Header),
+				}, nil
+			},
+			wantFetched: true,
+			checkLookup: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setPricingState(nil, false, nil)
+			http.DefaultTransport = roundTripperFunc{roundTrip: tt.roundTrip}
+
+			fetchPricing()
+
+			cache, fetched, fetchErr := getPricingState()
+			if tt.wantErr != "" {
+				if fetchErr == nil {
+					t.Fatalf("expected error containing %q", tt.wantErr)
+				}
+				if !strings.Contains(fetchErr.Error(), tt.wantErr) {
+					t.Fatalf("error = %q, want %q", fetchErr.Error(), tt.wantErr)
+				}
+			} else if fetchErr != nil {
+				t.Fatalf("unexpected error: %v", fetchErr)
+			}
+
+			if fetched != tt.wantFetched {
+				t.Fatalf("fetched = %v, want %v", fetched, tt.wantFetched)
+			}
+
+			if tt.checkLookup {
+				if cache == nil {
+					t.Fatal("expected cache to be populated")
+				}
+				pricing, found := lookupLiteLLMPricing("openai", "gpt-4o")
+				if !found {
+					t.Fatal("expected provider mapping to find pricing")
+				}
+				if pricing.InputPerMillion == 0 || pricing.OutputPerMillion == 0 {
+					t.Fatalf("unexpected pricing: %+v", pricing)
+				}
+			}
+		})
 	}
 }

@@ -205,7 +205,8 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		WorkingDir:    opts.WorkingDir,
 		MaxIterations: opts.MaxIterations,
 		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
-			childBundle, err := agent.BuildBundle(agentsDir, agentName, prompt, workingDir, mode)
+			// Child agents inherit parent's template variables
+			childBundle, err := agent.BuildBundle(agentsDir, agentName, prompt, workingDir, mode, opts.Vars)
 			if err != nil {
 				return "", nil, fmt.Errorf("failed to build child agent bundle: %w", err)
 			}

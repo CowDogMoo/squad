@@ -45,6 +45,7 @@ type RunOptions struct {
 	NumCtx            int
 	MaxIterations     int
 	Mode              string
+	Vars              map[string]string // Template variables (e.g., COVERAGE_TARGET=85)
 	ConfigAvailable   bool
 	Config            *config.Config
 }
@@ -115,7 +116,7 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 	agentsDir := filepath.Dir(agentDir)
 	opts.AgentsDir = agentsDir
 
-	bundle, err := agent.BuildBundle(agentsDir, opts.Agent, prompt, workingDir, opts.Mode)
+	bundle, err := agent.BuildBundle(agentsDir, opts.Agent, prompt, workingDir, opts.Mode, opts.Vars)
 	if err != nil {
 		return nil, err
 	}

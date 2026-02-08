@@ -114,6 +114,7 @@ tasks:
           --require-actionable=true \
           --temperature 0.3 \
           --max-iterations 200 \
+          --var COVERAGE_TARGET={{.COVERAGE_TARGET}} \
           --out {{.OUT_DIR}}/squad-go-tests.txt
       - echo "Test coverage output written to {{.OUT_DIR}}/squad-go-tests.txt"
       - |
@@ -139,6 +140,7 @@ tasks:
           --require-actionable=false \
           --temperature 0.3 \
           --print=false \
+          --var COVERAGE_TARGET={{.COVERAGE_TARGET}} \
           --out {{.OUT_DIR}}/squad-go-tests-analysis.txt
       - echo "Coverage analysis written to {{.OUT_DIR}}/squad-go-tests-analysis.txt"
 

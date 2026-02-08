@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -133,5 +134,69 @@ func TestGetConfigDirsSkipsEmptyXDGDirs(t *testing.T) {
 		if !found {
 			t.Fatalf("expected %q in dirs, got %v", want, dirs)
 		}
+	}
+}
+
+func TestAgentsCacheDirCreatesDir(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+
+	cacheDir, err := AgentsCacheDir()
+	if err != nil {
+		t.Fatalf("AgentsCacheDir() error = %v", err)
+	}
+	if !strings.HasSuffix(cacheDir, filepath.Join("squad", "agents")) {
+		t.Fatalf("unexpected cache dir: %s", cacheDir)
+	}
+	stat, statErr := os.Stat(cacheDir)
+	if statErr != nil {
+		t.Fatalf("AgentsCacheDir() stat error = %v", statErr)
+	}
+	if !stat.IsDir() {
+		t.Fatalf("cache path is not a dir: %s", cacheDir)
+	}
+}
+
+func TestConfigCachePathErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		envKey string
+		call   func() (string, error)
+	}{
+		{
+			name:   "config file mkdir error",
+			envKey: "XDG_CONFIG_HOME",
+			call: func() (string, error) {
+				return ConfigFile("config.yaml")
+			},
+		},
+		{
+			name:   "cache file mkdir error",
+			envKey: "XDG_CACHE_HOME",
+			call: func() (string, error) {
+				return CacheFile("cache.json")
+			},
+		},
+		{
+			name:   "agents cache dir mkdir error",
+			envKey: "XDG_CACHE_HOME",
+			call: func() (string, error) {
+				return AgentsCacheDir()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filePath := filepath.Join(t.TempDir(), "home")
+			if err := os.WriteFile(filePath, []byte("data"), 0o600); err != nil {
+				t.Fatalf("write file: %v", err)
+			}
+			t.Setenv(tt.envKey, filePath)
+
+			if _, err := tt.call(); err == nil {
+				t.Fatalf("expected error")
+			}
+		})
 	}
 }
