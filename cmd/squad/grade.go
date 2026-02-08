@@ -146,7 +146,7 @@ func runGrade(cmd *cobra.Command, args []string) error {
 		return outputJSON(cmd, result)
 	}
 
-	fmt.Fprint(cmd.OutOrStdout(), grading.FormatResult(result))
+	_, _ = fmt.Fprint(cmd.OutOrStdout(), grading.FormatResult(result))
 	return nil
 }
 
@@ -157,7 +157,7 @@ func displayHistory(cmd *cobra.Command, store *grading.Store, agent string, limi
 	}
 
 	if len(grades) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "No grades found.")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No grades found.")
 		return nil
 	}
 
@@ -165,9 +165,9 @@ func displayHistory(cmd *cobra.Command, store *grading.Store, agent string, limi
 		return outputJSON(cmd, grades)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Grade History (showing %d of %d):\n\n", len(grades), len(grades))
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Grade History (showing %d of %d):\n\n", len(grades), len(grades))
 	for _, g := range grades {
-		fmt.Fprintf(cmd.OutOrStdout(), "  %s  %-12s  Grade: %s  Score: %.0f%%  Iter: %d\n",
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s  %-12s  Grade: %s  Score: %.0f%%  Iter: %d\n",
 			g.Timestamp.Format("2006-01-02 15:04"),
 			g.Agent,
 			g.Grade,
@@ -188,17 +188,17 @@ func displayStats(cmd *cobra.Command, store *grading.Store, agent string, asJSON
 		return outputJSON(cmd, stats)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Statistics for %s:\n\n", stats.Agent)
-	fmt.Fprintf(cmd.OutOrStdout(), "  Total Runs:    %d\n", stats.TotalRuns)
-	fmt.Fprintf(cmd.OutOrStdout(), "  Latest Grade:  %s\n", stats.LatestGrade)
-	fmt.Fprintf(cmd.OutOrStdout(), "  Avg Score:     %.1f%%\n", stats.AvgScore)
-	fmt.Fprintf(cmd.OutOrStdout(), "  Avg Report:    %.1f%%\n", stats.AvgReportQuality)
-	fmt.Fprintf(cmd.OutOrStdout(), "  Avg Efficiency: %.1f%%\n\n", stats.AvgIterationEfficiency)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Statistics for %s:\n\n", stats.Agent)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Total Runs:    %d\n", stats.TotalRuns)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Latest Grade:  %s\n", stats.LatestGrade)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Avg Score:     %.1f%%\n", stats.AvgScore)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Avg Report:    %.1f%%\n", stats.AvgReportQuality)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Avg Efficiency: %.1f%%\n\n", stats.AvgIterationEfficiency)
 
-	fmt.Fprintln(cmd.OutOrStdout(), "  Grade Distribution:")
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  Grade Distribution:")
 	for _, grade := range []string{"A+", "A", "A-", "B+", "B", "B-", "C", "D", "F"} {
 		if count, ok := stats.GradeCounts[grade]; ok && count > 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "    %s: %d\n", grade, count)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "    %s: %d\n", grade, count)
 		}
 	}
 
