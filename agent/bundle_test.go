@@ -29,7 +29,24 @@ func setupTestAgent(t *testing.T, name string, files map[string]string) (dir, ag
 	return dir, agentDir
 }
 
-func TestBuildBundleWithModeOverride(t *testing.T) {
+// assertContains checks that s contains substr, failing with a descriptive message.
+func assertContains(t *testing.T, s, substr, context string) {
+	t.Helper()
+	if !strings.Contains(s, substr) {
+		t.Fatalf("expected %s to contain %q", context, substr)
+	}
+}
+
+// assertNotContains checks that s does not contain substr.
+func assertNotContains(t *testing.T, s, substr, context string) {
+	t.Helper()
+	if strings.Contains(s, substr) {
+		t.Fatalf("expected %s to NOT contain %q", context, substr)
+	}
+}
+
+// conditionalTestFiles returns test files with Go template conditionals.
+func conditionalTestFiles() map[string]string {
 	manifest := `name: Demo
 version: v1
 entrypoint: system.txt
@@ -37,46 +54,94 @@ wrapper: wrapper.txt
 references:
   - ref.md
 task: task.md
-modes:
-  fast:
-    entrypoint: system_fast.txt
-    wrapper: wrapper_fast.txt
-    references:
-      - ref_fast.md
-    task: task_fast.md
 `
-	dir, _ := setupTestAgent(t, "demo", map[string]string{
-		"agent.yaml":       manifest,
-		"system.txt":       "system",
-		"system_fast.txt":  "system fast",
-		"wrapper.txt":      "wrapper",
-		"wrapper_fast.txt": "wrapper fast",
-		"ref.md":           "reference",
-		"ref_fast.md":      "reference fast",
-		"task.md":          "default task instructions",
-		"task_fast.md":     "fast task instructions",
-	})
+	systemContent := `common system content
+{{if eq .Mode "edit"}}
+edit mode system content
+{{end}}
+{{if eq .Mode "readonly"}}
+readonly mode system content
+{{end}}
+`
+	wrapperContent := `common wrapper content
+{{if eq .Mode "edit"}}
+edit mode wrapper
+{{end}}
+{{if eq .Mode "readonly"}}
+readonly mode wrapper
+{{end}}
+`
+	taskContent := `common task instructions
+{{if eq .Mode "edit"}}
+edit mode task instructions
+{{end}}
+{{if eq .Mode "readonly"}}
+readonly mode task instructions
+{{end}}
+`
+	return map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  systemContent,
+		"wrapper.txt": wrapperContent,
+		"ref.md":      "reference content",
+		"task.md":     taskContent,
+	}
+}
 
-	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "fast")
+func TestBuildBundle_ReadonlyMode(t *testing.T) {
+	dir, _ := setupTestAgent(t, "demo", conditionalTestFiles())
+
+	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "readonly")
 	if err != nil {
 		t.Fatalf("BuildBundle: %v", err)
 	}
 
-	if !strings.Contains(bundle.System, "system fast") || !strings.Contains(bundle.System, "wrapper fast") {
-		t.Fatalf("expected mode override content, got %s", bundle.System)
+	assertContains(t, bundle.System, "readonly mode system content", "system")
+	assertContains(t, bundle.System, "readonly mode wrapper", "wrapper")
+	assertContains(t, bundle.System, "readonly mode task instructions", "task")
+	assertContains(t, bundle.System, "Mode: readonly", "header")
+	assertNotContains(t, bundle.System, "edit mode", "system")
+}
+
+func TestBuildBundle_EditModeDefault(t *testing.T) {
+	dir, _ := setupTestAgent(t, "demo", conditionalTestFiles())
+
+	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "")
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
 	}
-	if !strings.Contains(bundle.System, "reference fast") {
-		t.Fatalf("expected reference content")
+
+	assertContains(t, bundle.System, "edit mode system content", "system")
+	assertContains(t, bundle.System, "edit mode wrapper", "wrapper")
+	assertContains(t, bundle.System, "edit mode task instructions", "task")
+	assertContains(t, bundle.System, "Mode: edit", "header")
+	assertNotContains(t, bundle.System, "readonly mode", "system")
+}
+
+func TestBuildBundle_CommonContentPreserved(t *testing.T) {
+	dir, _ := setupTestAgent(t, "demo", conditionalTestFiles())
+
+	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "readonly")
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
 	}
-	if !strings.Contains(bundle.System, "fast task instructions") {
-		t.Fatalf("expected task content in system bundle")
+
+	assertContains(t, bundle.System, "common system content", "system")
+	assertContains(t, bundle.System, "common wrapper content", "wrapper")
+	assertContains(t, bundle.System, "common task instructions", "task")
+}
+
+func TestBuildBundle_UserMessageIncluded(t *testing.T) {
+	dir, _ := setupTestAgent(t, "demo", conditionalTestFiles())
+
+	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "readonly")
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
 	}
-	if strings.Contains(bundle.System, "default task instructions") {
-		t.Fatalf("expected mode override to replace default task")
-	}
-	if !strings.Contains(string(bundle.Combined), "## User Message") || !strings.Contains(string(bundle.Combined), "do the thing") {
-		t.Fatalf("expected combined output to include user message")
-	}
+
+	combined := string(bundle.Combined)
+	assertContains(t, combined, "## User Message", "combined")
+	assertContains(t, combined, "do the thing", "combined")
 }
 
 func TestBuildBundleDefaultUserMessage(t *testing.T) {
@@ -99,9 +164,7 @@ wrapper: wrapper.txt
 	if bundle.User != "Begin." {
 		t.Fatalf("expected default user message 'Begin.', got %q", bundle.User)
 	}
-	if !strings.Contains(string(bundle.Combined), "Begin.") {
-		t.Fatalf("expected combined output to include default user message")
-	}
+	assertContains(t, string(bundle.Combined), "Begin.", "combined")
 }
 
 func TestBuildBundleErrors(t *testing.T) {
