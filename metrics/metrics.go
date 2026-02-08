@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cowdogmoo/squad/logging"
 )
 
 const (
@@ -105,7 +107,11 @@ func fetchPricing() {
 		pricingCacheMu.Unlock()
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logging.Warn("failed to close pricing response body: %v", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		pricingCacheMu.Lock()
