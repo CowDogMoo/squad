@@ -54,15 +54,31 @@ modes:
 ## Usage
 
 ```bash
-# Run with default task instructions
+# Run with default task instructions (user message: "Begin.")
 squad run --agent go-review
 
-# Add custom instructions (task.md still included)
+# Add custom instructions (task.md still included, your text becomes user message)
 squad run --agent go-review "Focus only on error handling in cmd/"
 
 # Run in readonly mode (uses task_readonly.md)
 squad run --agent go-review --mode readonly
 ```
+
+### How Prompts Work
+
+The agent always receives its `task.md` instructions in the system bundle.
+The CLI prompt (if any) becomes the user message:
+
+| Command | System Bundle | User Message |
+|---------|---------------|--------------|
+| `squad run --agent go-review` | system.md + task.md + refs | "Begin." |
+| `squad run --agent go-review "Focus on cmd/"` | system.md + task.md + refs | "Focus on cmd/" |
+
+The CLI prompt **adds context**, it doesn't replace task.md. Use it to:
+
+- Narrow scope: `"Only review files in pkg/auth/"`
+- Add constraints: `"Skip any changes to generated code"`
+- Provide context: `"This is a new feature for OAuth support"`
 
 ## Available Agents
 
