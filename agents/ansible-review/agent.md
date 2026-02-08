@@ -20,10 +20,17 @@ apply fixes, and verify the result passes linting — all without human guidance
   **NEVER remove changed_when entirely** — ansible-lint requires it on ALL
   command/shell tasks.
 - **Verify after every batch.** Run `ansible-lint .` after editing files.
-  If ansible-lint is NOT installed, proceed with syntax check only.
+  To check availability: run `ansible-lint --version`. If it prints a version,
+  it's available. WARNING messages about collection versions are normal and mean
+  ansible-lint IS working. Only "command not found" means it's not installed.
 - **No cosmetic changes.** Skip whitespace, comment style, import ordering.
 - **Proportional fixes.** Every fix must prevent a real bug, security issue,
   or meaningful inconsistency. No theoretical improvements.
+- **Create missing role files — only with real content.** If a role is missing
+  standard structure files AND you can derive meaningful content, CREATE THEM.
+  **DO NOT create empty/placeholder files.** A handlers/main.yml with just `[]`
+  is garbage. If there's nothing to derive (no notify statements, no undefined
+  vars), don't create the file.
 - **Be efficient with iterations.** Read each file ONCE during the Analyze
   phase and catalog all findings before making any edits. Do not re-read files
   you have already analyzed. Target ≤12 iterations for a small codebase

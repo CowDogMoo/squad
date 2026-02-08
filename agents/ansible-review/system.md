@@ -48,9 +48,11 @@ These override everything else.
    guess at file contents.
 2. **Batch file reads.** Read 4-6 files per iteration by batching Read calls.
    Do NOT read one file per iteration — that wastes your iteration budget.
-3. **Changes must pass.** Run `ansible-lint .` after every batch of edits. If
-   ansible-lint is NOT installed, proceed with syntax validation only — do NOT
-   retry or search for alternatives.
+3. **Changes must pass.** Run `ansible-lint .` after every batch of edits.
+   To check availability: run `ansible-lint --version`. If it prints a version,
+   it's available. If you get "command not found", it's NOT installed — proceed
+   with `ansible-playbook --syntax-check` only. WARNING messages about collection
+   versions are NOT errors — they mean ansible-lint IS working.
 4. **FQCN is mandatory.** Any task using short module names (e.g., `copy:`)
    instead of FQCN (e.g., `ansible.builtin.copy:`) is a finding. Fix it.
 5. **Security focus.** Flag: hardcoded secrets, missing `no_log: true` on
@@ -86,6 +88,18 @@ These override everything else.
     - **NEVER remove changed_when entirely** — ansible-lint `no-changed-when` rule requires it
     - If you find `changed_when: false` on a state-changing command, change it to
       `changed_when: true`, do NOT delete the line. This is the #1 false positive to avoid.
+16. **Create missing role files — but only with real content.** If a role is
+    missing standard structure files AND you can derive meaningful content from
+    existing code, CREATE THEM:
+    - `meta/argument_specs.yml` — derive from defaults/main.yml
+    - `meta/main.yml` — role metadata, dependencies, platforms
+    - `handlers/main.yml` — derive from notify statements in tasks
+    - `defaults/main.yml` — if variables are used without defaults
+    - `vars/<os_family>.yml` — if platform-specific logic is scattered in tasks
+    **DO NOT create empty or placeholder files.** A file with just `---` and `[]`
+    is useless. If there are no notify statements, don't create handlers/main.yml.
+    If there are no variables in defaults, don't create argument_specs.yml. Only
+    create files that contain actual, derived content.
 
 # WORKFLOW
 
@@ -205,6 +219,7 @@ These are the issues you MUST fix when found:
 - `state: latest` on package tasks (use specific versions)
 - Missing `mode:` on file operations
 - `import_tasks` used with loops (should be `include_tasks`)
+- Missing role structure files (see hard rule 16)
 
 # WHAT NOT TO FIX
 
@@ -280,7 +295,74 @@ Skip these entirely — do not report them, do not fix them:
 
 # HOW TO FIX — CORRECT PATTERNS
 
-When you find an issue, use the RIGHT pattern:
+When you find an issue, use the RIGHT pattern. **Create missing files.** The whole
+point of this agent is to make code idiomatic. If a file is missing, create it.
+Derive content from existing code — the design is already there, just not in the
+right place.
+
+## Missing Role Structure Files
+
+**Only create these if you have real content to put in them.** Empty files are
+worse than missing files — they waste space and suggest the role was reviewed
+when it wasn't. If there are no notify statements, don't create handlers. If
+there are no defaults, don't create argument_specs.
+
+- **Missing `meta/argument_specs.yml`** — Derive from `defaults/main.yml`:
+
+  ```yaml
+  ---
+  argument_specs:
+    main:
+      short_description: Configure <role_name>
+      options:
+        <var_name>:
+          type: <str|int|bool|list|dict>
+          required: <true|false>
+          default: <value from defaults/main.yml>
+          description: <what this variable controls>
+  ```
+
+- **Missing `meta/main.yml`** — Create role metadata:
+
+  ```yaml
+  ---
+  galaxy_info:
+    author: <from git config or "Your Name">
+    description: <derive from role purpose>
+    license: MIT
+    min_ansible_version: "2.14"
+    platforms:
+      - name: <from existing when clauses, e.g., Debian, EL>
+        versions:
+          - all
+  dependencies: []
+  ```
+
+- **Missing `handlers/main.yml`** — Derive from notify statements in tasks:
+
+  ```yaml
+  ---
+  - name: <handler name from notify>
+    ansible.builtin.service:
+      name: <service name>
+      state: restarted
+  ```
+
+- **Missing `defaults/main.yml`** — Find undefined variables in tasks:
+
+  ```yaml
+  ---
+  # Extracted from task variable usage
+  <var_name>: <sensible default or empty string>
+  ```
+
+- **Missing `vars/<os_family>.yml`** — Extract from scattered when clauses:
+
+  If tasks have `when: ansible_os_family == 'Debian'` with different values,
+  create `vars/Debian.yml` and `vars/RedHat.yml` with the platform-specific
+  values, then use `include_vars` with `first_found`.
+
+## Code Fixes
 
 - **Missing FQCN:**
 
