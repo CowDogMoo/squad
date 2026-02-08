@@ -175,15 +175,24 @@ func readPrompt(cmd *cobra.Command, args []string) (string, error) {
 		return strings.Join(args, " "), nil
 	}
 
-	input, err := io.ReadAll(cmd.InOrStdin())
-	if err != nil {
-		return "", fmt.Errorf("failed to read stdin: %w", err)
+	// Check if stdin has piped input.
+	if f, ok := cmd.InOrStdin().(*os.File); ok {
+		fi, err := f.Stat()
+		if err == nil && (fi.Mode()&os.ModeCharDevice) == 0 {
+			// stdin has piped input
+			input, err := io.ReadAll(f)
+			if err != nil {
+				return "", fmt.Errorf("failed to read stdin: %w", err)
+			}
+			prompt := strings.TrimSpace(string(input))
+			if prompt != "" {
+				return prompt, nil
+			}
+		}
 	}
-	prompt := strings.TrimSpace(string(input))
-	if prompt == "" {
-		return "", fmt.Errorf("prompt is required (pass args or pipe stdin)")
-	}
-	return prompt, nil
+
+	// Return empty string - the agent bundle will use its default user_prompt if available.
+	return "", nil
 }
 
 func resolveWorkingDir(dir string) (string, error) {

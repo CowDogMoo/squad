@@ -6,7 +6,9 @@ entrypoint: system.md
 wrapper: agent.md
 references:
   - references/cobra-viper-best-practices.md
+task: task.md
 modes:
   readonly:
     entrypoint: system-readonly.md
     wrapper: agent-readonly.md
+    task: task_readonly.md

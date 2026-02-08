@@ -568,10 +568,10 @@ func TestNewRunCmdArgs(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "missing prompt",
+			name:    "no prompt uses agent default",
 			args:    nil,
 			input:   bytes.NewBuffer(nil),
-			wantErr: true,
+			wantErr: false, // No longer an error - agent's default user_prompt will be used
 		},
 	}
 	for _, tt := range tests {

@@ -161,6 +161,10 @@ func newRunCmd() *cobra.Command {
 		Use:     "run [prompt]",
 		Aliases: []string{"r"},
 		Short:   "Run an agent workflow",
+		Long: `Run an agent workflow with an optional prompt.
+
+If no prompt is provided via arguments or stdin, the agent's default
+user_prompt will be used (if configured in the agent's manifest).`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				return nil
@@ -168,7 +172,9 @@ func newRunCmd() *cobra.Command {
 			if hasPipedInput(cmd.InOrStdin()) {
 				return nil
 			}
-			return fmt.Errorf("prompt is required (pass args or pipe stdin)")
+			// Allow no prompt - the agent bundle will use default user_prompt if available.
+			// If the agent has no default, BuildBundle will return an error.
+			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Silence usage for runtime errors (API key missing, etc).
