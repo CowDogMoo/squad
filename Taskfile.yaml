@@ -361,6 +361,7 @@ tasks:
           --require-actionable=true \
           --temperature 0.3 \
           --max-iterations 200 \
+          --var COVERAGE_TARGET={{.COVERAGE_TARGET}} \
           --out {{.OUT_DIR}}/squad-python-tests.txt
       - echo "Python test coverage output written to {{.OUT_DIR}}/squad-python-tests.txt"
       - |
@@ -386,6 +387,7 @@ tasks:
           --require-actionable=false \
           --temperature 0.3 \
           --print=false \
+          --var COVERAGE_TARGET={{.COVERAGE_TARGET}} \
           --out {{.OUT_DIR}}/squad-python-tests-analysis.txt
       - echo "Python coverage analysis written to {{.OUT_DIR}}/squad-python-tests-analysis.txt"
 
