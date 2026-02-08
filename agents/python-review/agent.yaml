@@ -1,9 +1,0 @@
----
-name: python-review
-version: 0.2.0
-description: Autonomous Python code review agent that discovers code quality issues, fixes best-practice violations, and verifies the result passes linting.
-entrypoint: system.md
-wrapper: agent.md
-references:
-  - references/python-review-criteria.md
-task: task.md
