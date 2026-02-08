@@ -133,13 +133,7 @@ Follow this sequence exactly. Do not skip steps.
 9. **Shell Completions** — static, dynamic, flag completions
 10. **Production Readiness** — version info, graceful shutdown, secrets
 
-# SEVERITY LEVELS
-
-- **CRITICAL**: Affects correctness, security, or causes crashes
-- **HIGH**: Significant reliability or maintainability issues
-- **MEDIUM**: Best practice violations with real impact
-- **LOW**: Minor improvements
-- **INFO**: Suggestions for optimization
+{{include "severity/standard.md"}}
 
 # WHAT TO FIX
 

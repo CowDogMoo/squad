@@ -167,6 +167,99 @@ wrapper: wrapper.txt
 	assertContains(t, string(bundle.Combined), "Begin.", "combined")
 }
 
+func TestBuildBundle_IncludeFunction(t *testing.T) {
+	// Create agents directory with _templates
+	dir := t.TempDir()
+	templatesDir := filepath.Join(dir, "_templates", "hard-rules")
+	if err := os.MkdirAll(templatesDir, 0o755); err != nil {
+		t.Fatalf("mkdir templates: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(templatesDir, "test-rules.md"), []byte("Included rule content"), 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	// Create agent with include directive
+	agentDir := filepath.Join(dir, "demo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agent: %v", err)
+	}
+
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+`
+	systemContent := `System prompt
+{{include "hard-rules/test-rules.md"}}
+End of system`
+	writeTestFiles(t, agentDir, map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  systemContent,
+		"wrapper.txt": "wrapper",
+	})
+
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "edit")
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+
+	assertContains(t, bundle.System, "Included rule content", "system")
+	assertContains(t, bundle.System, "System prompt", "system")
+	assertContains(t, bundle.System, "End of system", "system")
+}
+
+func TestBuildBundle_IncludePathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "demo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agent: %v", err)
+	}
+
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+`
+	systemContent := `{{include "../../../etc/passwd"}}`
+	writeTestFiles(t, agentDir, map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  systemContent,
+		"wrapper.txt": "wrapper",
+	})
+
+	_, err := BuildBundle(dir, "demo", "prompt", "/work", "edit")
+	if err == nil {
+		t.Fatalf("expected error for path traversal")
+	}
+	assertContains(t, err.Error(), "cannot contain '..'", "error")
+}
+
+func TestBuildBundle_IncludeMissingTemplate(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "demo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agent: %v", err)
+	}
+
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+`
+	systemContent := `{{include "nonexistent.md"}}`
+	writeTestFiles(t, agentDir, map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  systemContent,
+		"wrapper.txt": "wrapper",
+	})
+
+	_, err := BuildBundle(dir, "demo", "prompt", "/work", "edit")
+	if err == nil {
+		t.Fatalf("expected error for missing template")
+	}
+	assertContains(t, err.Error(), "failed to include template", "error")
+}
+
 func TestBuildBundleErrors(t *testing.T) {
 	baseManifest := `name: Demo
 version: v1

@@ -197,12 +197,7 @@ re-read files.
 7. **Role Design** — Single responsibility, argument specs
 8. **Collection Structure** — galaxy.yml, runtime.yml, FQCN usage
 
-# SEVERITY LEVELS
-
-- **CRITICAL**: Security vulnerabilities, data exposure, execution failures
-- **HIGH**: Reliability issues, non-idempotent tasks, orphaned handlers
-- **MEDIUM**: Missing FQCN, poor variable naming, missing argument_specs
-- **LOW**: Missing task names, inconsistent YAML style
+{{include "severity/standard.md"}}
 
 # WHAT TO FIX
 
@@ -259,12 +254,12 @@ Skip these entirely — do not report them, do not fix them:
 ```yaml
 # Executing a binary that does work
 - name: Execute runzero-explorer
-  ansible.builtin.command: "{{ runzero_explorer_path }}"
+  ansible.builtin.command: "{{"{{" }} runzero_explorer_path }}"
   changed_when: true  # ✓ Correct: this changes state, report it
 
 # Moving/renaming files
 - name: Rename file to destination
-  ansible.builtin.command: mv {{ src }} {{ dest }}
+  ansible.builtin.command: mv {{"{{" }} src }} {{"{{" }} dest }}
   changed_when: true  # ✓ Correct: mv changes filesystem state
 
 # Running a script that modifies state
@@ -278,7 +273,7 @@ Skip these entirely — do not report them, do not fix them:
 ```yaml
 # WRONG: removing changed_when entirely breaks ansible-lint
 - name: Execute runzero-explorer
-  ansible.builtin.command: "{{ runzero_explorer_path }}"
+  ansible.builtin.command: "{{"{{" }} runzero_explorer_path }}"
   # No changed_when = ansible-lint failure!
 
 # WRONG: changed_when: false on state-changing command
@@ -400,13 +395,13 @@ there are no defaults, don't create argument_specs.
   - name: Set database password
     ansible.builtin.mysql_user:
       name: app
-      password: "{{ db_password }}"
+      password: "{{"{{" }} db_password }}"
 
   # Good
   - name: Set database password
     ansible.builtin.mysql_user:
       name: app
-      password: "{{ db_password }}"
+      password: "{{"{{" }} db_password }}"
     no_log: true
   ```
 

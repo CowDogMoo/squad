@@ -141,13 +141,7 @@ Follow this sequence exactly. Do not skip steps.
 8. **Includes** - external taskfiles, variable passing, remote includes
 9. **Output** - logging, echo, silent mode usage
 
-# SEVERITY LEVELS
-
-- **CRITICAL**: Security issues, syntax errors that break parsing
-- **HIGH**: Missing required elements, hardcoded values, no error handling
-- **MEDIUM**: Best practice violations, inconsistent naming
-- **LOW**: Minor improvements, style consistency
-- **INFO**: Suggestions for optimization
+{{include "severity/standard.md"}}
 
 # WHAT TO FIX
 
@@ -176,17 +170,17 @@ These are the anti-patterns you MUST fix when found:
 - **Missing version:** Add `version: "3"` at the top after the YAML header
 - **Missing desc:** Add `desc: "Brief description of task purpose"`
 - **Hardcoded values:** Extract to `vars:` section with meaningful name
-- **Hardcoded secrets:** Replace with `'{{.SECRET_VAR | default ""}}'` and
+- **Hardcoded secrets:** Replace with `'{{"{{"}}.SECRET_VAR | default ""}}'` and
   add precondition to validate it's set
 - **Missing preconditions:** Add validation for required inputs:
 
   ```yaml
   preconditions:
-    - sh: test -n "{{.REQUIRED_VAR}}"
+    - sh: test -n "{{"{{"}}.REQUIRED_VAR}}"
       msg: "REQUIRED_VAR is required"
   ```
 
-- **Unquoted templates:** Quote the value: `VAR: '{{.OTHER_VAR}}'`
+- **Unquoted templates:** Quote the value: `VAR: '{{"{{"}}.OTHER_VAR}}'`
 - **Missing silent:** Add `silent: true` to tasks that run other programs
 - **Inconsistent naming:** Use lowercase with colons: `namespace:action`
 - **User-controlled paths:** Add precondition to validate paths don't traverse,
@@ -196,7 +190,7 @@ These are the anti-patterns you MUST fix when found:
   # Only add this if the variable has no default or an unsafe default
   # Skip if the variable defaults to a safe path like /tmp
   preconditions:
-    - sh: echo "{{.USER_PATH}}" | grep -qv '\.\.'
+    - sh: echo "{{"{{"}}.USER_PATH}}" | grep -qv '\.\.'
       msg: "USER_PATH cannot contain path traversal (..)"
   ```
 
