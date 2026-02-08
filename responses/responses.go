@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/tools"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -68,7 +69,7 @@ func UseResponsesAPI(provider, model string) bool {
 }
 
 // RunWithTools drives a tool-calling loop using the OpenAI Responses API.
-func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations int, taskCfg *tools.TaskConfig) (string, error) {
+func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations int, taskCfg *tools.TaskConfig, m *metrics.Metrics) (string, error) {
 	client := newClient(apiKey, baseURL, organization)
 	handlers, toolDefs := tools.BuildHandlers(workingDir, taskCfg)
 	if maxIterations <= 0 {
@@ -99,8 +100,9 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		return "", fmt.Errorf("responses API call failed: %w", err)
 	}
 	logOutputItems(ctx, resp, "initial")
+	trackResponseMetrics(resp, m)
 
-	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc, maxIterations)
+	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc, maxIterations, m)
 	if err != nil {
 		return text, err
 	}
@@ -110,7 +112,7 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 
 	// If the loop exited with pending function calls, resolve them with
 	// dummy outputs so PreviousResponseID chaining doesn't fail.
-	resp, text, err = resolvePendingCalls(ctx, client, resp, &rc)
+	resp, text, err = resolvePendingCalls(ctx, client, resp, &rc, m)
 	if err != nil {
 		return "", fmt.Errorf("responses API: resolvePendingCalls failed: %w", err)
 	}
@@ -118,7 +120,7 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		return text, nil
 	}
 
-	finalText, finalErr := requestFinal(ctx, client, resp.ID, systemPrompt, &rc)
+	finalText, finalErr := requestFinal(ctx, client, resp.ID, systemPrompt, &rc, m)
 	if finalErr == nil && finalText != "" {
 		return finalText, nil
 	}
@@ -126,6 +128,17 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		logging.DebugContext(ctx, "responses API: requestFinal error: %v", finalErr)
 	}
 	return "", fmt.Errorf("responses API: no usable text after tool loop (OutputText empty, requestFinal failed: %v)", finalErr)
+}
+
+// trackResponseMetrics extracts token usage from a response and adds it to metrics.
+func trackResponseMetrics(resp *oairesponses.Response, m *metrics.Metrics) {
+	if m == nil || resp == nil {
+		return
+	}
+	m.IncrementIterations()
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+		m.AddTokens(resp.Usage.InputTokens, resp.Usage.OutputTokens)
+	}
 }
 
 func newClient(apiKey, baseURL, organization string) openai.Client {
@@ -139,7 +152,7 @@ func newClient(apiKey, baseURL, organization string) openai.Client {
 	return openai.NewClient(clientOpts...)
 }
 
-func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config, maxIter int) (*oairesponses.Response, string, error) {
+func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config, maxIter int, m *metrics.Metrics) (*oairesponses.Response, string, error) {
 	var repeat tools.RepeatTracker
 	for i := 0; i < maxIter; i++ {
 		calls := ExtractFunctionCalls(resp)
@@ -176,6 +189,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 			return resp, "", fmt.Errorf("responses API follow-up failed at iteration %d: %w", i+1, err)
 		}
 		logOutputItems(ctx, resp, fmt.Sprintf("follow-up-iter-%d", i+1))
+		trackResponseMetrics(resp, m)
 	}
 
 	text := resp.OutputText()
@@ -203,7 +217,7 @@ func checkRepeat(ctx context.Context, repeat *tools.RepeatTracker, calls []Funct
 	return false
 }
 
-func requestFinal(ctx context.Context, client openai.Client, previousID, systemPrompt string, rc *Config) (string, error) {
+func requestFinal(ctx context.Context, client openai.Client, previousID, systemPrompt string, rc *Config, m *metrics.Metrics) (string, error) {
 	if strings.TrimSpace(previousID) == "" {
 		return "", fmt.Errorf("missing previous response id")
 	}
@@ -228,6 +242,7 @@ func requestFinal(ctx context.Context, client openai.Client, previousID, systemP
 		return "", fmt.Errorf("responses API final call failed: %w", err)
 	}
 	logOutputItems(ctx, resp, "final-call")
+	trackResponseMetrics(resp, m)
 	text := resp.OutputText()
 	if text == "" {
 		return "", fmt.Errorf("responses API final call returned empty text")
@@ -239,7 +254,7 @@ func requestFinal(ctx context.Context, client openai.Client, previousID, systemP
 // resolvePendingCalls checks whether resp contains unresolved function_call
 // items and, if so, submits dummy outputs with ToolChoice=none so the
 // conversation is in a clean state for subsequent chaining.
-func resolvePendingCalls(ctx context.Context, client openai.Client, resp *oairesponses.Response, rc *Config) (*oairesponses.Response, string, error) {
+func resolvePendingCalls(ctx context.Context, client openai.Client, resp *oairesponses.Response, rc *Config, m *metrics.Metrics) (*oairesponses.Response, string, error) {
 	calls := ExtractFunctionCalls(resp)
 	if len(calls) == 0 {
 		return resp, resp.OutputText(), nil
@@ -279,6 +294,7 @@ func resolvePendingCalls(ctx context.Context, client openai.Client, resp *oaires
 		return resp, "", fmt.Errorf("resolve pending calls failed: %w", err)
 	}
 	logOutputItems(ctx, resolved, "resolve-pending")
+	trackResponseMetrics(resolved, m)
 	return resolved, resolved.OutputText(), nil
 }
 

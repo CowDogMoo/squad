@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -211,8 +212,8 @@ func TestBuildHandlers(t *testing.T) {
 					CallModel: func(
 						_ context.Context,
 						_, _, _, _, _ string,
-					) (string, error) {
-						return "", nil
+					) (string, *metrics.Metrics, error) {
+						return "", nil, nil
 					},
 				}
 			}
@@ -795,7 +796,7 @@ func TestRunWithToolsLoop(t *testing.T) {
 		},
 	}}
 
-	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, nil)
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, nil, nil)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
 	}
@@ -807,7 +808,7 @@ func TestRunWithToolsLoop(t *testing.T) {
 func TestFinishToolLoopFallback(t *testing.T) {
 	t.Parallel()
 	llm := &fakeLLM{responses: []*llms.ContentResponse{{Choices: []*llms.ContentChoice{{Content: ""}}}}}
-	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, nil)
+	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, nil, nil)
 	if err != nil {
 		t.Fatalf("finishToolLoop() error = %v", err)
 	}
@@ -836,7 +837,7 @@ func TestRunWithToolsErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := RunWithTools(context.Background(), tt.llm, "", "user", t.TempDir(), 1, nil)
+			_, err := RunWithTools(context.Background(), tt.llm, "", "user", t.TempDir(), 1, nil, nil)
 			if err == nil {
 				t.Fatalf("expected error")
 			}
@@ -848,7 +849,7 @@ func TestFinishToolLoopFinalContent(t *testing.T) {
 	llm := &stubLLM{
 		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
 	}
-	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, nil)
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, nil, nil)
 	if err != nil {
 		t.Fatalf("finishToolLoop() error = %v", err)
 	}
@@ -859,8 +860,133 @@ func TestFinishToolLoopFinalContent(t *testing.T) {
 
 func TestFinishToolLoopErrorNoContent(t *testing.T) {
 	llm := &stubLLM{err: errors.New("boom")}
-	_, err := finishToolLoop(context.Background(), llm, nil, "", 1, nil)
+	_, err := finishToolLoop(context.Background(), llm, nil, "", 1, nil, nil)
 	if err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestExtractTokenUsage(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		gi         map[string]any
+		wantInput  int64
+		wantOutput int64
+	}{
+		{
+			name:       "nil gi",
+			gi:         nil,
+			wantInput:  0,
+			wantOutput: 0,
+		},
+		{
+			name:       "empty gi",
+			gi:         map[string]any{},
+			wantInput:  0,
+			wantOutput: 0,
+		},
+		{
+			name:       "PromptTokens/CompletionTokens (OpenAI style)",
+			gi:         map[string]any{"PromptTokens": 100, "CompletionTokens": 50},
+			wantInput:  100,
+			wantOutput: 50,
+		},
+		{
+			name:       "prompt_tokens/completion_tokens (snake_case)",
+			gi:         map[string]any{"prompt_tokens": 200, "completion_tokens": 100},
+			wantInput:  200,
+			wantOutput: 100,
+		},
+		{
+			name:       "InputTokens/OutputTokens (Anthropic style)",
+			gi:         map[string]any{"InputTokens": 300, "OutputTokens": 150},
+			wantInput:  300,
+			wantOutput: 150,
+		},
+		{
+			name:       "input_tokens/output_tokens (snake_case)",
+			gi:         map[string]any{"input_tokens": 400, "output_tokens": 200},
+			wantInput:  400,
+			wantOutput: 200,
+		},
+		{
+			name:       "int64 values",
+			gi:         map[string]any{"PromptTokens": int64(500), "CompletionTokens": int64(250)},
+			wantInput:  500,
+			wantOutput: 250,
+		},
+		{
+			name:       "float64 values",
+			gi:         map[string]any{"PromptTokens": float64(600), "CompletionTokens": float64(300)},
+			wantInput:  600,
+			wantOutput: 300,
+		},
+		{
+			name:       "only input tokens",
+			gi:         map[string]any{"PromptTokens": 100},
+			wantInput:  100,
+			wantOutput: 0,
+		},
+		{
+			name:       "only output tokens",
+			gi:         map[string]any{"CompletionTokens": 50},
+			wantInput:  0,
+			wantOutput: 50,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := metrics.New("openai", "gpt-4o")
+			if tt.gi != nil {
+				extractTokenUsage(tt.gi, m)
+			}
+			if m.InputTokens != tt.wantInput {
+				t.Fatalf("InputTokens = %d, want %d", m.InputTokens, tt.wantInput)
+			}
+			if m.OutputTokens != tt.wantOutput {
+				t.Fatalf("OutputTokens = %d, want %d", m.OutputTokens, tt.wantOutput)
+			}
+		})
+	}
+}
+
+func TestExtractTokenUsageNilMetrics(t *testing.T) {
+	t.Parallel()
+	// Should not panic when metrics is nil
+	gi := map[string]any{"PromptTokens": 100, "CompletionTokens": 50}
+	extractTokenUsage(gi, nil) // Should not panic
+}
+
+func TestRunWithToolsWithMetrics(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	llm := &fakeLLM{responses: []*llms.ContentResponse{
+		{Choices: []*llms.ContentChoice{{
+			Content: "done",
+			GenerationInfo: map[string]any{
+				"PromptTokens":     100,
+				"CompletionTokens": 50,
+			},
+		}}},
+	}}
+
+	m := metrics.New("openai", "gpt-4o")
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, nil, m)
+	if err != nil {
+		t.Fatalf("RunWithTools() error = %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("output = %q, want %q", out, "done")
+	}
+	if m.Iterations != 1 {
+		t.Fatalf("Iterations = %d, want 1", m.Iterations)
+	}
+	if m.InputTokens != 100 {
+		t.Fatalf("InputTokens = %d, want 100", m.InputTokens)
+	}
+	if m.OutputTokens != 50 {
+		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens)
 	}
 }
