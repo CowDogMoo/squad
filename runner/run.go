@@ -10,8 +10,10 @@ import (
 	"strings"
 
 	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/source"
 	"github.com/cowdogmoo/squad/tools"
 	"github.com/spf13/cobra"
 )
@@ -44,6 +46,7 @@ type RunOptions struct {
 	MaxIterations     int
 	Mode              string
 	ConfigAvailable   bool
+	Config            *config.Config
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.
@@ -101,10 +104,15 @@ func printMetrics(cmd *cobra.Command, m *metrics.Metrics) error {
 
 // prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
 func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir string) (*agent.Bundle, error) {
-	agentsDir, err := resolveAgentsDir(opts.AgentsDir)
+	// Find the agent directory using the source manager
+	agentDir, err := findAgentDir(opts.Agent, opts.AgentsDir, opts.Config)
 	if err != nil {
 		return nil, err
 	}
+
+	// Extract the parent directory (agentsDir) for BuildBundle
+	// This allows _templates to be found relative to the agent source
+	agentsDir := filepath.Dir(agentDir)
 	opts.AgentsDir = agentsDir
 
 	bundle, err := agent.BuildBundle(agentsDir, opts.Agent, prompt, workingDir, opts.Mode)
@@ -207,13 +215,59 @@ func resolveAgentsDir(explicit string) (string, error) {
 		return filepath.Abs(explicit)
 	}
 
+	// Check local ./agents directory first
 	if stat, err := os.Stat("agents"); err == nil && stat.IsDir() {
 		return filepath.Abs("agents")
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve agents dir: %w", err)
+	// Use XDG config directories
+	for _, configDir := range config.GetConfigDirs() {
+		agentsDir := filepath.Join(configDir, "agents")
+		if stat, err := os.Stat(agentsDir); err == nil && stat.IsDir() {
+			return agentsDir, nil
+		}
 	}
-	return filepath.Join(home, ".config", "squad", "agents"), nil
+
+	// Return the first XDG config path as default (will be created if needed)
+	dirs := config.GetConfigDirs()
+	if len(dirs) > 0 {
+		return filepath.Join(dirs[0], "agents"), nil
+	}
+	return "", fmt.Errorf("failed to resolve agents dir: no config directories available")
+}
+
+// findAgentDir locates an agent by name using the source manager.
+// Falls back to the legacy single-directory resolution if config is unavailable.
+func findAgentDir(agentName, explicitDir string, cfg *config.Config) (string, error) {
+	// If explicit directory is provided, use it directly
+	if explicitDir != "" {
+		absDir, err := filepath.Abs(explicitDir)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(absDir, agentName), nil
+	}
+
+	// Use agent source manager if config is available
+	if cfg != nil {
+		manager, err := source.NewManager(cfg)
+		if err != nil {
+			// Fall through to legacy resolution
+			logging.Warn("failed to create agent source manager: %v", err)
+		} else {
+			agentDir, err := manager.FindAgent(agentName)
+			if err == nil {
+				return agentDir, nil
+			}
+			// Log but don't fail - try legacy resolution
+			logging.Debug("agent not found via source manager: %v", err)
+		}
+	}
+
+	// Legacy resolution: ./agents or ~/.config/squad/agents
+	agentsDir, err := resolveAgentsDir("")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(agentsDir, agentName), nil
 }

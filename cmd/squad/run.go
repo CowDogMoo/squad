@@ -59,6 +59,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		maxIter = 1000
 	}
 
+	cfg := configFromContext(cmd)
 	return &runner.RunOptions{
 		Agent:             agent,
 		AgentsDir:         agentsDir,
@@ -85,7 +86,8 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		NumCtx:            v.GetInt("provider.num_ctx"),
 		MaxIterations:     maxIter,
 		Mode:              mode,
-		ConfigAvailable:   configFromContext(cmd) != nil,
+		ConfigAvailable:   cfg != nil,
+		Config:            cfg,
 	}
 }
 

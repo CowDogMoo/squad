@@ -65,6 +65,7 @@ It provides a clean config + logging foundation for agent workflows.`,
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(newGradeCmd())
+	rootCmd.AddCommand(agentsCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(completionCmd)
 
