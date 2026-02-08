@@ -70,16 +70,23 @@ entrypoint: system.md
 wrapper: agent.md
 references:
   - refs/criteria.md
-modes:
-  readonly:
-    entrypoint: system-ro.md
-    wrapper: agent-ro.md
 `
+	// Use Go text/template conditionals for mode-specific content
 	files := map[string]string{
-		"system.md":        "default system prompt",
-		"agent.md":         "default wrapper",
-		"system-ro.md":     "readonly system prompt",
-		"agent-ro.md":      "readonly wrapper",
+		"system.md": `common system content
+{{if eq .Mode "edit"}}
+edit mode system content
+{{end}}
+{{if eq .Mode "readonly"}}
+readonly system content
+{{end}}`,
+		"agent.md": `common wrapper content
+{{if eq .Mode "edit"}}
+edit mode wrapper
+{{end}}
+{{if eq .Mode "readonly"}}
+readonly wrapper
+{{end}}`,
 		"refs/criteria.md": "review criteria content",
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
@@ -89,20 +96,24 @@ modes:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(bundle.System, "default system prompt") {
-		t.Error("expected default system prompt in bundle")
+	// Default mode is "edit"
+	if !strings.Contains(bundle.System, "edit mode system content") {
+		t.Error("expected edit mode system content in bundle")
 	}
-	if !strings.Contains(bundle.System, "default wrapper") {
-		t.Error("expected default wrapper in bundle")
+	if !strings.Contains(bundle.System, "edit mode wrapper") {
+		t.Error("expected edit mode wrapper in bundle")
 	}
-	if strings.Contains(bundle.System, "readonly system prompt") {
-		t.Error("did not expect readonly system prompt in default mode")
+	if strings.Contains(bundle.System, "readonly") {
+		t.Error("did not expect readonly content in default/edit mode")
 	}
 	if !strings.Contains(bundle.System, "review criteria content") {
 		t.Error("expected references in bundle")
 	}
 	if !strings.Contains(string(bundle.Combined), "review this") {
 		t.Error("expected user prompt in combined bundle")
+	}
+	if !strings.Contains(bundle.System, "Mode: edit") {
+		t.Error("expected Mode: edit header in bundle")
 	}
 }
 
@@ -114,16 +125,23 @@ entrypoint: system.md
 wrapper: agent.md
 references:
   - refs/criteria.md
-modes:
-  readonly:
-    entrypoint: system-ro.md
-    wrapper: agent-ro.md
 `
+	// Use Go text/template conditionals for mode-specific content
 	files := map[string]string{
-		"system.md":        "default system prompt",
-		"agent.md":         "default wrapper",
-		"system-ro.md":     "readonly system prompt",
-		"agent-ro.md":      "readonly wrapper",
+		"system.md": `common system content
+{{if eq .Mode "edit"}}
+edit mode system content
+{{end}}
+{{if eq .Mode "readonly"}}
+readonly system content
+{{end}}`,
+		"agent.md": `common wrapper content
+{{if eq .Mode "edit"}}
+edit mode wrapper
+{{end}}
+{{if eq .Mode "readonly"}}
+readonly wrapper
+{{end}}`,
 		"refs/criteria.md": "review criteria content",
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
@@ -133,39 +151,111 @@ modes:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(bundle.System, "readonly system prompt") {
-		t.Error("expected readonly system prompt in bundle")
+	if !strings.Contains(bundle.System, "readonly system content") {
+		t.Error("expected readonly system content in bundle")
 	}
 	if !strings.Contains(bundle.System, "readonly wrapper") {
 		t.Error("expected readonly wrapper in bundle")
 	}
-	if strings.Contains(bundle.System, "default system prompt") {
-		t.Error("did not expect default system prompt in readonly mode")
+	if strings.Contains(bundle.System, "edit mode") {
+		t.Error("did not expect edit mode content in readonly mode")
 	}
-	// References should still be inherited from defaults.
 	if !strings.Contains(bundle.System, "review criteria content") {
-		t.Error("expected default references to be inherited in readonly mode")
+		t.Error("expected references in bundle")
+	}
+	if !strings.Contains(bundle.System, "Mode: readonly") {
+		t.Error("expected Mode: readonly header in bundle")
 	}
 }
 
-func TestBuildAgentBundle_ModeOverridesReferences(t *testing.T) {
+func TestBuildAgentBundle_CommonContentPreserved(t *testing.T) {
 	manifest := `
 name: test-agent
 version: "1.0"
 entrypoint: system.md
 wrapper: agent.md
-references:
-  - refs/default-ref.md
-modes:
-  custom:
-    references:
-      - refs/custom-ref.md
+`
+	// Content without conditionals should be preserved
+	files := map[string]string{
+		"system.md": `This is common content that appears in all modes.
+{{if eq .Mode "edit"}}
+This is edit-only content.
+{{end}}
+{{if eq .Mode "readonly"}}
+This is readonly-only content.
+{{end}}
+This is also common content.`,
+		"agent.md": "common wrapper",
+	}
+	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
+
+	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "readonly")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(bundle.System, "This is common content that appears in all modes") {
+		t.Error("expected common content at beginning")
+	}
+	if !strings.Contains(bundle.System, "This is also common content") {
+		t.Error("expected common content at end")
+	}
+	if !strings.Contains(bundle.System, "readonly-only content") {
+		t.Error("expected readonly content")
+	}
+	if strings.Contains(bundle.System, "edit-only content") {
+		t.Error("did not expect edit content in readonly mode")
+	}
+}
+
+func TestBuildAgentBundle_NoConditionalBlocks(t *testing.T) {
+	// Agents without conditional blocks should work with any mode
+	manifest := `
+name: test-agent
+version: "1.0"
+entrypoint: system.md
+wrapper: agent.md
 `
 	files := map[string]string{
-		"system.md":           "system prompt",
-		"agent.md":            "wrapper",
-		"refs/default-ref.md": "default reference",
-		"refs/custom-ref.md":  "custom reference",
+		"system.md": "plain system content without conditionals",
+		"agent.md":  "plain wrapper without conditionals",
+	}
+	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
+
+	// Test with readonly mode on agent without conditional blocks
+	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "readonly")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(bundle.System, "plain system content") {
+		t.Error("expected plain system content")
+	}
+	if !strings.Contains(bundle.System, "plain wrapper") {
+		t.Error("expected plain wrapper")
+	}
+	if !strings.Contains(bundle.System, "Mode: readonly") {
+		t.Error("expected Mode: readonly header even without conditionals")
+	}
+}
+
+func TestBuildAgentBundle_CustomMode(t *testing.T) {
+	// Test that custom modes work with conditional blocks
+	manifest := `
+name: test-agent
+version: "1.0"
+entrypoint: system.md
+wrapper: agent.md
+`
+	files := map[string]string{
+		"system.md": `common content
+{{if eq .Mode "custom"}}
+custom mode content
+{{end}}
+{{if eq .Mode "edit"}}
+edit mode content
+{{end}}`,
+		"agent.md": "wrapper",
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
@@ -174,90 +264,14 @@ modes:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(bundle.System, "custom reference") {
-		t.Error("expected custom reference in bundle")
+	if !strings.Contains(bundle.System, "custom mode content") {
+		t.Error("expected custom mode content")
 	}
-	if strings.Contains(bundle.System, "default reference") {
-		t.Error("did not expect default reference when mode overrides references")
+	if strings.Contains(bundle.System, "edit mode content") {
+		t.Error("did not expect edit mode content in custom mode")
 	}
-}
-
-func TestBuildAgentBundle_NonexistentMode(t *testing.T) {
-	manifest := `
-name: test-agent
-version: "1.0"
-entrypoint: system.md
-wrapper: agent.md
-modes:
-  readonly:
-    entrypoint: system-ro.md
-`
-	files := map[string]string{
-		"system.md":    "system prompt",
-		"agent.md":     "wrapper",
-		"system-ro.md": "readonly system prompt",
-	}
-	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
-
-	_, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "nonexistent")
-	if err == nil {
-		t.Fatal("expected error for nonexistent mode")
-	}
-	if !strings.Contains(err.Error(), `has no mode "nonexistent"`) {
-		t.Errorf("unexpected error message: %v", err)
-	}
-}
-
-func TestBuildAgentBundle_NoModesField(t *testing.T) {
-	manifest := `
-name: test-agent
-version: "1.0"
-entrypoint: system.md
-wrapper: agent.md
-`
-	files := map[string]string{
-		"system.md": "system prompt",
-		"agent.md":  "wrapper",
-	}
-	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
-
-	_, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "anything")
-	if err == nil {
-		t.Fatal("expected error when requesting mode on agent with no modes")
-	}
-	if !strings.Contains(err.Error(), `has no mode "anything"`) {
-		t.Errorf("unexpected error message: %v", err)
-	}
-}
-
-func TestBuildAgentBundle_PartialOverride(t *testing.T) {
-	// Mode only overrides entrypoint, wrapper stays default.
-	manifest := `
-name: test-agent
-version: "1.0"
-entrypoint: system.md
-wrapper: agent.md
-modes:
-  lite:
-    entrypoint: system-lite.md
-`
-	files := map[string]string{
-		"system.md":      "default system",
-		"agent.md":       "default wrapper",
-		"system-lite.md": "lite system",
-	}
-	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
-
-	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "lite")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !strings.Contains(bundle.System, "lite system") {
-		t.Error("expected lite system prompt")
-	}
-	if !strings.Contains(bundle.System, "default wrapper") {
-		t.Error("expected default wrapper to be preserved")
+	if !strings.Contains(bundle.System, "Mode: custom") {
+		t.Error("expected Mode: custom header")
 	}
 }
 

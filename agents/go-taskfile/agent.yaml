@@ -8,8 +8,3 @@ references:
   - references/taskfile-best-practices.md
   - references/go-taskfile-standards.md
 task: task.md
-modes:
-  readonly:
-    entrypoint: system-readonly.md
-    wrapper: agent-readonly.md
-    task: task_readonly.md
