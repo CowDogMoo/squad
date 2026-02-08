@@ -9,6 +9,7 @@ import (
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/ollama"
 	"github.com/cowdogmoo/squad/responses"
 	"github.com/cowdogmoo/squad/tools"
@@ -18,7 +19,7 @@ import (
 )
 
 // invokeModel resolves provider settings and calls the appropriate model backend.
-func invokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (string, error) {
+func invokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (string, *metrics.Metrics, error) {
 	provider := normalizeProvider(opts.Provider)
 	model := opts.Model
 	temperature := opts.Temperature
@@ -34,7 +35,7 @@ func invokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 }
 
 // callModel dispatches the prompt to the appropriate model backend and returns the response.
-func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, error) {
+func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, *metrics.Metrics, error) {
 	if responses.UseResponsesAPI(provider, model) {
 		return callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens, taskCfg)
 	}
@@ -42,13 +43,13 @@ func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPro
 }
 
 // callResponsesAPI runs the prompt via the OpenAI Responses API.
-func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, error) {
+func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, *metrics.Metrics, error) {
 	apiKey := opts.APIKey
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
 	if apiKey == "" {
-		return "", fmt.Errorf("API key required for OpenAI Responses API: use --api-key, config provider.token, or OPENAI_API_KEY env var")
+		return "", nil, fmt.Errorf("API key required for OpenAI Responses API: use --api-key, config provider.token, or OPENAI_API_KEY env var")
 	}
 
 	// Reasoning models (gpt-5*) consume output tokens on internal reasoning
@@ -60,33 +61,40 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 		maxTokens = responses.DefaultMaxOutputTokens
 	}
 
-	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
-	modelStart := time.Now()
-	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens, opts.MaxIterations, taskCfg)
-	if err != nil {
-		return "", fmt.Errorf("model call failed: %w", err)
+	provider := "openai"
+	if responses.UseResponsesAPI(opts.Provider, model) && opts.Provider == "openai-responses" {
+		provider = "openai-responses"
 	}
-	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", time.Since(modelStart).Round(time.Millisecond), len(response))
-	return response, nil
+
+	m := metrics.New(provider, model)
+	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
+	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens, opts.MaxIterations, taskCfg, m)
+	m.Finish()
+	if err != nil {
+		return "", m, fmt.Errorf("model call failed: %w", err)
+	}
+	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", m.Duration().Round(time.Millisecond), len(response))
+	return response, m, nil
 }
 
 // callLangChainLLM runs the prompt via a LangChain-compatible LLM.
-func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, error) {
+func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, *metrics.Metrics, error) {
 	llm, err := buildLLM(opts, provider, model)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	callOpts := buildCallOpts(opts, provider, temperature, maxTokens)
 
+	m := metrics.New(provider, model)
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
-	modelStart := time.Now()
-	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, opts.MaxIterations, taskCfg, callOpts...)
+	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, opts.MaxIterations, taskCfg, m, callOpts...)
+	m.Finish()
 	if err != nil {
-		return "", fmt.Errorf("model call failed: %w", err)
+		return "", m, fmt.Errorf("model call failed: %w", err)
 	}
-	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", time.Since(modelStart).Round(time.Millisecond), len(response))
-	return response, nil
+	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", m.Duration().Round(time.Millisecond), len(response))
+	return response, m, nil
 }
 
 // buildCallOpts constructs LLM call options from provider settings.
@@ -196,10 +204,10 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		AgentsDir:     opts.AgentsDir,
 		WorkingDir:    opts.WorkingDir,
 		MaxIterations: opts.MaxIterations,
-		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error) {
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
 			childBundle, err := agent.BuildBundle(agentsDir, agentName, prompt, workingDir, mode)
 			if err != nil {
-				return "", fmt.Errorf("failed to build child agent bundle: %w", err)
+				return "", nil, fmt.Errorf("failed to build child agent bundle: %w", err)
 			}
 
 			childOpts := *opts

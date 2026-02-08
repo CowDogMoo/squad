@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -30,7 +31,7 @@ func TaskDepth(ctx context.Context) int {
 
 // CallModelFunc is the function signature for invoking a model run from
 // within the Task tool. It mirrors the core model invocation path.
-type CallModelFunc func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error)
+type CallModelFunc func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error)
 
 // TaskConfig holds the configuration needed to spawn child agent runs
 // from within the Task tool.
@@ -98,7 +99,7 @@ func taskTool(cfg TaskConfig) func(ctx context.Context, rawArgs []byte) (string,
 		childCtx := WithTaskDepth(ctx, depth+1)
 		logging.InfoContext(ctx, "Task tool: spawning child agent=%s depth=%d", args.Agent, depth+1)
 
-		response, err := cfg.CallModel(childCtx, cfg.AgentsDir, args.Agent, args.Prompt, workDir, args.Mode)
+		response, childMetrics, err := cfg.CallModel(childCtx, cfg.AgentsDir, args.Agent, args.Prompt, workDir, args.Mode)
 		if err != nil {
 			return "", fmt.Errorf("child agent %q failed: %w", args.Agent, err)
 		}
@@ -108,7 +109,11 @@ func taskTool(cfg TaskConfig) func(ctx context.Context, rawArgs []byte) (string,
 			response = response[:maxToolOutput] + "\n...output truncated"
 		}
 
-		logging.InfoContext(ctx, "Task tool: child agent=%s completed (%d bytes)", args.Agent, len(response))
+		metricsInfo := ""
+		if childMetrics != nil {
+			metricsInfo = fmt.Sprintf(" tokens=%d", childMetrics.TotalTokens())
+		}
+		logging.InfoContext(ctx, "Task tool: child agent=%s completed (%d bytes%s)", args.Agent, len(response), metricsInfo)
 		return response, nil
 	}
 }

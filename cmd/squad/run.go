@@ -171,6 +171,9 @@ func newRunCmd() *cobra.Command {
 			return fmt.Errorf("prompt is required (pass args or pipe stdin)")
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Silence usage for runtime errors (API key missing, etc).
+			// Args validation errors still show usage.
+			cmd.SilenceUsage = true
 			opts := newRunOptions(cmd)
 			return runner.ExecuteRun(cmd, args, opts)
 		},

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cowdogmoo/squad/metrics"
 )
 
 func TestTaskTool(t *testing.T) {
@@ -14,14 +16,14 @@ func TestTaskTool(t *testing.T) {
 	cfg := TaskConfig{
 		AgentsDir:  "agents",
 		WorkingDir: dir,
-		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error) {
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
 			if TaskDepth(ctx) != 1 {
 				t.Fatalf("expected depth 1, got %d", TaskDepth(ctx))
 			}
 			if workingDir != filepath.Join(dir, "sub") {
 				t.Fatalf("unexpected working dir: %s", workingDir)
 			}
-			return "response", nil
+			return "response", nil, nil
 		},
 	}
 
@@ -46,8 +48,8 @@ func TestTaskToolErrors(t *testing.T) {
 	cfg := TaskConfig{
 		AgentsDir:  "agents",
 		WorkingDir: dir,
-		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error) {
-			return "", fmt.Errorf("boom")
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+			return "", nil, fmt.Errorf("boom")
 		},
 	}
 	tool := taskTool(cfg)
@@ -105,8 +107,8 @@ func TestTaskToolErrors(t *testing.T) {
 			config: TaskConfig{
 				AgentsDir:  "agents",
 				WorkingDir: dir,
-				CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error) {
-					return longResponse, nil
+				CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+					return longResponse, nil, nil
 				},
 			},
 			wantOutput: "...output truncated",
@@ -140,8 +142,8 @@ func TestTaskToolErrors(t *testing.T) {
 }
 
 func TestTaskToolDepthLimit(t *testing.T) {
-	cfg := TaskConfig{WorkingDir: t.TempDir(), CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, error) {
-		return "", nil
+	cfg := TaskConfig{WorkingDir: t.TempDir(), CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+		return "", nil, nil
 	}}
 	tool := taskTool(cfg)
 	payload, _ := json.Marshal(map[string]string{

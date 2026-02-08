@@ -944,7 +944,9 @@ tasks:
         - Do NOT edit-wait-edit-wait — batch ALL edits into ONE iteration
         - Do NOT re-read files after editing — trust Edit output
         - STOP after verification — emit report in SAME response, NO more iterations
-        - If ansible-lint not installed, proceed with syntax check only
+        - To check ansible-lint: run 'ansible-lint --version'. If it prints a version, USE IT.
+          WARNING messages about collection versions are NORMAL — they mean ansible-lint IS working.
+          Only 'command not found' means it's not installed (then use syntax-check only).
         - Every file touched must appear in the output report" \
           --agent ansible-review \
           --working-dir {{.WORKING_DIR}} \
