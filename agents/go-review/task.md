@@ -1,3 +1,4 @@
+{{if eq .Mode "edit"}}
 Review and fix all Go code quality issues in this codebase.
 
 Start by using Glob with '**/*.go' to discover all Go source files.
@@ -20,3 +21,14 @@ IMPORTANT CONSTRAINTS (repeat from system prompt):
 - Use ONE Grep/Glob on repo root, not per-directory — minimize tool calls
 - After go build + go test pass, emit report IMMEDIATELY — no post-fix exploration
 - Every file touched must appear in the output report
+{{end}}
+{{if eq .Mode "readonly"}}
+Analyze this codebase for Go code quality issues.
+
+Use Glob with '**/*.go' to discover all Go source files.
+Read each file (skip _test.go and vendor/).
+Cross-reference between files for consistency issues.
+Produce a prioritized report of all findings.
+
+Do NOT write or modify any files.
+{{end}}

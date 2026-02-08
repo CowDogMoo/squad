@@ -7,8 +7,3 @@ wrapper: agent.md
 references:
   - references/go-documentation-standards.md
 task: task.md
-modes:
-  readonly:
-    entrypoint: system-readonly.md
-    wrapper: agent-readonly.md
-    task: task_readonly.md

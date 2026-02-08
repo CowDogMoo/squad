@@ -1,5 +1,4 @@
-- Consolidate readonly and normal agents - have readonly be a command line arg
+- Make agents as easy as warpgate templates
 - Update docs
 - Document process to create new agents - make sure it's relavtively easy and painless
-- Make agents as easy as warpgate templates
 - groq/moonshotai/kimi-k2-instruct-0905
