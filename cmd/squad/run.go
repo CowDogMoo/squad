@@ -35,6 +35,20 @@ import (
 	"github.com/spf13/viper"
 )
 
+// parseVars parses KEY=VALUE strings into a map.
+func parseVars(vars []string) map[string]string {
+	if len(vars) == 0 {
+		return nil
+	}
+	result := make(map[string]string)
+	for _, v := range vars {
+		if idx := strings.Index(v, "="); idx > 0 {
+			result[v[:idx]] = v[idx+1:]
+		}
+	}
+	return result
+}
+
 // newRunOptions creates a RunOptions by reading resolved values from flags and Viper.
 func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 	v := viperFromContext(cmd)
@@ -52,6 +66,10 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 	applyFallback := v.GetBool("run.apply_fallback")
 	mode := v.GetString("run.mode")
 
+	// Parse --var flags into a map
+	varStrings, _ := cmd.Flags().GetStringArray("var")
+	vars := parseVars(varStrings)
+
 	maxIter := v.GetInt("run.max_iterations")
 	if maxIter < 10 {
 		maxIter = 10
@@ -59,6 +77,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		maxIter = 1000
 	}
 
+	cfg := configFromContext(cmd)
 	return &runner.RunOptions{
 		Agent:             agent,
 		AgentsDir:         agentsDir,
@@ -85,7 +104,9 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		NumCtx:            v.GetInt("provider.num_ctx"),
 		MaxIterations:     maxIter,
 		Mode:              mode,
-		ConfigAvailable:   configFromContext(cmd) != nil,
+		Vars:              vars,
+		ConfigAvailable:   cfg != nil,
+		Config:            cfg,
 	}
 }
 
@@ -210,6 +231,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Int("num-ctx", 32768, "Context window size for Ollama models")
 	cmd.Flags().String("mode", "", "Agent mode override (e.g. readonly)")
 	cmd.Flags().Int("max-iterations", 100, "Maximum tool-calling iterations (range: 10-1000)")
+	cmd.Flags().StringArray("var", nil, "Template variable in KEY=VALUE format (can be repeated)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 

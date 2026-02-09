@@ -91,7 +91,7 @@ readonly mode task instructions
 func TestBuildBundle_ReadonlyMode(t *testing.T) {
 	dir, _ := setupTestAgent(t, "demo", conditionalTestFiles())
 
-	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "readonly")
+	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "readonly", nil)
 	if err != nil {
 		t.Fatalf("BuildBundle: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestBuildBundle_ReadonlyMode(t *testing.T) {
 func TestBuildBundle_EditModeDefault(t *testing.T) {
 	dir, _ := setupTestAgent(t, "demo", conditionalTestFiles())
 
-	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "")
+	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "", nil)
 	if err != nil {
 		t.Fatalf("BuildBundle: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestBuildBundle_EditModeDefault(t *testing.T) {
 func TestBuildBundle_CommonContentPreserved(t *testing.T) {
 	dir, _ := setupTestAgent(t, "demo", conditionalTestFiles())
 
-	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "readonly")
+	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "readonly", nil)
 	if err != nil {
 		t.Fatalf("BuildBundle: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestBuildBundle_CommonContentPreserved(t *testing.T) {
 func TestBuildBundle_UserMessageIncluded(t *testing.T) {
 	dir, _ := setupTestAgent(t, "demo", conditionalTestFiles())
 
-	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "readonly")
+	bundle, err := BuildBundle(dir, "demo", "do the thing", "/work", "readonly", nil)
 	if err != nil {
 		t.Fatalf("BuildBundle: %v", err)
 	}
@@ -156,7 +156,7 @@ wrapper: wrapper.txt
 		"wrapper.txt": "wrapper",
 	})
 
-	bundle, err := BuildBundle(dir, "demo", "", "/work", "")
+	bundle, err := BuildBundle(dir, "demo", "", "/work", "", nil)
 	if err != nil {
 		t.Fatalf("BuildBundle: %v", err)
 	}
@@ -198,7 +198,7 @@ End of system`
 		"wrapper.txt": "wrapper",
 	})
 
-	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "edit")
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "edit", nil)
 	if err != nil {
 		t.Fatalf("BuildBundle: %v", err)
 	}
@@ -227,7 +227,7 @@ wrapper: wrapper.txt
 		"wrapper.txt": "wrapper",
 	})
 
-	_, err := BuildBundle(dir, "demo", "prompt", "/work", "edit")
+	_, err := BuildBundle(dir, "demo", "prompt", "/work", "edit", nil)
 	if err == nil {
 		t.Fatalf("expected error for path traversal")
 	}
@@ -253,11 +253,53 @@ wrapper: wrapper.txt
 		"wrapper.txt": "wrapper",
 	})
 
-	_, err := BuildBundle(dir, "demo", "prompt", "/work", "edit")
+	_, err := BuildBundle(dir, "demo", "prompt", "/work", "edit", nil)
 	if err == nil {
 		t.Fatalf("expected error for missing template")
 	}
 	assertContains(t, err.Error(), "failed to include template", "error")
+}
+
+func TestBuildBundle_TemplateVars(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "demo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agent: %v", err)
+	}
+
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+task: task.txt
+`
+	// Test .Var and .Default template functions
+	systemContent := `Target: {{.Default "COVERAGE_TARGET" "75"}}%`
+	wrapperContent := `wrapper`
+	taskContent := `Coverage target is {{.Var "COVERAGE_TARGET"}} percent`
+	writeTestFiles(t, agentDir, map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  systemContent,
+		"wrapper.txt": wrapperContent,
+		"task.txt":    taskContent,
+	})
+
+	// Test with no vars - should use default
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "edit", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle with nil vars: %v", err)
+	}
+	assertContains(t, bundle.System, "Target: 75%", "system with default")
+	assertContains(t, bundle.System, "Coverage target is  percent", "task with empty var")
+
+	// Test with vars provided
+	vars := map[string]string{"COVERAGE_TARGET": "85"}
+	bundle2, err := BuildBundle(dir, "demo", "prompt", "/work", "edit", vars)
+	if err != nil {
+		t.Fatalf("BuildBundle with vars: %v", err)
+	}
+	assertContains(t, bundle2.System, "Target: 85%", "system with var override")
+	assertContains(t, bundle2.System, "Coverage target is 85 percent", "task with var")
 }
 
 func TestBuildBundleErrors(t *testing.T) {
@@ -356,7 +398,7 @@ task: missing.md
 			if tt.mutate != nil {
 				tt.mutate(t, dir, agentDir)
 			}
-			_, err := BuildBundle(dir, "demo", "prompt", "/work", "")
+			_, err := BuildBundle(dir, "demo", "prompt", "/work", "", nil)
 			if err == nil {
 				t.Fatalf("expected error")
 			}

@@ -1,9 +1,0 @@
----
-name: go-tests
-version: 0.2.0
-description: Autonomous Go test coverage agent that measures gaps, writes tests, and iterates to a target percentage.
-entrypoint: system.md
-wrapper: agent.md
-references:
-  - references/go-testing-patterns.md
-task: task.md

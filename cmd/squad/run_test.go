@@ -91,7 +91,7 @@ readonly wrapper
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
-	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "review this", "/tmp", "")
+	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "review this", "/tmp", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +146,7 @@ readonly wrapper
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
-	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "review this", "/tmp", "readonly")
+	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "review this", "/tmp", "readonly", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -189,7 +189,7 @@ This is also common content.`,
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
-	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "readonly")
+	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "readonly", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -223,7 +223,7 @@ wrapper: agent.md
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
 	// Test with readonly mode on agent without conditional blocks
-	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "readonly")
+	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "readonly", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -259,7 +259,7 @@ edit mode content
 	}
 	agentsDir := setupTestAgent(t, "test-agent", manifest, files)
 
-	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "custom")
+	bundle, err := agent.BuildBundle(agentsDir, "test-agent", "test", "/tmp", "custom", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

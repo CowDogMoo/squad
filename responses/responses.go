@@ -391,8 +391,14 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 
 		var output string
 		if err != nil {
-			output = fmt.Sprintf("error: %v", err)
-			logging.InfoContext(ctx, "responses API: %s failed in %s: %v", call.Name, toolDuration.Round(time.Millisecond), err)
+			// Include both result (e.g., command output) and error message
+			if result != "" {
+				output = fmt.Sprintf("%s\n\nerror: %v", result, err)
+				logging.InfoContext(ctx, "responses API: %s failed in %s: %v (output: %d bytes)", call.Name, toolDuration.Round(time.Millisecond), err, len(result))
+			} else {
+				output = fmt.Sprintf("error: %v", err)
+				logging.InfoContext(ctx, "responses API: %s failed in %s: %v (no output)", call.Name, toolDuration.Round(time.Millisecond), err)
+			}
 		} else {
 			output = result
 			logging.InfoContext(ctx, "responses API: %s completed in %s (%d bytes)", call.Name, toolDuration.Round(time.Millisecond), len(result))

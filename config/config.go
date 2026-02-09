@@ -42,6 +42,25 @@ type Config struct {
 	Log      LogConfig      `mapstructure:"log" yaml:"log"`
 	Provider ProviderConfig `mapstructure:"provider" yaml:"provider"`
 	Model    ModelConfig    `mapstructure:"model" yaml:"model"`
+	Agents   AgentsConfig   `mapstructure:"agents" yaml:"agents"`
+}
+
+// AgentsConfig holds agent source configuration.
+type AgentsConfig struct {
+	// CacheDir is where cloned git repositories are cached.
+	CacheDir string `mapstructure:"cache_dir" yaml:"cache_dir"`
+	// Repositories maps repository names to Git URLs.
+	// Example:
+	//   repositories:
+	//     official: https://github.com/cowdogmoo/squad-agents.git
+	//     private: git@github.com:myorg/private-agents.git
+	Repositories map[string]string `mapstructure:"repositories" yaml:"repositories"`
+	// LocalPaths lists local directories to search for agents.
+	// Example:
+	//   local_paths:
+	//     - /opt/shared/agents
+	//     - ~/dev/my-agents
+	LocalPaths []string `mapstructure:"local_paths" yaml:"local_paths"`
 }
 
 // LogConfig holds logging configuration.
@@ -84,6 +103,11 @@ func Defaults() *Config {
 	cfg.Model.Default = ""
 	cfg.Model.Temperature = 0.2
 	cfg.Model.MaxTokens = 1024
+	cfg.Agents.CacheDir = ""
+	cfg.Agents.Repositories = map[string]string{
+		"official": "https://github.com/cowdogmoo/squad-agents.git",
+	}
+	cfg.Agents.LocalPaths = []string{}
 	return cfg
 }
 
@@ -154,4 +178,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("model.default", "")
 	v.SetDefault("model.temperature", 0.2)
 	v.SetDefault("model.max_tokens", 1024)
+	v.SetDefault("agents.cache_dir", "")
+	v.SetDefault("agents.repositories", map[string]string{
+		"official": "https://github.com/cowdogmoo/squad-agents.git",
+	})
+	v.SetDefault("agents.local_paths", []string{})
 }

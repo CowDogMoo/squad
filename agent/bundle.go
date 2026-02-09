@@ -31,8 +31,31 @@ type Bundle struct {
 }
 
 // TemplateData holds the data passed to prompt templates.
+// Templates can use {{.Mode}}, {{.Var "KEY"}}, or {{.Vars.KEY}}.
 type TemplateData struct {
 	Mode string
+	Vars map[string]string
+}
+
+// Var returns the value of a template variable, or empty string if not set.
+// Usage in templates: {{.Var "COVERAGE_TARGET"}}
+func (td TemplateData) Var(key string) string {
+	if td.Vars == nil {
+		return ""
+	}
+	return td.Vars[key]
+}
+
+// Default returns the value of a variable, or a default if not set.
+// Usage in templates: {{.Default "COVERAGE_TARGET" "75"}}
+func (td TemplateData) Default(key, defaultVal string) string {
+	if td.Vars == nil {
+		return defaultVal
+	}
+	if v, ok := td.Vars[key]; ok && v != "" {
+		return v
+	}
+	return defaultVal
 }
 
 // makeIncludeFunc creates an include function that reads from the _templates directory.
@@ -53,12 +76,13 @@ func makeIncludeFunc(agentsDir string) func(string) (string, error) {
 	}
 }
 
-// processTemplate executes a Go text/template with the given mode.
+// processTemplate executes a Go text/template with the given data.
 // Templates can use {{if eq .Mode "edit"}}...{{end}} conditionals.
 // Templates can use {{include "hard-rules/universal.md"}} to include shared content.
-func processTemplate(name, content, mode, agentsDir string) (string, error) {
-	if mode == "" {
-		mode = "edit"
+// Templates can use {{.Var "KEY"}} or {{.Default "KEY" "default"}} for custom variables.
+func processTemplate(name, content, agentsDir string, data TemplateData) (string, error) {
+	if data.Mode == "" {
+		data.Mode = "edit"
 	}
 
 	funcMap := template.FuncMap{
@@ -71,7 +95,7 @@ func processTemplate(name, content, mode, agentsDir string) (string, error) {
 	}
 
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, TemplateData{Mode: mode}); err != nil {
+	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("failed to execute template %s: %w", name, err)
 	}
 
@@ -123,7 +147,7 @@ func loadManifest(agentPath string) (*Manifest, error) {
 }
 
 // loadAndProcessPrompts loads system, wrapper, and task files, then processes them as templates.
-func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, mode string) (system, wrapper, task string, err error) {
+func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data TemplateData) (system, wrapper, task string, err error) {
 	systemData, err := os.ReadFile(filepath.Join(agentPath, manifest.EntryPoint))
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to read system prompt: %w", err)
@@ -137,16 +161,16 @@ func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, mode
 		return "", "", "", err
 	}
 
-	system, err = processTemplate("system", string(systemData), mode, agentsDir)
+	system, err = processTemplate("system", string(systemData), agentsDir, data)
 	if err != nil {
 		return "", "", "", err
 	}
-	wrapper, err = processTemplate("wrapper", string(wrapperData), mode, agentsDir)
+	wrapper, err = processTemplate("wrapper", string(wrapperData), agentsDir, data)
 	if err != nil {
 		return "", "", "", err
 	}
 	if taskContent != "" {
-		task, err = processTemplate("task", taskContent, mode, agentsDir)
+		task, err = processTemplate("task", taskContent, agentsDir, data)
 		if err != nil {
 			return "", "", "", err
 		}
@@ -157,7 +181,8 @@ func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, mode
 // BuildBundle assembles the agent bundle from manifest, system prompt, wrapper, references, and task.
 // The task instructions are included in the system bundle. The CLI prompt becomes the user message.
 // If no CLI prompt is provided, a default user message is used.
-func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string) (*Bundle, error) {
+// The vars parameter allows passing custom template variables (e.g., COVERAGE_TARGET=85).
+func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map[string]string) (*Bundle, error) {
 	agentPath := filepath.Join(agentsDir, agentName)
 
 	manifest, err := loadManifest(agentPath)
@@ -170,7 +195,8 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string) (*Bundle
 		displayMode = "edit"
 	}
 
-	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(agentPath, agentsDir, manifest, mode)
+	data := TemplateData{Mode: mode, Vars: vars}
+	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(agentPath, agentsDir, manifest, data)
 	if err != nil {
 		return nil, err
 	}

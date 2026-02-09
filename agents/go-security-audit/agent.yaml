@@ -1,9 +1,0 @@
----
-name: go-security-audit
-version: 0.2.0
-description: Autonomous Go security audit agent that discovers vulnerabilities, fixes security anti-patterns, and verifies the result compiles.
-entrypoint: system.md
-wrapper: agent.md
-references:
-  - references/golang-security-guide.md
-task: task.md

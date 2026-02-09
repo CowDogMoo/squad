@@ -321,7 +321,12 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 	output, err := handler.Call(ctx, []byte(toolCall.FunctionCall.Arguments))
 	toolDuration := time.Since(toolStart)
 	if err != nil {
-		toolResponse.Content = fmt.Sprintf("error: %v", err)
+		// Include both output (e.g., command stdout/stderr) and error message
+		if output != "" {
+			toolResponse.Content = fmt.Sprintf("%s\n\nerror: %v", output, err)
+		} else {
+			toolResponse.Content = fmt.Sprintf("error: %v", err)
+		}
 		logging.DebugContext(ctx, "tool %s failed in %s: %v", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), err)
 	} else {
 		toolResponse.Content = output

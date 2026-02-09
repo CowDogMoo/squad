@@ -45,3 +45,12 @@ testdata/tmp/
 
 .claude
 FIXME.md
+
+# Secrets and environment files
+.env
+.env.*
+*.key
+*.pem
+
+# Tool version files (machine-specific)
+.tool-versions

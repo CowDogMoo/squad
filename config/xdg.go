@@ -112,3 +112,18 @@ func CacheFile(filename string) (string, error) {
 
 	return cachePath, nil
 }
+
+// AgentsCacheDir returns the directory for caching cloned agent repositories.
+func AgentsCacheDir() (string, error) {
+	cacheHome := getCacheHome()
+	if cacheHome == "" {
+		return "", os.ErrNotExist
+	}
+
+	cacheDir := filepath.Join(cacheHome, "squad", "agents")
+	if err := os.MkdirAll(cacheDir, DirPermReadWriteExec); err != nil {
+		return "", err
+	}
+
+	return cacheDir, nil
+}

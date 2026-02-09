@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -180,6 +181,7 @@ func TestResolveAgentsDir(t *testing.T) {
 
 	t.Run("home config fallback", func(t *testing.T) {
 		t.Setenv("HOME", tmp)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 		resolved, err := resolveAgentsDir("")
 		if err != nil {
 			t.Fatalf("resolveAgentsDir() error = %v", err)
@@ -203,18 +205,20 @@ func TestResolveAgentsDir(t *testing.T) {
 func TestHandleResponse(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name       string
-		opts       *RunOptions
-		response   string
-		wantErr    bool
-		wantStdout bool
-		wantFile   bool
+		name            string
+		opts            *RunOptions
+		response        string
+		wantErr         bool
+		wantErrContains string
+		wantStdout      bool
+		wantFile        bool
 	}{
 		{
-			name:     "requires actionable error",
-			opts:     &RunOptions{RequireActionable: true},
-			response: "plain text",
-			wantErr:  true,
+			name:            "requires actionable error",
+			opts:            &RunOptions{RequireActionable: true},
+			response:        "plain text",
+			wantErr:         true,
+			wantErrContains: "not actionable",
 		},
 		{
 			name:       "apply no changes writes file",
@@ -247,6 +251,11 @@ func TestHandleResponse(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("handleResponse() error = %v, wantErr %v", err, tt.wantErr)
 			}
+			if tt.wantErr && tt.wantErrContains != "" && err != nil {
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Fatalf("handleResponse() error = %q, want to contain %q", err.Error(), tt.wantErrContains)
+				}
+			}
 			if tt.wantStdout && !strings.Contains(buf.String(), tt.response) {
 				t.Fatalf("expected stdout to contain %q", tt.response)
 			}
@@ -269,11 +278,12 @@ func TestHandleResponse(t *testing.T) {
 func TestPrepareBundle(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name        string
-		opts        *RunOptions
-		wantErr     bool
-		wantBundle  bool
-		checkOutput bool
+		name            string
+		opts            *RunOptions
+		wantErr         bool
+		wantErrContains string
+		wantBundle      bool
+		checkOutput     bool
 	}{
 		{
 			name: "dry run with bundle output",
@@ -294,9 +304,10 @@ func TestPrepareBundle(t *testing.T) {
 				AgentsDir:       filepath.Join("..", "agents"),
 				ConfigAvailable: false,
 			},
-			wantErr:     true,
-			wantBundle:  false,
-			checkOutput: false,
+			wantErr:         true,
+			wantErrContains: "config not available",
+			wantBundle:      false,
+			checkOutput:     false,
 		},
 	}
 	for _, tt := range tests {
@@ -305,12 +316,19 @@ func TestPrepareBundle(t *testing.T) {
 			cmd := &cobra.Command{}
 			var buf bytes.Buffer
 			cmd.SetOut(&buf)
+			agentsDir := writeTestAgent(t, tt.opts.Agent)
+			tt.opts.AgentsDir = agentsDir
 			if tt.checkOutput {
 				tt.opts.BundleOut = filepath.Join(t.TempDir(), "bundle.txt")
 			}
 			bundle, err := prepareBundle(cmd, tt.opts, "prompt", t.TempDir())
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("prepareBundle() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && tt.wantErrContains != "" && err != nil {
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Fatalf("prepareBundle() error = %q, want to contain %q", err.Error(), tt.wantErrContains)
+				}
 			}
 			if (bundle != nil) != tt.wantBundle {
 				t.Fatalf("prepareBundle() bundle = %v, wantBundle %v", bundle != nil, tt.wantBundle)
@@ -364,9 +382,10 @@ func TestBuildTaskConfig(t *testing.T) {
 func TestExecuteRunDryRun(t *testing.T) {
 	t.Parallel()
 	cmd := &cobra.Command{}
+	agentsDir := writeTestAgent(t, "go-tests")
 	opts := &RunOptions{
 		Agent:     "go-tests",
-		AgentsDir: filepath.Join("..", "agents"),
+		AgentsDir: agentsDir,
 		DryRun:    true,
 	}
 	if err := ExecuteRun(cmd, []string{"hello"}, opts); err != nil {
@@ -377,9 +396,14 @@ func TestExecuteRunDryRun(t *testing.T) {
 func TestExecuteRunPromptError(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetIn(strings.NewReader(""))
-	opts := &RunOptions{Agent: "go-tests", AgentsDir: filepath.Join("..", "agents")}
-	if err := ExecuteRun(cmd, nil, opts); err == nil {
+	agentsDir := writeTestAgent(t, "go-tests")
+	opts := &RunOptions{Agent: "go-tests", AgentsDir: agentsDir, ConfigAvailable: false}
+	err := ExecuteRun(cmd, nil, opts)
+	if err == nil {
 		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "config not available") {
+		t.Fatalf("ExecuteRun() error = %q, want to contain %q", err.Error(), "config not available")
 	}
 }
 
@@ -387,16 +411,21 @@ func TestExecuteRunInvokeModelError(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
+	agentsDir := writeTestAgent(t, "go-tests")
 	opts := &RunOptions{
 		Agent:           "go-tests",
-		AgentsDir:       filepath.Join("..", "agents"),
+		AgentsDir:       agentsDir,
 		Provider:        "openai-responses",
 		Model:           "gpt-5",
 		MaxIterations:   1,
 		ConfigAvailable: true,
 	}
-	if err := ExecuteRun(cmd, []string{"hello"}, opts); err == nil {
+	err := ExecuteRun(cmd, []string{"hello"}, opts)
+	if err == nil {
 		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "API key required") {
+		t.Fatalf("ExecuteRun() error = %q, want to contain %q", err.Error(), "API key required")
 	}
 }
 
@@ -414,9 +443,10 @@ func TestExecuteRunSuccessOllama(t *testing.T) {
 	cmd.SetContext(context.Background())
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
+	agentsDir := writeTestAgent(t, "go-tests")
 	opts := &RunOptions{
 		Agent:           "go-tests",
-		AgentsDir:       filepath.Join("..", "agents"),
+		AgentsDir:       agentsDir,
 		Provider:        "ollama",
 		Model:           "mistral",
 		BaseURL:         server.URL,
@@ -477,4 +507,24 @@ func TestPrintMetricsNil(t *testing.T) {
 	if errBuf.Len() != 0 {
 		t.Fatalf("printMetrics(nil) should not output anything, got: %q", errBuf.String())
 	}
+}
+
+func writeTestAgent(t *testing.T, agentName string) string {
+	t.Helper()
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, agentName)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := fmt.Sprintf("name: %s\nversion: 0.0.0\nentrypoint: system.md\nwrapper: wrapper.md\n", agentName)
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile agent.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("System prompt."), 0o644); err != nil {
+		t.Fatalf("WriteFile system.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "wrapper.md"), []byte("Wrapper prompt."), 0o644); err != nil {
+		t.Fatalf("WriteFile wrapper.md: %v", err)
+	}
+	return agentsDir
 }
