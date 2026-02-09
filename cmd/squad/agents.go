@@ -119,15 +119,15 @@ func runAgentsList(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(agents) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "No agents found. Run 'squad agents update' to fetch from configured sources.")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No agents found. Run 'squad agents update' to fetch from configured sources.")
 		return nil
 	}
 
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tVERSION\tDESCRIPTION\tSOURCE")
+	_, _ = fmt.Fprintln(w, "NAME\tVERSION\tDESCRIPTION\tSOURCE")
 	for _, agent := range agents {
 		source := shortenPath(agent.Source)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 			agent.Name,
 			agent.Version,
 			truncate(agent.Description, 50),
@@ -227,23 +227,23 @@ func runAgentsSources(cmd *cobra.Command, args []string) error {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 
 	if len(cfg.Agents.Repositories) > 0 {
-		fmt.Fprintln(w, "REPOSITORIES:")
-		fmt.Fprintln(w, "NAME\tURL")
+		_, _ = fmt.Fprintln(w, "REPOSITORIES:")
+		_, _ = fmt.Fprintln(w, "NAME\tURL")
 		for name, url := range cfg.Agents.Repositories {
-			fmt.Fprintf(w, "%s\t%s\n", name, url)
+			_, _ = fmt.Fprintf(w, "%s\t%s\n", name, url)
 		}
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 	}
 
 	if len(cfg.Agents.LocalPaths) > 0 {
-		fmt.Fprintln(w, "LOCAL PATHS:")
+		_, _ = fmt.Fprintln(w, "LOCAL PATHS:")
 		for _, path := range cfg.Agents.LocalPaths {
-			fmt.Fprintln(w, path)
+			_, _ = fmt.Fprintln(w, path)
 		}
 	}
 
 	if len(cfg.Agents.Repositories) == 0 && len(cfg.Agents.LocalPaths) == 0 {
-		fmt.Fprintln(w, "No sources configured. Run 'squad agents add <url>' to add one.")
+		_, _ = fmt.Fprintln(w, "No sources configured. Run 'squad agents add <url>' to add one.")
 	}
 
 	return w.Flush()
