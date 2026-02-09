@@ -181,6 +181,7 @@ func TestResolveAgentsDir(t *testing.T) {
 
 	t.Run("home config fallback", func(t *testing.T) {
 		t.Setenv("HOME", tmp)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 		resolved, err := resolveAgentsDir("")
 		if err != nil {
 			t.Fatalf("resolveAgentsDir() error = %v", err)
