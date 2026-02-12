@@ -1,4 +1,1 @@
-- Make agents as easy as warpgate templates
-- Update docs
-- Document process to create new agents - make sure it's relavtively easy and painless
 - groq/moonshotai/kimi-k2-instruct-0905

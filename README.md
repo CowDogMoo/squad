@@ -77,7 +77,12 @@ squad init agent my-review --lang go
 
 # Create from an existing agent
 squad init agent my-review --from go-review
+
+# Test your agent
+squad run --agent my-review --print
 ```
+
+See [docs/creating-agents.md](docs/creating-agents.md) for the full guide.
 
 ## Providers
 
