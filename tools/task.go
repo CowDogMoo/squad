@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"sync/atomic"
 
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
@@ -15,6 +17,101 @@ type taskDepthKey struct{}
 
 // MaxTaskDepth is the maximum nesting depth for Task tool invocations.
 const MaxTaskDepth = 3
+
+// MaxConcurrentTasks limits concurrent background tasks per session.
+const MaxConcurrentTasks = 4
+
+// BackgroundTaskResult holds the result of a background task.
+type BackgroundTaskResult struct {
+	Output  string
+	Metrics *metrics.Metrics
+	Err     error
+	Done    chan struct{}
+}
+
+// BackgroundTaskRegistry manages background task spawning and results.
+type BackgroundTaskRegistry struct {
+	mu        sync.RWMutex
+	tasks     map[string]*BackgroundTaskResult
+	counter   uint64
+	semaphore chan struct{}
+}
+
+// NewBackgroundTaskRegistry creates a new registry with semaphore limiting.
+func NewBackgroundTaskRegistry() *BackgroundTaskRegistry {
+	return &BackgroundTaskRegistry{
+		tasks:     make(map[string]*BackgroundTaskResult),
+		semaphore: make(chan struct{}, MaxConcurrentTasks),
+	}
+}
+
+// SpawnTask runs a task in the background and returns its ID immediately.
+func (r *BackgroundTaskRegistry) SpawnTask(ctx context.Context, cfg TaskConfig, args taskArgs, workDir string) string {
+	id := fmt.Sprintf("bg-%d", atomic.AddUint64(&r.counter, 1))
+	result := &BackgroundTaskResult{
+		Done: make(chan struct{}),
+	}
+
+	r.mu.Lock()
+	r.tasks[id] = result
+	r.mu.Unlock()
+
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				result.Err = fmt.Errorf("task panicked: %v", rec)
+			}
+			close(result.Done)
+		}()
+
+		// Acquire semaphore slot
+		select {
+		case r.semaphore <- struct{}{}:
+			defer func() { <-r.semaphore }()
+		case <-ctx.Done():
+			result.Err = ctx.Err()
+			return
+		}
+
+		depth := TaskDepth(ctx)
+		childCtx := WithTaskDepth(ctx, depth+1)
+		logging.InfoContext(ctx, "Task tool: spawning background child agent=%s id=%s depth=%d", args.Agent, id, depth+1)
+
+		response, childMetrics, err := cfg.CallModel(childCtx, cfg.AgentsDir, args.Agent, args.Prompt, workDir, args.Mode)
+		result.Output = response
+		result.Metrics = childMetrics
+		result.Err = err
+
+		if len(result.Output) > maxToolOutput {
+			result.Output = result.Output[:maxToolOutput] + "\n...output truncated"
+		}
+
+		metricsInfo := ""
+		if childMetrics != nil {
+			metricsInfo = fmt.Sprintf(" tokens=%d", childMetrics.TotalTokens())
+		}
+		logging.InfoContext(ctx, "Task tool: background child agent=%s id=%s completed (%d bytes%s)", args.Agent, id, len(result.Output), metricsInfo)
+	}()
+
+	return id
+}
+
+// GetResult returns the result for a task ID, blocking until complete if wait is true.
+func (r *BackgroundTaskRegistry) GetResult(taskID string, wait bool) (*BackgroundTaskResult, bool) {
+	r.mu.RLock()
+	result, ok := r.tasks[taskID]
+	r.mu.RUnlock()
+
+	if !ok {
+		return nil, false
+	}
+
+	if wait {
+		<-result.Done
+	}
+
+	return result, true
+}
 
 // WithTaskDepth returns a new context with the given task depth.
 func WithTaskDepth(ctx context.Context, depth int) context.Context {
@@ -40,6 +137,7 @@ type TaskConfig struct {
 	WorkingDir    string
 	MaxIterations int
 	CallModel     CallModelFunc
+	Registry      *BackgroundTaskRegistry
 }
 
 type taskArgs struct {
@@ -47,6 +145,7 @@ type taskArgs struct {
 	Prompt     string `json:"prompt"`
 	Mode       string `json:"mode,omitempty"`
 	WorkingDir string `json:"working_dir,omitempty"`
+	Background bool   `json:"background,omitempty"`
 }
 
 func definitionTask() llms.Tool {
@@ -54,7 +153,7 @@ func definitionTask() llms.Tool {
 		Type: "function",
 		Function: &llms.FunctionDefinition{
 			Name:        "Task",
-			Description: "Spawn a child agent run. The child inherits the current context and tools but runs with its own iteration budget.",
+			Description: "Spawn a child agent run. The child inherits the current context and tools but runs with its own iteration budget. Use background=true for parallel execution, then call TaskResult to collect output.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -62,6 +161,7 @@ func definitionTask() llms.Tool {
 					"prompt":      map[string]any{"type": "string", "description": "Prompt/instructions for the child agent."},
 					"mode":        map[string]any{"type": "string", "description": "Optional agent mode override (e.g. readonly)."},
 					"working_dir": map[string]any{"type": "string", "description": "Optional working directory override for the child."},
+					"background":  map[string]any{"type": "boolean", "description": "If true, spawn task in background and return task ID immediately. Use TaskResult to collect output."},
 				},
 				"required": []string{"agent", "prompt"},
 			},
@@ -96,6 +196,16 @@ func taskTool(cfg TaskConfig) func(ctx context.Context, rawArgs []byte) (string,
 			workDir = resolved
 		}
 
+		// Background task: spawn and return ID immediately
+		if args.Background {
+			if cfg.Registry == nil {
+				return "", fmt.Errorf("background tasks not supported (registry not initialized)")
+			}
+			taskID := cfg.Registry.SpawnTask(ctx, cfg, args, workDir)
+			return fmt.Sprintf("Task started in background. Task ID: %s\nUse TaskResult(task_id=\"%s\") to collect the output when ready.", taskID, taskID), nil
+		}
+
+		// Blocking task: wait for completion
 		childCtx := WithTaskDepth(ctx, depth+1)
 		logging.InfoContext(ctx, "Task tool: spawning child agent=%s depth=%d", args.Agent, depth+1)
 
@@ -115,5 +225,59 @@ func taskTool(cfg TaskConfig) func(ctx context.Context, rawArgs []byte) (string,
 		}
 		logging.InfoContext(ctx, "Task tool: child agent=%s completed (%d bytes%s)", args.Agent, len(response), metricsInfo)
 		return response, nil
+	}
+}
+
+func definitionTaskResult() llms.Tool {
+	return llms.Tool{
+		Type: "function",
+		Function: &llms.FunctionDefinition{
+			Name:        "TaskResult",
+			Description: "Collect the result of a background task spawned with Task(background=true). Blocks until the task completes.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "The task ID returned by Task(background=true)."},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+	}
+}
+
+type taskResultArgs struct {
+	TaskID string `json:"task_id"`
+}
+
+func taskResultTool(cfg TaskConfig) func(ctx context.Context, rawArgs []byte) (string, error) {
+	return func(ctx context.Context, rawArgs []byte) (string, error) {
+		var args taskResultArgs
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return "", fmt.Errorf("invalid TaskResult args: %w", err)
+		}
+		if args.TaskID == "" {
+			return "", fmt.Errorf("task_id is required")
+		}
+
+		if cfg.Registry == nil {
+			return "", fmt.Errorf("background tasks not supported (registry not initialized)")
+		}
+
+		result, ok := cfg.Registry.GetResult(args.TaskID, true)
+		if !ok {
+			return "", fmt.Errorf("unknown task ID: %s", args.TaskID)
+		}
+
+		if result.Err != nil {
+			return "", fmt.Errorf("task %s failed: %w", args.TaskID, result.Err)
+		}
+
+		metricsInfo := ""
+		if result.Metrics != nil {
+			metricsInfo = fmt.Sprintf(" (tokens=%d)", result.Metrics.TotalTokens())
+		}
+		logging.InfoContext(ctx, "TaskResult: collected result for %s (%d bytes%s)", args.TaskID, len(result.Output), metricsInfo)
+
+		return result.Output, nil
 	}
 }
