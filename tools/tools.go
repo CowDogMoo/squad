@@ -354,6 +354,9 @@ func BuildHandlers(workingDir string, taskCfg *TaskConfig) (map[string]Handler, 
 
 	if taskCfg != nil {
 		add(Handler{Def: definitionTask(), Call: taskTool(*taskCfg)})
+		if taskCfg.Registry != nil {
+			add(Handler{Def: definitionTaskResult(), Call: taskResultTool(*taskCfg)})
+		}
 	}
 
 	toolDefs := make([]llms.Tool, 0, len(handlers))

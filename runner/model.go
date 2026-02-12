@@ -204,6 +204,7 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		AgentsDir:     opts.AgentsDir,
 		WorkingDir:    opts.WorkingDir,
 		MaxIterations: opts.MaxIterations,
+		Registry:      tools.NewBackgroundTaskRegistry(),
 		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
 			// Child agents inherit parent's template variables
 			childBundle, err := agent.BuildBundle(agentsDir, agentName, prompt, workingDir, mode, opts.Vars)

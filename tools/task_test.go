@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cowdogmoo/squad/metrics"
 )
@@ -154,5 +155,279 @@ func TestTaskToolDepthLimit(t *testing.T) {
 	ctx := WithTaskDepth(context.Background(), MaxTaskDepth)
 	if _, err := tool(ctx, payload); err == nil {
 		t.Fatalf("expected depth limit error")
+	}
+}
+
+func TestBackgroundTaskBasic(t *testing.T) {
+	dir := t.TempDir()
+	registry := NewBackgroundTaskRegistry()
+	cfg := TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Registry:   registry,
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+			return "background result", nil, nil
+		},
+	}
+
+	tool := taskTool(cfg)
+	resultTool := taskResultTool(cfg)
+
+	// Spawn background task
+	payload, _ := json.Marshal(map[string]any{
+		"agent":      "child",
+		"prompt":     "do work",
+		"background": true,
+	})
+
+	out, err := tool(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("taskTool background: %v", err)
+	}
+	if !strings.Contains(out, "bg-1") {
+		t.Fatalf("expected task ID in output, got: %s", out)
+	}
+
+	// Collect result
+	resultPayload, _ := json.Marshal(map[string]string{
+		"task_id": "bg-1",
+	})
+
+	result, err := resultTool(context.Background(), resultPayload)
+	if err != nil {
+		t.Fatalf("taskResultTool: %v", err)
+	}
+	if result != "background result" {
+		t.Fatalf("unexpected result: %s", result)
+	}
+}
+
+func TestBackgroundTaskSemaphore(t *testing.T) {
+	dir := t.TempDir()
+	registry := NewBackgroundTaskRegistry()
+
+	started := make(chan struct{}, MaxConcurrentTasks+1)
+	block := make(chan struct{})
+
+	cfg := TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Registry:   registry,
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+			started <- struct{}{}
+			<-block
+			return "done", nil, nil
+		},
+	}
+
+	tool := taskTool(cfg)
+
+	// Spawn MaxConcurrentTasks + 1 tasks
+	for i := 0; i < MaxConcurrentTasks+1; i++ {
+		payload, _ := json.Marshal(map[string]any{
+			"agent":      "child",
+			"prompt":     fmt.Sprintf("task %d", i),
+			"background": true,
+		})
+		_, err := tool(context.Background(), payload)
+		if err != nil {
+			t.Fatalf("taskTool: %v", err)
+		}
+	}
+
+	// Wait for MaxConcurrentTasks to start
+	for i := 0; i < MaxConcurrentTasks; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("expected %d tasks to start, only %d did", MaxConcurrentTasks, i)
+		}
+	}
+
+	// Verify the 5th task hasn't started yet (semaphore blocking)
+	select {
+	case <-started:
+		t.Fatalf("5th task should be blocked by semaphore")
+	case <-time.After(50 * time.Millisecond):
+		// Expected: 5th task is waiting
+	}
+
+	// Unblock one task
+	block <- struct{}{}
+
+	// Now the 5th task should start
+	select {
+	case <-started:
+		// Expected
+	case <-time.After(time.Second):
+		t.Fatalf("5th task should have started after one completed")
+	}
+
+	// Unblock remaining tasks
+	close(block)
+}
+
+func TestBackgroundTaskCancel(t *testing.T) {
+	dir := t.TempDir()
+	registry := NewBackgroundTaskRegistry()
+
+	started := make(chan struct{})
+
+	cfg := TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Registry:   registry,
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+			close(started)
+			<-ctx.Done()
+			return "", nil, ctx.Err()
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	tool := taskTool(cfg)
+	payload, _ := json.Marshal(map[string]any{
+		"agent":      "child",
+		"prompt":     "do work",
+		"background": true,
+	})
+
+	out, err := tool(ctx, payload)
+	if err != nil {
+		t.Fatalf("taskTool: %v", err)
+	}
+	if !strings.Contains(out, "bg-1") {
+		t.Fatalf("expected task ID")
+	}
+
+	// Wait for task to start
+	<-started
+
+	// Cancel context
+	cancel()
+
+	// Collect result - should have context error
+	result, ok := registry.GetResult("bg-1", true)
+	if !ok {
+		t.Fatalf("expected to find task result")
+	}
+	if result.Err == nil {
+		t.Fatalf("expected error from cancelled task")
+	}
+}
+
+func TestBackgroundTaskPanic(t *testing.T) {
+	dir := t.TempDir()
+	registry := NewBackgroundTaskRegistry()
+
+	cfg := TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Registry:   registry,
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+			panic("test panic")
+		},
+	}
+
+	tool := taskTool(cfg)
+	payload, _ := json.Marshal(map[string]any{
+		"agent":      "child",
+		"prompt":     "do work",
+		"background": true,
+	})
+
+	_, err := tool(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("taskTool: %v", err)
+	}
+
+	resultTool := taskResultTool(cfg)
+	resultPayload, _ := json.Marshal(map[string]string{
+		"task_id": "bg-1",
+	})
+
+	_, err = resultTool(context.Background(), resultPayload)
+	if err == nil {
+		t.Fatalf("expected error from panicked task")
+	}
+	if !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("expected panic error, got: %v", err)
+	}
+}
+
+func TestTaskResultInvalidID(t *testing.T) {
+	dir := t.TempDir()
+	registry := NewBackgroundTaskRegistry()
+	cfg := TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Registry:   registry,
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+	}
+
+	resultTool := taskResultTool(cfg)
+
+	tests := []struct {
+		name         string
+		payload      []byte
+		wantContains string
+	}{
+		{
+			name:         "invalid json",
+			payload:      []byte("{"),
+			wantContains: "invalid TaskResult args",
+		},
+		{
+			name:         "missing task_id",
+			payload:      []byte(`{}`),
+			wantContains: "task_id is required",
+		},
+		{
+			name:         "unknown task_id",
+			payload:      []byte(`{"task_id":"bg-999"}`),
+			wantContains: "unknown task ID",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resultTool(context.Background(), tt.payload)
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantContains) {
+				t.Fatalf("error = %q, want containing %q", err.Error(), tt.wantContains)
+			}
+		})
+	}
+}
+
+func TestBackgroundTaskNoRegistry(t *testing.T) {
+	dir := t.TempDir()
+	cfg := TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Registry:   nil, // No registry
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+	}
+
+	tool := taskTool(cfg)
+	payload, _ := json.Marshal(map[string]any{
+		"agent":      "child",
+		"prompt":     "do work",
+		"background": true,
+	})
+
+	_, err := tool(context.Background(), payload)
+	if err == nil {
+		t.Fatalf("expected error when registry is nil")
+	}
+	if !strings.Contains(err.Error(), "registry not initialized") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
