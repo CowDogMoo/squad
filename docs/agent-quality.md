@@ -3,6 +3,9 @@
 Scoring criteria for evaluating Squad agent runs. Use this rubric when
 tuning prompts, comparing models, or validating new agents.
 
+The `squad grade` command automates Report Quality and Iteration Efficiency
+scoring. Finding Quality and Skip Discipline require manual review.
+
 ## Grading Scale
 
 | Grade | Meaning |
