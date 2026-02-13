@@ -231,7 +231,35 @@ wrapper: wrapper.txt
 	if err == nil {
 		t.Fatalf("expected error for path traversal")
 	}
-	assertContains(t, err.Error(), "cannot contain '..'", "error")
+	// os.OpenInRoot (Go 1.24+) handles path traversal; just verify it fails
+	assertContains(t, err.Error(), "failed to include template", "error")
+}
+
+func TestBuildBundle_IncludeAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "demo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agent: %v", err)
+	}
+
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+`
+	systemContent := `{{include "/etc/passwd"}}`
+	writeTestFiles(t, agentDir, map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  systemContent,
+		"wrapper.txt": "wrapper",
+	})
+
+	_, err := BuildBundle(dir, "demo", "prompt", "/work", "edit", nil)
+	if err == nil {
+		t.Fatalf("expected error for absolute path")
+	}
+	// os.OpenInRoot (Go 1.24+) handles absolute paths; just verify it fails
+	assertContains(t, err.Error(), "failed to include template", "error")
 }
 
 func TestBuildBundle_IncludeMissingTemplate(t *testing.T) {

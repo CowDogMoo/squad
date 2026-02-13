@@ -4,6 +4,7 @@ package agent
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,17 +61,18 @@ func (td TemplateData) Default(key, defaultVal string) string {
 
 // makeIncludeFunc creates an include function that reads from the _templates directory.
 // Templates can use {{include "hard-rules/universal.md"}} to include shared content.
+// Uses os.OpenInRoot (Go 1.24+) for traversal-resistant file access.
 func makeIncludeFunc(agentsDir string) func(string) (string, error) {
+	templatesDir := filepath.Join(agentsDir, "_templates")
 	return func(path string) (string, error) {
-		// Validate path doesn't escape _templates directory
-		if strings.Contains(path, "..") {
-			return "", fmt.Errorf("include path cannot contain '..': %s", path)
-		}
-
-		templatePath := filepath.Join(agentsDir, "_templates", path)
-		content, err := os.ReadFile(templatePath)
+		f, err := os.OpenInRoot(templatesDir, path)
 		if err != nil {
 			return "", fmt.Errorf("failed to include template %s: %w", path, err)
+		}
+		defer f.Close()
+		content, err := io.ReadAll(f)
+		if err != nil {
+			return "", fmt.Errorf("failed to read template %s: %w", path, err)
 		}
 		return strings.TrimSpace(string(content)), nil
 	}
