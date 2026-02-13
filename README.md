@@ -84,6 +84,43 @@ squad run --agent my-review --print
 
 See [docs/creating-agents.md](docs/creating-agents.md) for the full guide.
 
+### Parallel Agent Execution
+
+Agents can spawn child agents using the `Task` tool. For parallel execution,
+use `background=true` to spawn multiple agents concurrently, then collect
+results with `TaskResult`.
+
+```text
+# Inside an agent prompt, spawn two agents in parallel:
+Task(agent="go-review", background=true, prompt="fix code quality issues")
+Task(agent="go-security-audit", background=true, prompt="fix security issues")
+
+# Collect results:
+TaskResult(task_id="bg-1")
+TaskResult(task_id="bg-2")
+```
+
+**Features:**
+
+- **Concurrent execution**: Up to 4 background tasks run simultaneously
+- **Automatic semaphore**: Prevents resource exhaustion
+- **Depth limiting**: Maximum 3 levels of nested agent calls
+- **Panic recovery**: Background tasks recover gracefully from panics
+
+**Example orchestration prompt:**
+
+```bash
+squad run --agent go-cobra \
+  --model gpt-4o \
+  --require-actionable=false \
+  "Run go-review and go-security-audit IN PARALLEL using background=true.
+   Spawn both with Task(background=true), then collect with TaskResult.
+   Report what was fixed."
+```
+
+This spawns both agents concurrently, reducing total wall time compared to
+sequential execution.
+
 ## Providers
 
 Providers are OpenAI-compatible by default. Configure with flags, environment

@@ -105,14 +105,22 @@ func processTemplate(name, content, agentsDir string, data TemplateData) (string
 }
 
 // loadReferences reads all reference files and returns formatted content.
+func readFileInRoot(root, path string) ([]byte, error) {
+	f, err := os.OpenInRoot(root, path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
 func loadReferences(agentPath string, refs []string) ([]string, error) {
 	var result []string
 	for _, ref := range refs {
 		if strings.TrimSpace(ref) == "" {
 			continue
 		}
-		refPath := filepath.Join(agentPath, ref)
-		refData, err := os.ReadFile(refPath)
+		refData, err := readFileInRoot(agentPath, ref)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read reference %s: %w", ref, err)
 		}
@@ -126,8 +134,7 @@ func loadTask(agentPath, taskFile string) (string, error) {
 	if taskFile == "" {
 		return "", nil
 	}
-	taskPath := filepath.Join(agentPath, taskFile)
-	taskData, err := os.ReadFile(taskPath)
+	taskData, err := readFileInRoot(agentPath, taskFile)
 	if err != nil {
 		return "", fmt.Errorf("failed to read task %s: %w", taskFile, err)
 	}
@@ -150,11 +157,11 @@ func loadManifest(agentPath string) (*Manifest, error) {
 
 // loadAndProcessPrompts loads system, wrapper, and task files, then processes them as templates.
 func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data TemplateData) (system, wrapper, task string, err error) {
-	systemData, err := os.ReadFile(filepath.Join(agentPath, manifest.EntryPoint))
+	systemData, err := readFileInRoot(agentPath, manifest.EntryPoint)
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to read system prompt: %w", err)
 	}
-	wrapperData, err := os.ReadFile(filepath.Join(agentPath, manifest.Wrapper))
+	wrapperData, err := readFileInRoot(agentPath, manifest.Wrapper)
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to read agent wrapper: %w", err)
 	}

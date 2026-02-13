@@ -62,6 +62,7 @@ func IsReasoningModel(model string) bool {
 // UseResponsesAPI reports whether the Responses API path should be used.
 func UseResponsesAPI(provider, model string) bool {
 	provider = strings.ToLower(strings.TrimSpace(provider))
+	model = strings.ToLower(strings.TrimSpace(model))
 	if provider == "openai-responses" {
 		return true
 	}
