@@ -69,7 +69,7 @@ func makeIncludeFunc(agentsDir string) func(string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to include template %s: %w", path, err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		content, err := io.ReadAll(f)
 		if err != nil {
 			return "", fmt.Errorf("failed to read template %s: %w", path, err)
@@ -110,7 +110,7 @@ func readFileInRoot(root, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return io.ReadAll(f)
 }
 
@@ -218,9 +218,9 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 	// Build the system message content (wrapper + system prompt + references + task).
 	var sys bytes.Buffer
 	sys.WriteString("# Squad Agent Bundle\n\n")
-	sys.WriteString(fmt.Sprintf("Agent: %s (%s)\n", manifest.Name, manifest.Version))
-	sys.WriteString(fmt.Sprintf("Mode: %s\n", displayMode))
-	sys.WriteString(fmt.Sprintf("Working Directory: %s\n\n", workingDir))
+	fmt.Fprintf(&sys, "Agent: %s (%s)\n", manifest.Name, manifest.Version)
+	fmt.Fprintf(&sys, "Mode: %s\n", displayMode)
+	fmt.Fprintf(&sys, "Working Directory: %s\n\n", workingDir)
 	sys.WriteString("## Agent Wrapper\n\n")
 	sys.WriteString(wrapperContent)
 	sys.WriteString("\n\n## System Prompt\n\n")
