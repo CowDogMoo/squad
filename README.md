@@ -1,6 +1,6 @@
 # squad
 
-[![codecov](https://codecov.io/gh/CowDogMoo/squad/graph/badge.svg?token=O74GTQA4J7)](https://codecov.io/gh/CowDogMoo/squad)
+[![codecov](https://codecov.io/github/cowdogmoo/squad/graph/badge.svg?token=O74GTQA4J7)](https://codecov.io/github/cowdogmoo/squad)
 
 Model-agnostic agent CLI built on LangChainGo.
 
@@ -128,12 +128,12 @@ variables, or config file.
 
 ### Provider Matrix
 
-| Provider | Status | Base URL | API Key | Notes |
-| --- | --- | --- | --- | --- |
-| openai | supported | `https://api.openai.com/v1` (default) | required | Supports `--api-type azure` for Azure OpenAI |
-| ollama | supported | `http://localhost:11434/v1` (default) | optional | Uses `max_tokens` for compatibility |
-| anthropic | planned | — | — | Not yet implemented |
-| gemini | planned | — | — | Not yet implemented |
+| Provider  | Status    | Base URL                              | API Key  | Notes                                        |
+| --------- | --------- | ------------------------------------- | -------- | -------------------------------------------- |
+| openai    | supported | `https://api.openai.com/v1` (default) | required | Supports `--api-type azure` for Azure OpenAI |
+| ollama    | supported | `http://localhost:11434/v1` (default) | optional | Uses `max_tokens` for compatibility          |
+| anthropic | planned   | —                                     | —        | Not yet implemented                          |
+| gemini    | planned   | —                                     | —        | Not yet implemented                          |
 
 ### OpenAI
 
@@ -193,14 +193,14 @@ task run:go-tests COVERAGE_TARGET=90 WORKING_DIR=/path/to/project
 
 ### Task Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PROVIDER` | `ollama` | LLM provider |
-| `MODEL` | `qwen3-coder:30b` | Model name |
-| `API_KEY` | — | API key for the provider |
-| `BASE_URL` | *(provider default)* | Custom API endpoint |
-| `WORKING_DIR` | `.` | Target codebase directory |
-| `COVERAGE_TARGET` | `75` | Target coverage % (test agents) |
+| Variable          | Default              | Description                     |
+| ----------------- | -------------------- | ------------------------------- |
+| `PROVIDER`        | `ollama`             | LLM provider                    |
+| `MODEL`           | `qwen3-coder:30b`    | Model name                      |
+| `API_KEY`         | —                    | API key for the provider        |
+| `BASE_URL`        | _(provider default)_ | Custom API endpoint             |
+| `WORKING_DIR`     | `.`                  | Target codebase directory       |
+| `COVERAGE_TARGET` | `75`                 | Target coverage % (test agents) |
 
 ## Configuration
 
@@ -232,14 +232,14 @@ squad config get provider.default
 
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `SQUAD_PROVIDER_DEFAULT` | Default provider |
-| `SQUAD_PROVIDER_TOKEN` | API key |
-| `SQUAD_PROVIDER_BASE_URL` | Base URL override |
-| `SQUAD_MODEL_DEFAULT` | Default model |
-| `SQUAD_LOG_LEVEL` | Log level (debug, info, warn, error) |
-| `SQUAD_LOG_FORMAT` | Log format (text, json, color) |
+| Variable                  | Description                          |
+| ------------------------- | ------------------------------------ |
+| `SQUAD_PROVIDER_DEFAULT`  | Default provider                     |
+| `SQUAD_PROVIDER_TOKEN`    | API key                              |
+| `SQUAD_PROVIDER_BASE_URL` | Base URL override                    |
+| `SQUAD_MODEL_DEFAULT`     | Default model                        |
+| `SQUAD_LOG_LEVEL`         | Log level (debug, info, warn, error) |
+| `SQUAD_LOG_FORMAT`        | Log format (text, json, color)       |
 
 ### Example Config
 
