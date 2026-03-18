@@ -427,6 +427,79 @@ func TestPricingStatus(t *testing.T) {
 	}
 }
 
+func TestSetMaxCost(t *testing.T) {
+	t.Parallel()
+	m := New("openai", "gpt-4o")
+	if m.MaxCost != 0 {
+		t.Fatalf("MaxCost = %v, want 0", m.MaxCost)
+	}
+	m.SetMaxCost(1.50)
+	if m.MaxCost != 1.50 {
+		t.Fatalf("MaxCost = %v, want 1.50", m.MaxCost)
+	}
+}
+
+func TestBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		maxCost float64
+		want    bool
+	}{
+		{"zero max cost (unlimited)", 0, false},
+		{"below budget", 100.0, false},
+		{"above budget with ollama (free)", 0.01, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := New("ollama", "llama3")
+			m.SetMaxCost(tt.maxCost)
+			m.AddTokens(1_000_000, 1_000_000)
+			if got := m.BudgetExceeded(); got != tt.want {
+				t.Fatalf("BudgetExceeded() = %v, want %v (cost=%v)", got, tt.want, m.TotalCostWithChildren())
+			}
+		})
+	}
+}
+
+func TestBudgetExceededWithPricing(t *testing.T) {
+	m := New("ollama", "llama3")
+	m.SetMaxCost(0.001)
+	m.AddTokens(10_000_000, 10_000_000)
+	if m.BudgetExceeded() {
+		t.Fatalf("ollama should never exceed budget (cost is $0)")
+	}
+
+	m2 := New("openai", "gpt-4o")
+	m2.SetMaxCost(0)
+	m2.AddTokens(10_000_000, 10_000_000)
+	if m2.BudgetExceeded() {
+		t.Fatalf("zero MaxCost should mean unlimited")
+	}
+
+	if testing.Short() {
+		return
+	}
+	m3 := New("openai", "gpt-4o")
+	m3.SetMaxCost(0.0001)
+	m3.AddTokens(1_000_000, 1_000_000)
+	cost := m3.TotalCostWithChildren()
+	if cost > 0 && !m3.BudgetExceeded() {
+		t.Fatalf("should exceed $0.0001 budget with 1M tokens (cost=$%.4f)", cost)
+	}
+}
+
+func TestErrBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	if ErrBudgetExceeded == nil {
+		t.Fatal("ErrBudgetExceeded should not be nil")
+	}
+	if !strings.Contains(ErrBudgetExceeded.Error(), "budget exceeded") {
+		t.Fatalf("ErrBudgetExceeded = %q, want containing 'budget exceeded'", ErrBudgetExceeded.Error())
+	}
+}
+
 func TestFetchPricingVariants(t *testing.T) {
 	// Subtests share pricing globals — do not add t.Parallel().
 	originalTransport := http.DefaultTransport

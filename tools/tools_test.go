@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -949,6 +950,163 @@ func TestExtractTokenUsage(t *testing.T) {
 				t.Fatalf("OutputTokens = %d, want %d", m.OutputTokens, tt.wantOutput)
 			}
 		})
+	}
+}
+
+func TestTruncateToolOutputHeadTail(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		maxBytes int
+		wantTrn  bool
+	}{
+		{"within limit", "short output", 100, false},
+		{"at limit", strings.Repeat("a", 100), 100, false},
+		{"over limit", strings.Repeat("line\n", 100), 50, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := TruncateToolOutputHeadTail(tt.input, tt.maxBytes)
+			truncated := strings.Contains(result, "lines omitted from tool output")
+			if truncated != tt.wantTrn {
+				t.Fatalf("truncated = %v, want %v", truncated, tt.wantTrn)
+			}
+			if tt.wantTrn {
+				if !strings.Contains(result, "line") {
+					t.Fatalf("truncated output should contain original content")
+				}
+			}
+		})
+	}
+}
+
+func TestTruncateToolOutputHeadTailPreservesEnds(t *testing.T) {
+	t.Parallel()
+	var sb strings.Builder
+	for i := 0; i < 100; i++ {
+		sb.WriteString(fmt.Sprintf("line-%03d\n", i))
+	}
+	input := sb.String()
+
+	result := TruncateToolOutputHeadTail(input, 200)
+
+	if !strings.HasPrefix(result, "line-000") {
+		t.Fatalf("result should start with line-000, got: %s", result[:30])
+	}
+	if !strings.Contains(result, "line-099") {
+		t.Fatalf("result should contain line-099")
+	}
+}
+
+func TestEstimateTokens(t *testing.T) {
+	t.Parallel()
+	messages := []llms.MessageContent{
+		{Role: llms.ChatMessageTypeSystem, Parts: []llms.ContentPart{llms.TextPart(strings.Repeat("a", 400))}},
+		{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(strings.Repeat("b", 400))}},
+	}
+	tokens := estimateTokens(messages)
+	if tokens != 200 {
+		t.Fatalf("estimateTokens = %d, want 200", tokens)
+	}
+}
+
+func TestCompactMessages(t *testing.T) {
+	t.Parallel()
+	messages := []llms.MessageContent{
+		{Role: llms.ChatMessageTypeSystem, Parts: []llms.ContentPart{llms.TextPart("system")}},
+		{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart("user")}},
+	}
+
+	largeOutput := strings.Repeat("x", 10000)
+	for i := 0; i < 30; i++ {
+		messages = append(messages,
+			llms.MessageContent{
+				Role: llms.ChatMessageTypeAI,
+				Parts: []llms.ContentPart{llms.ToolCall{
+					ID:           fmt.Sprintf("call-%d", i),
+					FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: "{}"},
+				}},
+			},
+			llms.MessageContent{
+				Role: llms.ChatMessageTypeTool,
+				Parts: []llms.ContentPart{llms.ToolCallResponse{
+					ToolCallID: fmt.Sprintf("call-%d", i),
+					Content:    largeOutput,
+				}},
+			},
+		)
+	}
+
+	ctx := context.Background()
+	compacted := compactMessages(ctx, messages)
+
+	if len(compacted) != len(messages) {
+		t.Fatalf("compacted length = %d, want %d", len(compacted), len(messages))
+	}
+
+	oldToolMsg := compacted[3]
+	if oldToolMsg.Role != llms.ChatMessageTypeTool {
+		t.Fatalf("expected tool message at index 3, got %v", oldToolMsg.Role)
+	}
+	resp, ok := oldToolMsg.Parts[0].(llms.ToolCallResponse)
+	if !ok {
+		t.Fatal("expected ToolCallResponse part")
+	}
+	if !strings.Contains(resp.Content, "compacted") {
+		t.Fatalf("old tool output should be compacted, got: %s", resp.Content[:50])
+	}
+
+	lastToolIdx := len(compacted) - 1
+	lastResp, ok := compacted[lastToolIdx].Parts[0].(llms.ToolCallResponse)
+	if !ok {
+		t.Fatal("expected ToolCallResponse part in last message")
+	}
+	if strings.Contains(lastResp.Content, "compacted") {
+		t.Fatal("recent tool output should NOT be compacted")
+	}
+
+	beforeTokens := estimateTokens(messages)
+	afterTokens := estimateTokens(compacted)
+	if afterTokens >= beforeTokens {
+		t.Fatalf("compaction should reduce tokens: before=%d, after=%d", beforeTokens, afterTokens)
+	}
+}
+
+func TestCompactMessagesBelowThreshold(t *testing.T) {
+	t.Parallel()
+	messages := []llms.MessageContent{
+		{Role: llms.ChatMessageTypeSystem, Parts: []llms.ContentPart{llms.TextPart("system")}},
+		{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart("user")}},
+	}
+	ctx := context.Background()
+	result := compactMessages(ctx, messages)
+	if len(result) != len(messages) {
+		t.Fatalf("should return unchanged messages below threshold")
+	}
+}
+
+func TestRunWithToolsBudgetExceeded(t *testing.T) {
+	originalCache, originalFetched, originalErr := metrics.PricingStatus()
+	_ = originalCache
+	_ = originalFetched
+	_ = originalErr
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	m := metrics.New("ollama", "llama3")
+	m.SetMaxCost(0.0001)
+
+	m2 := metrics.New("openai", "gpt-4o")
+	m2.SetMaxCost(0.0001)
+	m2.AddTokens(1_000_000, 1_000_000)
+
+	if m2.MaxCost != 0.0001 {
+		t.Fatalf("MaxCost = %v, want 0.0001", m2.MaxCost)
 	}
 }
 

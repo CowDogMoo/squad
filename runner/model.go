@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -67,10 +68,17 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 	}
 
 	m := metrics.New(provider, model)
+	m.SetMaxCost(opts.MaxCost)
+	if taskCfg != nil {
+		taskCfg.ParentMetrics = m
+	}
 	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
 	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens, opts.MaxIterations, taskCfg, m)
 	m.Finish()
 	if err != nil {
+		if errors.Is(err, metrics.ErrBudgetExceeded) {
+			return response, m, metrics.ErrBudgetExceeded
+		}
 		return "", m, fmt.Errorf("model call failed: %w", err)
 	}
 	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", m.Duration().Round(time.Millisecond), len(response))
@@ -87,10 +95,17 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	callOpts := buildCallOpts(opts, provider, temperature, maxTokens)
 
 	m := metrics.New(provider, model)
+	m.SetMaxCost(opts.MaxCost)
+	if taskCfg != nil {
+		taskCfg.ParentMetrics = m
+	}
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
 	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, opts.MaxIterations, taskCfg, m, callOpts...)
 	m.Finish()
 	if err != nil {
+		if errors.Is(err, metrics.ErrBudgetExceeded) {
+			return response, m, metrics.ErrBudgetExceeded
+		}
 		return "", m, fmt.Errorf("model call failed: %w", err)
 	}
 	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", m.Duration().Round(time.Millisecond), len(response))

@@ -4,6 +4,7 @@ package responses
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -105,6 +106,9 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 
 	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc, maxIterations, m)
 	if err != nil {
+		if errors.Is(err, metrics.ErrBudgetExceeded) {
+			return text, err
+		}
 		return text, err
 	}
 	if text != "" {
@@ -191,6 +195,12 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 		}
 		logOutputItems(ctx, resp, fmt.Sprintf("follow-up-iter-%d", i+1))
 		trackResponseMetrics(resp, m)
+
+		if m != nil && m.BudgetExceeded() {
+			logging.InfoContext(ctx, "responses API: budget exceeded ($%.4f >= $%.4f max), stopping", m.TotalCostWithChildren(), m.MaxCost)
+			text := resp.OutputText()
+			return resp, text, metrics.ErrBudgetExceeded
+		}
 	}
 
 	text := resp.OutputText()
@@ -219,6 +229,11 @@ func checkRepeat(ctx context.Context, repeat *tools.RepeatTracker, calls []Funct
 }
 
 func requestFinal(ctx context.Context, client openai.Client, previousID, systemPrompt string, rc *Config, m *metrics.Metrics) (string, error) {
+	if m != nil && m.BudgetExceeded() {
+		logging.InfoContext(ctx, "responses API: budget exceeded, skipping final call")
+		return "", metrics.ErrBudgetExceeded
+	}
+
 	if strings.TrimSpace(previousID) == "" {
 		return "", fmt.Errorf("missing previous response id")
 	}
@@ -404,6 +419,8 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			output = result
 			logging.InfoContext(ctx, "responses API: %s completed in %s (%d bytes)", call.Name, toolDuration.Round(time.Millisecond), len(result))
 		}
+
+		output = tools.TruncateToolOutputHeadTail(output, 32*1024)
 
 		outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
 			OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
