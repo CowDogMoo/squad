@@ -46,14 +46,14 @@ func TestNew(t *testing.T) {
 	if m.StartTime.IsZero() {
 		t.Fatalf("StartTime should be set")
 	}
-	if m.InputTokens != 0 {
-		t.Fatalf("InputTokens = %d, want 0", m.InputTokens)
+	if m.InputTokens() != 0 {
+		t.Fatalf("InputTokens = %d, want 0", m.InputTokens())
 	}
-	if m.OutputTokens != 0 {
-		t.Fatalf("OutputTokens = %d, want 0", m.OutputTokens)
+	if m.OutputTokens() != 0 {
+		t.Fatalf("OutputTokens = %d, want 0", m.OutputTokens())
 	}
-	if m.Iterations != 0 {
-		t.Fatalf("Iterations = %d, want 0", m.Iterations)
+	if m.Iterations() != 0 {
+		t.Fatalf("Iterations = %d, want 0", m.Iterations())
 	}
 }
 
@@ -62,20 +62,20 @@ func TestAddTokens(t *testing.T) {
 	m := New("openai", "gpt-4o")
 
 	m.AddTokens(100, 50)
-	if m.InputTokens != 100 {
-		t.Fatalf("InputTokens = %d, want 100", m.InputTokens)
+	if m.InputTokens() != 100 {
+		t.Fatalf("InputTokens = %d, want 100", m.InputTokens())
 	}
-	if m.OutputTokens != 50 {
-		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens)
+	if m.OutputTokens() != 50 {
+		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens())
 	}
 
 	// Accumulate more tokens
 	m.AddTokens(200, 100)
-	if m.InputTokens != 300 {
-		t.Fatalf("InputTokens = %d, want 300", m.InputTokens)
+	if m.InputTokens() != 300 {
+		t.Fatalf("InputTokens = %d, want 300", m.InputTokens())
 	}
-	if m.OutputTokens != 150 {
-		t.Fatalf("OutputTokens = %d, want 150", m.OutputTokens)
+	if m.OutputTokens() != 150 {
+		t.Fatalf("OutputTokens = %d, want 150", m.OutputTokens())
 	}
 }
 
@@ -86,11 +86,11 @@ func TestAddTokensZero(t *testing.T) {
 
 	// Adding zero should not change totals
 	m.AddTokens(0, 0)
-	if m.InputTokens != 100 {
-		t.Fatalf("InputTokens = %d, want 100", m.InputTokens)
+	if m.InputTokens() != 100 {
+		t.Fatalf("InputTokens = %d, want 100", m.InputTokens())
 	}
-	if m.OutputTokens != 50 {
-		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens)
+	if m.OutputTokens() != 50 {
+		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens())
 	}
 }
 
@@ -99,14 +99,14 @@ func TestIncrementIterations(t *testing.T) {
 	m := New("openai", "gpt-4o")
 
 	m.IncrementIterations()
-	if m.Iterations != 1 {
-		t.Fatalf("Iterations = %d, want 1", m.Iterations)
+	if m.Iterations() != 1 {
+		t.Fatalf("Iterations = %d, want 1", m.Iterations())
 	}
 
 	m.IncrementIterations()
 	m.IncrementIterations()
-	if m.Iterations != 3 {
-		t.Fatalf("Iterations = %d, want 3", m.Iterations)
+	if m.Iterations() != 3 {
+		t.Fatalf("Iterations = %d, want 3", m.Iterations())
 	}
 }
 
@@ -358,14 +358,14 @@ func TestMetricsIntegration(t *testing.T) {
 
 	m.Finish()
 
-	if m.Iterations != 5 {
-		t.Fatalf("Iterations = %d, want 5", m.Iterations)
+	if m.Iterations() != 5 {
+		t.Fatalf("Iterations = %d, want 5", m.Iterations())
 	}
-	if m.InputTokens != 2500 {
-		t.Fatalf("InputTokens = %d, want 2500", m.InputTokens)
+	if m.InputTokens() != 2500 {
+		t.Fatalf("InputTokens = %d, want 2500", m.InputTokens())
 	}
-	if m.OutputTokens != 1000 {
-		t.Fatalf("OutputTokens = %d, want 1000", m.OutputTokens)
+	if m.OutputTokens() != 1000 {
+		t.Fatalf("OutputTokens = %d, want 1000", m.OutputTokens())
 	}
 	if m.TotalTokens() != 3500 {
 		t.Fatalf("TotalTokens() = %d, want 3500", m.TotalTokens())

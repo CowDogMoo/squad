@@ -18,6 +18,7 @@ const (
 	fetchTimeout      = 10 * time.Second
 )
 
+// ErrBudgetExceeded is returned when the configured cost budget is exhausted.
 var ErrBudgetExceeded = fmt.Errorf("cost budget exceeded")
 
 type ChildMetrics struct {
@@ -29,17 +30,19 @@ type ChildMetrics struct {
 }
 
 // Metrics tracks resource usage for an agent run.
+// All exported methods are safe for concurrent use.
 type Metrics struct {
-	StartTime    time.Time
-	EndTime      time.Time
-	InputTokens  int64
-	OutputTokens int64
-	Iterations   int
-	Model        string
-	Provider     string
-	MaxCost      float64
-	Children     []ChildMetrics
+	StartTime time.Time
+	EndTime   time.Time
+	Model     string
+	Provider  string
+	MaxCost   float64
+
 	mu           sync.Mutex
+	inputTokens  int64
+	outputTokens int64
+	iterations   int
+	Children     []ChildMetrics
 }
 
 // New creates a new Metrics instance with the start time set to now.
@@ -52,20 +55,50 @@ func New(provider, model string) *Metrics {
 }
 
 func (m *Metrics) SetMaxCost(maxCost float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.MaxCost = maxCost
 }
 
 func (m *Metrics) BudgetExceeded() bool {
-	return m.MaxCost > 0 && m.TotalCostWithChildren() >= m.MaxCost
+	m.mu.Lock()
+	maxCost := m.MaxCost
+	m.mu.Unlock()
+	return maxCost > 0 && m.TotalCostWithChildren() >= maxCost
 }
 
 func (m *Metrics) AddTokens(input, output int64) {
-	m.InputTokens += input
-	m.OutputTokens += output
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.inputTokens += input
+	m.outputTokens += output
 }
 
 func (m *Metrics) IncrementIterations() {
-	m.Iterations++
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.iterations++
+}
+
+// InputTokens returns the current input token count.
+func (m *Metrics) InputTokens() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.inputTokens
+}
+
+// OutputTokens returns the current output token count.
+func (m *Metrics) OutputTokens() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.outputTokens
+}
+
+// Iterations returns the current iteration count.
+func (m *Metrics) Iterations() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.iterations
 }
 
 func (m *Metrics) AddChild(agent string, child *Metrics) {
@@ -76,17 +109,17 @@ func (m *Metrics) AddChild(agent string, child *Metrics) {
 	defer m.mu.Unlock()
 	m.Children = append(m.Children, ChildMetrics{
 		Agent:        agent,
-		InputTokens:  child.InputTokens,
-		OutputTokens: child.OutputTokens,
+		InputTokens:  child.InputTokens(),
+		OutputTokens: child.OutputTokens(),
 		Model:        child.Model,
 		Provider:     child.Provider,
 	})
 }
 
 func (m *Metrics) TotalCostWithChildren() float64 {
-	total := m.Cost()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	total := m.costLocked()
 	for _, c := range m.Children {
 		pricing := GetPricing(c.Provider, c.Model)
 		inputCost := float64(c.InputTokens) / 1_000_000 * pricing.InputPerMillion
@@ -97,9 +130,9 @@ func (m *Metrics) TotalCostWithChildren() float64 {
 }
 
 func (m *Metrics) TotalTokensWithChildren() int64 {
-	total := m.TotalTokens()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	total := m.inputTokens + m.outputTokens
 	for _, c := range m.Children {
 		total += c.InputTokens + c.OutputTokens
 	}
@@ -107,10 +140,14 @@ func (m *Metrics) TotalTokensWithChildren() int64 {
 }
 
 func (m *Metrics) Finish() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.EndTime = time.Now()
 }
 
 func (m *Metrics) Duration() time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.EndTime.IsZero() {
 		return time.Since(m.StartTime)
 	}
@@ -118,14 +155,23 @@ func (m *Metrics) Duration() time.Duration {
 }
 
 func (m *Metrics) TotalTokens() int64 {
-	return m.InputTokens + m.OutputTokens
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.inputTokens + m.outputTokens
 }
 
 // Cost calculates the estimated cost in USD based on model pricing.
 func (m *Metrics) Cost() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.costLocked()
+}
+
+// costLocked calculates cost; caller must hold m.mu.
+func (m *Metrics) costLocked() float64 {
 	pricing := GetPricing(m.Provider, m.Model)
-	inputCost := float64(m.InputTokens) / 1_000_000 * pricing.InputPerMillion
-	outputCost := float64(m.OutputTokens) / 1_000_000 * pricing.OutputPerMillion
+	inputCost := float64(m.inputTokens) / 1_000_000 * pricing.InputPerMillion
+	outputCost := float64(m.outputTokens) / 1_000_000 * pricing.OutputPerMillion
 	return inputCost + outputCost
 }
 
@@ -266,14 +312,16 @@ func GetPricing(provider, model string) Pricing {
 func (m *Metrics) String() string {
 	cost := m.Cost()
 	costStr := m.costString(cost)
+	in := m.InputTokens()
+	out := m.OutputTokens()
 
 	return fmt.Sprintf(
 		"Duration: %s | Iterations: %d | Tokens: %d in / %d out (%d total) | Cost: %s",
 		m.Duration().Round(time.Millisecond),
-		m.Iterations,
-		m.InputTokens,
-		m.OutputTokens,
-		m.TotalTokens(),
+		m.Iterations(),
+		in,
+		out,
+		in+out,
 		costStr,
 	)
 }
@@ -281,6 +329,9 @@ func (m *Metrics) String() string {
 func (m *Metrics) Summary() string {
 	cost := m.Cost()
 	costLine := "  Cost:       " + m.costString(cost)
+	in := m.InputTokens()
+	out := m.OutputTokens()
+	total := in + out
 
 	var warningLine string
 	loaded, _, err := PricingStatus()
@@ -298,18 +349,19 @@ Agent Metrics
 %s%s
 `,
 		m.Duration().Round(time.Millisecond),
-		m.Iterations,
+		m.Iterations(),
 		m.Model,
 		m.Provider,
-		m.InputTokens,
-		m.OutputTokens,
-		m.TotalTokens(),
+		in,
+		out,
+		total,
 		costLine,
 		warningLine,
 	)
 
 	m.mu.Lock()
-	children := m.Children
+	children := make([]ChildMetrics, len(m.Children))
+	copy(children, m.Children)
 	m.mu.Unlock()
 
 	if len(children) == 0 {
@@ -338,7 +390,7 @@ Agent Metrics
 	}
 
 	grandTotal := cost + totalChildCost
-	grandTokens := m.TotalTokens() + totalChildTokens
+	grandTokens := total + totalChildTokens
 	sb.WriteString(fmt.Sprintf("\n  %-20s %10d tokens  $%.4f\n", "TOTAL (all agents)", grandTokens, grandTotal))
 
 	return sb.String()

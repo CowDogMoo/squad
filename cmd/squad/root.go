@@ -38,6 +38,7 @@ import (
 )
 
 // NewRootCmd constructs the root cobra command for the squad CLI.
+// It wires subcommands, persistent flags, and completion handlers.
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "squad",
@@ -73,6 +74,7 @@ It provides a clean config + logging foundation for agent workflows.`,
 }
 
 // Execute runs the root command.
+// It installs signal handling so the CLI exits cleanly on interruption.
 func Execute() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

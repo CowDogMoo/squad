@@ -38,6 +38,7 @@ type GradeResult struct {
 }
 
 // GradeOptions configures the grading calculation.
+
 type GradeOptions struct {
 	Agent      string
 	Iterations int

@@ -31,6 +31,7 @@ var LangFilePatterns = map[string]string{
 }
 
 // CreateOptions configures agent scaffolding.
+
 type CreateOptions struct {
 	Name        string
 	Lang        string

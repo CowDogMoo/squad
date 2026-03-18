@@ -26,7 +26,7 @@ const maxSameToolRepeat = 10
 const maxMutatingToolRepeat = 50
 
 const maxReadBytes = 48 * 1024
-const maxGlobResults = 200
+const maxSearchResults = 200
 const contextTokenThreshold = 50_000
 const keepRecentMessages = 10
 const maxToolResultBytes = 32 * 1024
@@ -536,7 +536,7 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		}
 
 		if len(data) > maxReadBytes {
-			return truncateHeadTail(data, path), nil
+			return truncateHeadTail(data), nil
 		}
 		return string(data), nil
 	}
@@ -569,7 +569,7 @@ func sliceLines(data []byte, offset, limit int) string {
 	return sb.String()
 }
 
-func truncateHeadTail(data []byte, path string) string {
+func truncateHeadTail(data []byte) string {
 	totalLines := strings.Count(string(data), "\n") + 1
 	headSize := maxReadBytes * 3 / 4
 	tailSize := maxReadBytes - headSize
@@ -706,9 +706,9 @@ func globTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 			return "no matches", nil
 		}
 		total := len(matches)
-		if total > maxGlobResults {
-			matches = matches[:maxGlobResults]
-			result := fmt.Sprintf("[showing %d of %d matches — results truncated]\n%s", maxGlobResults, total, strings.Join(matches, "\n"))
+		if total > maxSearchResults {
+			matches = matches[:maxSearchResults]
+			result := fmt.Sprintf("[showing %d of %d matches — results truncated]\n%s", maxSearchResults, total, strings.Join(matches, "\n"))
 			return TruncateToolOutputHeadTail(result, maxToolResultBytes), nil
 		}
 		result := strings.Join(matches, "\n")
@@ -752,9 +752,9 @@ func grepTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 			return "no matches", nil
 		}
 		total := len(matches)
-		if total > maxGlobResults {
-			matches = matches[:maxGlobResults]
-			result := fmt.Sprintf("[showing %d of %d grep matches — results truncated]\n%s", maxGlobResults, total, strings.Join(matches, "\n"))
+		if total > maxSearchResults {
+			matches = matches[:maxSearchResults]
+			result := fmt.Sprintf("[showing %d of %d grep matches — results truncated]\n%s", maxSearchResults, total, strings.Join(matches, "\n"))
 			return TruncateToolOutputHeadTail(result, maxToolResultBytes), nil
 		}
 		result := strings.Join(matches, "\n")

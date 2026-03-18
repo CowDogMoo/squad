@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/ollama"
@@ -219,7 +220,7 @@ func reasoningPrefixes(opts *RunOptions) []string {
 	if opts.Config != nil && len(opts.Config.Model.ReasoningPrefixes) > 0 {
 		return opts.Config.Model.ReasoningPrefixes
 	}
-	return []string{"gpt-5"}
+	return config.Defaults().Model.ReasoningPrefixes
 }
 
 // buildTaskConfig creates a TaskConfig for the Task tool from RunOptions.

@@ -48,7 +48,7 @@ func getCacheHome() string {
 	return ""
 }
 
-// GetConfigDirs returns all config directories to search (in priority order).
+// GetConfigDirs returns all config directories to search in priority order.
 func GetConfigDirs() []string {
 	return getConfigDirs()
 }

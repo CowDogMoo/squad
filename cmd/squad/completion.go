@@ -20,6 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
+// Package main implements the squad CLI for model-agnostic agent workflows.
 package main
 
 import (
@@ -28,6 +29,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// completionCmd generates shell completion scripts for squad.
 var completionCmd = &cobra.Command{
 	Use:   "completion [bash|zsh|fish|powershell]",
 	Short: "Generate shell completion scripts",

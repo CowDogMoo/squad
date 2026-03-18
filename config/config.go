@@ -38,6 +38,7 @@ const (
 )
 
 // Config represents the global squad configuration.
+// Its zero value is not useful; use [Defaults] or [Load] to initialize it.
 type Config struct {
 	Log      LogConfig      `mapstructure:"log" yaml:"log"`
 	Provider ProviderConfig `mapstructure:"provider" yaml:"provider"`

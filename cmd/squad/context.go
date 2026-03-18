@@ -8,8 +8,10 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Context key types for storing config and viper instance.
+// configKeyType identifies the config value stored in a context.
 type configKeyType struct{}
+
+// viperKeyType identifies the Viper value stored in a context.
 type viperKeyType struct{}
 
 var (

@@ -24,6 +24,7 @@ package main
 
 import "github.com/spf13/cobra"
 
+// initCmd initializes squad resources.
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize squad resources",

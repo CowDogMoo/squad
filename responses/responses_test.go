@@ -887,11 +887,11 @@ func TestTrackResponseMetricsNilMetrics(t *testing.T) {
 
 func TestTrackResponseMetricsNilResponse(t *testing.T) {
 	t.Parallel()
-	m := &metrics.Metrics{}
+	m := metrics.New("openai", "gpt-4o")
 	trackResponseMetrics(nil, m)
 	// Should not increment or add tokens when response is nil
-	if m.Iterations != 0 {
-		t.Fatalf("Iterations = %d, want 0", m.Iterations)
+	if m.Iterations() != 0 {
+		t.Fatalf("Iterations = %d, want 0", m.Iterations())
 	}
 }
 
@@ -909,14 +909,14 @@ func TestTrackResponseMetricsWithUsage(t *testing.T) {
 
 	trackResponseMetrics(resp, m)
 
-	if m.Iterations != 1 {
-		t.Fatalf("Iterations = %d, want 1", m.Iterations)
+	if m.Iterations() != 1 {
+		t.Fatalf("Iterations = %d, want 1", m.Iterations())
 	}
-	if m.InputTokens != 1000 {
-		t.Fatalf("InputTokens = %d, want 1000", m.InputTokens)
+	if m.InputTokens() != 1000 {
+		t.Fatalf("InputTokens = %d, want 1000", m.InputTokens())
 	}
-	if m.OutputTokens != 500 {
-		t.Fatalf("OutputTokens = %d, want 500", m.OutputTokens)
+	if m.OutputTokens() != 500 {
+		t.Fatalf("OutputTokens = %d, want 500", m.OutputTokens())
 	}
 }
 
@@ -940,13 +940,13 @@ func TestTrackResponseMetricsAccumulates(t *testing.T) {
 	trackResponseMetrics(resp1, m)
 	trackResponseMetrics(resp2, m)
 
-	if m.Iterations != 2 {
-		t.Fatalf("Iterations = %d, want 2", m.Iterations)
+	if m.Iterations() != 2 {
+		t.Fatalf("Iterations = %d, want 2", m.Iterations())
 	}
-	if m.InputTokens != 300 {
-		t.Fatalf("InputTokens = %d, want 300", m.InputTokens)
+	if m.InputTokens() != 300 {
+		t.Fatalf("InputTokens = %d, want 300", m.InputTokens())
 	}
-	if m.OutputTokens != 150 {
-		t.Fatalf("OutputTokens = %d, want 150", m.OutputTokens)
+	if m.OutputTokens() != 150 {
+		t.Fatalf("OutputTokens = %d, want 150", m.OutputTokens())
 	}
 }

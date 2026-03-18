@@ -4,7 +4,6 @@ package responses
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -114,9 +113,6 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 
 	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc, maxIterations, m)
 	if err != nil {
-		if errors.Is(err, metrics.ErrBudgetExceeded) {
-			return text, err
-		}
 		return text, err
 	}
 	if text != "" {

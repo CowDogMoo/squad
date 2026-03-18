@@ -34,6 +34,7 @@ import (
 )
 
 // GitOperations handles git operations for agent repositories.
+
 type GitOperations struct {
 	cacheDir string
 }
