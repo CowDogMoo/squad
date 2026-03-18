@@ -41,6 +41,7 @@ var (
 )
 
 // LogLevel represents the supported log severity levels.
+
 type LogLevel int
 
 // OutputType defines the available logger output formats.

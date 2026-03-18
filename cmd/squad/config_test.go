@@ -136,7 +136,7 @@ func TestRunConfigSet(t *testing.T) {
 		t.Fatalf("runConfigSet() error = %v", err)
 	}
 
-	updated, err := config.LoadFromPath(configPath)
+	updated, _, err := config.LoadFromPath(configPath)
 	if err != nil {
 		t.Fatalf("LoadFromPath: %v", err)
 	}

@@ -32,6 +32,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// newGradeCmd constructs the grade subcommand.
 func newGradeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "grade [output.md]",
@@ -73,6 +74,7 @@ Examples:
 	return cmd
 }
 
+// runGrade grades an agent output report or shows stored grade data.
 func runGrade(cmd *cobra.Command, args []string) error {
 	showHistory, _ := cmd.Flags().GetBool("history")
 	showStats, _ := cmd.Flags().GetBool("stats")

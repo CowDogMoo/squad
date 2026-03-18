@@ -15,19 +15,34 @@ import (
 const (
 	// LiteLLM maintains a comprehensive pricing database updated by the community.
 	liteLLMPricingURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-	// Timeout for fetching pricing data.
-	fetchTimeout = 10 * time.Second
+	fetchTimeout      = 10 * time.Second
 )
 
-// Metrics tracks resource usage for an agent run.
-type Metrics struct {
-	StartTime    time.Time
-	EndTime      time.Time
+// ErrBudgetExceeded is returned when the configured cost budget is exhausted.
+var ErrBudgetExceeded = fmt.Errorf("cost budget exceeded")
+
+type ChildMetrics struct {
+	Agent        string
 	InputTokens  int64
 	OutputTokens int64
-	Iterations   int
 	Model        string
 	Provider     string
+}
+
+// Metrics tracks resource usage for an agent run.
+// All exported methods are safe for concurrent use.
+type Metrics struct {
+	StartTime time.Time
+	EndTime   time.Time
+	Model     string
+	Provider  string
+	MaxCost   float64
+
+	mu           sync.Mutex
+	inputTokens  int64
+	outputTokens int64
+	iterations   int
+	Children     []ChildMetrics
 }
 
 // New creates a new Metrics instance with the start time set to now.
@@ -39,50 +54,132 @@ func New(provider, model string) *Metrics {
 	}
 }
 
-// AddTokens adds token counts to the running total.
+func (m *Metrics) SetMaxCost(maxCost float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.MaxCost = maxCost
+}
+
+func (m *Metrics) BudgetExceeded() bool {
+	m.mu.Lock()
+	maxCost := m.MaxCost
+	m.mu.Unlock()
+	return maxCost > 0 && m.TotalCostWithChildren() >= maxCost
+}
+
 func (m *Metrics) AddTokens(input, output int64) {
-	m.InputTokens += input
-	m.OutputTokens += output
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.inputTokens += input
+	m.outputTokens += output
 }
 
-// IncrementIterations increments the iteration counter.
 func (m *Metrics) IncrementIterations() {
-	m.Iterations++
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.iterations++
 }
 
-// Finish marks the end time.
+// InputTokens returns the current input token count.
+func (m *Metrics) InputTokens() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.inputTokens
+}
+
+// OutputTokens returns the current output token count.
+func (m *Metrics) OutputTokens() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.outputTokens
+}
+
+// Iterations returns the current iteration count.
+func (m *Metrics) Iterations() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.iterations
+}
+
+func (m *Metrics) AddChild(agent string, child *Metrics) {
+	if child == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Children = append(m.Children, ChildMetrics{
+		Agent:        agent,
+		InputTokens:  child.InputTokens(),
+		OutputTokens: child.OutputTokens(),
+		Model:        child.Model,
+		Provider:     child.Provider,
+	})
+}
+
+func (m *Metrics) TotalCostWithChildren() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	total := m.costLocked()
+	for _, c := range m.Children {
+		pricing := GetPricing(c.Provider, c.Model)
+		inputCost := float64(c.InputTokens) / 1_000_000 * pricing.InputPerMillion
+		outputCost := float64(c.OutputTokens) / 1_000_000 * pricing.OutputPerMillion
+		total += inputCost + outputCost
+	}
+	return total
+}
+
+func (m *Metrics) TotalTokensWithChildren() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	total := m.inputTokens + m.outputTokens
+	for _, c := range m.Children {
+		total += c.InputTokens + c.OutputTokens
+	}
+	return total
+}
+
 func (m *Metrics) Finish() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.EndTime = time.Now()
 }
 
-// Duration returns the elapsed time.
 func (m *Metrics) Duration() time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.EndTime.IsZero() {
 		return time.Since(m.StartTime)
 	}
 	return m.EndTime.Sub(m.StartTime)
 }
 
-// TotalTokens returns the sum of input and output tokens.
 func (m *Metrics) TotalTokens() int64 {
-	return m.InputTokens + m.OutputTokens
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.inputTokens + m.outputTokens
 }
 
 // Cost calculates the estimated cost in USD based on model pricing.
 func (m *Metrics) Cost() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.costLocked()
+}
+
+// costLocked calculates cost; caller must hold m.mu.
+func (m *Metrics) costLocked() float64 {
 	pricing := GetPricing(m.Provider, m.Model)
-	inputCost := float64(m.InputTokens) / 1_000_000 * pricing.InputPerMillion
-	outputCost := float64(m.OutputTokens) / 1_000_000 * pricing.OutputPerMillion
+	inputCost := float64(m.inputTokens) / 1_000_000 * pricing.InputPerMillion
+	outputCost := float64(m.outputTokens) / 1_000_000 * pricing.OutputPerMillion
 	return inputCost + outputCost
 }
 
-// Pricing holds per-million-token costs for a model.
 type Pricing struct {
 	InputPerMillion  float64
 	OutputPerMillion float64
 }
 
-// liteLLMModel represents a model entry from the LiteLLM pricing JSON.
 type liteLLMModel struct {
 	InputCostPerToken  float64 `json:"input_cost_per_token"`
 	OutputCostPerToken float64 `json:"output_cost_per_token"`
@@ -97,7 +194,6 @@ var (
 	pricingFetchOnce sync.Once
 )
 
-// fetchPricing downloads the LiteLLM pricing database.
 func fetchPricing() {
 	client := &http.Client{Timeout: fetchTimeout}
 	resp, err := client.Get(liteLLMPricingURL)
@@ -135,8 +231,6 @@ func fetchPricing() {
 	pricingCacheMu.Unlock()
 }
 
-// PricingStatus returns whether pricing data was loaded and any error that occurred.
-// Returns (loaded, modelCount, error).
 func PricingStatus() (bool, int, error) {
 	ensurePricingLoaded()
 
@@ -146,12 +240,10 @@ func PricingStatus() (bool, int, error) {
 	return pricingFetched, len(pricingCache), pricingFetchErr
 }
 
-// ensurePricingLoaded triggers a one-time fetch of pricing data.
 func ensurePricingLoaded() {
 	pricingFetchOnce.Do(fetchPricing)
 }
 
-// lookupLiteLLMPricing searches the LiteLLM cache for a model.
 func lookupLiteLLMPricing(provider, model string) (Pricing, bool) {
 	ensurePricingLoaded()
 
@@ -200,9 +292,6 @@ func lookupLiteLLMPricing(provider, model string) (Pricing, bool) {
 	return Pricing{}, false
 }
 
-// GetPricing returns the pricing for a given provider and model.
-// Pricing is fetched from LiteLLM's community-maintained database.
-// Returns zero pricing if the model is not found (displays as "pricing not available yet").
 func GetPricing(provider, model string) Pricing {
 	model = strings.ToLower(model)
 	provider = strings.ToLower(provider)
@@ -217,39 +306,40 @@ func GetPricing(provider, model string) Pricing {
 		return pricing
 	}
 
-	// Model not found in LiteLLM database
 	return Pricing{InputPerMillion: 0, OutputPerMillion: 0}
 }
 
-// String returns a human-readable summary of the metrics.
 func (m *Metrics) String() string {
 	cost := m.Cost()
 	costStr := m.costString(cost)
+	in := m.InputTokens()
+	out := m.OutputTokens()
 
 	return fmt.Sprintf(
 		"Duration: %s | Iterations: %d | Tokens: %d in / %d out (%d total) | Cost: %s",
 		m.Duration().Round(time.Millisecond),
-		m.Iterations,
-		m.InputTokens,
-		m.OutputTokens,
-		m.TotalTokens(),
+		m.Iterations(),
+		in,
+		out,
+		in+out,
 		costStr,
 	)
 }
 
-// Summary returns a formatted multi-line summary for display.
 func (m *Metrics) Summary() string {
 	cost := m.Cost()
 	costLine := "  Cost:       " + m.costString(cost)
+	in := m.InputTokens()
+	out := m.OutputTokens()
+	total := in + out
 
-	// Check if pricing fetch failed
 	var warningLine string
 	loaded, _, err := PricingStatus()
 	if !loaded && err != nil && strings.ToLower(m.Provider) != "ollama" {
 		warningLine = fmt.Sprintf("\n  ⚠ Pricing unavailable: %v", err)
 	}
 
-	return fmt.Sprintf(`
+	base := fmt.Sprintf(`
 Agent Metrics
 ─────────────
   Duration:   %s
@@ -259,18 +349,53 @@ Agent Metrics
 %s%s
 `,
 		m.Duration().Round(time.Millisecond),
-		m.Iterations,
+		m.Iterations(),
 		m.Model,
 		m.Provider,
-		m.InputTokens,
-		m.OutputTokens,
-		m.TotalTokens(),
+		in,
+		out,
+		total,
 		costLine,
 		warningLine,
 	)
+
+	m.mu.Lock()
+	children := make([]ChildMetrics, len(m.Children))
+	copy(children, m.Children)
+	m.mu.Unlock()
+
+	if len(children) == 0 {
+		return base
+	}
+
+	var sb strings.Builder
+	sb.WriteString(base)
+	sb.WriteString("Child Agent Costs\n")
+	sb.WriteString("─────────────────\n")
+
+	var totalChildTokens int64
+	var totalChildCost float64
+	for _, c := range children {
+		tokens := c.InputTokens + c.OutputTokens
+		pricing := GetPricing(c.Provider, c.Model)
+		childCost := float64(c.InputTokens)/1_000_000*pricing.InputPerMillion +
+			float64(c.OutputTokens)/1_000_000*pricing.OutputPerMillion
+		totalChildTokens += tokens
+		totalChildCost += childCost
+		costStr := "N/A"
+		if childCost > 0 {
+			costStr = fmt.Sprintf("$%.4f", childCost)
+		}
+		sb.WriteString(fmt.Sprintf("  %-20s %10d tokens  %s\n", c.Agent, tokens, costStr))
+	}
+
+	grandTotal := cost + totalChildCost
+	grandTokens := total + totalChildTokens
+	sb.WriteString(fmt.Sprintf("\n  %-20s %10d tokens  $%.4f\n", "TOTAL (all agents)", grandTokens, grandTotal))
+
+	return sb.String()
 }
 
-// costString returns a formatted cost string.
 func (m *Metrics) costString(cost float64) string {
 	switch {
 	case cost > 0:

@@ -38,6 +38,7 @@ const (
 )
 
 // Config represents the global squad configuration.
+// Its zero value is not useful; use [Defaults] or [Load] to initialize it.
 type Config struct {
 	Log      LogConfig      `mapstructure:"log" yaml:"log"`
 	Provider ProviderConfig `mapstructure:"provider" yaml:"provider"`
@@ -83,36 +84,27 @@ type ProviderConfig struct {
 
 // ModelConfig holds model defaults.
 type ModelConfig struct {
-	Default     string  `mapstructure:"default" yaml:"default"`
-	Temperature float64 `mapstructure:"temperature" yaml:"temperature"`
-	MaxTokens   int     `mapstructure:"max_tokens" yaml:"max_tokens"`
+	Default           string   `mapstructure:"default" yaml:"default"`
+	Temperature       float64  `mapstructure:"temperature" yaml:"temperature"`
+	MaxTokens         int      `mapstructure:"max_tokens" yaml:"max_tokens"`
+	ReasoningPrefixes []string `mapstructure:"reasoning_prefixes" yaml:"reasoning_prefixes"`
 }
 
 // Defaults returns a config populated with sensible defaults.
+// All default values are defined once in SetDefaults; this function
+// derives the struct from that single source of truth.
 func Defaults() *Config {
+	v := viper.New()
+	SetDefaults(v)
 	cfg := &Config{}
-	cfg.Log.Level = "info"
-	cfg.Log.Format = "text"
-	cfg.Provider.Default = "openai"
-	cfg.Provider.BaseURL = ""
-	cfg.Provider.Organization = ""
-	cfg.Provider.APIVersion = ""
-	cfg.Provider.APIType = ""
-	cfg.Provider.OpenAICompatMaxTokens = false
-	cfg.Provider.NumCtx = 32768
-	cfg.Model.Default = ""
-	cfg.Model.Temperature = 0.2
-	cfg.Model.MaxTokens = 1024
-	cfg.Agents.CacheDir = ""
-	cfg.Agents.Repositories = map[string]string{
-		"official": "https://github.com/cowdogmoo/squad-agents.git",
-	}
-	cfg.Agents.LocalPaths = []string{}
+	_ = v.Unmarshal(cfg)
 	return cfg
 }
 
 // Load loads config from standard locations with env and defaults.
-func Load() (*Config, error) {
+// It returns the resolved Config and the Viper instance that produced it,
+// so callers can bind additional flags without recreating the precedence chain.
+func Load() (*Config, *viper.Viper, error) {
 	return loadConfigWithViper(func(v *viper.Viper) error {
 		v.SetConfigName("config")
 		v.SetConfigType("yaml")
@@ -133,7 +125,8 @@ func Load() (*Config, error) {
 }
 
 // LoadFromPath loads config from an explicit path.
-func LoadFromPath(path string) (*Config, error) {
+// It returns the resolved Config and the Viper instance that produced it.
+func LoadFromPath(path string) (*Config, *viper.Viper, error) {
 	return loadConfigWithViper(func(v *viper.Viper) error {
 		v.SetConfigFile(path)
 		if err := v.ReadInConfig(); err != nil {
@@ -143,29 +136,31 @@ func LoadFromPath(path string) (*Config, error) {
 	})
 }
 
-func loadConfigWithViper(setup func(*viper.Viper) error) (*Config, error) {
+func loadConfigWithViper(setup func(*viper.Viper) error) (*Config, *viper.Viper, error) {
 	v := viper.New()
 	v.SetConfigType("yaml")
 
-	setDefaults(v)
+	SetDefaults(v)
 
 	v.SetEnvPrefix("SQUAD")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
 	if err := setup(v); err != nil {
-		return nil, fmt.Errorf("config load failed: %w", err)
+		return nil, nil, fmt.Errorf("config load failed: %w", err)
 	}
 
-	cfg := Defaults()
+	cfg := &Config{}
 	if err := v.Unmarshal(cfg); err != nil {
-		return nil, fmt.Errorf("config unmarshal failed: %w", err)
+		return nil, nil, fmt.Errorf("config unmarshal failed: %w", err)
 	}
 
-	return cfg, nil
+	return cfg, v, nil
 }
 
-func setDefaults(v *viper.Viper) {
+// SetDefaults registers all hardcoded default values on a Viper instance.
+// This is the single source of truth for default configuration values.
+func SetDefaults(v *viper.Viper) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")
 	v.SetDefault("provider.default", "openai")
@@ -178,6 +173,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("model.default", "")
 	v.SetDefault("model.temperature", 0.2)
 	v.SetDefault("model.max_tokens", 1024)
+	v.SetDefault("model.reasoning_prefixes", []string{"gpt-5"})
+	v.SetDefault("run.max_cost", 5.0)
 	v.SetDefault("agents.cache_dir", "")
 	v.SetDefault("agents.repositories", map[string]string{
 		"official": "https://github.com/cowdogmoo/squad-agents.git",

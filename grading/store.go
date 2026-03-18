@@ -19,6 +19,7 @@ type GradeHistory struct {
 }
 
 // NewStore creates a store at the default location (~/.cache/squad/grades.json).
+
 func NewStore() (*Store, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {

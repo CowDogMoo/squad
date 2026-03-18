@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -45,14 +46,14 @@ func TestNew(t *testing.T) {
 	if m.StartTime.IsZero() {
 		t.Fatalf("StartTime should be set")
 	}
-	if m.InputTokens != 0 {
-		t.Fatalf("InputTokens = %d, want 0", m.InputTokens)
+	if m.InputTokens() != 0 {
+		t.Fatalf("InputTokens = %d, want 0", m.InputTokens())
 	}
-	if m.OutputTokens != 0 {
-		t.Fatalf("OutputTokens = %d, want 0", m.OutputTokens)
+	if m.OutputTokens() != 0 {
+		t.Fatalf("OutputTokens = %d, want 0", m.OutputTokens())
 	}
-	if m.Iterations != 0 {
-		t.Fatalf("Iterations = %d, want 0", m.Iterations)
+	if m.Iterations() != 0 {
+		t.Fatalf("Iterations = %d, want 0", m.Iterations())
 	}
 }
 
@@ -61,20 +62,20 @@ func TestAddTokens(t *testing.T) {
 	m := New("openai", "gpt-4o")
 
 	m.AddTokens(100, 50)
-	if m.InputTokens != 100 {
-		t.Fatalf("InputTokens = %d, want 100", m.InputTokens)
+	if m.InputTokens() != 100 {
+		t.Fatalf("InputTokens = %d, want 100", m.InputTokens())
 	}
-	if m.OutputTokens != 50 {
-		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens)
+	if m.OutputTokens() != 50 {
+		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens())
 	}
 
 	// Accumulate more tokens
 	m.AddTokens(200, 100)
-	if m.InputTokens != 300 {
-		t.Fatalf("InputTokens = %d, want 300", m.InputTokens)
+	if m.InputTokens() != 300 {
+		t.Fatalf("InputTokens = %d, want 300", m.InputTokens())
 	}
-	if m.OutputTokens != 150 {
-		t.Fatalf("OutputTokens = %d, want 150", m.OutputTokens)
+	if m.OutputTokens() != 150 {
+		t.Fatalf("OutputTokens = %d, want 150", m.OutputTokens())
 	}
 }
 
@@ -85,11 +86,11 @@ func TestAddTokensZero(t *testing.T) {
 
 	// Adding zero should not change totals
 	m.AddTokens(0, 0)
-	if m.InputTokens != 100 {
-		t.Fatalf("InputTokens = %d, want 100", m.InputTokens)
+	if m.InputTokens() != 100 {
+		t.Fatalf("InputTokens = %d, want 100", m.InputTokens())
 	}
-	if m.OutputTokens != 50 {
-		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens)
+	if m.OutputTokens() != 50 {
+		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens())
 	}
 }
 
@@ -98,14 +99,14 @@ func TestIncrementIterations(t *testing.T) {
 	m := New("openai", "gpt-4o")
 
 	m.IncrementIterations()
-	if m.Iterations != 1 {
-		t.Fatalf("Iterations = %d, want 1", m.Iterations)
+	if m.Iterations() != 1 {
+		t.Fatalf("Iterations = %d, want 1", m.Iterations())
 	}
 
 	m.IncrementIterations()
 	m.IncrementIterations()
-	if m.Iterations != 3 {
-		t.Fatalf("Iterations = %d, want 3", m.Iterations)
+	if m.Iterations() != 3 {
+		t.Fatalf("Iterations = %d, want 3", m.Iterations())
 	}
 }
 
@@ -357,14 +358,14 @@ func TestMetricsIntegration(t *testing.T) {
 
 	m.Finish()
 
-	if m.Iterations != 5 {
-		t.Fatalf("Iterations = %d, want 5", m.Iterations)
+	if m.Iterations() != 5 {
+		t.Fatalf("Iterations = %d, want 5", m.Iterations())
 	}
-	if m.InputTokens != 2500 {
-		t.Fatalf("InputTokens = %d, want 2500", m.InputTokens)
+	if m.InputTokens() != 2500 {
+		t.Fatalf("InputTokens = %d, want 2500", m.InputTokens())
 	}
-	if m.OutputTokens != 1000 {
-		t.Fatalf("OutputTokens = %d, want 1000", m.OutputTokens)
+	if m.OutputTokens() != 1000 {
+		t.Fatalf("OutputTokens = %d, want 1000", m.OutputTokens())
 	}
 	if m.TotalTokens() != 3500 {
 		t.Fatalf("TotalTokens() = %d, want 3500", m.TotalTokens())
@@ -424,6 +425,235 @@ func TestPricingStatus(t *testing.T) {
 		} else {
 			t.Logf("Pricing not loaded: %v", err)
 		}
+	}
+}
+
+func TestSetMaxCost(t *testing.T) {
+	t.Parallel()
+	m := New("openai", "gpt-4o")
+	if m.MaxCost != 0 {
+		t.Fatalf("MaxCost = %v, want 0", m.MaxCost)
+	}
+	m.SetMaxCost(1.50)
+	if m.MaxCost != 1.50 {
+		t.Fatalf("MaxCost = %v, want 1.50", m.MaxCost)
+	}
+}
+
+func TestBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		maxCost float64
+		want    bool
+	}{
+		{"zero max cost (unlimited)", 0, false},
+		{"below budget", 100.0, false},
+		{"above budget with ollama (free)", 0.01, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := New("ollama", "llama3")
+			m.SetMaxCost(tt.maxCost)
+			m.AddTokens(1_000_000, 1_000_000)
+			if got := m.BudgetExceeded(); got != tt.want {
+				t.Fatalf("BudgetExceeded() = %v, want %v (cost=%v)", got, tt.want, m.TotalCostWithChildren())
+			}
+		})
+	}
+}
+
+func TestBudgetExceededWithPricing(t *testing.T) {
+	m := New("ollama", "llama3")
+	m.SetMaxCost(0.001)
+	m.AddTokens(10_000_000, 10_000_000)
+	if m.BudgetExceeded() {
+		t.Fatalf("ollama should never exceed budget (cost is $0)")
+	}
+
+	m2 := New("openai", "gpt-4o")
+	m2.SetMaxCost(0)
+	m2.AddTokens(10_000_000, 10_000_000)
+	if m2.BudgetExceeded() {
+		t.Fatalf("zero MaxCost should mean unlimited")
+	}
+
+	if testing.Short() {
+		return
+	}
+	m3 := New("openai", "gpt-4o")
+	m3.SetMaxCost(0.0001)
+	m3.AddTokens(1_000_000, 1_000_000)
+	cost := m3.TotalCostWithChildren()
+	if cost > 0 && !m3.BudgetExceeded() {
+		t.Fatalf("should exceed $0.0001 budget with 1M tokens (cost=$%.4f)", cost)
+	}
+}
+
+func TestErrBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	if ErrBudgetExceeded == nil {
+		t.Fatal("ErrBudgetExceeded should not be nil")
+	}
+	if !strings.Contains(ErrBudgetExceeded.Error(), "budget exceeded") {
+		t.Fatalf("ErrBudgetExceeded = %q, want containing 'budget exceeded'", ErrBudgetExceeded.Error())
+	}
+}
+
+func TestAddChildNil(t *testing.T) {
+	t.Parallel()
+	m := New("openai", "gpt-4o")
+	m.AddChild("child1", nil)
+	if len(m.Children) != 0 {
+		t.Fatalf("AddChild(nil) should not add entry, got %d children", len(m.Children))
+	}
+}
+
+func TestAddChildValid(t *testing.T) {
+	t.Parallel()
+	parent := New("openai", "gpt-4o")
+	child := New("ollama", "llama3")
+	child.AddTokens(500, 200)
+
+	parent.AddChild("worker-1", child)
+
+	if len(parent.Children) != 1 {
+		t.Fatalf("Children = %d, want 1", len(parent.Children))
+	}
+	c := parent.Children[0]
+	if c.Agent != "worker-1" {
+		t.Fatalf("Agent = %q, want worker-1", c.Agent)
+	}
+	if c.InputTokens != 500 || c.OutputTokens != 200 {
+		t.Fatalf("tokens = %d/%d, want 500/200", c.InputTokens, c.OutputTokens)
+	}
+	if c.Model != "llama3" || c.Provider != "ollama" {
+		t.Fatalf("model/provider = %q/%q, want llama3/ollama", c.Model, c.Provider)
+	}
+}
+
+func TestAddChildMultiple(t *testing.T) {
+	t.Parallel()
+	parent := New("openai", "gpt-4o")
+	for i := 0; i < 3; i++ {
+		child := New("ollama", "llama3")
+		child.AddTokens(int64(100*(i+1)), int64(50*(i+1)))
+		parent.AddChild(fmt.Sprintf("child-%d", i), child)
+	}
+	if len(parent.Children) != 3 {
+		t.Fatalf("Children = %d, want 3", len(parent.Children))
+	}
+}
+
+func TestTotalCostWithChildrenNoChildren(t *testing.T) {
+	t.Parallel()
+	m := New("ollama", "llama3")
+	m.AddTokens(1000, 500)
+	total := m.TotalCostWithChildren()
+	if total != 0 {
+		t.Fatalf("TotalCostWithChildren() = %v, want 0 for ollama", total)
+	}
+}
+
+func TestTotalCostWithChildrenOllamaChildren(t *testing.T) {
+	t.Parallel()
+	parent := New("ollama", "llama3")
+	parent.AddTokens(1000, 500)
+	child := New("ollama", "llama3")
+	child.AddTokens(2000, 1000)
+	parent.AddChild("worker", child)
+
+	total := parent.TotalCostWithChildren()
+	if total != 0 {
+		t.Fatalf("TotalCostWithChildren() = %v, want 0 for all-ollama", total)
+	}
+}
+
+func TestTotalTokensWithChildrenNoChildren(t *testing.T) {
+	t.Parallel()
+	m := New("openai", "gpt-4o")
+	m.AddTokens(100, 50)
+	total := m.TotalTokensWithChildren()
+	if total != 150 {
+		t.Fatalf("TotalTokensWithChildren() = %d, want 150", total)
+	}
+}
+
+func TestTotalTokensWithChildren(t *testing.T) {
+	t.Parallel()
+	parent := New("openai", "gpt-4o")
+	parent.AddTokens(100, 50)
+
+	child1 := New("ollama", "llama3")
+	child1.AddTokens(200, 100)
+	parent.AddChild("c1", child1)
+
+	child2 := New("openai", "gpt-4o")
+	child2.AddTokens(300, 150)
+	parent.AddChild("c2", child2)
+
+	total := parent.TotalTokensWithChildren()
+	// parent: 150, child1: 300, child2: 450 = 900
+	if total != 900 {
+		t.Fatalf("TotalTokensWithChildren() = %d, want 900", total)
+	}
+}
+
+func TestSummaryWithChildren(t *testing.T) {
+	t.Parallel()
+	parent := New("ollama", "llama3")
+	parent.AddTokens(1000, 500)
+	parent.IncrementIterations()
+	parent.Finish()
+
+	child := New("ollama", "llama3")
+	child.AddTokens(2000, 1000)
+	parent.AddChild("sub-agent", child)
+
+	summary := parent.Summary()
+	if !strings.Contains(summary, "Child Agent Costs") {
+		t.Fatalf("Summary() missing Child Agent Costs section")
+	}
+	if !strings.Contains(summary, "sub-agent") {
+		t.Fatalf("Summary() missing child agent name")
+	}
+	if !strings.Contains(summary, "TOTAL (all agents)") {
+		t.Fatalf("Summary() missing TOTAL line")
+	}
+}
+
+func TestBudgetExceededWithChildren(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping pricing test in short mode")
+	}
+	parent := New("openai", "gpt-4o")
+	parent.SetMaxCost(0.0001)
+	// Parent has no tokens, but child has lots
+	child := New("openai", "gpt-4o")
+	child.AddTokens(1_000_000, 1_000_000)
+	parent.AddChild("expensive-child", child)
+
+	childCost := parent.TotalCostWithChildren()
+	if childCost > 0 && !parent.BudgetExceeded() {
+		t.Fatalf("BudgetExceeded() should be true when child cost ($%.4f) exceeds budget", childCost)
+	}
+}
+
+func TestChildMetricsStruct(t *testing.T) {
+	t.Parallel()
+	cm := ChildMetrics{
+		Agent:        "test-agent",
+		InputTokens:  100,
+		OutputTokens: 50,
+		Model:        "gpt-4o",
+		Provider:     "openai",
+	}
+	if cm.Agent != "test-agent" {
+		t.Fatalf("Agent = %q, want test-agent", cm.Agent)
+	}
+	if cm.InputTokens+cm.OutputTokens != 150 {
+		t.Fatalf("total tokens = %d, want 150", cm.InputTokens+cm.OutputTokens)
 	}
 }
 

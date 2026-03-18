@@ -2,12 +2,14 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/ollama"
@@ -36,7 +38,7 @@ func invokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 
 // callModel dispatches the prompt to the appropriate model backend and returns the response.
 func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, *metrics.Metrics, error) {
-	if responses.UseResponsesAPI(provider, model) {
+	if responses.UseResponsesAPI(provider, model, reasoningPrefixes(opts)) {
 		return callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens, taskCfg)
 	}
 	return callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg)
@@ -56,21 +58,28 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 	// before producing visible text.  The config default of 1024 is far too
 	// small — the model burns the entire budget on thinking and returns no
 	// message.  Apply a higher floor unless the user explicitly set --max-tokens.
-	if responses.IsReasoningModel(model) && maxTokens < responses.DefaultMaxOutputTokens {
+	if responses.IsReasoningModel(model, reasoningPrefixes(opts)) && maxTokens < responses.DefaultMaxOutputTokens {
 		logging.InfoContext(ctx, "raising max_output_tokens %d → %d for reasoning model %s", maxTokens, responses.DefaultMaxOutputTokens, model)
 		maxTokens = responses.DefaultMaxOutputTokens
 	}
 
 	provider := "openai"
-	if responses.UseResponsesAPI(opts.Provider, model) && opts.Provider == "openai-responses" {
+	if responses.UseResponsesAPI(opts.Provider, model, reasoningPrefixes(opts)) && opts.Provider == "openai-responses" {
 		provider = "openai-responses"
 	}
 
 	m := metrics.New(provider, model)
+	m.SetMaxCost(opts.MaxCost)
+	if taskCfg != nil {
+		taskCfg.ParentMetrics = m
+	}
 	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
-	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens, opts.MaxIterations, taskCfg, m)
+	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens, opts.MaxIterations, reasoningPrefixes(opts), taskCfg, m)
 	m.Finish()
 	if err != nil {
+		if errors.Is(err, metrics.ErrBudgetExceeded) {
+			return response, m, metrics.ErrBudgetExceeded
+		}
 		return "", m, fmt.Errorf("model call failed: %w", err)
 	}
 	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", m.Duration().Round(time.Millisecond), len(response))
@@ -87,10 +96,17 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	callOpts := buildCallOpts(opts, provider, temperature, maxTokens)
 
 	m := metrics.New(provider, model)
+	m.SetMaxCost(opts.MaxCost)
+	if taskCfg != nil {
+		taskCfg.ParentMetrics = m
+	}
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
 	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, opts.MaxIterations, taskCfg, m, callOpts...)
 	m.Finish()
 	if err != nil {
+		if errors.Is(err, metrics.ErrBudgetExceeded) {
+			return response, m, metrics.ErrBudgetExceeded
+		}
 		return "", m, fmt.Errorf("model call failed: %w", err)
 	}
 	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", m.Duration().Round(time.Millisecond), len(response))
@@ -196,6 +212,15 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 
 func isOpenAICompatProvider(provider string) bool {
 	return provider == "" || provider == "openai"
+}
+
+// reasoningPrefixes returns the configured reasoning model prefixes,
+// falling back to the default if config is unavailable.
+func reasoningPrefixes(opts *RunOptions) []string {
+	if opts.Config != nil && len(opts.Config.Model.ReasoningPrefixes) > 0 {
+		return opts.Config.Model.ReasoningPrefixes
+	}
+	return config.Defaults().Model.ReasoningPrefixes
 }
 
 // buildTaskConfig creates a TaskConfig for the Task tool from RunOptions.

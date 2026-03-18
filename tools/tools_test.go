@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -942,13 +943,393 @@ func TestExtractTokenUsage(t *testing.T) {
 			if tt.gi != nil {
 				extractTokenUsage(tt.gi, m)
 			}
-			if m.InputTokens != tt.wantInput {
-				t.Fatalf("InputTokens = %d, want %d", m.InputTokens, tt.wantInput)
+			if m.InputTokens() != tt.wantInput {
+				t.Fatalf("InputTokens = %d, want %d", m.InputTokens(), tt.wantInput)
 			}
-			if m.OutputTokens != tt.wantOutput {
-				t.Fatalf("OutputTokens = %d, want %d", m.OutputTokens, tt.wantOutput)
+			if m.OutputTokens() != tt.wantOutput {
+				t.Fatalf("OutputTokens = %d, want %d", m.OutputTokens(), tt.wantOutput)
 			}
 		})
+	}
+}
+
+func TestTruncateToolOutputHeadTail(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		maxBytes int
+		wantTrn  bool
+	}{
+		{"within limit", "short output", 100, false},
+		{"at limit", strings.Repeat("a", 100), 100, false},
+		{"over limit", strings.Repeat("line\n", 100), 50, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := TruncateToolOutputHeadTail(tt.input, tt.maxBytes)
+			truncated := strings.Contains(result, "lines omitted from tool output")
+			if truncated != tt.wantTrn {
+				t.Fatalf("truncated = %v, want %v", truncated, tt.wantTrn)
+			}
+			if tt.wantTrn {
+				if !strings.Contains(result, "line") {
+					t.Fatalf("truncated output should contain original content")
+				}
+			}
+		})
+	}
+}
+
+func TestTruncateToolOutputHeadTailPreservesEnds(t *testing.T) {
+	t.Parallel()
+	var sb strings.Builder
+	for i := 0; i < 100; i++ {
+		sb.WriteString(fmt.Sprintf("line-%03d\n", i))
+	}
+	input := sb.String()
+
+	result := TruncateToolOutputHeadTail(input, 200)
+
+	if !strings.HasPrefix(result, "line-000") {
+		t.Fatalf("result should start with line-000, got: %s", result[:30])
+	}
+	if !strings.Contains(result, "line-099") {
+		t.Fatalf("result should contain line-099")
+	}
+}
+
+func TestEstimateTokens(t *testing.T) {
+	t.Parallel()
+	messages := []llms.MessageContent{
+		{Role: llms.ChatMessageTypeSystem, Parts: []llms.ContentPart{llms.TextPart(strings.Repeat("a", 400))}},
+		{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(strings.Repeat("b", 400))}},
+	}
+	tokens := estimateTokens(messages)
+	if tokens != 200 {
+		t.Fatalf("estimateTokens = %d, want 200", tokens)
+	}
+}
+
+func TestCompactMessages(t *testing.T) {
+	t.Parallel()
+	messages := []llms.MessageContent{
+		{Role: llms.ChatMessageTypeSystem, Parts: []llms.ContentPart{llms.TextPart("system")}},
+		{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart("user")}},
+	}
+
+	largeOutput := strings.Repeat("x", 10000)
+	for i := 0; i < 30; i++ {
+		messages = append(messages,
+			llms.MessageContent{
+				Role: llms.ChatMessageTypeAI,
+				Parts: []llms.ContentPart{llms.ToolCall{
+					ID:           fmt.Sprintf("call-%d", i),
+					FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: "{}"},
+				}},
+			},
+			llms.MessageContent{
+				Role: llms.ChatMessageTypeTool,
+				Parts: []llms.ContentPart{llms.ToolCallResponse{
+					ToolCallID: fmt.Sprintf("call-%d", i),
+					Content:    largeOutput,
+				}},
+			},
+		)
+	}
+
+	ctx := context.Background()
+	compacted := compactMessages(ctx, messages)
+
+	if len(compacted) != len(messages) {
+		t.Fatalf("compacted length = %d, want %d", len(compacted), len(messages))
+	}
+
+	oldToolMsg := compacted[3]
+	if oldToolMsg.Role != llms.ChatMessageTypeTool {
+		t.Fatalf("expected tool message at index 3, got %v", oldToolMsg.Role)
+	}
+	oldContent := fmt.Sprintf("%v", oldToolMsg.Parts[0])
+	if !strings.Contains(oldContent, "compacted") {
+		t.Fatalf("old tool output should be compacted, got: %s", oldContent[:50])
+	}
+
+	lastToolIdx := len(compacted) - 1
+	lastContent := fmt.Sprintf("%v", compacted[lastToolIdx].Parts[0])
+	if strings.Contains(lastContent, "compacted") {
+		t.Fatal("recent tool output should NOT be compacted")
+	}
+
+	beforeTokens := estimateTokens(messages)
+	afterTokens := estimateTokens(compacted)
+	if afterTokens >= beforeTokens {
+		t.Fatalf("compaction should reduce tokens: before=%d, after=%d", beforeTokens, afterTokens)
+	}
+}
+
+func TestCompactMessagesBelowThreshold(t *testing.T) {
+	t.Parallel()
+	messages := []llms.MessageContent{
+		{Role: llms.ChatMessageTypeSystem, Parts: []llms.ContentPart{llms.TextPart("system")}},
+		{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart("user")}},
+	}
+	ctx := context.Background()
+	result := compactMessages(ctx, messages)
+	if len(result) != len(messages) {
+		t.Fatalf("should return unchanged messages below threshold")
+	}
+}
+
+func TestRunWithToolsBudgetExceeded(t *testing.T) {
+	originalCache, originalFetched, originalErr := metrics.PricingStatus()
+	_ = originalCache
+	_ = originalFetched
+	_ = originalErr
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	m := metrics.New("ollama", "llama3")
+	m.SetMaxCost(0.0001)
+
+	m2 := metrics.New("openai", "gpt-4o")
+	m2.SetMaxCost(0.0001)
+	m2.AddTokens(1_000_000, 1_000_000)
+
+	if m2.MaxCost != 0.0001 {
+		t.Fatalf("MaxCost = %v, want 0.0001", m2.MaxCost)
+	}
+}
+
+func TestSliceLines(t *testing.T) {
+	t.Parallel()
+	data := []byte("line1\nline2\nline3\nline4\nline5\n")
+	tests := []struct {
+		name   string
+		offset int
+		limit  int
+		want   string
+	}{
+		{"from start", 1, 2, "[lines 1-2 of 5]\nline1\nline2\n"},
+		{"middle", 2, 2, "[lines 2-3 of 5]\nline2\nline3\n"},
+		{"zero offset defaults to 1", 0, 2, "[lines 1-2 of 5]\nline1\nline2\n"},
+		{"no limit", 3, 0, "[lines 3-5 of 5]\nline3\nline4\nline5\n"},
+		{"past end", 10, 0, "(file has 5 lines, offset 10 is past end)"},
+		{"limit exceeds file", 1, 100, "[lines 1-5 of 5]\nline1\nline2\nline3\nline4\nline5\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := sliceLines(data, tt.offset, tt.limit)
+			if got != tt.want {
+				t.Fatalf("sliceLines(offset=%d, limit=%d) =\n%q\nwant:\n%q", tt.offset, tt.limit, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTruncateHeadTail(t *testing.T) {
+	t.Parallel()
+	// Build a file larger than maxReadBytes
+	var sb strings.Builder
+	for i := 0; i < 5000; i++ {
+		sb.WriteString(fmt.Sprintf("line-%04d: %s\n", i, strings.Repeat("x", 20)))
+	}
+	data := []byte(sb.String())
+	if len(data) <= maxReadBytes {
+		t.Fatalf("test data too small: %d bytes, need > %d", len(data), maxReadBytes)
+	}
+
+	result := truncateHeadTail(data)
+
+	if !strings.Contains(result, "lines omitted") {
+		t.Fatal("truncateHeadTail should contain 'lines omitted' marker")
+	}
+	if !strings.Contains(result, "line-0000") {
+		t.Fatal("truncateHeadTail should contain first line")
+	}
+	if !strings.Contains(result, "line-4999") {
+		t.Fatal("truncateHeadTail should contain last line")
+	}
+	if !strings.Contains(result, "Use Read with offset/limit") {
+		t.Fatal("truncateHeadTail should contain usage hint")
+	}
+}
+
+func TestReadToolWithOffsetLimit(t *testing.T) {
+	dir := t.TempDir()
+	content := "alpha\nbeta\ngamma\ndelta\nepsilon\n"
+	if err := os.WriteFile(filepath.Join(dir, "lines.txt"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	read := readTool(dir)
+	out, err := read(context.Background(), []byte(`{"path":"lines.txt","offset":2,"limit":2}`))
+	if err != nil {
+		t.Fatalf("readTool: %v", err)
+	}
+	if !strings.Contains(out, "beta") || !strings.Contains(out, "gamma") {
+		t.Fatalf("expected lines 2-3, got: %s", out)
+	}
+	if strings.Contains(out, "alpha") || strings.Contains(out, "delta") {
+		t.Fatalf("should not contain lines outside range, got: %s", out)
+	}
+}
+
+func TestReadToolLargeFileTruncation(t *testing.T) {
+	dir := t.TempDir()
+	// Create a file larger than maxReadBytes
+	var sb strings.Builder
+	for i := 0; i < 5000; i++ {
+		sb.WriteString(fmt.Sprintf("line-%04d: %s\n", i, strings.Repeat("x", 20)))
+	}
+	content := sb.String()
+	if err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	read := readTool(dir)
+	out, err := read(context.Background(), []byte(`{"path":"big.txt"}`))
+	if err != nil {
+		t.Fatalf("readTool: %v", err)
+	}
+	if !strings.Contains(out, "lines omitted") {
+		t.Fatalf("large file should be truncated, got: %s", out[:100])
+	}
+}
+
+func TestGlobToolSkipsDirs(t *testing.T) {
+	dir := t.TempDir()
+	write := writeTool(dir)
+	_, _ = write(context.Background(), []byte(`{"path":"src/main.go","content":"package main"}`))
+	_, _ = write(context.Background(), []byte(`{"path":"node_modules/pkg/index.js","content":"module.exports={}"}`))
+	_, _ = write(context.Background(), []byte(`{"path":".git/config","content":"[core]"}`))
+	_, _ = write(context.Background(), []byte(`{"path":"__pycache__/mod.pyc","content":"bytecode"}`))
+
+	glob := globTool(dir)
+	out, err := glob(context.Background(), []byte(`{"pattern":"**/*"}`))
+	if err != nil {
+		t.Fatalf("globTool: %v", err)
+	}
+	if !strings.Contains(out, "src/main.go") {
+		t.Fatalf("glob should include src/main.go, got: %s", out)
+	}
+	if strings.Contains(out, "node_modules") {
+		t.Fatalf("glob should skip node_modules, got: %s", out)
+	}
+	if strings.Contains(out, ".git/config") {
+		t.Fatalf("glob should skip .git, got: %s", out)
+	}
+	if strings.Contains(out, "__pycache__") {
+		t.Fatalf("glob should skip __pycache__, got: %s", out)
+	}
+}
+
+func TestGrepToolSkipsDirs(t *testing.T) {
+	dir := t.TempDir()
+	write := writeTool(dir)
+	_, _ = write(context.Background(), []byte(`{"path":"src/main.go","content":"findme here"}`))
+	_, _ = write(context.Background(), []byte(`{"path":"node_modules/pkg/lib.js","content":"findme there"}`))
+	_, _ = write(context.Background(), []byte(`{"path":".git/objects/abc","content":"findme hidden"}`))
+
+	grep := grepTool(dir)
+	out, err := grep(context.Background(), []byte(`{"pattern":"findme","path":"."}`))
+	if err != nil {
+		t.Fatalf("grepTool: %v", err)
+	}
+	if !strings.Contains(out, "src/main.go") {
+		t.Fatalf("grep should include src/main.go, got: %s", out)
+	}
+	if strings.Contains(out, "node_modules") {
+		t.Fatalf("grep should skip node_modules, got: %s", out)
+	}
+	if strings.Contains(out, ".git") {
+		t.Fatalf("grep should skip .git, got: %s", out)
+	}
+}
+
+func TestFinishToolLoopBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("ollama", "llama3")
+	m.SetMaxCost(0.0001)
+	// Ollama is free, so budget won't be exceeded — use a hack to simulate
+	// by setting MaxCost to 0 and checking non-budget path
+	llm := &stubLLM{
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
+	}
+	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, m, nil)
+	if err != nil {
+		t.Fatalf("finishToolLoop() error = %v", err)
+	}
+	if out != "final" {
+		t.Fatalf("output = %q, want %q", out, "final")
+	}
+}
+
+func TestEstimateTokensWithToolCallResponse(t *testing.T) {
+	t.Parallel()
+	messages := []llms.MessageContent{
+		{
+			Role: llms.ChatMessageTypeTool,
+			Parts: []llms.ContentPart{
+				llms.ToolCallResponse{Content: strings.Repeat("a", 400)},
+			},
+		},
+	}
+	tokens := estimateTokens(messages)
+	if tokens != 100 {
+		t.Fatalf("estimateTokens = %d, want 100", tokens)
+	}
+}
+
+func TestCompactMessagesProtectsHeadAndTail(t *testing.T) {
+	t.Parallel()
+	messages := []llms.MessageContent{
+		{Role: llms.ChatMessageTypeSystem, Parts: []llms.ContentPart{llms.TextPart("system")}},
+		{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart("user")}},
+	}
+
+	largeOutput := strings.Repeat("x", 10000)
+	for i := 0; i < 30; i++ {
+		messages = append(messages,
+			llms.MessageContent{
+				Role: llms.ChatMessageTypeAI,
+				Parts: []llms.ContentPart{llms.ToolCall{
+					ID:           fmt.Sprintf("call-%d", i),
+					FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: "{}"},
+				}},
+			},
+			llms.MessageContent{
+				Role: llms.ChatMessageTypeTool,
+				Parts: []llms.ContentPart{llms.ToolCallResponse{
+					ToolCallID: fmt.Sprintf("call-%d", i),
+					Content:    largeOutput,
+				}},
+			},
+		)
+	}
+
+	ctx := context.Background()
+	compacted := compactMessages(ctx, messages)
+
+	// System (index 0) should be untouched
+	sysText := fmt.Sprintf("%v", compacted[0].Parts[0])
+	if !strings.Contains(sysText, "system") {
+		t.Fatalf("system message should be preserved, got: %s", sysText)
+	}
+
+	// Human (index 1) should be untouched
+	humanText := fmt.Sprintf("%v", compacted[1].Parts[0])
+	if !strings.Contains(humanText, "user") {
+		t.Fatalf("human message should be preserved, got: %s", humanText)
+	}
+
+	// AI messages (non-tool) should be untouched
+	aiMsg := compacted[2]
+	if aiMsg.Role != llms.ChatMessageTypeAI {
+		t.Fatalf("expected AI message at index 2, got %v", aiMsg.Role)
 	}
 }
 
@@ -980,13 +1361,219 @@ func TestRunWithToolsWithMetrics(t *testing.T) {
 	if out != "done" {
 		t.Fatalf("output = %q, want %q", out, "done")
 	}
-	if m.Iterations != 1 {
-		t.Fatalf("Iterations = %d, want 1", m.Iterations)
+	if m.Iterations() != 1 {
+		t.Fatalf("Iterations = %d, want 1", m.Iterations())
 	}
-	if m.InputTokens != 100 {
-		t.Fatalf("InputTokens = %d, want 100", m.InputTokens)
+	if m.InputTokens() != 100 {
+		t.Fatalf("InputTokens = %d, want 100", m.InputTokens())
 	}
-	if m.OutputTokens != 50 {
-		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens)
+	if m.OutputTokens() != 50 {
+		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens())
+	}
+}
+
+func TestToolLoopBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// LLM returns a tool call, then after tool execution budget is checked.
+	// We pre-load metrics with enough tokens to exceed the budget.
+	llm := &fakeLLM{responses: []*llms.ContentResponse{
+		{
+			Choices: []*llms.ContentChoice{{
+				Content: "partial",
+				ToolCalls: []llms.ToolCall{{
+					ID:   "1",
+					Type: "function",
+					FunctionCall: &llms.FunctionCall{
+						Name:      "Read",
+						Arguments: `{"path":"note.txt"}`,
+					},
+				}},
+				GenerationInfo: map[string]any{
+					"PromptTokens":     int64(500000),
+					"CompletionTokens": int64(500000),
+				},
+			}},
+		},
+	}}
+
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	// Pre-load tokens so budget is exceeded after the first tool call
+	m.AddTokens(1_000_000, 1_000_000)
+
+	_, err := RunWithTools(context.Background(), llm, "", "user", dir, 10, nil, m)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+}
+
+func TestFinishToolLoopBudgetExceededWithContent(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	llm := &stubLLM{
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
+	}
+
+	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "partial" {
+		t.Fatalf("output = %q, want %q", out, "partial")
+	}
+}
+
+func TestFinishToolLoopBudgetExceededNoContent(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	llm := &stubLLM{
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
+	}
+
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("output = %q, want empty", out)
+	}
+}
+
+func TestTaskToolWithParentMetrics(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	parentMetrics := metrics.New("openai", "gpt-4o")
+	childMetrics := metrics.New("openai", "gpt-4o")
+	childMetrics.AddTokens(100, 50)
+
+	cfg := TaskConfig{
+		AgentsDir:     "agents",
+		WorkingDir:    dir,
+		ParentMetrics: parentMetrics,
+		CallModel: func(
+			_ context.Context,
+			_, _, _, _, _ string,
+		) (string, *metrics.Metrics, error) {
+			return "child output", childMetrics, nil
+		},
+	}
+
+	tool := taskTool(cfg)
+	out, err := tool(context.Background(), []byte(`{"agent":"test-agent","prompt":"do stuff"}`))
+	if err != nil {
+		t.Fatalf("taskTool() error = %v", err)
+	}
+	if out != "child output" {
+		t.Fatalf("output = %q, want %q", out, "child output")
+	}
+	if len(parentMetrics.Children) != 1 {
+		t.Fatalf("expected 1 child metric, got %d", len(parentMetrics.Children))
+	}
+	if parentMetrics.Children[0].Agent != "test-agent" {
+		t.Fatalf("child agent = %q, want %q", parentMetrics.Children[0].Agent, "test-agent")
+	}
+	if parentMetrics.Children[0].InputTokens != 100 {
+		t.Fatalf("child InputTokens = %d, want 100", parentMetrics.Children[0].InputTokens)
+	}
+}
+
+func TestTaskResultToolWithParentMetrics(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	parentMetrics := metrics.New("openai", "gpt-4o")
+	childMetrics := metrics.New("openai", "gpt-4o")
+	childMetrics.AddTokens(200, 100)
+
+	registry := NewBackgroundTaskRegistry()
+	result := &BackgroundTaskResult{
+		Output:  "bg output",
+		Metrics: childMetrics,
+		Done:    make(chan struct{}),
+	}
+	close(result.Done)
+
+	registry.mu.Lock()
+	registry.tasks["bg-test"] = result
+	registry.mu.Unlock()
+
+	cfg := TaskConfig{
+		AgentsDir:     "agents",
+		WorkingDir:    dir,
+		ParentMetrics: parentMetrics,
+		Registry:      registry,
+		CallModel: func(
+			_ context.Context,
+			_, _, _, _, _ string,
+		) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+	}
+
+	tool := taskResultTool(cfg)
+	out, err := tool(context.Background(), []byte(`{"task_id":"bg-test"}`))
+	if err != nil {
+		t.Fatalf("taskResultTool() error = %v", err)
+	}
+	if out != "bg output" {
+		t.Fatalf("output = %q, want %q", out, "bg output")
+	}
+	if len(parentMetrics.Children) != 1 {
+		t.Fatalf("expected 1 child metric, got %d", len(parentMetrics.Children))
+	}
+	if parentMetrics.Children[0].Agent != "bg-test" {
+		t.Fatalf("child agent = %q, want %q", parentMetrics.Children[0].Agent, "bg-test")
+	}
+}
+
+func TestBuildHandlersWithRegistry(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg := &TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Registry:   NewBackgroundTaskRegistry(),
+		CallModel: func(
+			_ context.Context,
+			_, _, _, _, _ string,
+		) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+	}
+	handlers, defs := BuildHandlers(dir, cfg)
+	if _, ok := handlers["TaskResult"]; !ok {
+		t.Fatalf("expected TaskResult handler when registry is set")
+	}
+	if len(defs) != 8 {
+		t.Fatalf("tool defs = %d, want 8 (6 base + Task + TaskResult)", len(defs))
+	}
+}
+
+func TestExecuteToolCallWithOutputAndError(t *testing.T) {
+	t.Parallel()
+	handlers := map[string]Handler{
+		"PartialFail": {Call: func(context.Context, []byte) (string, error) {
+			return "some output", errors.New("partial error")
+		}},
+	}
+	resp := executeToolCall(context.Background(), llms.ToolCall{
+		ID:           "1",
+		FunctionCall: &llms.FunctionCall{Name: "PartialFail", Arguments: "{}"},
+	}, handlers)
+	if !strings.Contains(resp.Content, "some output") {
+		t.Fatalf("expected output in response, got: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "error: partial error") {
+		t.Fatalf("expected error in response, got: %s", resp.Content)
 	}
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// newInitAgentCmd constructs the agent initialization subcommand.
 func newInitAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "agent NAME",
@@ -70,6 +71,7 @@ Examples:
 	return cmd
 }
 
+// runInitAgent creates a new agent from templates or copies an existing one.
 func runInitAgent(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	ctx := cmd.Context()

@@ -138,6 +138,7 @@ type TaskConfig struct {
 	MaxIterations int
 	CallModel     CallModelFunc
 	Registry      *BackgroundTaskRegistry
+	ParentMetrics *metrics.Metrics // parent metrics for cost aggregation
 }
 
 type taskArgs struct {
@@ -222,6 +223,9 @@ func taskTool(cfg TaskConfig) func(ctx context.Context, rawArgs []byte) (string,
 		metricsInfo := ""
 		if childMetrics != nil {
 			metricsInfo = fmt.Sprintf(" tokens=%d", childMetrics.TotalTokens())
+			if cfg.ParentMetrics != nil {
+				cfg.ParentMetrics.AddChild(args.Agent, childMetrics)
+			}
 		}
 		logging.InfoContext(ctx, "Task tool: child agent=%s completed (%d bytes%s)", args.Agent, len(response), metricsInfo)
 		return response, nil
@@ -275,6 +279,9 @@ func taskResultTool(cfg TaskConfig) func(ctx context.Context, rawArgs []byte) (s
 		metricsInfo := ""
 		if result.Metrics != nil {
 			metricsInfo = fmt.Sprintf(" (tokens=%d)", result.Metrics.TotalTokens())
+			if cfg.ParentMetrics != nil {
+				cfg.ParentMetrics.AddChild(args.TaskID, result.Metrics)
+			}
 		}
 		logging.InfoContext(ctx, "TaskResult: collected result for %s (%d bytes%s)", args.TaskID, len(result.Output), metricsInfo)
 

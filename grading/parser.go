@@ -53,6 +53,7 @@ type Parser struct {
 }
 
 // NewParser creates a new output parser.
+
 func NewParser() *Parser {
 	return &Parser{
 		sectionPatterns: map[string]*regexp.Regexp{

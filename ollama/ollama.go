@@ -19,6 +19,7 @@ var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
 // LLM implements llms.Model using Ollama's native /api/chat endpoint,
 // which supports both tool calling and the num_ctx parameter.
+
 type LLM struct {
 	serverURL string
 	model     string

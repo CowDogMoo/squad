@@ -33,6 +33,7 @@ import (
 )
 
 // Manager handles agent source operations.
+
 type Manager struct {
 	cfg        *config.Config
 	configPath string

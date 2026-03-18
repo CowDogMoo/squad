@@ -20,11 +20,29 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
-// MaxToolIterations is the default iteration limit for tool loops.
 const MaxToolIterations = 100
 const maxToolOutput = 64 * 1024
 const maxSameToolRepeat = 10
 const maxMutatingToolRepeat = 50
+
+const maxReadBytes = 48 * 1024
+const maxSearchResults = 200
+const contextTokenThreshold = 50_000
+const keepRecentMessages = 10
+const maxToolResultBytes = 32 * 1024
+
+var defaultSkipDirs = map[string]bool{
+	".venv":         true,
+	"venv":          true,
+	"__pycache__":   true,
+	".tox":          true,
+	"node_modules":  true,
+	".git":          true,
+	".mypy_cache":   true,
+	".pytest_cache": true,
+	".ruff_cache":   true,
+	".eggs":         true,
+}
 
 type editsKeyType struct{}
 
@@ -40,27 +58,23 @@ var highRepeatTools = map[string]bool{
 	"Grep": true,
 }
 
-// InitEdits initializes edit tracking in the context.
 func InitEdits(ctx context.Context) context.Context {
 	b := false
 	return context.WithValue(ctx, editsKeyType{}, &b)
 }
 
-// ResetEditsApplied resets the edit tracking state on the context.
 func ResetEditsApplied(ctx context.Context) {
 	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
 		*b = false
 	}
 }
 
-// MarkEditsApplied marks that tool-based edits were made on the context.
 func MarkEditsApplied(ctx context.Context) {
 	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
 		*b = true
 	}
 }
 
-// EditsApplied returns whether tool-based edits were made on the context.
 func EditsApplied(ctx context.Context) bool {
 	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
 		return *b
@@ -68,21 +82,17 @@ func EditsApplied(ctx context.Context) bool {
 	return false
 }
 
-// Handler wraps a tool definition and its implementation function.
 type Handler struct {
 	Def  llms.Tool
 	Call func(ctx context.Context, rawArgs []byte) (string, error)
 }
 
-// RepeatTracker detects when the model is stuck calling the same
-// tool repeatedly. Mutating tools get a higher threshold.
 type RepeatTracker struct {
 	lastSignature string
 	LastName      string
 	Count         int
 }
 
-// Update records a new set of tool calls for repetition tracking.
 func (t *RepeatTracker) Update(calls []llms.ToolCall) {
 	signature := ""
 	name := ""
@@ -99,7 +109,6 @@ func (t *RepeatTracker) Update(calls []llms.ToolCall) {
 	}
 }
 
-// Exceeded reports whether the repetition limit has been hit.
 func (t *RepeatTracker) Exceeded() bool {
 	limit := maxSameToolRepeat
 	if highRepeatTools[t.LastName] {
@@ -111,7 +120,6 @@ func (t *RepeatTracker) Exceeded() bool {
 	return t.Count >= limit
 }
 
-// RunWithTools drives a tool-calling loop for LangChainGo-based models.
 func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations int, taskCfg *TaskConfig, m *metrics.Metrics, callOpts ...llms.CallOption) (string, error) {
 	handlers, toolDefs := BuildHandlers(workingDir, taskCfg)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
@@ -177,11 +185,17 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 
 		messages = appendToolCallMessage(messages, choice.ToolCalls, ctx)
 		messages = executeToolCalls(ctx, messages, choice.ToolCalls, handlers)
+
+		if m != nil && m.BudgetExceeded() {
+			logging.InfoContext(ctx, "budget exceeded ($%.4f >= $%.4f max), stopping tool loop", m.TotalCostWithChildren(), m.MaxCost)
+			return lastContent, messages, metrics.ErrBudgetExceeded, false
+		}
+
+		messages = compactMessages(ctx, messages)
 	}
 	return lastContent, messages, nil, false
 }
 
-// extractTokenUsage extracts token counts from GenerationInfo and adds them to metrics.
 func extractTokenUsage(gi map[string]any, m *metrics.Metrics) {
 	if m == nil {
 		return
@@ -197,7 +211,6 @@ func extractTokenUsage(gi map[string]any, m *metrics.Metrics) {
 	}
 }
 
-// extractTokenValue tries to extract a token count from the map using the given keys.
 func extractTokenValue(gi map[string]any, keys []string) int64 {
 	for _, key := range keys {
 		if v, ok := gi[key]; ok {
@@ -209,7 +222,6 @@ func extractTokenValue(gi map[string]any, keys []string) int64 {
 	return 0
 }
 
-// toInt64 converts various numeric types to int64.
 func toInt64(v any) int64 {
 	switch t := v.(type) {
 	case int:
@@ -224,6 +236,14 @@ func toInt64(v any) int64 {
 }
 
 func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, lastContent string, maxIter int, m *metrics.Metrics, callOpts []llms.CallOption) (string, error) {
+	if m != nil && m.BudgetExceeded() {
+		logging.InfoContext(ctx, "budget exceeded, skipping final call")
+		if lastContent != "" {
+			return lastContent, metrics.ErrBudgetExceeded
+		}
+		return "", metrics.ErrBudgetExceeded
+	}
+
 	logging.InfoContext(ctx, "tool loop ended, requesting final response with tool_choice=none")
 	finalOpts := make([]llms.CallOption, len(callOpts), len(callOpts)+1)
 	copy(finalOpts, callOpts)
@@ -335,8 +355,6 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 	return toolResponse
 }
 
-// BuildHandlers creates all tool handlers and their definitions.
-// When taskCfg is non-nil, the Task tool is registered for sub-agent spawning.
 func BuildHandlers(workingDir string, taskCfg *TaskConfig) (map[string]Handler, []llms.Tool) {
 	handlers := map[string]Handler{}
 
@@ -387,11 +405,13 @@ func definitionRead() llms.Tool {
 		Type: "function",
 		Function: &llms.FunctionDefinition{
 			Name:        "Read",
-			Description: "Read a text file and return its contents.",
+			Description: "Read a text file. Large files are automatically truncated (head+tail). Use offset/limit to read specific line ranges of large files.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"path": map[string]any{"type": "string", "description": "Path to the file."},
+					"path":   map[string]any{"type": "string", "description": "Path to the file."},
+					"offset": map[string]any{"type": "integer", "description": "Start line (1-based). Omit to start from beginning."},
+					"limit":  map[string]any{"type": "integer", "description": "Max lines to return. Omit to read to end."},
 				},
 				"required": []string{"path"},
 			},
@@ -493,7 +513,9 @@ func definitionBash() llms.Tool {
 
 func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (string, error) {
 	type args struct {
-		Path string `json:"path"`
+		Path   string `json:"path"`
+		Offset int    `json:"offset,omitempty"` // 1-based start line
+		Limit  int    `json:"limit,omitempty"`  // max lines
 	}
 	return func(_ context.Context, rawArgs []byte) (string, error) {
 		var payload args
@@ -508,8 +530,71 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		if err != nil {
 			return "", err
 		}
+
+		if payload.Offset > 0 || payload.Limit > 0 {
+			return sliceLines(data, payload.Offset, payload.Limit), nil
+		}
+
+		if len(data) > maxReadBytes {
+			return truncateHeadTail(data), nil
+		}
 		return string(data), nil
 	}
+}
+
+func sliceLines(data []byte, offset, limit int) string {
+	lines := strings.SplitAfter(string(data), "\n")
+	totalLines := len(lines)
+	// Trim trailing empty element from SplitAfter
+	if totalLines > 0 && lines[totalLines-1] == "" {
+		lines = lines[:totalLines-1]
+		totalLines = len(lines)
+	}
+	if offset < 1 {
+		offset = 1
+	}
+	start := offset - 1
+	if start >= totalLines {
+		return fmt.Sprintf("(file has %d lines, offset %d is past end)", totalLines, offset)
+	}
+	end := totalLines
+	if limit > 0 && start+limit < end {
+		end = start + limit
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("[lines %d-%d of %d]\n", offset, end, totalLines))
+	for _, line := range lines[start:end] {
+		sb.WriteString(line)
+	}
+	return sb.String()
+}
+
+func truncateHeadTail(data []byte) string {
+	totalLines := strings.Count(string(data), "\n") + 1
+	headSize := maxReadBytes * 3 / 4
+	tailSize := maxReadBytes - headSize
+
+	head := string(data[:headSize])
+	tail := string(data[len(data)-tailSize:])
+
+	// Find clean line boundaries
+	headEnd := strings.LastIndex(head, "\n")
+	if headEnd < 0 {
+		headEnd = len(head)
+	}
+	tailStart := strings.Index(tail, "\n")
+	if tailStart < 0 {
+		tailStart = 0
+	} else {
+		tailStart++ // skip the newline itself
+	}
+
+	headLines := strings.Count(head[:headEnd], "\n") + 1
+	tailLines := strings.Count(tail[tailStart:], "\n") + 1
+	omitted := totalLines - headLines - tailLines
+
+	return fmt.Sprintf("%s\n\n... [%d lines omitted — file has %d total lines, %d bytes. Use Read with offset/limit for specific sections.] ...\n\n%s",
+		head[:headEnd], omitted, totalLines, len(data), tail[tailStart:])
 }
 
 func writeTool(workingDir string) func(ctx context.Context, rawArgs []byte) (string, error) {
@@ -598,6 +683,9 @@ func globTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 				return err
 			}
 			if d.IsDir() {
+				if defaultSkipDirs[d.Name()] {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			rel, err := filepath.Rel(workingDir, path)
@@ -617,7 +705,14 @@ func globTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		if len(matches) == 0 {
 			return "no matches", nil
 		}
-		return strings.Join(matches, "\n"), nil
+		total := len(matches)
+		if total > maxSearchResults {
+			matches = matches[:maxSearchResults]
+			result := fmt.Sprintf("[showing %d of %d matches — results truncated]\n%s", maxSearchResults, total, strings.Join(matches, "\n"))
+			return TruncateToolOutputHeadTail(result, maxToolResultBytes), nil
+		}
+		result := strings.Join(matches, "\n")
+		return TruncateToolOutputHeadTail(result, maxToolResultBytes), nil
 	}
 }
 
@@ -656,7 +751,14 @@ func grepTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		if len(matches) == 0 {
 			return "no matches", nil
 		}
-		return strings.Join(matches, "\n"), nil
+		total := len(matches)
+		if total > maxSearchResults {
+			matches = matches[:maxSearchResults]
+			result := fmt.Sprintf("[showing %d of %d grep matches — results truncated]\n%s", maxSearchResults, total, strings.Join(matches, "\n"))
+			return TruncateToolOutputHeadTail(result, maxToolResultBytes), nil
+		}
+		result := strings.Join(matches, "\n")
+		return TruncateToolOutputHeadTail(result, maxToolResultBytes), nil
 	}
 }
 
@@ -686,6 +788,9 @@ func grepVisitFile(workingDir string, re *regexp.Regexp, matches *[]string) file
 			return walkErr
 		}
 		if info.IsDir() {
+			if defaultSkipDirs[info.Name()] {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		file, err := os.Open(path)
@@ -744,6 +849,101 @@ func bashTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 	}
 }
 
+// --- Context management ---
+
+func estimateTokens(messages []llms.MessageContent) int {
+	total := 0
+	for _, msg := range messages {
+		for _, part := range msg.Parts {
+			switch p := part.(type) {
+			case llms.TextContent:
+				total += len(p.Text) / 4
+			case llms.ToolCallResponse:
+				total += len(p.Content) / 4
+			}
+		}
+	}
+	return total
+}
+
+func compactMessages(ctx context.Context, messages []llms.MessageContent) []llms.MessageContent {
+	tokens := estimateTokens(messages)
+	if tokens < contextTokenThreshold {
+		return messages
+	}
+
+	protectedHead := 2
+	if protectedHead > len(messages) {
+		return messages
+	}
+	protectedTail := keepRecentMessages
+	if protectedTail > len(messages)-protectedHead {
+		protectedTail = len(messages) - protectedHead
+	}
+	compactEnd := len(messages) - protectedTail
+
+	compacted := make([]llms.MessageContent, len(messages))
+	copy(compacted, messages)
+
+	for i := protectedHead; i < compactEnd; i++ {
+		if compacted[i].Role != llms.ChatMessageTypeTool {
+			continue
+		}
+		newParts := make([]llms.ContentPart, len(compacted[i].Parts))
+		for j, part := range compacted[i].Parts {
+			if resp, ok := part.(llms.ToolCallResponse); ok {
+				origLen := len(resp.Content)
+				if origLen > 200 {
+					resp.Content = fmt.Sprintf("[tool output compacted — was %d bytes]", origLen)
+				}
+				newParts[j] = resp
+			} else {
+				newParts[j] = part
+			}
+		}
+		compacted[i].Parts = newParts
+	}
+
+	after := estimateTokens(compacted)
+	logging.InfoContext(ctx, "compacted context: ~%d tokens -> ~%d tokens", tokens, after)
+	return compacted
+}
+
+func TruncateToolOutputHeadTail(output string, maxBytes int) string {
+	if len(output) <= maxBytes {
+		return output
+	}
+
+	headSize := maxBytes * 3 / 4
+	tailSize := maxBytes - headSize
+
+	head := output[:headSize]
+	tail := output[len(output)-tailSize:]
+
+	// Snap to line boundaries
+	headEnd := strings.LastIndex(head, "\n")
+	if headEnd < 0 {
+		headEnd = len(head)
+	}
+	tailStart := strings.Index(tail, "\n")
+	if tailStart < 0 {
+		tailStart = 0
+	} else {
+		tailStart++
+	}
+
+	totalLines := strings.Count(output, "\n") + 1
+	headLines := strings.Count(head[:headEnd], "\n") + 1
+	tailLines := strings.Count(tail[tailStart:], "\n") + 1
+	omitted := totalLines - headLines - tailLines
+	if omitted < 0 {
+		omitted = 0
+	}
+
+	return fmt.Sprintf("%s\n\n... [%d lines omitted from tool output — total %d bytes] ...\n\n%s",
+		head[:headEnd], omitted, len(output), tail[tailStart:])
+}
+
 // --- Utilities ---
 
 // FlexBool unmarshals both JSON booleans and string representations
@@ -769,7 +969,6 @@ func (b *FlexBool) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ResolvePath resolves a path relative to the working directory and validates it's within bounds.
 func ResolvePath(workingDir, input string) (string, error) {
 	if strings.TrimSpace(input) == "" {
 		return "", fmt.Errorf("path is required")
@@ -851,7 +1050,6 @@ func globToRegex(pattern string) (string, error) {
 	return buf.String(), nil
 }
 
-// TruncateString truncates a string to the given max length.
 func TruncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

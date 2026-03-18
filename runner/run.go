@@ -3,6 +3,7 @@ package runner
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -44,6 +45,7 @@ type RunOptions struct {
 	ApplyFallback     bool
 	NumCtx            int
 	MaxIterations     int
+	MaxCost           float64
 	Mode              string
 	Vars              map[string]string // Template variables (e.g., COVERAGE_TARGET=85)
 	ConfigAvailable   bool
@@ -78,6 +80,18 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	tools.ResetEditsApplied(ctx)
 	response, m, err := invokeModel(ctx, opts, bundle)
 	if err != nil {
+		if errors.Is(err, metrics.ErrBudgetExceeded) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Run stopped: cost budget of $%.4f exceeded (actual: $%.4f)\n", opts.MaxCost, m.TotalCostWithChildren())
+			if response != "" {
+				if handleErr := handleResponse(cmd, opts, response, workingDir); handleErr != nil {
+					logging.Warn("failed to handle partial response: %v", handleErr)
+				}
+			}
+			if metricsErr := printMetrics(cmd, m); metricsErr != nil {
+				logging.Warn("failed to print metrics: %v", metricsErr)
+			}
+			return err
+		}
 		if metricsErr := printMetrics(cmd, m); metricsErr != nil {
 			logging.Warn("failed to print metrics: %v", metricsErr)
 		}

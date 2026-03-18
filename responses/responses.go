@@ -28,11 +28,12 @@ type FunctionCall struct {
 
 // Config bundles the immutable parameters for a Responses API session.
 type Config struct {
-	Model        string
-	Tools        []oairesponses.ToolUnionParam
-	Temperature  float64
-	MaxTokens    int
-	Instructions string
+	Model             string
+	Tools             []oairesponses.ToolUnionParam
+	Temperature       float64
+	MaxTokens         int
+	Instructions      string
+	ReasoningPrefixes []string
 }
 
 // DefaultMaxOutputTokens is the fallback output-token budget for reasoning
@@ -42,46 +43,53 @@ type Config struct {
 const DefaultMaxOutputTokens = 16384
 
 func (rc *Config) applyOptionals(params *oairesponses.ResponseNewParams) {
-	if rc.Temperature >= 0 && !IsReasoningModel(rc.Model) {
+	if rc.Temperature >= 0 && !IsReasoningModel(rc.Model, rc.ReasoningPrefixes) {
 		params.Temperature = openai.Float(rc.Temperature)
 	}
 	switch {
 	case rc.MaxTokens > 0:
 		params.MaxOutputTokens = openai.Int(int64(rc.MaxTokens))
-	case IsReasoningModel(rc.Model):
+	case IsReasoningModel(rc.Model, rc.ReasoningPrefixes):
 		params.MaxOutputTokens = openai.Int(DefaultMaxOutputTokens)
 	}
 }
 
 // IsReasoningModel reports whether a model emits reasoning tokens
-// (e.g. gpt-5*) that require a larger output-token budget.
-func IsReasoningModel(model string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5")
+// that require a larger output-token budget. It checks the model name
+// against the configured reasoning prefixes (e.g. ["gpt-5"]).
+func IsReasoningModel(model string, prefixes []string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	for _, p := range prefixes {
+		if strings.HasPrefix(m, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
 }
 
 // UseResponsesAPI reports whether the Responses API path should be used.
-func UseResponsesAPI(provider, model string) bool {
+func UseResponsesAPI(provider, model string, prefixes []string) bool {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	model = strings.ToLower(strings.TrimSpace(model))
 	if provider == "openai-responses" {
 		return true
 	}
-	return provider == "openai" && strings.HasPrefix(model, "gpt-5")
+	return provider == "openai" && IsReasoningModel(model, prefixes)
 }
 
 // RunWithTools drives a tool-calling loop using the OpenAI Responses API.
-func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations int, taskCfg *tools.TaskConfig, m *metrics.Metrics) (string, error) {
+func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations int, reasoningPrefixes []string, taskCfg *tools.TaskConfig, m *metrics.Metrics) (string, error) {
 	client := newClient(apiKey, baseURL, organization)
 	handlers, toolDefs := tools.BuildHandlers(workingDir, taskCfg)
 	if maxIterations <= 0 {
 		maxIterations = tools.MaxToolIterations
 	}
 	rc := Config{
-		Model:        model,
-		Tools:        ConvertTools(toolDefs),
-		Temperature:  temperature,
-		MaxTokens:    maxTokens,
-		Instructions: systemPrompt,
+		Model:             model,
+		Tools:             ConvertTools(toolDefs),
+		Temperature:       temperature,
+		MaxTokens:         maxTokens,
+		Instructions:      systemPrompt,
+		ReasoningPrefixes: reasoningPrefixes,
 	}
 
 	params := oairesponses.ResponseNewParams{
@@ -191,6 +199,12 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 		}
 		logOutputItems(ctx, resp, fmt.Sprintf("follow-up-iter-%d", i+1))
 		trackResponseMetrics(resp, m)
+
+		if m != nil && m.BudgetExceeded() {
+			logging.InfoContext(ctx, "responses API: budget exceeded ($%.4f >= $%.4f max), stopping", m.TotalCostWithChildren(), m.MaxCost)
+			text := resp.OutputText()
+			return resp, text, metrics.ErrBudgetExceeded
+		}
 	}
 
 	text := resp.OutputText()
@@ -219,6 +233,11 @@ func checkRepeat(ctx context.Context, repeat *tools.RepeatTracker, calls []Funct
 }
 
 func requestFinal(ctx context.Context, client openai.Client, previousID, systemPrompt string, rc *Config, m *metrics.Metrics) (string, error) {
+	if m != nil && m.BudgetExceeded() {
+		logging.InfoContext(ctx, "responses API: budget exceeded, skipping final call")
+		return "", metrics.ErrBudgetExceeded
+	}
+
 	if strings.TrimSpace(previousID) == "" {
 		return "", fmt.Errorf("missing previous response id")
 	}
@@ -404,6 +423,8 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			output = result
 			logging.InfoContext(ctx, "responses API: %s completed in %s (%d bytes)", call.Name, toolDuration.Round(time.Millisecond), len(result))
 		}
+
+		output = tools.TruncateToolOutputHeadTail(output, 32*1024)
 
 		outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
 			OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{

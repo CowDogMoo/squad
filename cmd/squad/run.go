@@ -77,6 +77,11 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		maxIter = 1000
 	}
 
+	maxCost := v.GetFloat64("run.max_cost")
+	if maxCost < 0 {
+		maxCost = 0
+	}
+
 	cfg := configFromContext(cmd)
 	return &runner.RunOptions{
 		Agent:             agent,
@@ -103,6 +108,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		ApplyFallback:     applyFallback,
 		NumCtx:            v.GetInt("provider.num_ctx"),
 		MaxIterations:     maxIter,
+		MaxCost:           maxCost,
 		Mode:              mode,
 		Vars:              vars,
 		ConfigAvailable:   cfg != nil,
@@ -169,6 +175,7 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 		{"run.apply_fallback", "apply-fallback"},
 		{"run.mode", "mode"},
 		{"run.max_iterations", "max-iterations"},
+		{"run.max_cost", "max-cost"},
 	} {
 		if err := bind(pair[0], pair[1]); err != nil {
 			return err
@@ -231,6 +238,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Int("num-ctx", 32768, "Context window size for Ollama models")
 	cmd.Flags().String("mode", "", "Agent mode override (e.g. readonly)")
 	cmd.Flags().Int("max-iterations", 100, "Maximum tool-calling iterations (range: 10-1000)")
+	cmd.Flags().Float64("max-cost", 5, "Maximum cost budget in USD (0 = unlimited)")
 	cmd.Flags().StringArray("var", nil, "Template variable in KEY=VALUE format (can be repeated)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")

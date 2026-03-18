@@ -38,7 +38,7 @@ func TestIsReasoningModel(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := IsReasoningModel(tt.model); got != tt.want {
+			if got := IsReasoningModel(tt.model, []string{"gpt-5"}); got != tt.want {
 				t.Fatalf("IsReasoningModel(%q) = %v, want %v", tt.model, got, tt.want)
 			}
 		})
@@ -63,7 +63,7 @@ func TestUseResponsesAPI(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := UseResponsesAPI(tt.provider, tt.model); got != tt.want {
+			if got := UseResponsesAPI(tt.provider, tt.model, []string{"gpt-5"}); got != tt.want {
 				t.Fatalf("UseResponsesAPI(%q, %q) = %v, want %v", tt.provider, tt.model, got, tt.want)
 			}
 		})
@@ -175,19 +175,19 @@ func TestConfigApplyOptionals(t *testing.T) {
 	}{
 		{
 			"non-reasoning with temperature",
-			Config{Model: "gpt-4o", Temperature: 0.7},
+			Config{Model: "gpt-4o", Temperature: 0.7, ReasoningPrefixes: []string{"gpt-5"}},
 			true,
 			false,
 		},
 		{
 			"reasoning model skips temperature",
-			Config{Model: "gpt-5-turbo", Temperature: 0.5},
+			Config{Model: "gpt-5-turbo", Temperature: 0.5, ReasoningPrefixes: []string{"gpt-5"}},
 			false,
 			true,
 		},
 		{
 			"explicit max tokens",
-			Config{Model: "gpt-5", MaxTokens: 2048},
+			Config{Model: "gpt-5", MaxTokens: 2048, ReasoningPrefixes: []string{"gpt-5"}},
 			false,
 			true,
 		},
@@ -351,6 +351,7 @@ func TestRunWithToolsNoToolCalls(t *testing.T) {
 		1,
 		nil,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
@@ -463,6 +464,7 @@ func TestRunWithToolsExhaustedWithPendingCalls(t *testing.T) {
 		0.4,
 		0,
 		1, // maxIterations=1 → loop exits with pending calls
+		nil,
 		&tools.TaskConfig{},
 		nil,
 	)
@@ -562,6 +564,7 @@ func TestRunWithToolsFollowUp(t *testing.T) {
 		0.4,
 		0,
 		2,
+		nil,
 		nil,
 		nil,
 	)
@@ -748,6 +751,7 @@ func TestRunWithToolsErrors(t *testing.T) {
 				0.2,
 				0,
 				1,
+				nil,
 				&tools.TaskConfig{},
 				nil,
 			)
@@ -755,6 +759,123 @@ func TestRunWithToolsErrors(t *testing.T) {
 				t.Fatalf("expected error")
 			}
 		})
+	}
+}
+
+func TestRequestFinalBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	client := openai.NewClient()
+	cfg := &Config{Model: "gpt-4o"}
+	_, err := requestFinal(context.Background(), client, "resp-1", "sys", cfg, m)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+}
+
+func TestRunWithToolsBudgetExceededDuringLoop(t *testing.T) {
+	t.Parallel()
+
+	callCount := int32(0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count := atomic.AddInt32(&callCount, 1)
+		w.Header().Set("Content-Type", "application/json")
+		var payload map[string]any
+		switch count {
+		case 1:
+			// Initial request → function_call
+			payload = map[string]any{
+				"id": "resp-1", "object": "response", "created_at": 0,
+				"model": "gpt-4o", "parallel_tool_calls": false,
+				"temperature": 0, "tool_choice": "auto", "tools": []any{},
+				"top_p":              1,
+				"error":              map[string]any{"code": "server_error", "message": ""},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output": []map[string]any{
+					{
+						"id": "fc-1", "type": "function_call",
+						"call_id": "call-1", "name": "Echo", "arguments": `{"msg":"hi"}`,
+					},
+				},
+			}
+		default:
+			// Follow-up returns text (budget check happens after this)
+			payload = map[string]any{
+				"id": "resp-2", "object": "response", "created_at": 0,
+				"model": "gpt-4o", "parallel_tool_calls": false,
+				"temperature": 0, "tool_choice": "auto", "tools": []any{},
+				"top_p":              1,
+				"error":              map[string]any{"code": "server_error", "message": ""},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"usage":              map[string]any{"input_tokens": 500000, "output_tokens": 500000},
+				"output": []map[string]any{
+					{
+						"id": "fc-2", "type": "function_call",
+						"call_id": "call-2", "name": "Echo", "arguments": `{"msg":"again"}`,
+					},
+				},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer server.Close()
+
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000) // pre-exceed budget
+
+	text, err := RunWithTools(
+		context.Background(),
+		"key",
+		server.URL,
+		"gpt-4o",
+		"system",
+		"user",
+		t.TempDir(),
+		"",
+		0.4,
+		0,
+		10,
+		nil,
+		nil,
+		m,
+	)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	// Should still return partial text
+	_ = text
+}
+
+func TestExecuteAndBuildOutputsWithResultAndError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	handlers := map[string]tools.Handler{
+		"PartialFail": {
+			Call: func(context.Context, []byte) (string, error) {
+				return "partial output", fmt.Errorf("something failed")
+			},
+		},
+	}
+	calls := []FunctionCall{{Name: "PartialFail", CallID: "call-pf", Arguments: "{}"}}
+	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	if len(outputs) != 1 {
+		t.Fatalf("expected 1 output, got %d", len(outputs))
+	}
+	got := outputs[0].OfFunctionCallOutput
+	if got == nil {
+		t.Fatalf("expected function call output")
+	}
+	wantOutput := "partial output\n\nerror: something failed"
+	if !reflect.DeepEqual(got.Output.OfString, openai.String(wantOutput)) {
+		t.Fatalf("output = %v, want %q", got.Output.OfString, wantOutput)
 	}
 }
 
@@ -766,11 +887,11 @@ func TestTrackResponseMetricsNilMetrics(t *testing.T) {
 
 func TestTrackResponseMetricsNilResponse(t *testing.T) {
 	t.Parallel()
-	m := &metrics.Metrics{}
+	m := metrics.New("openai", "gpt-4o")
 	trackResponseMetrics(nil, m)
 	// Should not increment or add tokens when response is nil
-	if m.Iterations != 0 {
-		t.Fatalf("Iterations = %d, want 0", m.Iterations)
+	if m.Iterations() != 0 {
+		t.Fatalf("Iterations = %d, want 0", m.Iterations())
 	}
 }
 
@@ -788,14 +909,14 @@ func TestTrackResponseMetricsWithUsage(t *testing.T) {
 
 	trackResponseMetrics(resp, m)
 
-	if m.Iterations != 1 {
-		t.Fatalf("Iterations = %d, want 1", m.Iterations)
+	if m.Iterations() != 1 {
+		t.Fatalf("Iterations = %d, want 1", m.Iterations())
 	}
-	if m.InputTokens != 1000 {
-		t.Fatalf("InputTokens = %d, want 1000", m.InputTokens)
+	if m.InputTokens() != 1000 {
+		t.Fatalf("InputTokens = %d, want 1000", m.InputTokens())
 	}
-	if m.OutputTokens != 500 {
-		t.Fatalf("OutputTokens = %d, want 500", m.OutputTokens)
+	if m.OutputTokens() != 500 {
+		t.Fatalf("OutputTokens = %d, want 500", m.OutputTokens())
 	}
 }
 
@@ -819,13 +940,13 @@ func TestTrackResponseMetricsAccumulates(t *testing.T) {
 	trackResponseMetrics(resp1, m)
 	trackResponseMetrics(resp2, m)
 
-	if m.Iterations != 2 {
-		t.Fatalf("Iterations = %d, want 2", m.Iterations)
+	if m.Iterations() != 2 {
+		t.Fatalf("Iterations = %d, want 2", m.Iterations())
 	}
-	if m.InputTokens != 300 {
-		t.Fatalf("InputTokens = %d, want 300", m.InputTokens)
+	if m.InputTokens() != 300 {
+		t.Fatalf("InputTokens = %d, want 300", m.InputTokens())
 	}
-	if m.OutputTokens != 150 {
-		t.Fatalf("OutputTokens = %d, want 150", m.OutputTokens)
+	if m.OutputTokens() != 150 {
+		t.Fatalf("OutputTokens = %d, want 150", m.OutputTokens())
 	}
 }
