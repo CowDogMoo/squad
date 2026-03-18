@@ -1014,7 +1014,7 @@ func TestTruncateToolOutputHeadTailPreservesEnds(t *testing.T) {
 	t.Parallel()
 	var sb strings.Builder
 	for i := 0; i < 100; i++ {
-		sb.WriteString(fmt.Sprintf("line-%03d\n", i))
+		fmt.Fprintf(&sb, "line-%03d\n", i)
 	}
 	input := sb.String()
 
@@ -1164,7 +1164,7 @@ func TestTruncateHeadTail(t *testing.T) {
 	// Build a file larger than maxReadBytes
 	var sb strings.Builder
 	for i := 0; i < 5000; i++ {
-		sb.WriteString(fmt.Sprintf("line-%04d: %s\n", i, strings.Repeat("x", 20)))
+		fmt.Fprintf(&sb, "line-%04d: %s\n", i, strings.Repeat("x", 20))
 	}
 	data := []byte(sb.String())
 	if len(data) <= maxReadBytes {
@@ -1211,7 +1211,7 @@ func TestReadToolLargeFileTruncation(t *testing.T) {
 	// Create a file larger than maxReadBytes
 	var sb strings.Builder
 	for i := 0; i < 5000; i++ {
-		sb.WriteString(fmt.Sprintf("line-%04d: %s\n", i, strings.Repeat("x", 20)))
+		fmt.Fprintf(&sb, "line-%04d: %s\n", i, strings.Repeat("x", 20))
 	}
 	content := sb.String()
 	if err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte(content), 0o644); err != nil {
