@@ -22,6 +22,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Model.Temperature != 0.2 || cfg.Model.MaxTokens != 1024 {
 		t.Fatalf("unexpected model defaults: %+v", cfg.Model)
 	}
+	if len(cfg.Model.ReasoningPrefixes) != 1 || cfg.Model.ReasoningPrefixes[0] != "gpt-5" {
+		t.Fatalf("unexpected reasoning prefixes: %+v", cfg.Model.ReasoningPrefixes)
+	}
 }
 
 func TestLoadFromPathWithEnvOverrides(t *testing.T) {
@@ -34,7 +37,7 @@ func TestLoadFromPathWithEnvOverrides(t *testing.T) {
 
 	t.Setenv("SQUAD_LOG_LEVEL", "debug")
 
-	cfg, err := LoadFromPath(path)
+	cfg, _, err := LoadFromPath(path)
 	if err != nil {
 		t.Fatalf("LoadFromPath: %v", err)
 	}
@@ -90,7 +93,7 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	t.Setenv("HOME", baseDir)
 	t.Setenv("USERPROFILE", baseDir)
 
-	cfg, err := Load()
+	cfg, _, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -101,7 +104,7 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 
 func TestLoadFromPathMissingFile(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.yaml")
-	if _, err := LoadFromPath(missing); err == nil {
+	if _, _, err := LoadFromPath(missing); err == nil {
 		t.Fatalf("expected error for missing config file")
 	}
 }
@@ -129,7 +132,7 @@ func TestLoadInvalidConfigFile(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	_, err := Load()
+	_, _, err := Load()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -144,7 +147,7 @@ func TestLoadFromPathInvalidConfig(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	_, err := LoadFromPath(configPath)
+	_, _, err := LoadFromPath(configPath)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -154,7 +157,7 @@ func TestLoadFromPathInvalidConfig(t *testing.T) {
 }
 
 func TestLoadConfigWithViperSetupError(t *testing.T) {
-	_, err := loadConfigWithViper(func(*viper.Viper) error {
+	_, _, err := loadConfigWithViper(func(*viper.Viper) error {
 		return fmt.Errorf("boom")
 	})
 	if err == nil {

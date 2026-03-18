@@ -219,7 +219,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get config path: %w", err)
 	}
 
-	cfg, err := config.LoadFromPath(configPath)
+	cfg, _, err := config.LoadFromPath(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}

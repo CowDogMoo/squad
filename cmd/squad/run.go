@@ -238,7 +238,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Int("num-ctx", 32768, "Context window size for Ollama models")
 	cmd.Flags().String("mode", "", "Agent mode override (e.g. readonly)")
 	cmd.Flags().Int("max-iterations", 100, "Maximum tool-calling iterations (range: 10-1000)")
-	cmd.Flags().Float64("max-cost", 0, "Maximum cost budget in USD (0 = unlimited)")
+	cmd.Flags().Float64("max-cost", 5, "Maximum cost budget in USD (0 = unlimited)")
 	cmd.Flags().StringArray("var", nil, "Template variable in KEY=VALUE format (can be repeated)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")

@@ -83,6 +83,7 @@ func Execute() error {
 
 func initConfig(cmd *cobra.Command, _ []string) error {
 	var cfg *config.Config
+	var v *viper.Viper
 	var err error
 	// Resolve config file path directly from flags to avoid global mutable flag state
 	configPath, err := cmd.Root().PersistentFlags().GetString("config")
@@ -90,35 +91,20 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to read config flag: %w", err)
 	}
 	if configPath != "" {
-		cfg, err = config.LoadFromPath(configPath)
+		cfg, v, err = config.LoadFromPath(configPath)
 	} else {
-		cfg, err = config.Load()
+		cfg, v, err = config.Load()
 	}
 
 	if err != nil {
 		logging.Warn("failed to load config, using defaults: %v", err)
 		cfg = config.Defaults()
+		v = viper.New()
+		config.SetDefaults(v)
+		v.SetEnvPrefix("SQUAD")
+		v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+		v.AutomaticEnv()
 	}
-
-	v := viper.New()
-
-	v.SetDefault("log.level", cfg.Log.Level)
-	v.SetDefault("log.format", cfg.Log.Format)
-	v.SetDefault("provider.default", cfg.Provider.Default)
-	v.SetDefault("provider.base_url", cfg.Provider.BaseURL)
-	v.SetDefault("provider.organization", cfg.Provider.Organization)
-	v.SetDefault("provider.api_version", cfg.Provider.APIVersion)
-	v.SetDefault("provider.api_type", cfg.Provider.APIType)
-	v.SetDefault("provider.openai_compat_max_tokens", cfg.Provider.OpenAICompatMaxTokens)
-	v.SetDefault("provider.token", cfg.Provider.Token)
-	v.SetDefault("provider.num_ctx", cfg.Provider.NumCtx)
-	v.SetDefault("model.default", cfg.Model.Default)
-	v.SetDefault("model.temperature", cfg.Model.Temperature)
-	v.SetDefault("model.max_tokens", cfg.Model.MaxTokens)
-
-	v.SetEnvPrefix("SQUAD")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.AutomaticEnv()
 
 	// Bind persistent (root) flags.
 	if err := v.BindPFlag("config", cmd.Root().PersistentFlags().Lookup("config")); err != nil {
@@ -159,19 +145,10 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to initialize logging: %w", err)
 	}
 
-	cfg.Log.Level = logLevel
-	cfg.Log.Format = logFormat
-	cfg.Provider.Default = v.GetString("provider.default")
-	cfg.Provider.BaseURL = v.GetString("provider.base_url")
-	cfg.Provider.Organization = v.GetString("provider.organization")
-	cfg.Provider.APIVersion = v.GetString("provider.api_version")
-	cfg.Provider.APIType = v.GetString("provider.api_type")
-	cfg.Provider.OpenAICompatMaxTokens = v.GetBool("provider.openai_compat_max_tokens")
-	cfg.Provider.Token = v.GetString("provider.token")
-	cfg.Provider.NumCtx = v.GetInt("provider.num_ctx")
-	cfg.Model.Default = v.GetString("model.default")
-	cfg.Model.Temperature = v.GetFloat64("model.temperature")
-	cfg.Model.MaxTokens = v.GetInt("model.max_tokens")
+	// Re-unmarshal so flag/env overrides are reflected in the config struct.
+	if err := v.Unmarshal(cfg); err != nil {
+		return fmt.Errorf("failed to apply config overrides: %w", err)
+	}
 
 	logger := logging.FromContext(cmd.Context())
 	ctx := withConfig(cmd.Context(), cfg)

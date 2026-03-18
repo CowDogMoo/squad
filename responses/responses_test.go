@@ -38,7 +38,7 @@ func TestIsReasoningModel(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := IsReasoningModel(tt.model); got != tt.want {
+			if got := IsReasoningModel(tt.model, []string{"gpt-5"}); got != tt.want {
 				t.Fatalf("IsReasoningModel(%q) = %v, want %v", tt.model, got, tt.want)
 			}
 		})
@@ -63,7 +63,7 @@ func TestUseResponsesAPI(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := UseResponsesAPI(tt.provider, tt.model); got != tt.want {
+			if got := UseResponsesAPI(tt.provider, tt.model, []string{"gpt-5"}); got != tt.want {
 				t.Fatalf("UseResponsesAPI(%q, %q) = %v, want %v", tt.provider, tt.model, got, tt.want)
 			}
 		})
@@ -175,19 +175,19 @@ func TestConfigApplyOptionals(t *testing.T) {
 	}{
 		{
 			"non-reasoning with temperature",
-			Config{Model: "gpt-4o", Temperature: 0.7},
+			Config{Model: "gpt-4o", Temperature: 0.7, ReasoningPrefixes: []string{"gpt-5"}},
 			true,
 			false,
 		},
 		{
 			"reasoning model skips temperature",
-			Config{Model: "gpt-5-turbo", Temperature: 0.5},
+			Config{Model: "gpt-5-turbo", Temperature: 0.5, ReasoningPrefixes: []string{"gpt-5"}},
 			false,
 			true,
 		},
 		{
 			"explicit max tokens",
-			Config{Model: "gpt-5", MaxTokens: 2048},
+			Config{Model: "gpt-5", MaxTokens: 2048, ReasoningPrefixes: []string{"gpt-5"}},
 			false,
 			true,
 		},
@@ -351,6 +351,7 @@ func TestRunWithToolsNoToolCalls(t *testing.T) {
 		1,
 		nil,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
@@ -463,6 +464,7 @@ func TestRunWithToolsExhaustedWithPendingCalls(t *testing.T) {
 		0.4,
 		0,
 		1, // maxIterations=1 → loop exits with pending calls
+		nil,
 		&tools.TaskConfig{},
 		nil,
 	)
@@ -562,6 +564,7 @@ func TestRunWithToolsFollowUp(t *testing.T) {
 		0.4,
 		0,
 		2,
+		nil,
 		nil,
 		nil,
 	)
@@ -748,6 +751,7 @@ func TestRunWithToolsErrors(t *testing.T) {
 				0.2,
 				0,
 				1,
+				nil,
 				&tools.TaskConfig{},
 				nil,
 			)

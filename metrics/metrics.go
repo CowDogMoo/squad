@@ -15,7 +15,7 @@ import (
 const (
 	// LiteLLM maintains a comprehensive pricing database updated by the community.
 	liteLLMPricingURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-	fetchTimeout = 10 * time.Second
+	fetchTimeout      = 10 * time.Second
 )
 
 var ErrBudgetExceeded = fmt.Errorf("cost budget exceeded")
