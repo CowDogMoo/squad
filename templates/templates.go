@@ -52,7 +52,7 @@ func Render(name string, data AgentData) (string, error) {
 	return buf.String(), nil
 }
 
-// ListTemplates returns all available template files.
+// ListTemplates returns the names of all embedded template files.
 func ListTemplates() ([]string, error) {
 	entries, err := AgentTemplates.ReadDir(".")
 	if err != nil {

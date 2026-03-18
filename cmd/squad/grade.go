@@ -229,7 +229,7 @@ func displayStats(cmd *cobra.Command, store *grading.Store, agent string, asJSON
 }
 
 func readStdin() ([]byte, error) {
-	return os.ReadFile("/dev/stdin")
+	return io.ReadAll(os.Stdin)
 }
 
 func outputJSON(cmd *cobra.Command, v any) error {

@@ -571,6 +571,33 @@ func TestGlobToolErrors(t *testing.T) {
 	}
 }
 
+func TestSanitizeRegex(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"dotnet (?n)", `(?n)func\s+readStdin\b`, `func\s+readStdin\b`},
+		{"pcre (?x)", `(?x) foo \s+ bar`, ` foo \s+ bar`},
+		{"valid (?i) preserved", `(?i)hello`, `(?i)hello`},
+		{"valid (?ms) preserved", `(?ms)foo.bar`, `(?ms)foo.bar`},
+		{"mixed valid/invalid stripped", `(?in)hello`, `hello`},
+		{"multiple groups", `(?n)foo(?x)bar`, `foobar`},
+		{"no flags unchanged", `func\s+\w+`, `func\s+\w+`},
+		{"valid (?i-s) preserved", `(?i-s)test`, `(?i-s)test`},
+		{"invalid (?n-i) stripped", `(?n-i)test`, `test`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeRegex(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeRegex(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGrepToolErrors(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -587,6 +614,7 @@ func TestGrepToolErrors(t *testing.T) {
 		{"invalid json", "{", true, "invalid args", ""},
 		{"empty pattern", `{"pattern":""}`, true, "pattern is required", ""},
 		{"invalid regex", `{"pattern":"["}`, true, "invalid regex", ""},
+		{"dotnet (?n) sanitized", `{"pattern":"(?n)alpha","path":"."}`, false, "", "note.txt:1:alpha"},
 		{"outside path", `{"pattern":"alpha","path":"../outside"}`, true, "outside working directory", ""},
 		{"no matches", `{"pattern":"beta","path":"."}`, false, "", "no matches"},
 	}

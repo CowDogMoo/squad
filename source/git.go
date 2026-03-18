@@ -121,7 +121,7 @@ func (g *GitOperations) getCachePath(gitURL string) string {
 	return filepath.Join(g.cacheDir, fmt.Sprintf("%s-%s", name, hashStr))
 }
 
-// IsGitURL returns true if the string looks like a git URL.
+// IsGitURL reports whether s looks like a git URL.
 func IsGitURL(s string) bool {
 	return strings.HasPrefix(s, "https://") ||
 		strings.HasPrefix(s, "http://") ||

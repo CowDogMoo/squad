@@ -150,7 +150,7 @@ func CopyAgent(ctx context.Context, agentsDir, from, to string, force bool) erro
 	return nil
 }
 
-// IsValidAgentName checks if the agent name is valid.
+// IsValidAgentName reports whether name is a valid agent name.
 func IsValidAgentName(name string) bool {
 	matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]*[a-z0-9]$`, name)
 	return matched || (len(name) >= 2 && regexp.MustCompile(`^[a-z][a-z0-9]*$`).MatchString(name))

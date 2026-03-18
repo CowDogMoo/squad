@@ -45,7 +45,7 @@ type Metrics struct {
 	Children     []ChildMetrics
 }
 
-// New creates a new Metrics instance with the start time set to now.
+// New returns a Metrics instance with its start time set to now.
 func New(provider, model string) *Metrics {
 	return &Metrics{
 		StartTime: time.Now(),
@@ -54,12 +54,14 @@ func New(provider, model string) *Metrics {
 	}
 }
 
+// SetMaxCost sets the maximum total cost budget in USD for the run.
 func (m *Metrics) SetMaxCost(maxCost float64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.MaxCost = maxCost
 }
 
+// BudgetExceeded reports whether the total run cost has reached MaxCost.
 func (m *Metrics) BudgetExceeded() bool {
 	m.mu.Lock()
 	maxCost := m.MaxCost
@@ -67,6 +69,7 @@ func (m *Metrics) BudgetExceeded() bool {
 	return maxCost > 0 && m.TotalCostWithChildren() >= maxCost
 }
 
+// AddTokens adds input and output token counts to the run totals.
 func (m *Metrics) AddTokens(input, output int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -74,6 +77,7 @@ func (m *Metrics) AddTokens(input, output int64) {
 	m.outputTokens += output
 }
 
+// IncrementIterations increments the recorded model iteration count.
 func (m *Metrics) IncrementIterations() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -101,6 +105,7 @@ func (m *Metrics) Iterations() int {
 	return m.iterations
 }
 
+// AddChild records usage from a child agent run in the parent metrics.
 func (m *Metrics) AddChild(agent string, child *Metrics) {
 	if child == nil {
 		return
@@ -116,6 +121,7 @@ func (m *Metrics) AddChild(agent string, child *Metrics) {
 	})
 }
 
+// TotalCostWithChildren returns the estimated cost including child runs.
 func (m *Metrics) TotalCostWithChildren() float64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -129,6 +135,7 @@ func (m *Metrics) TotalCostWithChildren() float64 {
 	return total
 }
 
+// TotalTokensWithChildren returns total tokens for the run and child runs.
 func (m *Metrics) TotalTokensWithChildren() int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -139,12 +146,14 @@ func (m *Metrics) TotalTokensWithChildren() int64 {
 	return total
 }
 
+// Finish records the end time for the run.
 func (m *Metrics) Finish() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.EndTime = time.Now()
 }
 
+// Duration returns the elapsed time for the run.
 func (m *Metrics) Duration() time.Duration {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -154,6 +163,7 @@ func (m *Metrics) Duration() time.Duration {
 	return m.EndTime.Sub(m.StartTime)
 }
 
+// TotalTokens returns the total input and output tokens for the run.
 func (m *Metrics) TotalTokens() int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -175,6 +185,7 @@ func (m *Metrics) costLocked() float64 {
 	return inputCost + outputCost
 }
 
+// Pricing holds per-million-token pricing for a model.
 type Pricing struct {
 	InputPerMillion  float64
 	OutputPerMillion float64
@@ -231,6 +242,7 @@ func fetchPricing() {
 	pricingCacheMu.Unlock()
 }
 
+// PricingStatus reports whether pricing data was loaded successfully.
 func PricingStatus() (bool, int, error) {
 	ensurePricingLoaded()
 
@@ -292,6 +304,7 @@ func lookupLiteLLMPricing(provider, model string) (Pricing, bool) {
 	return Pricing{}, false
 }
 
+// GetPricing returns pricing information for the given provider and model.
 func GetPricing(provider, model string) Pricing {
 	model = strings.ToLower(model)
 	provider = strings.ToLower(provider)
@@ -309,6 +322,7 @@ func GetPricing(provider, model string) Pricing {
 	return Pricing{InputPerMillion: 0, OutputPerMillion: 0}
 }
 
+// String returns a one-line summary of the recorded metrics.
 func (m *Metrics) String() string {
 	cost := m.Cost()
 	costStr := m.costString(cost)
@@ -326,6 +340,7 @@ func (m *Metrics) String() string {
 	)
 }
 
+// Summary returns a multi-line summary of the recorded metrics.
 func (m *Metrics) Summary() string {
 	cost := m.Cost()
 	costLine := "  Cost:       " + m.costString(cost)
