@@ -38,5 +38,5 @@ func viperFromContext(cmd *cobra.Command) *viper.Viper {
 	if v, ok := cmd.Context().Value(viperKey).(*viper.Viper); ok {
 		return v
 	}
-	panic("bug: viper not found in context (initConfig not called)")
+	return nil
 }

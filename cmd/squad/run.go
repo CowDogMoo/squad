@@ -52,6 +52,9 @@ func parseVars(vars []string) map[string]string {
 // newRunOptions creates a RunOptions by reading resolved values from flags and Viper.
 func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 	v := viperFromContext(cmd)
+	if v == nil {
+		return nil
+	}
 	agent := v.GetString("run.agent")
 	agentsDir := v.GetString("run.agents_dir")
 	workingDir := v.GetString("run.working_dir")
@@ -209,6 +212,9 @@ user_prompt will be used (if configured in the agent's manifest).`,
 			// Args validation errors still show usage.
 			cmd.SilenceUsage = true
 			opts := newRunOptions(cmd)
+			if opts == nil {
+				return fmt.Errorf("run configuration not initialized")
+			}
 			return runner.ExecuteRun(cmd, args, opts)
 		},
 	}

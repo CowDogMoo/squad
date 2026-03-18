@@ -81,7 +81,7 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	response, m, err := invokeModel(ctx, opts, bundle)
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Run stopped: cost budget of $%.4f exceeded (actual: $%.4f)\n", opts.MaxCost, m.TotalCostWithChildren())
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Run stopped: cost budget of $%.4f exceeded (actual: $%.4f)\n", opts.MaxCost, m.TotalCostWithChildren())
 			if response != "" {
 				if handleErr := handleResponse(cmd, opts, response, workingDir); handleErr != nil {
 					logging.Warn("failed to handle partial response: %v", handleErr)

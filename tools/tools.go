@@ -562,7 +562,7 @@ func sliceLines(data []byte, offset, limit int) string {
 		end = start + limit
 	}
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[lines %d-%d of %d]\n", offset, end, totalLines))
+	fmt.Fprintf(&sb, "[lines %d-%d of %d]\n", offset, end, totalLines)
 	for _, line := range lines[start:end] {
 		sb.WriteString(line)
 	}

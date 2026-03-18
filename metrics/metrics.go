@@ -386,12 +386,12 @@ Agent Metrics
 		if childCost > 0 {
 			costStr = fmt.Sprintf("$%.4f", childCost)
 		}
-		sb.WriteString(fmt.Sprintf("  %-20s %10d tokens  %s\n", c.Agent, tokens, costStr))
+		fmt.Fprintf(&sb, "  %-20s %10d tokens  %s\n", c.Agent, tokens, costStr)
 	}
 
 	grandTotal := cost + totalChildCost
 	grandTokens := total + totalChildTokens
-	sb.WriteString(fmt.Sprintf("\n  %-20s %10d tokens  $%.4f\n", "TOTAL (all agents)", grandTokens, grandTotal))
+	fmt.Fprintf(&sb, "\n  %-20s %10d tokens  $%.4f\n", "TOTAL (all agents)", grandTokens, grandTotal)
 
 	return sb.String()
 }
