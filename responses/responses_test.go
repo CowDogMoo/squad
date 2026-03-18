@@ -762,6 +762,123 @@ func TestRunWithToolsErrors(t *testing.T) {
 	}
 }
 
+func TestRequestFinalBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	client := openai.NewClient()
+	cfg := &Config{Model: "gpt-4o"}
+	_, err := requestFinal(context.Background(), client, "resp-1", "sys", cfg, m)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+}
+
+func TestRunWithToolsBudgetExceededDuringLoop(t *testing.T) {
+	t.Parallel()
+
+	callCount := int32(0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count := atomic.AddInt32(&callCount, 1)
+		w.Header().Set("Content-Type", "application/json")
+		var payload map[string]any
+		switch count {
+		case 1:
+			// Initial request → function_call
+			payload = map[string]any{
+				"id": "resp-1", "object": "response", "created_at": 0,
+				"model": "gpt-4o", "parallel_tool_calls": false,
+				"temperature": 0, "tool_choice": "auto", "tools": []any{},
+				"top_p":              1,
+				"error":              map[string]any{"code": "server_error", "message": ""},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output": []map[string]any{
+					{
+						"id": "fc-1", "type": "function_call",
+						"call_id": "call-1", "name": "Echo", "arguments": `{"msg":"hi"}`,
+					},
+				},
+			}
+		default:
+			// Follow-up returns text (budget check happens after this)
+			payload = map[string]any{
+				"id": "resp-2", "object": "response", "created_at": 0,
+				"model": "gpt-4o", "parallel_tool_calls": false,
+				"temperature": 0, "tool_choice": "auto", "tools": []any{},
+				"top_p":              1,
+				"error":              map[string]any{"code": "server_error", "message": ""},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"usage":              map[string]any{"input_tokens": 500000, "output_tokens": 500000},
+				"output": []map[string]any{
+					{
+						"id": "fc-2", "type": "function_call",
+						"call_id": "call-2", "name": "Echo", "arguments": `{"msg":"again"}`,
+					},
+				},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer server.Close()
+
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000) // pre-exceed budget
+
+	text, err := RunWithTools(
+		context.Background(),
+		"key",
+		server.URL,
+		"gpt-4o",
+		"system",
+		"user",
+		t.TempDir(),
+		"",
+		0.4,
+		0,
+		10,
+		nil,
+		nil,
+		m,
+	)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	// Should still return partial text
+	_ = text
+}
+
+func TestExecuteAndBuildOutputsWithResultAndError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	handlers := map[string]tools.Handler{
+		"PartialFail": {
+			Call: func(context.Context, []byte) (string, error) {
+				return "partial output", fmt.Errorf("something failed")
+			},
+		},
+	}
+	calls := []FunctionCall{{Name: "PartialFail", CallID: "call-pf", Arguments: "{}"}}
+	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	if len(outputs) != 1 {
+		t.Fatalf("expected 1 output, got %d", len(outputs))
+	}
+	got := outputs[0].OfFunctionCallOutput
+	if got == nil {
+		t.Fatalf("expected function call output")
+	}
+	wantOutput := "partial output\n\nerror: something failed"
+	if !reflect.DeepEqual(got.Output.OfString, openai.String(wantOutput)) {
+		t.Fatalf("output = %v, want %q", got.Output.OfString, wantOutput)
+	}
+}
+
 func TestTrackResponseMetricsNilMetrics(t *testing.T) {
 	t.Parallel()
 	// Should not panic when metrics is nil

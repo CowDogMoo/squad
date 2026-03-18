@@ -1377,3 +1377,209 @@ func TestRunWithToolsWithMetrics(t *testing.T) {
 		t.Fatalf("OutputTokens = %d, want 50", m.OutputTokens)
 	}
 }
+
+func TestToolLoopBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// LLM returns a tool call, then after tool execution budget is checked.
+	// We pre-load metrics with enough tokens to exceed the budget.
+	llm := &fakeLLM{responses: []*llms.ContentResponse{
+		{
+			Choices: []*llms.ContentChoice{{
+				Content: "partial",
+				ToolCalls: []llms.ToolCall{{
+					ID:   "1",
+					Type: "function",
+					FunctionCall: &llms.FunctionCall{
+						Name:      "Read",
+						Arguments: `{"path":"note.txt"}`,
+					},
+				}},
+				GenerationInfo: map[string]any{
+					"PromptTokens":     int64(500000),
+					"CompletionTokens": int64(500000),
+				},
+			}},
+		},
+	}}
+
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	// Pre-load tokens so budget is exceeded after the first tool call
+	m.AddTokens(1_000_000, 1_000_000)
+
+	_, err := RunWithTools(context.Background(), llm, "", "user", dir, 10, nil, m)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+}
+
+func TestFinishToolLoopBudgetExceededWithContent(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	llm := &stubLLM{
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
+	}
+
+	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "partial" {
+		t.Fatalf("output = %q, want %q", out, "partial")
+	}
+}
+
+func TestFinishToolLoopBudgetExceededNoContent(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	llm := &stubLLM{
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
+	}
+
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("output = %q, want empty", out)
+	}
+}
+
+func TestTaskToolWithParentMetrics(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	parentMetrics := metrics.New("openai", "gpt-4o")
+	childMetrics := metrics.New("openai", "gpt-4o")
+	childMetrics.AddTokens(100, 50)
+
+	cfg := TaskConfig{
+		AgentsDir:     "agents",
+		WorkingDir:    dir,
+		ParentMetrics: parentMetrics,
+		CallModel: func(
+			_ context.Context,
+			_, _, _, _, _ string,
+		) (string, *metrics.Metrics, error) {
+			return "child output", childMetrics, nil
+		},
+	}
+
+	tool := taskTool(cfg)
+	out, err := tool(context.Background(), []byte(`{"agent":"test-agent","prompt":"do stuff"}`))
+	if err != nil {
+		t.Fatalf("taskTool() error = %v", err)
+	}
+	if out != "child output" {
+		t.Fatalf("output = %q, want %q", out, "child output")
+	}
+	if len(parentMetrics.Children) != 1 {
+		t.Fatalf("expected 1 child metric, got %d", len(parentMetrics.Children))
+	}
+	if parentMetrics.Children[0].Agent != "test-agent" {
+		t.Fatalf("child agent = %q, want %q", parentMetrics.Children[0].Agent, "test-agent")
+	}
+	if parentMetrics.Children[0].InputTokens != 100 {
+		t.Fatalf("child InputTokens = %d, want 100", parentMetrics.Children[0].InputTokens)
+	}
+}
+
+func TestTaskResultToolWithParentMetrics(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	parentMetrics := metrics.New("openai", "gpt-4o")
+	childMetrics := metrics.New("openai", "gpt-4o")
+	childMetrics.AddTokens(200, 100)
+
+	registry := NewBackgroundTaskRegistry()
+	result := &BackgroundTaskResult{
+		Output:  "bg output",
+		Metrics: childMetrics,
+		Done:    make(chan struct{}),
+	}
+	close(result.Done)
+
+	registry.mu.Lock()
+	registry.tasks["bg-test"] = result
+	registry.mu.Unlock()
+
+	cfg := TaskConfig{
+		AgentsDir:     "agents",
+		WorkingDir:    dir,
+		ParentMetrics: parentMetrics,
+		Registry:      registry,
+		CallModel: func(
+			_ context.Context,
+			_, _, _, _, _ string,
+		) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+	}
+
+	tool := taskResultTool(cfg)
+	out, err := tool(context.Background(), []byte(`{"task_id":"bg-test"}`))
+	if err != nil {
+		t.Fatalf("taskResultTool() error = %v", err)
+	}
+	if out != "bg output" {
+		t.Fatalf("output = %q, want %q", out, "bg output")
+	}
+	if len(parentMetrics.Children) != 1 {
+		t.Fatalf("expected 1 child metric, got %d", len(parentMetrics.Children))
+	}
+	if parentMetrics.Children[0].Agent != "bg-test" {
+		t.Fatalf("child agent = %q, want %q", parentMetrics.Children[0].Agent, "bg-test")
+	}
+}
+
+func TestBuildHandlersWithRegistry(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg := &TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Registry:   NewBackgroundTaskRegistry(),
+		CallModel: func(
+			_ context.Context,
+			_, _, _, _, _ string,
+		) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+	}
+	handlers, defs := BuildHandlers(dir, cfg)
+	if _, ok := handlers["TaskResult"]; !ok {
+		t.Fatalf("expected TaskResult handler when registry is set")
+	}
+	if len(defs) != 8 {
+		t.Fatalf("tool defs = %d, want 8 (6 base + Task + TaskResult)", len(defs))
+	}
+}
+
+func TestExecuteToolCallWithOutputAndError(t *testing.T) {
+	t.Parallel()
+	handlers := map[string]Handler{
+		"PartialFail": {Call: func(context.Context, []byte) (string, error) {
+			return "some output", errors.New("partial error")
+		}},
+	}
+	resp := executeToolCall(context.Background(), llms.ToolCall{
+		ID:           "1",
+		FunctionCall: &llms.FunctionCall{Name: "PartialFail", Arguments: "{}"},
+	}, handlers)
+	if !strings.Contains(resp.Content, "some output") {
+		t.Fatalf("expected output in response, got: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "error: partial error") {
+		t.Fatalf("expected error in response, got: %s", resp.Content)
+	}
+}
