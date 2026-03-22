@@ -11,7 +11,7 @@ var (
 	_ Executor = (*LocalExecutor)(nil)
 	_ Executor = (*DockerExecutor)(nil)
 	_ Executor = (*SSMExecutor)(nil)
-	_ Executor = (*KubectlExecutor)(nil)
+	_ Executor = (*KubeExecutor)(nil)
 )
 
 func TestLocalExecutor(t *testing.T) {

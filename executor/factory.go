@@ -15,7 +15,7 @@ func New(cfg *Config, workingDir string) (Executor, error) {
 	case "ssm":
 		return NewSSMExecutor(cfg)
 	case "kubectl":
-		return NewKubectlExecutor(cfg)
+		return NewKubeExecutor(cfg)
 	default:
 		return nil, fmt.Errorf("unknown executor type: %q", cfg.Type)
 	}
