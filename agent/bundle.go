@@ -3,6 +3,7 @@ package agent
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,20 @@ type Manifest struct {
 	References  []string         `yaml:"references"`
 	Task        string           `yaml:"task,omitempty"`
 	Environment *executor.Config `yaml:"environment,omitempty"`
+	DependsOn   []string         `yaml:"depends_on,omitempty"`
+	Output      *OutputConfig    `yaml:"output,omitempty"`
+}
+
+// OutputConfig specifies the structured output contract for an agent.
+// When format is "json", the agent's system prompt is augmented with
+// instructions to emit JSON matching the declared schema.
+type OutputConfig struct {
+	// Format is the output format: "json" or "markdown" (default: "markdown").
+	Format string `yaml:"format,omitempty"`
+
+	// Schema is a JSON Schema definition for the agent's output.
+	// Only used when Format is "json".
+	Schema map[string]any `yaml:"schema,omitempty"`
 }
 
 // Bundle contains the assembled system, user, and combined prompt content for an agent run.
@@ -241,6 +256,21 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		sys.WriteString("\n\n## Task\n\n")
 		sys.WriteString(taskContent)
 		sys.WriteString("\n")
+	}
+
+	// Inject structured output contract if configured.
+	if manifest.Output != nil && manifest.Output.Format == "json" {
+		sys.WriteString("\n\n## Output Contract\n\n")
+		sys.WriteString("You MUST emit your final response as a single JSON object.\n")
+		sys.WriteString("Do not wrap it in markdown code fences.\n")
+		if len(manifest.Output.Schema) > 0 {
+			schemaBytes, schemaErr := json.MarshalIndent(manifest.Output.Schema, "", "  ")
+			if schemaErr == nil {
+				sys.WriteString("\nYour output must conform to this JSON Schema:\n\n")
+				sys.Write(schemaBytes)
+				sys.WriteString("\n")
+			}
+		}
 	}
 
 	userMessage := prompt
