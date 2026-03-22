@@ -436,3 +436,113 @@ task: missing.md
 		})
 	}
 }
+
+func TestBuildBundle_DependsOn(t *testing.T) {
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+depends_on:
+  - go-cobra
+  - go-review
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	// Verify it parses without error (depends_on is metadata, not used at build time).
+	_, err := BuildBundle(dir, "demo", "prompt", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+
+	// Verify manifest parsing via loadManifest.
+	m, err := loadManifest(filepath.Join(dir, "demo"))
+	if err != nil {
+		t.Fatalf("loadManifest: %v", err)
+	}
+	if len(m.DependsOn) != 2 || m.DependsOn[0] != "go-cobra" || m.DependsOn[1] != "go-review" {
+		t.Fatalf("depends_on = %v, want [go-cobra go-review]", m.DependsOn)
+	}
+}
+
+func TestBuildBundle_OutputContractJSON(t *testing.T) {
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+output:
+  format: json
+  schema:
+    type: object
+    required:
+      - status
+      - findings
+    properties:
+      status:
+        type: string
+      findings:
+        type: array
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+
+	assertContains(t, bundle.System, "Output Contract", "system")
+	assertContains(t, bundle.System, "single JSON object", "system")
+	assertContains(t, bundle.System, "JSON Schema", "system")
+	assertContains(t, bundle.System, `"status"`, "system")
+}
+
+func TestBuildBundle_OutputContractMarkdown(t *testing.T) {
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+output:
+  format: markdown
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+
+	// Markdown format should not inject JSON output contract.
+	assertNotContains(t, bundle.System, "Output Contract", "system")
+}
+
+func TestBuildBundle_NoOutputConfig(t *testing.T) {
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+
+	// No output config should not inject contract.
+	assertNotContains(t, bundle.System, "Output Contract", "system")
+}
