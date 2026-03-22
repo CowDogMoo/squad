@@ -10,25 +10,28 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/cowdogmoo/squad/executor"
 	"gopkg.in/yaml.v3"
 )
 
 // Manifest represents the structure of an agent's manifest file.
 type Manifest struct {
-	Name       string   `yaml:"name"`
-	Version    string   `yaml:"version"`
-	EntryPoint string   `yaml:"entrypoint"`
-	Wrapper    string   `yaml:"wrapper"`
-	References []string `yaml:"references"`
-	Task       string   `yaml:"task,omitempty"`
+	Name        string           `yaml:"name"`
+	Version     string           `yaml:"version"`
+	EntryPoint  string           `yaml:"entrypoint"`
+	Wrapper     string           `yaml:"wrapper"`
+	References  []string         `yaml:"references"`
+	Task        string           `yaml:"task,omitempty"`
+	Environment *executor.Config `yaml:"environment,omitempty"`
 }
 
 // Bundle contains the assembled system, user, and combined prompt content for an agent run.
 type Bundle struct {
-	System   string // wrapper + system prompt + references + task
-	User     string // user request (CLI prompt or default)
-	Combined []byte // concatenated for --print-bundle/--bundle-out
-	WorkDir  string
+	System      string // wrapper + system prompt + references + task
+	User        string // user request (CLI prompt or default)
+	Combined    []byte // concatenated for --print-bundle/--bundle-out
+	WorkDir     string
+	Environment *executor.Config // execution environment from agent manifest
 }
 
 // TemplateData holds the data passed to prompt templates.
@@ -252,9 +255,10 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 	combined.WriteString("\n")
 
 	return &Bundle{
-		System:   sys.String(),
-		User:     userMessage,
-		Combined: combined.Bytes(),
-		WorkDir:  workingDir,
+		System:      sys.String(),
+		User:        userMessage,
+		Combined:    combined.Bytes(),
+		WorkDir:     workingDir,
+		Environment: manifest.Environment,
 	}, nil
 }

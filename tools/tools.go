@@ -3,18 +3,17 @@ package tools
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/tmc/langchaingo/llms"
@@ -141,8 +140,8 @@ func (t *RepeatTracker) Exceeded() bool {
 	return t.Count >= limit
 }
 
-func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations int, taskCfg *TaskConfig, m *metrics.Metrics, callOpts ...llms.CallOption) (string, error) {
-	handlers, toolDefs := BuildHandlers(workingDir, taskCfg)
+func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations int, taskCfg *TaskConfig, m *metrics.Metrics, ex executor.Executor, callOpts ...llms.CallOption) (string, error) {
+	handlers, toolDefs := BuildHandlers(workingDir, taskCfg, ex)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
 	if maxIterations <= 0 {
@@ -376,7 +375,7 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 	return toolResponse
 }
 
-func BuildHandlers(workingDir string, taskCfg *TaskConfig) (map[string]Handler, []llms.Tool) {
+func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor) (map[string]Handler, []llms.Tool) {
 	handlers := map[string]Handler{}
 
 	add := func(handler Handler) {
@@ -389,7 +388,7 @@ func BuildHandlers(workingDir string, taskCfg *TaskConfig) (map[string]Handler, 
 	add(Handler{Def: definitionEdit(), Call: trackEdits(editTool(workingDir))})
 	add(Handler{Def: definitionGlob(), Call: globTool(workingDir)})
 	add(Handler{Def: definitionGrep(), Call: grepTool(workingDir)})
-	add(Handler{Def: definitionBash(), Call: bashTool(workingDir)})
+	add(Handler{Def: definitionBash(), Call: bashTool(ex)})
 
 	if taskCfg != nil {
 		add(Handler{Def: definitionTask(), Call: taskTool(*taskCfg)})
@@ -845,7 +844,7 @@ func grepVisitFile(workingDir string, re *regexp.Regexp, matches *[]string) file
 	}
 }
 
-func bashTool(workingDir string) func(ctx context.Context, rawArgs []byte) (string, error) {
+func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (string, error) {
 	type args struct {
 		Command string `json:"command"`
 	}
@@ -858,16 +857,11 @@ func bashTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		if command == "" {
 			return "", fmt.Errorf("command is required")
 		}
-		cmd := exec.CommandContext(ctx, "bash", "-lc", command)
-		cmd.Dir = workingDir
-		var buf bytes.Buffer
-		cmd.Stdout = &buf
-		cmd.Stderr = &buf
-		if err := cmd.Run(); err != nil {
-			output := limitOutput(buf.Bytes())
-			return string(output), fmt.Errorf("command failed: %w", err)
+		output, err := ex.Execute(ctx, command)
+		if err != nil {
+			return string(limitOutput(output)), fmt.Errorf("command failed: %w", err)
 		}
-		return string(limitOutput(buf.Bytes())), nil
+		return string(limitOutput(output)), nil
 	}
 }
 

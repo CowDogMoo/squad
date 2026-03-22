@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/responses"
 )
 
@@ -169,6 +170,7 @@ func TestCallLangChainLLMWithOllama(t *testing.T) {
 
 	opts := &RunOptions{Provider: "ollama", BaseURL: server.URL, MaxIterations: 1}
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
+	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
 	response, _, err := callLangChainLLM(
 		context.Background(),
 		opts,
@@ -179,6 +181,7 @@ func TestCallLangChainLLMWithOllama(t *testing.T) {
 		0.4,
 		0,
 		nil,
+		ex,
 	)
 	if err != nil {
 		t.Fatalf("callLangChainLLM() error = %v", err)
@@ -244,6 +247,7 @@ func TestCallResponsesAPIRoundTrip(t *testing.T) {
 
 	opts := &RunOptions{APIKey: "key", BaseURL: server.URL, MaxIterations: 1}
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
+	ex2 := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
 	response, _, err := callResponsesAPI(
 		context.Background(),
 		opts,
@@ -253,6 +257,7 @@ func TestCallResponsesAPIRoundTrip(t *testing.T) {
 		0.4,
 		100,
 		nil,
+		ex2,
 	)
 	if err != nil {
 		t.Fatalf("callResponsesAPI() error = %v", err)
@@ -405,6 +410,7 @@ func TestCallModelRoutes(t *testing.T) {
 			}
 
 			bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
+			ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
 			got, _, err := callModel(
 				context.Background(),
 				opts,
@@ -415,6 +421,7 @@ func TestCallModelRoutes(t *testing.T) {
 				0.4,
 				0,
 				nil,
+				ex,
 			)
 			if err != nil {
 				t.Fatalf("callModel() error = %v", err)
@@ -429,6 +436,7 @@ func TestCallModelRoutes(t *testing.T) {
 func TestCallLangChainLLMUnknownProvider(t *testing.T) {
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
 	opts := &RunOptions{Provider: "unknown"}
+	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
 	_, _, err := callLangChainLLM(
 		context.Background(),
 		opts,
@@ -439,6 +447,7 @@ func TestCallLangChainLLMUnknownProvider(t *testing.T) {
 		0.2,
 		0,
 		nil,
+		ex,
 	)
 	if err == nil {
 		t.Fatalf("expected error")

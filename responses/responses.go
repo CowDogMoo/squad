@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/tools"
@@ -77,9 +78,9 @@ func UseResponsesAPI(provider, model string, prefixes []string) bool {
 }
 
 // RunWithTools drives a tool-calling loop using the OpenAI Responses API.
-func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations int, reasoningPrefixes []string, taskCfg *tools.TaskConfig, m *metrics.Metrics) (string, error) {
+func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations int, reasoningPrefixes []string, taskCfg *tools.TaskConfig, m *metrics.Metrics, ex executor.Executor) (string, error) {
 	client := newClient(apiKey, baseURL, organization)
-	handlers, toolDefs := tools.BuildHandlers(workingDir, taskCfg)
+	handlers, toolDefs := tools.BuildHandlers(workingDir, taskCfg, ex)
 	if maxIterations <= 0 {
 		maxIterations = tools.MaxToolIterations
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
+	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/ollama"
@@ -32,20 +33,26 @@ func invokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 		systemPrompt += "\n\n## System Override\n\n" + strings.TrimSpace(opts.System) + "\n"
 	}
 
+	ex, err := executor.New(bundle.Environment, bundle.WorkDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create executor: %w", err)
+	}
+	defer ex.Close()
+
 	taskCfg := buildTaskConfig(opts)
-	return callModel(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg)
+	return callModel(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
 }
 
 // callModel dispatches the prompt to the appropriate model backend and returns the response.
-func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, *metrics.Metrics, error) {
+func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor) (string, *metrics.Metrics, error) {
 	if responses.UseResponsesAPI(provider, model, reasoningPrefixes(opts)) {
-		return callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens, taskCfg)
+		return callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
 	}
-	return callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg)
+	return callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
 }
 
 // callResponsesAPI runs the prompt via the OpenAI Responses API.
-func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, *metrics.Metrics, error) {
+func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor) (string, *metrics.Metrics, error) {
 	apiKey := opts.APIKey
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_API_KEY")
@@ -74,7 +81,7 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 		taskCfg.ParentMetrics = m
 	}
 	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
-	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens, opts.MaxIterations, reasoningPrefixes(opts), taskCfg, m)
+	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens, opts.MaxIterations, reasoningPrefixes(opts), taskCfg, m, ex)
 	m.Finish()
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
@@ -87,7 +94,7 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 }
 
 // callLangChainLLM runs the prompt via a LangChain-compatible LLM.
-func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig) (string, *metrics.Metrics, error) {
+func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor) (string, *metrics.Metrics, error) {
 	llm, err := buildLLM(opts, provider, model)
 	if err != nil {
 		return "", nil, err
@@ -101,7 +108,7 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		taskCfg.ParentMetrics = m
 	}
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
-	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, opts.MaxIterations, taskCfg, m, callOpts...)
+	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, opts.MaxIterations, taskCfg, m, ex, callOpts...)
 	m.Finish()
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {

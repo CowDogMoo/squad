@@ -7,3 +7,13 @@ wrapper: agent.md
 references:
   - references/{{.Name}}-guide.md
 task: task.md
+# environment:
+#   type: local  # local | docker | ssm | kubectl
+#   options:
+#     image: ubuntu:22.04        # docker: container image
+#     volumes: /host:/container   # docker: comma-separated volume mounts
+#     instance_id: i-0abc123     # ssm: EC2 instance ID
+#     region: us-east-1          # ssm: AWS region
+#     pod: my-pod                # kubectl: pod name
+#     namespace: default         # kubectl: namespace
+#     container: app             # kubectl: container (multi-container pods)
