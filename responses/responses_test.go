@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/tools"
 	openai "github.com/openai/openai-go/v3"
@@ -337,6 +338,7 @@ func TestRunWithToolsNoToolCalls(t *testing.T) {
 	}))
 	defer server.Close()
 
+	td := t.TempDir()
 	resp, err := RunWithTools(
 		context.Background(),
 		"key",
@@ -344,7 +346,7 @@ func TestRunWithToolsNoToolCalls(t *testing.T) {
 		"gpt-4o",
 		"system",
 		"user",
-		t.TempDir(),
+		td,
 		"",
 		0.4,
 		0,
@@ -352,6 +354,7 @@ func TestRunWithToolsNoToolCalls(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		&executor.LocalExecutor{WorkingDir: td},
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
@@ -452,6 +455,7 @@ func TestRunWithToolsExhaustedWithPendingCalls(t *testing.T) {
 	}))
 	defer server.Close()
 
+	td2 := t.TempDir()
 	resp, err := RunWithTools(
 		context.Background(),
 		"key",
@@ -459,7 +463,7 @@ func TestRunWithToolsExhaustedWithPendingCalls(t *testing.T) {
 		"gpt-4o",
 		"system",
 		"user",
-		t.TempDir(),
+		td2,
 		"",
 		0.4,
 		0,
@@ -467,6 +471,7 @@ func TestRunWithToolsExhaustedWithPendingCalls(t *testing.T) {
 		nil,
 		&tools.TaskConfig{},
 		nil,
+		&executor.LocalExecutor{WorkingDir: td2},
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
@@ -552,6 +557,7 @@ func TestRunWithToolsFollowUp(t *testing.T) {
 	}))
 	defer server.Close()
 
+	td3 := t.TempDir()
 	resp, err := RunWithTools(
 		context.Background(),
 		"key",
@@ -559,7 +565,7 @@ func TestRunWithToolsFollowUp(t *testing.T) {
 		"gpt-4o",
 		"system",
 		"user",
-		t.TempDir(),
+		td3,
 		"",
 		0.4,
 		0,
@@ -567,6 +573,7 @@ func TestRunWithToolsFollowUp(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		&executor.LocalExecutor{WorkingDir: td3},
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
@@ -739,6 +746,7 @@ func TestRunWithToolsErrors(t *testing.T) {
 			server := tt.setup(t)
 			defer server.Close()
 
+			td := t.TempDir()
 			_, err := RunWithTools(
 				context.Background(),
 				"key",
@@ -746,7 +754,7 @@ func TestRunWithToolsErrors(t *testing.T) {
 				"gpt-4o",
 				"system",
 				"user",
-				t.TempDir(),
+				td,
 				"",
 				0.2,
 				0,
@@ -754,6 +762,7 @@ func TestRunWithToolsErrors(t *testing.T) {
 				nil,
 				&tools.TaskConfig{},
 				nil,
+				&executor.LocalExecutor{WorkingDir: td},
 			)
 			if err == nil {
 				t.Fatalf("expected error")
@@ -831,6 +840,7 @@ func TestRunWithToolsBudgetExceededDuringLoop(t *testing.T) {
 	m.SetMaxCost(0.0001)
 	m.AddTokens(1_000_000, 1_000_000) // pre-exceed budget
 
+	td4 := t.TempDir()
 	text, err := RunWithTools(
 		context.Background(),
 		"key",
@@ -838,7 +848,7 @@ func TestRunWithToolsBudgetExceededDuringLoop(t *testing.T) {
 		"gpt-4o",
 		"system",
 		"user",
-		t.TempDir(),
+		td4,
 		"",
 		0.4,
 		0,
@@ -846,6 +856,7 @@ func TestRunWithToolsBudgetExceededDuringLoop(t *testing.T) {
 		nil,
 		nil,
 		m,
+		&executor.LocalExecutor{WorkingDir: td4},
 	)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)

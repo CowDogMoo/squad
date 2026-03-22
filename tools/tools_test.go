@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/tmc/langchaingo/llms"
 )
@@ -218,7 +219,7 @@ func TestBuildHandlers(t *testing.T) {
 					},
 				}
 			}
-			handlers, defs := BuildHandlers(dir, cfg)
+			handlers, defs := BuildHandlers(dir, cfg, &executor.LocalExecutor{WorkingDir: dir})
 			if _, ok := handlers["Task"]; ok != tt.withTask {
 				t.Fatalf(
 					"Task handler present = %v, want %v",
@@ -396,7 +397,7 @@ func TestBashTool(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			bash := bashTool(dir)
+			bash := bashTool(&executor.LocalExecutor{WorkingDir: dir})
 			out, err := bash(
 				context.Background(), []byte(tt.payload),
 			)
@@ -825,7 +826,7 @@ func TestRunWithToolsLoop(t *testing.T) {
 		},
 	}}
 
-	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, nil, nil)
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, nil, nil, &executor.LocalExecutor{WorkingDir: dir})
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
 	}
@@ -866,7 +867,8 @@ func TestRunWithToolsErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := RunWithTools(context.Background(), tt.llm, "", "user", t.TempDir(), 1, nil, nil)
+			td := t.TempDir()
+			_, err := RunWithTools(context.Background(), tt.llm, "", "user", td, 1, nil, nil, &executor.LocalExecutor{WorkingDir: td})
 			if err == nil {
 				t.Fatalf("expected error")
 			}
@@ -1382,7 +1384,7 @@ func TestRunWithToolsWithMetrics(t *testing.T) {
 	}}
 
 	m := metrics.New("openai", "gpt-4o")
-	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, nil, m)
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, nil, m, &executor.LocalExecutor{WorkingDir: dir})
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
 	}
@@ -1434,7 +1436,7 @@ func TestToolLoopBudgetExceeded(t *testing.T) {
 	// Pre-load tokens so budget is exceeded after the first tool call
 	m.AddTokens(1_000_000, 1_000_000)
 
-	_, err := RunWithTools(context.Background(), llm, "", "user", dir, 10, nil, m)
+	_, err := RunWithTools(context.Background(), llm, "", "user", dir, 10, nil, m, &executor.LocalExecutor{WorkingDir: dir})
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
@@ -1578,7 +1580,7 @@ func TestBuildHandlersWithRegistry(t *testing.T) {
 			return "", nil, nil
 		},
 	}
-	handlers, defs := BuildHandlers(dir, cfg)
+	handlers, defs := BuildHandlers(dir, cfg, &executor.LocalExecutor{WorkingDir: dir})
 	if _, ok := handlers["TaskResult"]; !ok {
 		t.Fatalf("expected TaskResult handler when registry is set")
 	}
