@@ -37,7 +37,7 @@ func invokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create executor: %w", err)
 	}
-	defer ex.Close()
+	defer func() { _ = ex.Close() }()
 
 	taskCfg := buildTaskConfig(opts)
 	return callModel(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
