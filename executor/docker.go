@@ -13,15 +13,45 @@ import (
 type DockerExecutor struct {
 	containerID string
 	shell       string
+	runner      cmdRunner
+}
+
+// cmdRunner abstracts os/exec for testing.
+type cmdRunner interface {
+	Run(ctx context.Context, name string, args ...string) ([]byte, error)
+	RunInDir(ctx context.Context, dir, name string, args ...string) ([]byte, error)
+}
+
+// execRunner implements cmdRunner using real os/exec.
+type execRunner struct{}
+
+func (r *execRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	var buf bytes.Buffer
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err := cmd.Run()
+	return buf.Bytes(), err
+}
+
+func (r *execRunner) RunInDir(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	var buf bytes.Buffer
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err := cmd.Run()
+	return buf.Bytes(), err
 }
 
 // NewDockerExecutor creates a Docker container from the given config
 // and returns an executor that runs commands inside it.
 func NewDockerExecutor(cfg *Config, workingDir string) (*DockerExecutor, error) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		return nil, fmt.Errorf("docker executable not found: %w", err)
-	}
+	return newDockerExecutor(cfg, workingDir, &execRunner{})
+}
 
+// newDockerExecutor is the internal constructor, injectable for testing.
+func newDockerExecutor(cfg *Config, workingDir string, runner cmdRunner) (*DockerExecutor, error) {
 	image := cfg.Options["image"]
 	if image == "" {
 		return nil, fmt.Errorf("docker executor requires 'image' option")
@@ -32,12 +62,33 @@ func NewDockerExecutor(cfg *Config, workingDir string) (*DockerExecutor, error) 
 		shell = "/bin/sh"
 	}
 
+	args := buildDockerRunArgs(cfg, workingDir)
+	args = append(args, image, "tail", "-f", "/dev/null")
+
+	out, err := runner.Run(context.Background(), "docker", args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start docker container: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	containerID := strings.TrimSpace(string(out))
+	if containerID == "" {
+		return nil, fmt.Errorf("docker run returned empty container ID")
+	}
+
+	return &DockerExecutor{
+		containerID: containerID,
+		shell:       shell,
+		runner:      runner,
+	}, nil
+}
+
+// buildDockerRunArgs constructs the docker run arguments from config.
+func buildDockerRunArgs(cfg *Config, workingDir string) []string {
 	containerWorkDir := cfg.Options["working_dir"]
 	if containerWorkDir == "" {
 		containerWorkDir = "/work"
 	}
 
-	// Build docker run args for a long-lived container.
 	args := []string{"run", "-d", "--rm", "-w", containerWorkDir}
 
 	// Mount volumes.
@@ -68,41 +119,16 @@ func NewDockerExecutor(cfg *Config, workingDir string) (*DockerExecutor, error) 
 		args = append(args, "--platform", platform)
 	}
 
-	// Image and entrypoint that keeps the container alive.
-	args = append(args, image, "tail", "-f", "/dev/null")
-
-	var out bytes.Buffer
-	cmd := exec.Command("docker", args...)
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("failed to start docker container: %s: %w", strings.TrimSpace(out.String()), err)
-	}
-
-	containerID := strings.TrimSpace(out.String())
-	if containerID == "" {
-		return nil, fmt.Errorf("docker run returned empty container ID")
-	}
-
-	return &DockerExecutor{
-		containerID: containerID,
-		shell:       shell,
-	}, nil
+	return args
 }
 
 // Execute runs a command inside the Docker container.
 func (e *DockerExecutor) Execute(ctx context.Context, command string) ([]byte, error) {
-	args := []string{"exec", e.containerID, e.shell, "-c", command}
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err := cmd.Run()
-	return buf.Bytes(), err
+	return e.runner.RunInDir(ctx, "", "docker", "exec", e.containerID, e.shell, "-c", command)
 }
 
 // Close stops and removes the Docker container.
 func (e *DockerExecutor) Close() error {
-	cmd := exec.Command("docker", "rm", "-f", e.containerID)
-	return cmd.Run()
+	_, err := e.runner.Run(context.Background(), "docker", "rm", "-f", e.containerID)
+	return err
 }

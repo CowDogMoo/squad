@@ -433,6 +433,54 @@ func TestCallModelRoutes(t *testing.T) {
 	}
 }
 
+func TestInvokeModel_ExecutorError(t *testing.T) {
+	t.Parallel()
+	bundle := &agent.Bundle{
+		System:  "system",
+		User:    "user",
+		WorkDir: t.TempDir(),
+		Environment: &executor.Config{
+			Type:    "quantum", // unknown executor type
+			Options: map[string]string{},
+		},
+	}
+	opts := &RunOptions{Provider: "openai", Model: "gpt-4o", APIKey: "key"}
+
+	_, _, err := invokeModel(context.Background(), opts, bundle)
+	if err == nil {
+		t.Fatal("expected error from unknown executor type")
+	}
+	if !strings.Contains(err.Error(), "failed to create executor") {
+		t.Fatalf("error = %q, want 'failed to create executor'", err)
+	}
+}
+
+func TestInvokeModel_SystemOverride(t *testing.T) {
+	t.Parallel()
+	// This tests the system override path in invokeModel.
+	// It will fail on API call but exercises the system override code path.
+	bundle := &agent.Bundle{
+		System:  "base system",
+		User:    "user",
+		WorkDir: t.TempDir(),
+	}
+	opts := &RunOptions{
+		Provider: "openai-responses",
+		Model:    "gpt-4o",
+		System:   "extra instructions",
+		// No API key → will fail at API call
+	}
+
+	_, _, err := invokeModel(context.Background(), opts, bundle)
+	if err == nil {
+		t.Fatal("expected error (no API key)")
+	}
+	// The error should be about API key, not about system override
+	if !strings.Contains(err.Error(), "API key required") {
+		t.Fatalf("error = %q, want API key error", err)
+	}
+}
+
 func TestCallLangChainLLMUnknownProvider(t *testing.T) {
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
 	opts := &RunOptions{Provider: "unknown"}

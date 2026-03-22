@@ -207,3 +207,77 @@ func TestNewKubeExecutor_MissingPod(t *testing.T) {
 		t.Fatalf("error = %q, want mention of 'pod'", err)
 	}
 }
+
+func TestKubeExecutor_CustomShell(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Type: "kubectl",
+		Options: map[string]string{
+			"pod":   "test-pod",
+			"shell": "/bin/bash",
+		},
+	}
+
+	ex := newKubeExecutor(fake.NewSimpleClientset(), testRestConfig, cfg, newFakeSPDYCreator("", "", nil))
+
+	if ex.shell != "/bin/bash" {
+		t.Fatalf("shell = %q, want '/bin/bash'", ex.shell)
+	}
+}
+
+func TestKubeExecutor_CustomNamespace(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Type: "kubectl",
+		Options: map[string]string{
+			"pod":       "test-pod",
+			"namespace": "kube-system",
+		},
+	}
+
+	ex := newKubeExecutor(fake.NewSimpleClientset(), testRestConfig, cfg, newFakeSPDYCreator("", "", nil))
+
+	if ex.namespace != "kube-system" {
+		t.Fatalf("namespace = %q, want 'kube-system'", ex.namespace)
+	}
+}
+
+func TestKubeExecutor_StdoutOnly(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Type: "kubectl",
+		Options: map[string]string{
+			"pod": "test-pod",
+		},
+	}
+
+	ex := newKubeExecutor(testClient(t), testRestConfig, cfg, newFakeSPDYCreator("just stdout", "", nil))
+
+	out, err := ex.Execute(context.Background(), "echo test")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if string(out) != "just stdout" {
+		t.Fatalf("output = %q, want 'just stdout'", string(out))
+	}
+}
+
+func TestBuildRestConfig_InvalidKubeconfig(t *testing.T) {
+	t.Parallel()
+	// buildRestConfig with a nonexistent kubeconfig and no in-cluster env
+	// should fail (we're not in a cluster and the file doesn't exist).
+	_, err := buildRestConfig("/nonexistent/kubeconfig", "")
+	if err == nil {
+		t.Fatal("expected error for invalid kubeconfig path")
+	}
+}
+
+func TestBuildRestConfig_WithContext(t *testing.T) {
+	t.Parallel()
+	// buildRestConfig with a nonexistent kubeconfig and a context override
+	// should still fail, but exercises the context override path.
+	_, err := buildRestConfig("/nonexistent/kubeconfig", "fake-context")
+	if err == nil {
+		t.Fatal("expected error for invalid kubeconfig path")
+	}
+}
