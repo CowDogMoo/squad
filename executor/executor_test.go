@@ -18,7 +18,7 @@ func TestLocalExecutor(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	ex := &LocalExecutor{WorkingDir: dir}
-	defer ex.Close()
+	defer func() { _ = ex.Close() }()
 
 	out, err := ex.Execute(context.Background(), "printf 'hello'")
 	if err != nil {
@@ -34,7 +34,7 @@ func TestLocalExecutor_WorkingDir(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	ex := &LocalExecutor{WorkingDir: dir}
-	defer ex.Close()
+	defer func() { _ = ex.Close() }()
 
 	out, err := ex.Execute(context.Background(), "pwd")
 	if err != nil {
@@ -51,7 +51,7 @@ func TestLocalExecutor_WorkingDir(t *testing.T) {
 func TestLocalExecutor_CommandError(t *testing.T) {
 	t.Parallel()
 	ex := &LocalExecutor{WorkingDir: t.TempDir()}
-	defer ex.Close()
+	defer func() { _ = ex.Close() }()
 
 	_, err := ex.Execute(context.Background(), "false")
 	if err == nil {
@@ -68,7 +68,7 @@ func TestFactory_NilConfig(t *testing.T) {
 	if ex == nil {
 		t.Fatal("expected non-nil executor")
 	}
-	ex.Close()
+	_ = ex.Close()
 }
 
 func TestFactory_EmptyType(t *testing.T) {
@@ -80,7 +80,7 @@ func TestFactory_EmptyType(t *testing.T) {
 	if ex == nil {
 		t.Fatal("expected non-nil executor")
 	}
-	ex.Close()
+	_ = ex.Close()
 }
 
 func TestFactory_LocalType(t *testing.T) {
@@ -92,7 +92,7 @@ func TestFactory_LocalType(t *testing.T) {
 	if ex == nil {
 		t.Fatal("expected non-nil executor")
 	}
-	ex.Close()
+	_ = ex.Close()
 }
 
 func TestFactory_UnknownType(t *testing.T) {
