@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cowdogmoo/squad/executor"
 )
 
 // writeTestFiles writes multiple files to the given directory.
@@ -545,4 +547,55 @@ wrapper: wrapper.txt
 
 	// No output config should not inject contract.
 	assertNotContains(t, bundle.System, "Output Contract", "system")
+}
+
+func TestResolveEnvironmentTemplates(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil config", func(t *testing.T) {
+		t.Parallel()
+		if err := resolveEnvironmentTemplates(nil, TemplateData{}); err != nil {
+			t.Fatalf("expected nil error for nil config, got: %v", err)
+		}
+	})
+
+	t.Run("nil options", func(t *testing.T) {
+		t.Parallel()
+		cfg := &executor.Config{Type: "local"}
+		if err := resolveEnvironmentTemplates(cfg, TemplateData{}); err != nil {
+			t.Fatalf("expected nil error for nil options, got: %v", err)
+		}
+	})
+
+	t.Run("resolves templates", func(t *testing.T) {
+		t.Parallel()
+		cfg := &executor.Config{
+			Type: "local",
+			Options: map[string]string{
+				"mode":   "{{.Mode}}-resolved",
+				"static": "no-template-here",
+			},
+		}
+		data := TemplateData{Mode: "edit"}
+		if err := resolveEnvironmentTemplates(cfg, data); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Options["mode"] != "edit-resolved" {
+			t.Fatalf("expected resolved mode, got: %q", cfg.Options["mode"])
+		}
+		if cfg.Options["static"] != "no-template-here" {
+			t.Fatalf("static value changed: %q", cfg.Options["static"])
+		}
+	})
+
+	t.Run("invalid template syntax", func(t *testing.T) {
+		t.Parallel()
+		cfg := &executor.Config{
+			Type:    "local",
+			Options: map[string]string{"bad": "{{.Unclosed"},
+		}
+		if err := resolveEnvironmentTemplates(cfg, TemplateData{}); err == nil {
+			t.Fatalf("expected parse error for invalid template")
+		}
+	})
 }
