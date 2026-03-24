@@ -276,10 +276,15 @@ func TestSSMExecutor_Execute_CommandFailedStatus(t *testing.T) {
 	ex := &SSMExecutor{instanceID: "i-abc123", runner: runner}
 
 	out, err := ex.Execute(context.Background(), "cmd")
-	if err == nil || !strings.Contains(err.Error(), "Failed") {
-		t.Fatalf("expected status error, got: %v", err)
+	// "Failed" status means the command ran but exited non-zero — this is
+	// treated as a normal tool result (no error), with an exit code appended.
+	if err != nil {
+		t.Fatalf("expected no error for Failed status, got: %v", err)
 	}
 	if !strings.Contains(string(out), "partial output") {
 		t.Fatalf("expected partial output, got: %q", string(out))
+	}
+	if !strings.Contains(string(out), "[exit code") {
+		t.Fatalf("expected exit code annotation, got: %q", string(out))
 	}
 }
