@@ -278,3 +278,19 @@ func TestOutputWriterDefaultsToStdout(t *testing.T) {
 		t.Fatalf("expected outputWriter to default to stdout")
 	}
 }
+
+func TestWithPrefix(t *testing.T) {
+	t.Parallel()
+	orig := &CustomLogger{Prefix: "orig: "}
+	prefixed := orig.WithPrefix("new: ")
+
+	if prefixed.Prefix != "new: " {
+		t.Fatalf("expected prefix %q, got %q", "new: ", prefixed.Prefix)
+	}
+	if orig.Prefix != "orig: " {
+		t.Fatalf("original prefix mutated: got %q", orig.Prefix)
+	}
+	if prefixed == orig {
+		t.Fatalf("WithPrefix should return a new logger, not the same pointer")
+	}
+}

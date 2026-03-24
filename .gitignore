@@ -54,3 +54,6 @@ FIXME.md
 
 # Tool version files (machine-specific)
 .tool-versions
+
+# Go vendor directory
+vendor/

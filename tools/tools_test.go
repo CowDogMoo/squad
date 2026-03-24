@@ -1607,3 +1607,37 @@ func TestExecuteToolCallWithOutputAndError(t *testing.T) {
 		t.Fatalf("expected error in response, got: %s", resp.Content)
 	}
 }
+
+func TestToolArgsSummary(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		toolName string
+		argsJSON string
+		want     string
+	}{
+		{"invalid json", "Bash", "{bad", ""},
+		{"Read path", "Read", `{"path":"/tmp/foo"}`, "/tmp/foo"},
+		{"Write path", "Write", `{"path":"/tmp/bar"}`, "/tmp/bar"},
+		{"Edit path", "Edit", `{"path":"/tmp/baz"}`, "/tmp/baz"},
+		{"Glob pattern", "Glob", `{"pattern":"*.go"}`, "*.go"},
+		{"Bash command", "Bash", `{"command":"echo hello"}`, "echo hello"},
+		{"Bash empty command", "Bash", `{"command":""}`, ""},
+		{"Grep pattern only", "Grep", `{"pattern":"foo"}`, "foo"},
+		{"Grep pattern with path", "Grep", `{"pattern":"foo","path":"/src"}`, "foo in /src"},
+		{"Task with agent", "Task", `{"agent":"review","prompt":"check code quality and style"}`, `agent=review prompt="check code quality and style"`},
+		{"Task without agent", "Task", `{"prompt":"do stuff"}`, ""},
+		{"TaskResult", "TaskResult", `{"id":"abc-123"}`, "id=abc-123"},
+		{"unknown tool", "Unknown", `{"x":"y"}`, ""},
+		{"non-string value", "Read", `{"path":123}`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := toolArgsSummary(tt.toolName, tt.argsJSON)
+			if got != tt.want {
+				t.Errorf("toolArgsSummary(%q, %q) = %q, want %q", tt.toolName, tt.argsJSON, got, tt.want)
+			}
+		})
+	}
+}
