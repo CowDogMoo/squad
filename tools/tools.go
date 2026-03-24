@@ -181,30 +181,29 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 			m.IncrementIterations()
 		}
 
-		choice := response.Choices[0]
-		if gi := choice.GenerationInfo; gi != nil {
-			logging.DebugContext(ctx, "generation info: %v", gi)
-			if m != nil {
-				extractTokenUsage(gi, m)
-			}
+		mergedContent, mergedToolCalls := mergeChoices(ctx, response.Choices, m)
+		if mergedContent != "" {
+			lastContent = mergedContent
 		}
-		if choice.Content != "" {
-			lastContent = choice.Content
-		}
-		if len(choice.ToolCalls) == 0 {
+		if len(mergedToolCalls) == 0 {
 			logging.InfoContext(ctx, "model returned final response in %s (no tool calls)", iterDuration.Round(time.Millisecond))
-			return choice.Content, messages, nil, true
+			return mergedContent, messages, nil, true
 		}
-		logging.DebugContext(ctx, "model responded in %s with %d tool call(s)", iterDuration.Round(time.Millisecond), len(choice.ToolCalls))
+		// Log the model's reasoning/text before tool calls so operators can
+		// follow the agent's chain of thought.
+		if mergedContent != "" {
+			logging.InfoContext(ctx, "model: %s", TruncateString(strings.ReplaceAll(mergedContent, "\n", " "), 200))
+		}
+		logging.InfoContext(ctx, "model making %d tool call(s) in %s", len(mergedToolCalls), iterDuration.Round(time.Millisecond))
 
-		repeat.Update(choice.ToolCalls)
+		repeat.Update(mergedToolCalls)
 		if repeat.Exceeded() {
 			logging.InfoContext(ctx, "model called %s %d times in a row, breaking tool loop", repeat.LastName, repeat.Count)
 			break
 		}
 
-		messages = appendToolCallMessage(messages, choice.ToolCalls, ctx)
-		messages = executeToolCalls(ctx, messages, choice.ToolCalls, handlers)
+		messages = appendToolCallMessage(messages, mergedContent, mergedToolCalls, ctx)
+		messages = executeToolCalls(ctx, messages, mergedToolCalls, handlers)
 
 		if m != nil && m.BudgetExceeded() {
 			logging.InfoContext(ctx, "budget exceeded ($%.4f >= $%.4f max), stopping tool loop", m.TotalCostWithChildren(), m.MaxCost)
@@ -229,6 +228,27 @@ func extractTokenUsage(gi map[string]any, m *metrics.Metrics) {
 	if input > 0 || output > 0 {
 		m.AddTokens(input, output)
 	}
+}
+
+// mergeChoices collects text and tool calls across all response choices.
+// Anthropic returns separate content blocks (text, tool_use) as separate
+// Choices; we must collect tool calls across all of them.
+func mergeChoices(ctx context.Context, choices []*llms.ContentChoice, m *metrics.Metrics) (string, []llms.ToolCall) {
+	var content string
+	var toolCalls []llms.ToolCall
+	for _, ch := range choices {
+		if gi := ch.GenerationInfo; gi != nil {
+			logging.DebugContext(ctx, "generation info: %v", gi)
+			if m != nil {
+				extractTokenUsage(gi, m)
+			}
+		}
+		if ch.Content != "" {
+			content = ch.Content
+		}
+		toolCalls = append(toolCalls, ch.ToolCalls...)
+	}
+	return content, toolCalls
 }
 
 func extractTokenValue(gi map[string]any, keys []string) int64 {
@@ -306,14 +326,19 @@ func buildInitialMessages(systemPrompt, userPrompt string) []llms.MessageContent
 	return messages
 }
 
-func appendToolCallMessage(messages []llms.MessageContent, toolCalls []llms.ToolCall, ctx context.Context) []llms.MessageContent {
+func appendToolCallMessage(messages []llms.MessageContent, textContent string, toolCalls []llms.ToolCall, ctx context.Context) []llms.MessageContent {
 	toolNames := make([]string, 0, len(toolCalls))
-	toolCallParts := make([]llms.ContentPart, 0, len(toolCalls))
+	// Anthropic requires the assistant message to contain both the text
+	// block and all tool_use blocks together.  Include text first if present.
+	var parts []llms.ContentPart
+	if textContent != "" {
+		parts = append(parts, llms.TextContent{Text: textContent})
+	}
 	for _, toolCall := range toolCalls {
 		if toolCall.FunctionCall != nil && toolCall.FunctionCall.Name != "" {
 			toolNames = append(toolNames, toolCall.FunctionCall.Name)
 		}
-		toolCallParts = append(toolCallParts, llms.ToolCall{
+		parts = append(parts, llms.ToolCall{
 			ID:           toolCall.ID,
 			Type:         toolCall.Type,
 			FunctionCall: toolCall.FunctionCall,
@@ -324,19 +349,22 @@ func appendToolCallMessage(messages []llms.MessageContent, toolCalls []llms.Tool
 	}
 	return append(messages, llms.MessageContent{
 		Role:  llms.ChatMessageTypeAI,
-		Parts: toolCallParts,
+		Parts: parts,
 	})
 }
 
 func executeToolCalls(ctx context.Context, messages []llms.MessageContent, toolCalls []llms.ToolCall, handlers map[string]Handler) []llms.MessageContent {
+	// Batch all tool results into a single message.  Anthropic requires every
+	// tool_result to be in the same user message that follows the assistant
+	// message containing the corresponding tool_use blocks.
+	parts := make([]llms.ContentPart, 0, len(toolCalls))
 	for _, toolCall := range toolCalls {
-		toolResponse := executeToolCall(ctx, toolCall, handlers)
-		messages = append(messages, llms.MessageContent{
-			Role:  llms.ChatMessageTypeTool,
-			Parts: []llms.ContentPart{toolResponse},
-		})
+		parts = append(parts, executeToolCall(ctx, toolCall, handlers))
 	}
-	return messages
+	return append(messages, llms.MessageContent{
+		Role:  llms.ChatMessageTypeTool,
+		Parts: parts,
+	})
 }
 
 func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[string]Handler) llms.ToolCallResponse {
@@ -356,7 +384,9 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 	}
 
 	toolResponse.Name = toolCall.FunctionCall.Name
-	logging.DebugContext(ctx, "tool %s args: %s", toolCall.FunctionCall.Name, TruncateString(toolCall.FunctionCall.Arguments, 200))
+	argsSummary := toolArgsSummary(toolCall.FunctionCall.Name, toolCall.FunctionCall.Arguments)
+	logging.InfoContext(ctx, "  → %s %s", toolCall.FunctionCall.Name, argsSummary)
+	logging.DebugContext(ctx, "tool %s full args: %s", toolCall.FunctionCall.Name, TruncateString(toolCall.FunctionCall.Arguments, 500))
 	toolStart := time.Now()
 	output, err := handler.Call(ctx, []byte(toolCall.FunctionCall.Arguments))
 	toolDuration := time.Since(toolStart)
@@ -367,12 +397,69 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 		} else {
 			toolResponse.Content = fmt.Sprintf("error: %v", err)
 		}
-		logging.DebugContext(ctx, "tool %s failed in %s: %v", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), err)
+		logging.InfoContext(ctx, "  ✗ %s failed in %s: %s", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), TruncateString(err.Error(), 200))
 	} else {
 		toolResponse.Content = output
-		logging.DebugContext(ctx, "tool %s completed in %s (output-bytes=%d)", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), len(output))
+		logging.InfoContext(ctx, "  ✓ %s done in %s (%d bytes)", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), len(output))
 	}
 	return toolResponse
+}
+
+// toolArgsSummary extracts a short, human-readable summary from tool call arguments.
+// For Bash it shows the command, for Read/Write/Edit the path, for Grep the pattern, etc.
+// argString extracts the first matching string value from a parsed JSON args map.
+func argString(args map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := args[k]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// simpleArgKeys maps tool names to the single arg key that summarizes them.
+var simpleArgKeys = map[string]string{
+	"Read":  "path",
+	"Write": "path",
+	"Edit":  "path",
+	"Glob":  "pattern",
+}
+
+func toolArgsSummary(toolName, argsJSON string) string {
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return ""
+	}
+	if key, ok := simpleArgKeys[toolName]; ok {
+		return argString(args, key)
+	}
+	return toolArgsSummaryComplex(toolName, args)
+}
+
+func toolArgsSummaryComplex(toolName string, args map[string]interface{}) string {
+	switch toolName {
+	case "Bash":
+		if cmd := argString(args, "command"); cmd != "" {
+			return TruncateString(cmd, 120)
+		}
+	case "Grep":
+		p := argString(args, "pattern")
+		if path := argString(args, "path"); path != "" {
+			return p + " in " + path
+		}
+		return p
+	case "Task":
+		agent := argString(args, "agent")
+		prompt := TruncateString(argString(args, "prompt"), 80)
+		if agent != "" {
+			return fmt.Sprintf("agent=%s prompt=%q", agent, prompt)
+		}
+	case "TaskResult":
+		return "id=" + argString(args, "id")
+	}
+	return ""
 }
 
 func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor) (map[string]Handler, []llms.Tool) {

@@ -75,10 +75,23 @@ type CustomLogger struct {
 	ConsoleWriter io.Writer
 	OutputWriter  io.Writer
 	Verbose       bool
+	Prefix        string // Optional prefix prepended to all log messages (e.g., "[bg-1] ")
+}
+
+// WithPrefix returns a shallow copy of the logger with the given prefix.
+// The prefix is prepended to every log line, making it easy to distinguish
+// output from different child agents or background tasks.
+func (l *CustomLogger) WithPrefix(prefix string) *CustomLogger {
+	cp := *l
+	cp.Prefix = prefix
+	return &cp
 }
 
 func (l *CustomLogger) formatMessage(level LogLevel, message string, args ...interface{}) string {
 	formattedMsg := fmt.Sprintf(message, args...)
+	if l.Prefix != "" {
+		formattedMsg = l.Prefix + formattedMsg
+	}
 
 	if l.OutputType != ColorOutput {
 		return formattedMsg

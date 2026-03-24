@@ -158,6 +158,25 @@ func loadManifest(agentPath string) (*Manifest, error) {
 	return &manifest, nil
 }
 
+// resolveEnvironmentTemplates processes template variables in environment options.
+func resolveEnvironmentTemplates(env *executor.Config, data TemplateData) error {
+	if env == nil || env.Options == nil {
+		return nil
+	}
+	for key, val := range env.Options {
+		tmpl, err := template.New(key).Parse(val)
+		if err != nil {
+			return fmt.Errorf("failed to parse environment option %s: %w", key, err)
+		}
+		var buf bytes.Buffer
+		if err := tmpl.Execute(&buf, data); err != nil {
+			return fmt.Errorf("failed to resolve environment option %s: %w", key, err)
+		}
+		env.Options[key] = buf.String()
+	}
+	return nil
+}
+
 // loadAndProcessPrompts loads system, wrapper, and task files, then processes them as templates.
 func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data TemplateData) (system, wrapper, task string, err error) {
 	systemData, err := readFileInRoot(agentPath, manifest.EntryPoint)
@@ -253,6 +272,12 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 	combined.WriteString("\n\n## User Message\n\n")
 	combined.WriteString(userMessage)
 	combined.WriteString("\n")
+
+	if manifest.Environment != nil {
+		if err := resolveEnvironmentTemplates(manifest.Environment, data); err != nil {
+			return nil, err
+		}
+	}
 
 	return &Bundle{
 		System:      sys.String(),

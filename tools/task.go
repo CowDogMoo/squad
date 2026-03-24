@@ -75,6 +75,10 @@ func (r *BackgroundTaskRegistry) SpawnTask(ctx context.Context, cfg TaskConfig, 
 
 		depth := TaskDepth(ctx)
 		childCtx := WithTaskDepth(ctx, depth+1)
+		// Give child agents a prefixed logger so their output is distinguishable.
+		parentLogger := logging.FromContext(ctx)
+		childLogger := parentLogger.WithPrefix(fmt.Sprintf("[%s] ", id))
+		childCtx = logging.WithLogger(childCtx, childLogger)
 		logging.InfoContext(ctx, "Task tool: spawning background child agent=%s id=%s depth=%d", args.Agent, id, depth+1)
 
 		response, childMetrics, err := cfg.CallModel(childCtx, cfg.AgentsDir, args.Agent, args.Prompt, workDir, args.Mode)
