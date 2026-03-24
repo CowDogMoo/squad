@@ -1,11 +1,9 @@
 package executor
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 )
 
 // SSMExecutor runs commands on an EC2 instance via AWS Systems Manager.
@@ -13,14 +11,16 @@ type SSMExecutor struct {
 	instanceID string
 	region     string
 	profile    string
+	runner     cmdRunner
 }
 
 // NewSSMExecutor creates an SSM executor targeting the given EC2 instance.
 func NewSSMExecutor(cfg *Config) (*SSMExecutor, error) {
-	if _, err := exec.LookPath("aws"); err != nil {
-		return nil, fmt.Errorf("aws CLI not found: %w", err)
-	}
+	return newSSMExecutor(cfg, &execRunner{})
+}
 
+// newSSMExecutor is the internal constructor, injectable for testing.
+func newSSMExecutor(cfg *Config, runner cmdRunner) (*SSMExecutor, error) {
 	instanceID := cfg.Options["instance_id"]
 	if instanceID == "" {
 		return nil, fmt.Errorf("ssm executor requires 'instance_id' option")
@@ -30,6 +30,7 @@ func NewSSMExecutor(cfg *Config) (*SSMExecutor, error) {
 		instanceID: instanceID,
 		region:     cfg.Options["region"],
 		profile:    cfg.Options["profile"],
+		runner:     runner,
 	}, nil
 }
 
@@ -59,12 +60,9 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 		"--output", "json",
 	)
 
-	var sendOut bytes.Buffer
-	sendCmd := exec.CommandContext(ctx, "aws", sendArgs...)
-	sendCmd.Stdout = &sendOut
-	sendCmd.Stderr = &sendOut
-	if err := sendCmd.Run(); err != nil {
-		return sendOut.Bytes(), fmt.Errorf("ssm send-command failed: %w", err)
+	sendOut, err := e.runner.Run(ctx, "aws", sendArgs...)
+	if err != nil {
+		return sendOut, fmt.Errorf("ssm send-command failed: %w", err)
 	}
 
 	// Extract the command ID from the response.
@@ -73,12 +71,12 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 			CommandID string `json:"CommandId"`
 		} `json:"Command"`
 	}
-	if err := json.Unmarshal(sendOut.Bytes(), &result); err != nil {
-		return sendOut.Bytes(), fmt.Errorf("failed to parse send-command response: %w", err)
+	if err := json.Unmarshal(sendOut, &result); err != nil {
+		return sendOut, fmt.Errorf("failed to parse send-command response: %w", err)
 	}
 	commandID := result.Command.CommandID
 	if commandID == "" {
-		return sendOut.Bytes(), fmt.Errorf("send-command returned empty CommandId")
+		return sendOut, fmt.Errorf("send-command returned empty CommandId")
 	}
 
 	// Wait for the command to complete and get output.
@@ -86,8 +84,7 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 		"--command-id", commandID,
 		"--instance-id", e.instanceID,
 	)
-	waitCmd := exec.CommandContext(ctx, "aws", waitArgs...)
-	_ = waitCmd.Run() // best-effort wait; get-command-invocation will show status
+	_, _ = e.runner.Run(ctx, "aws", waitArgs...) // best-effort wait
 
 	// Retrieve the output.
 	getArgs := e.baseArgs("ssm", "get-command-invocation",
@@ -96,12 +93,9 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 		"--output", "json",
 	)
 
-	var getOut bytes.Buffer
-	getCmd := exec.CommandContext(ctx, "aws", getArgs...)
-	getCmd.Stdout = &getOut
-	getCmd.Stderr = &getOut
-	if err := getCmd.Run(); err != nil {
-		return getOut.Bytes(), fmt.Errorf("ssm get-command-invocation failed: %w", err)
+	getOut, err := e.runner.Run(ctx, "aws", getArgs...)
+	if err != nil {
+		return getOut, fmt.Errorf("ssm get-command-invocation failed: %w", err)
 	}
 
 	var invocation struct {
@@ -110,8 +104,8 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 		Status                string `json:"Status"`
 		ResponseCode          int    `json:"ResponseCode"`
 	}
-	if err := json.Unmarshal(getOut.Bytes(), &invocation); err != nil {
-		return getOut.Bytes(), fmt.Errorf("failed to parse invocation response: %w", err)
+	if err := json.Unmarshal(getOut, &invocation); err != nil {
+		return getOut, fmt.Errorf("failed to parse invocation response: %w", err)
 	}
 
 	output := invocation.StandardOutputContent

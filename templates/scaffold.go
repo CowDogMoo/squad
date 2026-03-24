@@ -185,6 +185,64 @@ func generateDescription(name, lang string) string {
 	}
 }
 
+// PipelineData contains the data for rendering pipeline templates.
+type PipelineData struct {
+	Name        string // e.g. "security-pipeline"
+	Description string // e.g. "Security analysis pipeline"
+}
+
+// CreatePipelineOptions configures pipeline scaffolding.
+type CreatePipelineOptions struct {
+	Name        string
+	Description string
+	OutputDir   string
+	Force       bool
+}
+
+// CreatePipeline scaffolds a new pipeline config from templates.
+func CreatePipeline(ctx context.Context, opts CreatePipelineOptions) error {
+	if !IsValidAgentName(opts.Name) {
+		return fmt.Errorf("invalid pipeline name %q: must be lowercase alphanumeric with hyphens", opts.Name)
+	}
+
+	outPath := filepath.Join(opts.OutputDir, opts.Name+".yaml")
+
+	if _, err := os.Stat(outPath); err == nil {
+		if !opts.Force {
+			return fmt.Errorf("pipeline %q already exists at %s (use --force to overwrite)", opts.Name, outPath)
+		}
+		logging.WarnContext(ctx, "Overwriting existing pipeline at %s", outPath)
+	}
+
+	if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	description := opts.Description
+	if description == "" {
+		description = fmt.Sprintf("Pipeline for %s", ToTitleCase(opts.Name))
+	}
+
+	data := AgentData{
+		Name:        opts.Name,
+		NameTitle:   ToTitleCase(opts.Name),
+		Description: description,
+		Version:     "0.1.0",
+	}
+
+	content, err := Render("pipeline.yaml.tmpl", data)
+	if err != nil {
+		return fmt.Errorf("failed to render pipeline template: %w", err)
+	}
+
+	if err := os.WriteFile(outPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("failed to write pipeline config: %w", err)
+	}
+
+	logging.InfoContext(ctx, "Pipeline %q created at %s", opts.Name, outPath)
+	return nil
+}
+
 // copyDir recursively copies a directory.
 func copyDir(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {

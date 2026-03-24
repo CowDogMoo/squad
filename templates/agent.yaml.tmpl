@@ -7,6 +7,21 @@ wrapper: agent.md
 references:
   - references/{{.Name}}-guide.md
 task: task.md
+# depends_on:             # agents this agent requires to run first
+#   - go-cobra
+# output:                 # structured output contract
+#   format: json           # json | markdown (default: markdown)
+#   schema:                # JSON Schema for output validation
+#     type: object
+#     required: [status, findings]
+#     properties:
+#       status:
+#         type: string
+#         enum: [pass, fail, warn]
+#       findings:
+#         type: array
+#       summary:
+#         type: string
 # environment:
 #   type: local  # local | docker | ssm | kubectl
 #   options:

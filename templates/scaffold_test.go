@@ -292,6 +292,7 @@ func TestListTemplates(t *testing.T) {
 		"task.md.tmpl",
 		"README.md.tmpl",
 		"reference.md.tmpl",
+		"pipeline.yaml.tmpl",
 	}
 
 	for _, expected := range expectedTemplates {
@@ -396,6 +397,128 @@ func TestCopyAgentWithForce(t *testing.T) {
 			t.Error("system.md content not copied correctly")
 		}
 	})
+}
+
+func TestRenderPipelineTemplate(t *testing.T) {
+	data := AgentData{
+		Name:        "security-pipeline",
+		NameTitle:   "Security Pipeline",
+		Description: "Security analysis pipeline",
+		Version:     "1.0.0",
+	}
+
+	content, err := Render("pipeline.yaml.tmpl", data)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+
+	if !strings.Contains(content, "name: security-pipeline") {
+		t.Error("rendered pipeline missing name")
+	}
+	if !strings.Contains(content, "Security analysis pipeline") {
+		t.Error("rendered pipeline missing description")
+	}
+	if !strings.Contains(content, "stages:") {
+		t.Error("rendered pipeline missing stages section")
+	}
+}
+
+func TestCreatePipeline(t *testing.T) {
+	t.Run("creates pipeline config", func(t *testing.T) {
+		h := newTestHelper(t)
+		err := CreatePipeline(h.ctx, CreatePipelineOptions{
+			Name:      "my-pipeline",
+			OutputDir: h.tmpDir,
+		})
+		if err != nil {
+			t.Fatalf("CreatePipeline() error = %v", err)
+		}
+		if !h.fileExists("my-pipeline.yaml") {
+			t.Error("expected pipeline config to exist")
+		}
+		content := h.readFile("my-pipeline.yaml")
+		if !strings.Contains(content, "name: my-pipeline") {
+			t.Error("pipeline config missing name")
+		}
+	})
+
+	t.Run("uses custom description", func(t *testing.T) {
+		h := newTestHelper(t)
+		err := CreatePipeline(h.ctx, CreatePipelineOptions{
+			Name:        "test-pipeline",
+			Description: "Custom description",
+			OutputDir:   h.tmpDir,
+		})
+		if err != nil {
+			t.Fatalf("CreatePipeline() error = %v", err)
+		}
+		content := h.readFile("test-pipeline.yaml")
+		if !strings.Contains(content, "Custom description") {
+			t.Error("pipeline config missing custom description")
+		}
+	})
+
+	t.Run("rejects invalid name", func(t *testing.T) {
+		h := newTestHelper(t)
+		err := CreatePipeline(h.ctx, CreatePipelineOptions{
+			Name:      "Invalid-Name",
+			OutputDir: h.tmpDir,
+		})
+		if err == nil || !strings.Contains(err.Error(), "invalid pipeline name") {
+			t.Errorf("expected 'invalid pipeline name' error, got: %v", err)
+		}
+	})
+
+	t.Run("fails without force when exists", func(t *testing.T) {
+		h := newTestHelper(t)
+		h.mustWriteFile("existing-pipeline.yaml", "old content")
+		err := CreatePipeline(h.ctx, CreatePipelineOptions{
+			Name:      "existing-pipeline",
+			OutputDir: h.tmpDir,
+		})
+		if err == nil || !strings.Contains(err.Error(), "already exists") {
+			t.Errorf("expected 'already exists' error, got: %v", err)
+		}
+	})
+
+	t.Run("overwrites with force", func(t *testing.T) {
+		h := newTestHelper(t)
+		h.mustWriteFile("force-pipeline.yaml", "old content")
+		err := CreatePipeline(h.ctx, CreatePipelineOptions{
+			Name:      "force-pipeline",
+			OutputDir: h.tmpDir,
+			Force:     true,
+		})
+		if err != nil {
+			t.Fatalf("CreatePipeline() with force error = %v", err)
+		}
+		content := h.readFile("force-pipeline.yaml")
+		if strings.Contains(content, "old content") {
+			t.Error("pipeline config should have been overwritten")
+		}
+	})
+}
+
+func TestCreateAgentWithOutputConfig(t *testing.T) {
+	h := newTestHelper(t)
+	if err := h.createAgent("json-agent", "go", false); err != nil {
+		t.Fatalf("CreateAgent() error = %v", err)
+	}
+
+	content := h.readFile("json-agent/agent.yaml")
+	// The scaffolded agent.yaml should contain commented-out output config.
+	if !strings.Contains(content, "depends_on") {
+		t.Error("agent.yaml missing depends_on comment")
+	}
+	if !strings.Contains(content, "output:") {
+		t.Error("agent.yaml missing output comment")
+	}
+	if !strings.Contains(content, "format: json") {
+		t.Error("agent.yaml missing format: json comment")
+	}
+	if !strings.Contains(content, "schema:") {
+		t.Error("agent.yaml missing schema comment")
+	}
 }
 
 func TestToTitleCaseEdgeCases(t *testing.T) {
