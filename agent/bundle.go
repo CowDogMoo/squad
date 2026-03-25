@@ -26,6 +26,29 @@ type Manifest struct {
 	Environment *executor.Config `yaml:"environment,omitempty"`
 	DependsOn   []string         `yaml:"depends_on,omitempty"`
 	Output      *OutputConfig    `yaml:"output,omitempty"`
+	Budget      *BudgetConfig    `yaml:"budget,omitempty"`
+}
+
+// BudgetConfig provides static hints for cost estimation.
+// These are used by --dry-run to estimate costs before running.
+type BudgetConfig struct {
+	// MaxTokens is the recommended output-token budget for this agent.
+	// If zero, inferred from whether the agent dispatches child agents.
+	MaxTokens int `yaml:"max_tokens,omitempty"`
+
+	// EstimatedIterations is the expected number of model iterations.
+	EstimatedIterations int `yaml:"estimated_iterations,omitempty"`
+
+	// Children lists agent names this orchestrator dispatches via the Task tool.
+	Children []string `yaml:"children,omitempty"`
+
+	// ScaleFactor describes what makes this agent's cost scale.
+	// Currently supported: "files" (cost scales with source file count).
+	ScaleFactor string `yaml:"scale_factor,omitempty"`
+
+	// FilesPerIteration is how many files the agent typically processes
+	// per model iteration, used when ScaleFactor is "files".
+	FilesPerIteration int `yaml:"files_per_iteration,omitempty"`
 }
 
 // OutputConfig specifies the structured output contract for an agent.
@@ -159,8 +182,8 @@ func loadTask(agentPath, taskFile string) (string, error) {
 	return strings.TrimSpace(string(taskData)), nil
 }
 
-// loadManifest reads and parses the agent manifest.
-func loadManifest(agentPath string) (*Manifest, error) {
+// LoadManifest reads and parses the agent manifest from the given agent directory.
+func LoadManifest(agentPath string) (*Manifest, error) {
 	manifestPath := filepath.Join(agentPath, "agent.yaml")
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -231,7 +254,7 @@ func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data
 func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map[string]string) (*Bundle, error) {
 	agentPath := filepath.Join(agentsDir, agentName)
 
-	manifest, err := loadManifest(agentPath)
+	manifest, err := LoadManifest(agentPath)
 	if err != nil {
 		return nil, err
 	}

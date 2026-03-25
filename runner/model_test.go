@@ -590,6 +590,32 @@ func TestBuildCallOptsAnthropicNoMaxTokens(t *testing.T) {
 	}
 }
 
+func TestInferMaxTokens(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		maxTokens   int
+		hasTaskTool bool
+		want        int
+	}{
+		{"explicit override with task tool", 8192, true, 8192},
+		{"explicit override without task tool", 2048, false, 2048},
+		{"no override with task tool", 0, true, DefaultMaxTokensWithTask},
+		{"no override without task tool", 0, false, DefaultMaxTokensLeaf},
+		{"negative with task tool", -1, true, DefaultMaxTokensWithTask},
+		{"negative without task tool", -1, false, DefaultMaxTokensLeaf},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := inferMaxTokens(tt.maxTokens, tt.hasTaskTool)
+			if got != tt.want {
+				t.Fatalf("inferMaxTokens(%d, %v) = %d, want %d", tt.maxTokens, tt.hasTaskTool, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildTaskConfigBudgetExhausted(t *testing.T) {
 	t.Parallel()
 	agentsDir := t.TempDir()
