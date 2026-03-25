@@ -53,10 +53,16 @@ func Connect(ctx context.Context, cfg ServerConfig) (*Client, error) {
 			}
 			opts = append(opts, transport.WithHeaders(hdrs))
 		}
-		inner, err = mcpclient.NewSSEMCPClient(cfg.URL, opts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to MCP server %q (%s): %w", cfg.Name, cfg.URL, err)
+		sseClient, sseErr := mcpclient.NewSSEMCPClient(cfg.URL, opts...)
+		if sseErr != nil {
+			return nil, fmt.Errorf("failed to connect to MCP server %q (%s): %w", cfg.Name, cfg.URL, sseErr)
 		}
+		// SSE transport requires an explicit Start() call (stdio auto-starts).
+		if startErr := sseClient.Start(ctx); startErr != nil {
+			_ = sseClient.Close()
+			return nil, fmt.Errorf("failed to start MCP server %q (%s): %w", cfg.Name, cfg.URL, startErr)
+		}
+		inner = sseClient
 	default:
 		return nil, fmt.Errorf("mcp server %q has unsupported transport %q (want stdio or sse)", cfg.Name, cfg.Transport)
 	}

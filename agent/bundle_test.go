@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/cowdogmoo/squad/executor"
+	"github.com/cowdogmoo/squad/mcp"
 )
 
 // writeTestFiles writes multiple files to the given directory.
@@ -598,4 +599,110 @@ func TestResolveEnvironmentTemplates(t *testing.T) {
 			t.Fatalf("expected parse error for invalid template")
 		}
 	})
+}
+
+func TestResolveMCPServerTemplates(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil servers", func(t *testing.T) {
+		t.Parallel()
+		resolved, err := resolveMCPServerTemplates(nil, TemplateData{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resolved) != 0 {
+			t.Fatalf("expected empty result, got %d", len(resolved))
+		}
+	})
+
+	t.Run("no templates", func(t *testing.T) {
+		t.Parallel()
+		servers := []mcp.ServerConfig{
+			{Name: "test", Command: "npx", Args: []string{"-y", "some-pkg"}, URL: "http://localhost:9876"},
+		}
+		resolved, err := resolveMCPServerTemplates(servers, TemplateData{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolved[0].Command != "npx" || resolved[0].URL != "http://localhost:9876" {
+			t.Fatalf("static values changed: command=%q url=%q", resolved[0].Command, resolved[0].URL)
+		}
+		if resolved[0].Args[0] != "-y" || resolved[0].Args[1] != "some-pkg" {
+			t.Fatalf("static args changed: %v", resolved[0].Args)
+		}
+	})
+
+	t.Run("uses defaults when vars missing", func(t *testing.T) {
+		t.Parallel()
+		servers := []mcp.ServerConfig{
+			{
+				Name: "burp",
+				URL:  `{{.Default "BURP_URL" "http://localhost:9876"}}`,
+			},
+		}
+		resolved, err := resolveMCPServerTemplates(servers, TemplateData{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolved[0].URL != "http://localhost:9876" {
+			t.Fatalf("URL = %q, want default http://localhost:9876", resolved[0].URL)
+		}
+	})
+
+	t.Run("invalid template syntax", func(t *testing.T) {
+		t.Parallel()
+		servers := []mcp.ServerConfig{
+			{Name: "bad", URL: "{{.Unclosed"},
+		}
+		_, err := resolveMCPServerTemplates(servers, TemplateData{})
+		if err == nil {
+			t.Fatalf("expected error for invalid template")
+		}
+		if !strings.Contains(err.Error(), "failed to parse MCP server template") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestResolveMCPServerTemplatesAllFields(t *testing.T) {
+	t.Parallel()
+
+	servers := []mcp.ServerConfig{
+		{
+			Name:    "burp",
+			URL:     `{{.Default "BURP_URL" "http://localhost:9876"}}`,
+			Headers: []string{`Authorization={{.Var "BURP_KEY"}}`},
+		},
+		{
+			Name:    "chrome",
+			Command: "npx",
+			Args:    []string{"-y", `--wsEndpoint={{.Var "CHROME_WS"}}`},
+			Env:     []string{`DEBUG={{.Default "DEBUG" "false"}}`},
+		},
+	}
+	data := TemplateData{Vars: map[string]string{
+		"BURP_URL":  "http://remote:8080",
+		"BURP_KEY":  "secret123",
+		"CHROME_WS": "ws://127.0.0.1:9222/devtools/browser/abc",
+	}}
+	resolved, err := resolveMCPServerTemplates(servers, data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Burp SSE
+	if resolved[0].URL != "http://remote:8080" {
+		t.Fatalf("burp URL = %q, want http://remote:8080", resolved[0].URL)
+	}
+	if resolved[0].Headers[0] != "Authorization=secret123" {
+		t.Fatalf("burp header = %q, want Authorization=secret123", resolved[0].Headers[0])
+	}
+
+	// Chrome stdio
+	if resolved[1].Args[1] != "--wsEndpoint=ws://127.0.0.1:9222/devtools/browser/abc" {
+		t.Fatalf("chrome arg = %q", resolved[1].Args[1])
+	}
+	if resolved[1].Env[0] != "DEBUG=false" {
+		t.Fatalf("chrome env = %q, want DEBUG=false", resolved[1].Env[0])
+	}
 }

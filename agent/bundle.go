@@ -218,6 +218,52 @@ func resolveEnvironmentTemplates(env *executor.Config, data TemplateData) error 
 	return nil
 }
 
+// resolveMCPServerTemplates processes template variables in MCP server configurations.
+func resolveMCPServerTemplates(servers []mcp.ServerConfig, data TemplateData) ([]mcp.ServerConfig, error) {
+	resolveStr := func(name, val string) (string, error) {
+		if val == "" || !strings.Contains(val, "{{") {
+			return val, nil
+		}
+		tmpl, err := template.New(name).Parse(val)
+		if err != nil {
+			return "", fmt.Errorf("failed to parse MCP server template %s: %w", name, err)
+		}
+		var buf bytes.Buffer
+		if err := tmpl.Execute(&buf, data); err != nil {
+			return "", fmt.Errorf("failed to resolve MCP server template %s: %w", name, err)
+		}
+		return buf.String(), nil
+	}
+
+	resolved := make([]mcp.ServerConfig, len(servers))
+	for i, srv := range servers {
+		resolved[i] = srv
+		var err error
+		if resolved[i].Command, err = resolveStr(srv.Name+".command", srv.Command); err != nil {
+			return nil, err
+		}
+		if resolved[i].URL, err = resolveStr(srv.Name+".url", srv.URL); err != nil {
+			return nil, err
+		}
+		for j, arg := range srv.Args {
+			if resolved[i].Args[j], err = resolveStr(fmt.Sprintf("%s.args[%d]", srv.Name, j), arg); err != nil {
+				return nil, err
+			}
+		}
+		for j, env := range srv.Env {
+			if resolved[i].Env[j], err = resolveStr(fmt.Sprintf("%s.env[%d]", srv.Name, j), env); err != nil {
+				return nil, err
+			}
+		}
+		for j, hdr := range srv.Headers {
+			if resolved[i].Headers[j], err = resolveStr(fmt.Sprintf("%s.headers[%d]", srv.Name, j), hdr); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return resolved, nil
+}
+
 // loadAndProcessPrompts loads system, wrapper, and task files, then processes them as templates.
 func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data TemplateData) (system, wrapper, task string, err error) {
 	systemData, err := readFileInRoot(agentPath, manifest.EntryPoint)
@@ -254,31 +300,8 @@ func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data
 // The task instructions are included in the system bundle. The CLI prompt becomes the user message.
 // If no CLI prompt is provided, a default user message is used.
 // The vars parameter allows passing custom template variables (e.g., COVERAGE_TARGET=85).
-func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map[string]string) (*Bundle, error) {
-	agentPath := filepath.Join(agentsDir, agentName)
-
-	manifest, err := LoadManifest(agentPath)
-	if err != nil {
-		return nil, err
-	}
-
-	displayMode := mode
-	if displayMode == "" {
-		displayMode = "edit"
-	}
-
-	data := TemplateData{Mode: mode, Vars: vars}
-	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(agentPath, agentsDir, manifest, data)
-	if err != nil {
-		return nil, err
-	}
-
-	refs, err := loadReferences(agentPath, manifest.References)
-	if err != nil {
-		return nil, err
-	}
-
-	// Build the system message content (wrapper + system prompt + references + task).
+// buildSystemMessage assembles the system prompt content from all bundle components.
+func buildSystemMessage(manifest *Manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent string, refs []string) bytes.Buffer {
 	var sys bytes.Buffer
 	sys.WriteString("# Squad Agent Bundle\n\n")
 	fmt.Fprintf(&sys, "Agent: %s (%s)\n", manifest.Name, manifest.Version)
@@ -303,7 +326,6 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		sys.WriteString("\n")
 	}
 
-	// Inject structured output contract if configured.
 	if manifest.Output != nil && manifest.Output.Format == "json" {
 		sys.WriteString("\n\n## Output Contract\n\n")
 		sys.WriteString("You MUST emit your final response as a single JSON object.\n")
@@ -317,6 +339,35 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 			}
 		}
 	}
+
+	return sys
+}
+
+func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map[string]string) (*Bundle, error) {
+	agentPath := filepath.Join(agentsDir, agentName)
+
+	manifest, err := LoadManifest(agentPath)
+	if err != nil {
+		return nil, err
+	}
+
+	displayMode := mode
+	if displayMode == "" {
+		displayMode = "edit"
+	}
+
+	data := TemplateData{Mode: mode, Vars: vars}
+	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(agentPath, agentsDir, manifest, data)
+	if err != nil {
+		return nil, err
+	}
+
+	refs, err := loadReferences(agentPath, manifest.References)
+	if err != nil {
+		return nil, err
+	}
+
+	sys := buildSystemMessage(manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent, refs)
 
 	userMessage := prompt
 	if userMessage == "" {
@@ -335,12 +386,17 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		}
 	}
 
+	resolvedMCP, err := resolveMCPServerTemplates(manifest.MCPServers, data)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Bundle{
 		System:      sys.String(),
 		User:        userMessage,
 		Combined:    combined.Bytes(),
 		WorkDir:     workingDir,
 		Environment: manifest.Environment,
-		MCPServers:  manifest.MCPServers,
+		MCPServers:  resolvedMCP,
 	}, nil
 }
