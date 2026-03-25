@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -153,7 +154,7 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	if done {
 		return lastContent, nil
 	}
-	if loopErr != nil {
+	if loopErr != nil && !errors.Is(loopErr, metrics.ErrBudgetExceeded) {
 		return lastContent, loopErr
 	}
 
@@ -276,15 +277,25 @@ func toInt64(v any) int64 {
 }
 
 func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, lastContent string, maxIter int, m *metrics.Metrics, callOpts []llms.CallOption) (string, error) {
-	if m != nil && m.BudgetExceeded() {
-		logging.InfoContext(ctx, "budget exceeded, skipping final call")
-		if lastContent != "" {
-			return lastContent, metrics.ErrBudgetExceeded
-		}
-		return "", metrics.ErrBudgetExceeded
+	budgetExceeded := m != nil && m.BudgetExceeded()
+
+	if budgetExceeded {
+		logging.InfoContext(ctx, "budget exceeded - making final summary call with tool_choice=none")
+		messages = append(messages, llms.MessageContent{
+			Role:  llms.ChatMessageTypeHuman,
+			Parts: []llms.ContentPart{llms.TextPart("Your cost budget has been exhausted. Produce your final structured output now. Do NOT request any tool calls.")},
+		})
+	} else {
+		logging.InfoContext(ctx, "tool loop ended after %d iterations, requesting final response with tool_choice=none", maxIter)
+		// Inject a message telling the model to produce its final output.
+		// Without this, the model often returns empty content because it was
+		// planning to continue working.
+		messages = append(messages, llms.MessageContent{
+			Role:  llms.ChatMessageTypeHuman,
+			Parts: []llms.ContentPart{llms.TextPart("You have reached the maximum number of tool-calling iterations. Produce your final structured output now based on all the data you have collected. Do NOT request any tool calls.")},
+		})
 	}
 
-	logging.InfoContext(ctx, "tool loop ended, requesting final response with tool_choice=none")
 	finalOpts := make([]llms.CallOption, len(callOpts), len(callOpts)+1)
 	copy(finalOpts, callOpts)
 	finalOpts = append(finalOpts, llms.WithToolChoice("none"))
@@ -299,41 +310,74 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 		}
 		if response.Choices[0].Content != "" {
 			logging.InfoContext(ctx, "final call produced response (%d bytes)", len(response.Choices[0].Content))
+			if budgetExceeded {
+				return response.Choices[0].Content, metrics.ErrBudgetExceeded
+			}
 			return response.Choices[0].Content, nil
 		}
+	} else if budgetExceeded {
+		// Grace call failed; fall back to whatever we had.
+		logging.InfoContext(ctx, "budget-exceeded grace call failed (err=%v), falling back to last content", err)
+		if lastContent != "" {
+			return lastContent, metrics.ErrBudgetExceeded
+		}
+		return "", metrics.ErrBudgetExceeded
 	}
 
 	if lastContent != "" {
 		logging.InfoContext(ctx, "returning last partial content (%d bytes)", len(lastContent))
+		if budgetExceeded {
+			return lastContent, metrics.ErrBudgetExceeded
+		}
 		return lastContent, nil
 	}
 
+	if budgetExceeded {
+		return "", metrics.ErrBudgetExceeded
+	}
 	return "", fmt.Errorf("tool loop ended after %d iterations with no usable response", maxIter)
 }
 
 func buildInitialMessages(systemPrompt, userPrompt string) []llms.MessageContent {
 	messages := []llms.MessageContent{}
 	if systemPrompt != "" {
+		// Mark the system prompt for caching.  Note: langchaingo v0.1.14's
+		// Anthropic provider serializes the system field as a plain string
+		// and silently drops cache_control.  We set it anyway so it takes
+		// effect once upstream is fixed.
 		messages = append(messages, llms.MessageContent{
-			Role:  llms.ChatMessageTypeSystem,
-			Parts: []llms.ContentPart{llms.TextPart(systemPrompt)},
+			Role: llms.ChatMessageTypeSystem,
+			Parts: []llms.ContentPart{
+				llms.WithCacheControl(
+					llms.TextPart(systemPrompt),
+					&llms.CacheControl{Type: "ephemeral"},
+				),
+			},
 		})
 	}
+	// Wrap the user prompt with cache_control as well.  The Anthropic
+	// provider correctly propagates CachedContent on human messages, so
+	// this is the path that actually enables prompt caching today.
 	messages = append(messages, llms.MessageContent{
-		Role:  llms.ChatMessageTypeHuman,
-		Parts: []llms.ContentPart{llms.TextPart(userPrompt)},
+		Role: llms.ChatMessageTypeHuman,
+		Parts: []llms.ContentPart{
+			llms.WithCacheControl(
+				llms.TextPart(userPrompt),
+				&llms.CacheControl{Type: "ephemeral"},
+			),
+		},
 	})
 	return messages
 }
 
 func appendToolCallMessage(messages []llms.MessageContent, textContent string, toolCalls []llms.ToolCall, ctx context.Context) []llms.MessageContent {
 	toolNames := make([]string, 0, len(toolCalls))
-	// Anthropic requires the assistant message to contain both the text
-	// block and all tool_use blocks together.  Include text first if present.
+	// Tool calls MUST come first in the parts list.  The langchaingo Anthropic
+	// provider's handleAIMessage only inspects Parts[0] to decide the message
+	// type; if Parts[0] is TextContent it creates a text-only assistant message
+	// and drops all tool_use blocks, causing a tool_use_id mismatch error on
+	// the next API call.  Placing tool calls first ensures they are preserved.
 	var parts []llms.ContentPart
-	if textContent != "" {
-		parts = append(parts, llms.TextContent{Text: textContent})
-	}
 	for _, toolCall := range toolCalls {
 		if toolCall.FunctionCall != nil && toolCall.FunctionCall.Name != "" {
 			toolNames = append(toolNames, toolCall.FunctionCall.Name)
@@ -343,6 +387,9 @@ func appendToolCallMessage(messages []llms.MessageContent, textContent string, t
 			Type:         toolCall.Type,
 			FunctionCall: toolCall.FunctionCall,
 		})
+	}
+	if textContent != "" {
+		parts = append(parts, llms.TextContent{Text: textContent})
 	}
 	if len(toolNames) > 0 {
 		logging.InfoContext(ctx, "tool calls requested: %s", strings.Join(toolNames, ", "))
@@ -476,11 +523,19 @@ func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor)
 	add(Handler{Def: definitionGlob(), Call: globTool(workingDir)})
 	add(Handler{Def: definitionGrep(), Call: grepTool(workingDir)})
 	add(Handler{Def: definitionBash(), Call: bashTool(ex)})
+	add(Handler{Def: definitionSystemInfo(), Call: systemInfoTool(ex)})
 
 	if taskCfg != nil {
 		add(Handler{Def: definitionTask(), Call: taskTool(*taskCfg)})
 		if taskCfg.Registry != nil {
 			add(Handler{Def: definitionTaskResult(), Call: taskResultTool(*taskCfg)})
+		}
+		if taskCfg.Findings != nil {
+			agentName := taskCfg.AgentName
+			if agentName == "" {
+				agentName = "unknown"
+			}
+			add(Handler{Def: definitionReportFinding(), Call: reportFindingTool(taskCfg.Findings, agentName)})
 		}
 	}
 

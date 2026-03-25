@@ -13,7 +13,7 @@ func New(cfg *Config, workingDir string) (Executor, error) {
 	case "docker":
 		return NewDockerExecutor(cfg, workingDir)
 	case "ssm":
-		return NewSSMExecutor(cfg)
+		return NewSSMExecutor(cfg, workingDir)
 	case "kubectl":
 		return NewKubeExecutor(cfg)
 	default:

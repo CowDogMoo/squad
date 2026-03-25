@@ -121,6 +121,22 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 // Close is a no-op (pod lifecycle is managed externally).
 func (e *KubeExecutor) Close() error { return nil }
 
+// Type returns "kubectl".
+func (e *KubeExecutor) Type() string { return "kubectl" }
+
+// EnvironmentDescription returns a description of the Kubernetes execution environment.
+func (e *KubeExecutor) EnvironmentDescription() string {
+	desc := fmt.Sprintf(
+		"Commands execute inside Kubernetes pod %s/%s (shell: %s).",
+		e.namespace, e.pod, e.shell,
+	)
+	if e.container != "" {
+		desc += fmt.Sprintf(" Container: %s.", e.container)
+	}
+	desc += " File paths are relative to the pod filesystem, not the local host."
+	return desc
+}
+
 // buildRestConfig resolves Kubernetes config from in-cluster, explicit path,
 // or default loading rules.
 func buildRestConfig(kubeconfigPath, kubeContext string) (*rest.Config, error) {

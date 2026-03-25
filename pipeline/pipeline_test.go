@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/tools"
 )
 
 func TestParsePipeline(t *testing.T) {
@@ -542,6 +544,87 @@ func TestFormatReportMarkdown(t *testing.T) {
 	}
 }
 
+func TestRunnerBudgetTracking(t *testing.T) {
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{Name: "review", Agent: "go-review"},
+			{Name: "test", Agent: "go-tests", DependsOn: []string{"review"}},
+		},
+	}
+
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		MaxCost:    1.00,
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			m := metrics.New("ollama", "llama3") // free
+			m.AddTokens(1000, 500)
+			return "ok", m, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Status != StatusPassed {
+		t.Fatalf("status = %s, want passed", report.Status)
+	}
+	// Both agents should have run (ollama is free, within budget)
+	if len(report.Stages) != 2 {
+		t.Fatalf("stages = %d, want 2", len(report.Stages))
+	}
+}
+
+func TestRunnerBudgetExhausted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping pricing test in short mode")
+	}
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{Name: "expensive", Agent: "agent-a"},
+			{Name: "cheap", Agent: "agent-b", DependsOn: []string{"expensive"}},
+		},
+	}
+
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		MaxCost:    0.0001, // very small budget
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			m := metrics.New("openai", "gpt-4o")
+			m.AddTokens(1_000_000, 500_000) // expensive
+			return "ok", m, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	// The first agent runs and spends over budget, second should be skipped
+	cost := runner.remainingBudget()
+	if report != nil && len(report.Stages) >= 2 {
+		secondAgent := report.Stages[1].Agents[0]
+		if secondAgent.Status == StatusPassed && cost == 0 {
+			t.Fatalf("second agent should have failed when budget exhausted")
+		}
+	}
+	_ = err // may or may not error depending on pricing availability
+}
+
+func TestRunnerRemainingBudgetUnlimited(t *testing.T) {
+	t.Parallel()
+	runner := &Runner{MaxCost: 0}
+	if runner.remainingBudget() != 0 {
+		t.Fatalf("remainingBudget() = %v, want 0 for unlimited", runner.remainingBudget())
+	}
+}
+
 func TestRunnerStageVarsAndMode(t *testing.T) {
 	p := &Pipeline{
 		Name:    "test",
@@ -578,5 +661,255 @@ func TestRunnerStageVarsAndMode(t *testing.T) {
 	}
 	if capturedVars["COVERAGE_TARGET"] != "90" {
 		t.Fatalf("vars = %v, want COVERAGE_TARGET=90", capturedVars)
+	}
+}
+
+func TestBuildPromptContextTruncation(t *testing.T) {
+	t.Parallel()
+
+	// Create output longer than 4096 characters.
+	longOutput := strings.Repeat("x", 5000)
+
+	stage := Stage{
+		Name:      "analysis",
+		Agent:     "agent-a",
+		DependsOn: []string{"review"},
+	}
+	completed := map[string]*StageResult{
+		"review": {
+			Name:   "review",
+			Status: StatusPassed,
+			Agents: []AgentResult{
+				{Agent: "go-review", Status: StatusPassed, Output: longOutput},
+			},
+		},
+	}
+
+	runner := &Runner{
+		Pipeline: &Pipeline{Name: "test", Version: "v1"},
+	}
+
+	ctx := runner.buildPromptContext(stage, completed)
+
+	// The output should be truncated: 4096 chars + "...(truncated)" marker.
+	if !strings.Contains(ctx, "...(truncated)") {
+		t.Fatalf("expected truncation marker in prompt context, got %d chars", len(ctx))
+	}
+	// The full 5000-char output should NOT appear.
+	if strings.Contains(ctx, longOutput) {
+		t.Fatalf("expected output to be truncated, but full output is present")
+	}
+}
+
+func TestFormatReportMarkdownWithFindings(t *testing.T) {
+	t.Parallel()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages:  []Stage{{Name: "review", Agent: "go-review"}},
+	}
+
+	runner := &Runner{Pipeline: p, WorkingDir: t.TempDir()}
+	report := &Report{
+		Pipeline: "test",
+		Version:  "v1",
+		Status:   StatusPassed,
+		Stages: []StageResult{
+			{Name: "review", Status: StatusPassed, Agents: []AgentResult{{Agent: "go-review", Status: StatusPassed}}},
+		},
+		Findings: []tools.Finding{
+			{Title: "SQL Injection", Severity: "critical", Description: "User input not sanitized"},
+			{Title: "Missing auth", Severity: "high", Description: "Endpoint lacks authentication"},
+		},
+		Duration: "2s",
+	}
+
+	output, err := runner.FormatReport(report)
+	if err != nil {
+		t.Fatalf("FormatReport: %v", err)
+	}
+	if !strings.Contains(output, "## Findings") {
+		t.Fatalf("expected Findings section in markdown report")
+	}
+	if !strings.Contains(output, "SQL Injection") {
+		t.Fatalf("expected finding title in report")
+	}
+	if !strings.Contains(output, "CRITICAL") {
+		t.Fatalf("expected severity in report")
+	}
+	if !strings.Contains(output, "Missing auth") {
+		t.Fatalf("expected second finding in report")
+	}
+}
+
+func TestFormatReportMarkdownWithOutput(t *testing.T) {
+	t.Parallel()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages:  []Stage{{Name: "review", Agent: "go-review"}},
+	}
+
+	runner := &Runner{Pipeline: p, WorkingDir: t.TempDir()}
+	report := &Report{
+		Pipeline: "test",
+		Version:  "v1",
+		Status:   StatusPassed,
+		Stages: []StageResult{
+			{
+				Name:   "review",
+				Status: StatusPassed,
+				Agents: []AgentResult{
+					{Agent: "go-review", Status: StatusPassed, Output: "Found 3 issues in main.go"},
+				},
+			},
+		},
+		Duration: "1s",
+	}
+
+	output, err := runner.FormatReport(report)
+	if err != nil {
+		t.Fatalf("FormatReport: %v", err)
+	}
+	// Should contain the agent output section header.
+	if !strings.Contains(output, "## review / go-review") {
+		t.Fatalf("expected agent output section header, got: %s", output)
+	}
+	if !strings.Contains(output, "Found 3 issues in main.go") {
+		t.Fatalf("expected agent output in report")
+	}
+}
+
+func TestRunnerAddSpent(t *testing.T) {
+	t.Parallel()
+
+	runner := &Runner{MaxCost: 10.0}
+
+	// Basic accumulation.
+	total := runner.addSpent(1.5)
+	if total != 1.5 {
+		t.Fatalf("addSpent(1.5) = %v, want 1.5", total)
+	}
+	total = runner.addSpent(2.5)
+	if total != 4.0 {
+		t.Fatalf("addSpent(2.5) = %v, want 4.0", total)
+	}
+
+	// Concurrent accumulation: 100 goroutines each adding 0.01.
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runner.addSpent(0.01)
+		}()
+	}
+	wg.Wait()
+
+	// Should be 4.0 + 100*0.01 = 5.0 (with floating point tolerance).
+	remaining := runner.remainingBudget()
+	expectedRemaining := 10.0 - 5.0
+	if remaining < expectedRemaining-0.01 || remaining > expectedRemaining+0.01 {
+		t.Fatalf("remainingBudget() = %v, want ~%v", remaining, expectedRemaining)
+	}
+}
+
+func TestRunnerRunWithFindings(t *testing.T) {
+	t.Parallel()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{Name: "review", Agent: "go-review"},
+		},
+	}
+
+	store := tools.NewFindingsStore()
+	store.Add(tools.Finding{
+		Title:       "Path Traversal",
+		Severity:    "critical",
+		Description: "Unsanitized path input",
+		Agent:       "go-review",
+	})
+	store.Add(tools.Finding{
+		Title:       "Weak Permissions",
+		Severity:    "high",
+		Description: "Config file is world-readable",
+		Agent:       "go-review",
+	})
+
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		Findings:   store,
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			return "review complete", nil, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 2 {
+		t.Fatalf("findings = %d, want 2", len(report.Findings))
+	}
+	if report.Findings[0].Title != "Path Traversal" && report.Findings[1].Title != "Path Traversal" {
+		t.Fatalf("expected Path Traversal finding in report, got: %v", report.Findings)
+	}
+}
+
+func TestRunnerAttachFindings(t *testing.T) {
+	t.Parallel()
+
+	store := tools.NewFindingsStore()
+	store.Add(tools.Finding{
+		Title:       "Test Finding",
+		Severity:    "medium",
+		Description: "A test finding",
+	})
+
+	runner := &Runner{
+		Pipeline: &Pipeline{Name: "test", Version: "v1"},
+		Findings: store,
+	}
+
+	// attachFindings should copy findings into the report.
+	report := &Report{Pipeline: "test"}
+	runner.attachFindings(report)
+
+	if len(report.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(report.Findings))
+	}
+	if report.Findings[0].Title != "Test Finding" {
+		t.Fatalf("finding title = %q, want Test Finding", report.Findings[0].Title)
+	}
+
+	// With empty store, findings should remain nil.
+	emptyRunner := &Runner{
+		Pipeline: &Pipeline{Name: "test", Version: "v1"},
+		Findings: tools.NewFindingsStore(),
+	}
+	emptyReport := &Report{Pipeline: "test"}
+	emptyRunner.attachFindings(emptyReport)
+
+	if emptyReport.Findings != nil {
+		t.Fatalf("expected nil findings for empty store, got %v", emptyReport.Findings)
+	}
+
+	// With nil store, should not panic.
+	nilRunner := &Runner{
+		Pipeline: &Pipeline{Name: "test", Version: "v1"},
+		Findings: nil,
+	}
+	nilReport := &Report{Pipeline: "test"}
+	nilRunner.attachFindings(nilReport)
+
+	if nilReport.Findings != nil {
+		t.Fatalf("expected nil findings for nil store, got %v", nilReport.Findings)
 	}
 }

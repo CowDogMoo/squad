@@ -79,7 +79,13 @@ func (r *BackgroundTaskRegistry) SpawnTask(ctx context.Context, cfg TaskConfig, 
 		parentLogger := logging.FromContext(ctx)
 		childLogger := parentLogger.WithPrefix(fmt.Sprintf("[%s] ", id))
 		childCtx = logging.WithLogger(childCtx, childLogger)
-		logging.InfoContext(ctx, "Task tool: spawning background child agent=%s id=%s depth=%d", args.Agent, id, depth+1)
+
+		budgetInfo := ""
+		if cfg.ParentMetrics != nil && cfg.MaxCost > 0 {
+			remaining := cfg.ParentMetrics.RemainingBudget()
+			budgetInfo = fmt.Sprintf(" budget=$%.4f remaining", remaining)
+		}
+		logging.InfoContext(ctx, "Task tool: spawning background child agent=%s id=%s depth=%d%s", args.Agent, id, depth+1, budgetInfo)
 
 		response, childMetrics, err := cfg.CallModel(childCtx, cfg.AgentsDir, args.Agent, args.Prompt, workDir, args.Mode)
 		result.Output = response
@@ -140,9 +146,12 @@ type TaskConfig struct {
 	AgentsDir     string
 	WorkingDir    string
 	MaxIterations int
+	MaxCost       float64 // original budget ceiling from parent
 	CallModel     CallModelFunc
 	Registry      *BackgroundTaskRegistry
 	ParentMetrics *metrics.Metrics // parent metrics for cost aggregation
+	Findings      *FindingsStore   // shared findings store for ReportFinding tool
+	AgentName     string           // current agent name (for finding attribution)
 }
 
 type taskArgs struct {

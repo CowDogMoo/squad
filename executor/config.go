@@ -20,6 +20,7 @@ type Config struct {
 	//   instance_id  - EC2 instance ID (required)
 	//   region       - AWS region
 	//   profile      - AWS CLI profile
+	//   timeout      - command timeout in seconds (default: 600)
 	//
 	// Kubectl options:
 	//   pod          - pod name (required)

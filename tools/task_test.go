@@ -431,3 +431,72 @@ func TestBackgroundTaskNoRegistry(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestTaskResultNoRegistry(t *testing.T) {
+	t.Parallel()
+	cfg := TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: t.TempDir(),
+		Registry:   nil,
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+	}
+
+	tool := taskResultTool(cfg)
+	payload, _ := json.Marshal(map[string]string{"task_id": "bg-1"})
+
+	_, err := tool(context.Background(), payload)
+	if err == nil {
+		t.Fatalf("expected error when registry is nil")
+	}
+	if !strings.Contains(err.Error(), "registry not initialized") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTaskToolWithMetricsTracking(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	parentMetrics := metrics.New("openai", "gpt-4o")
+	childMetrics := metrics.New("anthropic", "claude-3")
+	childMetrics.AddTokens(500, 250)
+
+	cfg := TaskConfig{
+		AgentsDir:     "agents",
+		WorkingDir:    dir,
+		ParentMetrics: parentMetrics,
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+			return "child response", childMetrics, nil
+		},
+	}
+
+	tool := taskTool(cfg)
+	payload, _ := json.Marshal(map[string]string{
+		"agent":  "sub-agent",
+		"prompt": "analyze code",
+	})
+
+	out, err := tool(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("taskTool: %v", err)
+	}
+	if out != "child response" {
+		t.Fatalf("output = %q, want %q", out, "child response")
+	}
+
+	// Verify child metrics were added to parent
+	if len(parentMetrics.Children) != 1 {
+		t.Fatalf("expected 1 child, got %d", len(parentMetrics.Children))
+	}
+	child := parentMetrics.Children[0]
+	if child.Agent != "sub-agent" {
+		t.Fatalf("child agent = %q, want sub-agent", child.Agent)
+	}
+	if child.InputTokens != 500 || child.OutputTokens != 250 {
+		t.Fatalf("child tokens = %d/%d, want 500/250", child.InputTokens, child.OutputTokens)
+	}
+	if child.Model != "claude-3" || child.Provider != "anthropic" {
+		t.Fatalf("child model/provider = %q/%q, want claude-3/anthropic", child.Model, child.Provider)
+	}
+}

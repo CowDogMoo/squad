@@ -21,8 +21,9 @@ import (
 	"github.com/tmc/langchaingo/llms/openai"
 )
 
-// invokeModel resolves provider settings and calls the appropriate model backend.
-func invokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (string, *metrics.Metrics, error) {
+// InvokeModel resolves provider settings and calls the appropriate model backend.
+// It is exported so the pipeline runner can call it directly.
+func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (string, *metrics.Metrics, error) {
 	provider := normalizeProvider(opts.Provider)
 	model := opts.Model
 	temperature := opts.Temperature
@@ -38,6 +39,11 @@ func invokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 		return "", nil, fmt.Errorf("failed to create executor: %w", err)
 	}
 	defer func() { _ = ex.Close() }()
+
+	logging.InfoContext(ctx, "executor created (type=%s)", ex.Type())
+	if ex.Type() != "local" {
+		systemPrompt += "\n\n## Execution Environment\n\n" + ex.EnvironmentDescription() + "\n"
+	}
 
 	taskCfg := buildTaskConfig(opts)
 	return callModel(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
@@ -125,6 +131,12 @@ func buildCallOpts(opts *RunOptions, provider string, temperature float64, maxTo
 	callOpts := []llms.CallOption{}
 	if temperature >= 0 {
 		callOpts = append(callOpts, llms.WithTemperature(temperature))
+	}
+	// Enable prompt caching for Anthropic models.  The system prompt is
+	// sent on every tool-loop iteration and can be 18K+ tokens; caching
+	// gives a 90% discount on repeated input tokens.
+	if provider == "anthropic" {
+		callOpts = append(callOpts, anthropic.WithPromptCaching())
 	}
 	if maxTokens <= 0 {
 		return callOpts
@@ -232,26 +244,42 @@ func reasoningPrefixes(opts *RunOptions) []string {
 
 // buildTaskConfig creates a TaskConfig for the Task tool from RunOptions.
 func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
-	return &tools.TaskConfig{
+	cfg := &tools.TaskConfig{
 		AgentsDir:     opts.AgentsDir,
 		WorkingDir:    opts.WorkingDir,
 		MaxIterations: opts.MaxIterations,
+		MaxCost:       opts.MaxCost,
 		Registry:      tools.NewBackgroundTaskRegistry(),
-		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
-			// Child agents inherit parent's template variables
-			childBundle, err := agent.BuildBundle(agentsDir, agentName, prompt, workingDir, mode, opts.Vars)
-			if err != nil {
-				return "", nil, fmt.Errorf("failed to build child agent bundle: %w", err)
-			}
-
-			childOpts := *opts
-			childOpts.Agent = agentName
-			childOpts.AgentsDir = agentsDir
-			childOpts.WorkingDir = workingDir
-			childOpts.Mode = mode
-			childOpts.System = ""
-
-			return invokeModel(ctx, &childOpts, childBundle)
-		},
+		Findings:      opts.Findings,
+		AgentName:     opts.AgentName,
 	}
+	cfg.CallModel = func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+		// Child agents inherit parent's template variables
+		childBundle, err := agent.BuildBundle(agentsDir, agentName, prompt, workingDir, mode, opts.Vars)
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to build child agent bundle: %w", err)
+		}
+
+		childOpts := *opts
+		childOpts.Agent = agentName
+		childOpts.AgentsDir = agentsDir
+		childOpts.WorkingDir = workingDir
+		childOpts.Mode = mode
+		childOpts.System = ""
+		childOpts.AgentName = agentName
+
+		// Propagate remaining budget from parent metrics so child agents
+		// cannot each spend the full original budget independently.
+		if cfg.ParentMetrics != nil && opts.MaxCost > 0 {
+			remaining := cfg.ParentMetrics.RemainingBudget()
+			if remaining <= 0 {
+				return "", nil, metrics.ErrBudgetExceeded
+			}
+			childOpts.MaxCost = remaining
+			logging.InfoContext(ctx, "child agent %s budget: $%.4f remaining of $%.4f total", agentName, remaining, opts.MaxCost)
+		}
+
+		return InvokeModel(ctx, &childOpts, childBundle)
+	}
+	return cfg
 }

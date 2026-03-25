@@ -199,8 +199,8 @@ func TestBuildHandlers(t *testing.T) {
 		withTask bool
 		wantDefs int
 	}{
-		{"without TaskConfig", false, 6},
-		{"with TaskConfig", true, 7},
+		{"without TaskConfig", false, 7},
+		{"with TaskConfig", true, 8},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1411,10 +1411,11 @@ func TestToolLoopBudgetExceeded(t *testing.T) {
 
 	// LLM returns a tool call, then after tool execution budget is checked.
 	// We pre-load metrics with enough tokens to exceed the budget.
+	// The second response is the grace call's final structured output.
 	llm := &fakeLLM{responses: []*llms.ContentResponse{
 		{
 			Choices: []*llms.ContentChoice{{
-				Content: "partial",
+				Content: "partial status message",
 				ToolCalls: []llms.ToolCall{{
 					ID:   "1",
 					Type: "function",
@@ -1429,6 +1430,12 @@ func TestToolLoopBudgetExceeded(t *testing.T) {
 				},
 			}},
 		},
+		// Grace call response: the model produces its final report.
+		{
+			Choices: []*llms.ContentChoice{{
+				Content: "## Final Report\nComplete structured output from grace call.",
+			}},
+		},
 	}}
 
 	m := metrics.New("openai", "gpt-4o")
@@ -1436,9 +1443,13 @@ func TestToolLoopBudgetExceeded(t *testing.T) {
 	// Pre-load tokens so budget is exceeded after the first tool call
 	m.AddTokens(1_000_000, 1_000_000)
 
-	_, err := RunWithTools(context.Background(), llm, "", "user", dir, 10, nil, m, &executor.LocalExecutor{WorkingDir: dir})
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 10, nil, m, &executor.LocalExecutor{WorkingDir: dir})
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	// The grace call should produce the final report, not the partial status message.
+	if out != "## Final Report\nComplete structured output from grace call." {
+		t.Fatalf("output = %q, want final report from grace call", out)
 	}
 }
 
@@ -1448,16 +1459,18 @@ func TestFinishToolLoopBudgetExceededWithContent(t *testing.T) {
 	m.SetMaxCost(0.0001)
 	m.AddTokens(1_000_000, 1_000_000)
 
+	// The grace call should produce the final structured output.
 	llm := &stubLLM{
-		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final structured report"}}},
 	}
 
 	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, m, nil)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
-	if out != "partial" {
-		t.Fatalf("output = %q, want %q", out, "partial")
+	// Grace call succeeds, so we get the model's final output, not the partial content.
+	if out != "final structured report" {
+		t.Fatalf("output = %q, want %q", out, "final structured report")
 	}
 }
 
@@ -1467,16 +1480,38 @@ func TestFinishToolLoopBudgetExceededNoContent(t *testing.T) {
 	m.SetMaxCost(0.0001)
 	m.AddTokens(1_000_000, 1_000_000)
 
+	// Grace call produces a final report even when there was no prior content.
 	llm := &stubLLM{
-		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final report"}}},
 	}
 
 	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
-	if out != "" {
-		t.Fatalf("output = %q, want empty", out)
+	// Grace call succeeds, so we get the model's final output.
+	if out != "final report" {
+		t.Fatalf("output = %q, want %q", out, "final report")
+	}
+}
+
+func TestFinishToolLoopBudgetExceededGraceCallFails(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	// Grace call fails — should fall back to lastContent.
+	llm := &stubLLM{
+		err: errors.New("API error"),
+	}
+
+	out, err := finishToolLoop(context.Background(), llm, nil, "partial fallback", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "partial fallback" {
+		t.Fatalf("output = %q, want %q", out, "partial fallback")
 	}
 }
 
@@ -1584,8 +1619,8 @@ func TestBuildHandlersWithRegistry(t *testing.T) {
 	if _, ok := handlers["TaskResult"]; !ok {
 		t.Fatalf("expected TaskResult handler when registry is set")
 	}
-	if len(defs) != 8 {
-		t.Fatalf("tool defs = %d, want 8 (6 base + Task + TaskResult)", len(defs))
+	if len(defs) != 9 {
+		t.Fatalf("tool defs = %d, want 9 (7 base + Task + TaskResult)", len(defs))
 	}
 }
 
@@ -1639,5 +1674,200 @@ func TestToolArgsSummary(t *testing.T) {
 				t.Errorf("toolArgsSummary(%q, %q) = %q, want %q", tt.toolName, tt.argsJSON, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestToInt64(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		val  any
+		want int64
+	}{
+		{"int", int(42), 42},
+		{"int64", int64(99), 99},
+		{"float64", float64(7.9), 7},
+		{"string unsupported", "hello", 0},
+		{"nil", nil, 0},
+		{"bool unsupported", true, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := toInt64(tt.val)
+			if got != tt.want {
+				t.Fatalf("toInt64(%v) = %d, want %d", tt.val, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildHandlersWithFindings(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := NewFindingsStore()
+	cfg := &TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Registry:   NewBackgroundTaskRegistry(),
+		Findings:   store,
+		AgentName:  "test-agent",
+		CallModel: func(
+			_ context.Context,
+			_, _, _, _, _ string,
+		) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+	}
+	handlers, defs := BuildHandlers(dir, cfg, &executor.LocalExecutor{WorkingDir: dir})
+
+	if _, ok := handlers["ReportFinding"]; !ok {
+		t.Fatalf("expected ReportFinding handler when Findings store is set")
+	}
+	// 7 base + Task + TaskResult + ReportFinding = 10
+	if len(defs) != 10 {
+		t.Fatalf("tool defs = %d, want 10", len(defs))
+	}
+
+	// Verify the handler actually works and attributes to the agent
+	payload, _ := json.Marshal(map[string]string{
+		"title":       "Test Finding",
+		"severity":    "high",
+		"description": "Found something.",
+	})
+	out, err := handlers["ReportFinding"].Call(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("ReportFinding: %v", err)
+	}
+	if !strings.Contains(out, "Finding recorded") {
+		t.Fatalf("unexpected output: %s", out)
+	}
+	if store.Count() != 1 {
+		t.Fatalf("store count = %d, want 1", store.Count())
+	}
+	if store.All()[0].Agent != "test-agent" {
+		t.Fatalf("agent = %q, want test-agent", store.All()[0].Agent)
+	}
+}
+
+func TestFinishToolLoopBudgetExceededGraceCallFailsNoContent(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	// Grace call fails and there is no lastContent to fall back on.
+	llm := &stubLLM{err: errors.New("API error")}
+
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("output = %q, want empty", out)
+	}
+}
+
+func TestFinishToolLoopBudgetExceededEmptyGraceResponse(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	// Grace call succeeds but returns empty content.
+	llm := &stubLLM{
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: ""}}},
+	}
+
+	// With lastContent: should return it.
+	out, err := finishToolLoop(context.Background(), llm, nil, "fallback", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "fallback" {
+		t.Fatalf("output = %q, want %q", out, "fallback")
+	}
+}
+
+func TestFinishToolLoopBudgetExceededEmptyGraceAndNoContent(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	// Grace call succeeds but returns empty content, no lastContent either.
+	llm := &stubLLM{
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: ""}}},
+	}
+
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("output = %q, want empty", out)
+	}
+}
+
+func TestMergeChoicesMultipleWithMetrics(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	choices := []*llms.ContentChoice{
+		{
+			Content: "thinking...",
+			GenerationInfo: map[string]any{
+				"PromptTokens":     200,
+				"CompletionTokens": 100,
+			},
+		},
+		{
+			ToolCalls: []llms.ToolCall{{
+				ID:           "call-1",
+				FunctionCall: &llms.FunctionCall{Name: "Bash", Arguments: `{"command":"ls"}`},
+			}},
+		},
+	}
+
+	content, toolCalls := mergeChoices(context.Background(), choices, m)
+	if content != "thinking..." {
+		t.Fatalf("content = %q, want %q", content, "thinking...")
+	}
+	if len(toolCalls) != 1 {
+		t.Fatalf("toolCalls len = %d, want 1", len(toolCalls))
+	}
+	if m.InputTokens() != 200 || m.OutputTokens() != 100 {
+		t.Fatalf("tokens = %d/%d, want 200/100", m.InputTokens(), m.OutputTokens())
+	}
+}
+
+func TestBuildHandlersWithFindingsDefaultAgent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := NewFindingsStore()
+	cfg := &TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Findings:   store,
+		AgentName:  "", // empty agent name should default to "unknown"
+		CallModel: func(
+			_ context.Context,
+			_, _, _, _, _ string,
+		) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+	}
+	handlers, _ := BuildHandlers(dir, cfg, &executor.LocalExecutor{WorkingDir: dir})
+
+	payload, _ := json.Marshal(map[string]string{
+		"title":       "Test",
+		"severity":    "info",
+		"description": "desc",
+	})
+	_, err := handlers["ReportFinding"].Call(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("ReportFinding: %v", err)
+	}
+	if store.All()[0].Agent != "unknown" {
+		t.Fatalf("agent = %q, want unknown", store.All()[0].Agent)
 	}
 }

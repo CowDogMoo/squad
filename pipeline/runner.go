@@ -12,6 +12,7 @@ import (
 
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/tools"
 )
 
 // StageStatus represents the outcome of a pipeline stage.
@@ -44,11 +45,12 @@ type AgentResult struct {
 
 // Report is the structured output of a pipeline run.
 type Report struct {
-	Pipeline string        `json:"pipeline"`
-	Version  string        `json:"version"`
-	Status   StageStatus   `json:"status"`
-	Stages   []StageResult `json:"stages"`
-	Duration string        `json:"duration"`
+	Pipeline string          `json:"pipeline"`
+	Version  string          `json:"version"`
+	Status   StageStatus     `json:"status"`
+	Stages   []StageResult   `json:"stages"`
+	Findings []tools.Finding `json:"findings,omitempty"`
+	Duration string          `json:"duration"`
 }
 
 // RunAgentFunc is called by the runner to execute a single agent.
@@ -60,12 +62,22 @@ type Runner struct {
 	Pipeline   *Pipeline
 	WorkingDir string
 	RunAgent   RunAgentFunc
-	Prompt     string // base prompt passed to each agent
+	Prompt     string  // base prompt passed to each agent
+	MaxCost    float64 // total cost budget for the pipeline (0 = unlimited)
+	Findings   *tools.FindingsStore
+	spent      float64 // accumulated cost across all agents
+	spentMu    sync.Mutex
 }
 
 // Run executes the pipeline and returns a structured report.
 func (r *Runner) Run(ctx context.Context) (*Report, error) {
 	start := time.Now()
+
+	// Create a shared findings store if not already set.
+	if r.Findings == nil {
+		r.Findings = tools.NewFindingsStore()
+	}
+
 	report := &Report{
 		Pipeline: r.Pipeline.Name,
 		Version:  r.Pipeline.Version,
@@ -85,6 +97,7 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 			if result.Status == StatusFailed {
 				report.Status = StatusFailed
 				report.Duration = time.Since(start).Round(time.Millisecond).String()
+				r.attachFindings(report)
 				return report, fmt.Errorf("stage %q failed: %s", result.Name, result.Error)
 			}
 
@@ -92,9 +105,16 @@ func (r *Runner) Run(ctx context.Context) (*Report, error) {
 			if err := r.runGates(ctx, result.Name, completedStages); err != nil {
 				report.Status = StatusFailed
 				report.Duration = time.Since(start).Round(time.Millisecond).String()
+				r.attachFindings(report)
 				return report, err
 			}
 		}
+	}
+
+	// Attach findings to the report.
+	if r.Findings != nil && r.Findings.Count() > 0 {
+		report.Findings = r.Findings.All()
+		logging.InfoContext(ctx, "pipeline: %d findings collected", len(report.Findings))
 	}
 
 	report.Duration = time.Since(start).Round(time.Millisecond).String()
@@ -178,12 +198,47 @@ func (r *Runner) runAgentsParallel(ctx context.Context, agents []string, stage S
 	return results
 }
 
+// addSpent records cost from a completed agent and returns the new total.
+func (r *Runner) addSpent(cost float64) float64 {
+	r.spentMu.Lock()
+	defer r.spentMu.Unlock()
+	r.spent += cost
+	return r.spent
+}
+
+// remainingBudget returns the remaining cost budget, or 0 if unlimited.
+func (r *Runner) remainingBudget() float64 {
+	if r.MaxCost <= 0 {
+		return 0
+	}
+	r.spentMu.Lock()
+	defer r.spentMu.Unlock()
+	remaining := r.MaxCost - r.spent
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 // runAgent executes a single agent and returns its result.
 func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, promptContext string) AgentResult {
 	start := time.Now()
 	result := AgentResult{
 		Agent:  agentName,
 		Status: StatusPassed,
+	}
+
+	// Check pipeline budget before starting agent.
+	if r.MaxCost > 0 {
+		remaining := r.remainingBudget()
+		if remaining <= 0 {
+			result.Status = StatusFailed
+			result.Duration = time.Since(start).Round(time.Millisecond).String()
+			result.Output = "pipeline cost budget exceeded"
+			logging.InfoContext(ctx, "pipeline: skipping agent %q — budget exhausted ($%.4f spent of $%.4f)", agentName, r.spent, r.MaxCost)
+			return result
+		}
+		logging.InfoContext(ctx, "pipeline: agent %q budget: $%.4f remaining of $%.4f total", agentName, remaining, r.MaxCost)
 	}
 
 	prompt := r.Prompt
@@ -199,6 +254,12 @@ func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, pr
 	result.Duration = time.Since(start).Round(time.Millisecond).String()
 	result.Metrics = m
 	result.Output = output
+
+	// Track cost across the pipeline.
+	if m != nil {
+		totalSpent := r.addSpent(m.TotalCostWithChildren())
+		logging.InfoContext(ctx, "pipeline: agent %q cost=$%.4f, pipeline total=$%.4f", agentName, m.TotalCostWithChildren(), totalSpent)
+	}
 
 	if err != nil {
 		result.Status = StatusFailed
@@ -275,6 +336,13 @@ func (r *Runner) runGates(ctx context.Context, stageName string, completed map[s
 	return nil
 }
 
+// attachFindings copies findings from the store into the report.
+func (r *Runner) attachFindings(report *Report) {
+	if r.Findings != nil && r.Findings.Count() > 0 {
+		report.Findings = r.Findings.All()
+	}
+}
+
 // FormatReport returns the report in the configured output format.
 func (r *Runner) FormatReport(report *Report) (string, error) {
 	format := "markdown"
@@ -308,6 +376,16 @@ func formatMarkdownReport(report *Report) string {
 		}
 	}
 	sb.WriteString("\n")
+
+	// Include aggregated findings if present.
+	if len(report.Findings) > 0 {
+		store := tools.NewFindingsStore()
+		for _, f := range report.Findings {
+			store.Add(f)
+		}
+		sb.WriteString(store.FormatMarkdown())
+		sb.WriteString("\n")
+	}
 
 	for _, sr := range report.Stages {
 		for _, ar := range sr.Agents {

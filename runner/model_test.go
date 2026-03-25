@@ -12,8 +12,11 @@ import (
 	"testing"
 
 	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/executor"
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/responses"
+	"github.com/cowdogmoo/squad/tools"
 )
 
 func TestNormalizeProvider(t *testing.T) {
@@ -446,7 +449,7 @@ func TestInvokeModel_ExecutorError(t *testing.T) {
 	}
 	opts := &RunOptions{Provider: "openai", Model: "gpt-4o", APIKey: "key"}
 
-	_, _, err := invokeModel(context.Background(), opts, bundle)
+	_, _, err := InvokeModel(context.Background(), opts, bundle)
 	if err == nil {
 		t.Fatal("expected error from unknown executor type")
 	}
@@ -457,7 +460,7 @@ func TestInvokeModel_ExecutorError(t *testing.T) {
 
 func TestInvokeModel_SystemOverride(t *testing.T) {
 	t.Parallel()
-	// This tests the system override path in invokeModel.
+	// This tests the system override path in InvokeModel.
 	// It will fail on API call but exercises the system override code path.
 	bundle := &agent.Bundle{
 		System:  "base system",
@@ -471,7 +474,7 @@ func TestInvokeModel_SystemOverride(t *testing.T) {
 		// No API key → will fail at API call
 	}
 
-	_, _, err := invokeModel(context.Background(), opts, bundle)
+	_, _, err := InvokeModel(context.Background(), opts, bundle)
 	if err == nil {
 		t.Fatal("expected error (no API key)")
 	}
@@ -499,5 +502,269 @@ func TestCallLangChainLLMUnknownProvider(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestReasoningPrefixes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		opts *RunOptions
+		want []string
+	}{
+		{
+			"nil config uses defaults",
+			&RunOptions{Config: nil},
+			config.Defaults().Model.ReasoningPrefixes,
+		},
+		{
+			"empty prefixes uses defaults",
+			&RunOptions{Config: &config.Config{}},
+			config.Defaults().Model.ReasoningPrefixes,
+		},
+		{
+			"custom prefixes",
+			&RunOptions{Config: &config.Config{
+				Model: config.ModelConfig{
+					ReasoningPrefixes: []string{"o1", "o3"},
+				},
+			}},
+			[]string{"o1", "o3"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := reasoningPrefixes(tt.opts)
+			if len(got) != len(tt.want) {
+				t.Fatalf("reasoningPrefixes() len = %d, want %d", len(got), len(tt.want))
+			}
+			for i, v := range got {
+				if v != tt.want[i] {
+					t.Fatalf("reasoningPrefixes()[%d] = %q, want %q", i, v, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestBuildNativeOllamaLLMDefaults(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{} // empty BaseURL and NumCtx
+	llm := buildNativeOllamaLLM(opts, "llama3")
+	if llm == nil {
+		t.Fatal("buildNativeOllamaLLM returned nil")
+	}
+	got := fmt.Sprintf("%T", llm)
+	if got != "*ollama.LLM" {
+		t.Fatalf("type = %s, want *ollama.LLM", got)
+	}
+}
+
+func TestBuildNativeOllamaLLMCustom(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{BaseURL: "http://custom:11434", NumCtx: 65536}
+	llm := buildNativeOllamaLLM(opts, "mistral")
+	if llm == nil {
+		t.Fatal("buildNativeOllamaLLM returned nil")
+	}
+}
+
+func TestBuildCallOptsAnthropic(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{}
+	callOpts := buildCallOpts(opts, "anthropic", 0.5, 2048)
+	// Should have: temperature + prompt caching + maxTokens = 3
+	if len(callOpts) != 3 {
+		t.Fatalf("buildCallOpts(anthropic) len = %d, want 3", len(callOpts))
+	}
+}
+
+func TestBuildCallOptsAnthropicNoMaxTokens(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{}
+	callOpts := buildCallOpts(opts, "anthropic", 0.5, 0)
+	// Should have: temperature + prompt caching = 2
+	if len(callOpts) != 2 {
+		t.Fatalf("buildCallOpts(anthropic, no max) len = %d, want 2", len(callOpts))
+	}
+}
+
+func TestBuildTaskConfigBudgetExhausted(t *testing.T) {
+	t.Parallel()
+	agentsDir := t.TempDir()
+	agentName := "child"
+	agentDir := filepath.Join(agentsDir, agentName)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := "name: child\nversion: '1.0'\nentrypoint: system.md\nwrapper: agent.md\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("system"), 0o644); err != nil {
+		t.Fatalf("WriteFile system: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrapper"), 0o644); err != nil {
+		t.Fatalf("WriteFile wrapper: %v", err)
+	}
+
+	// Set up parent metrics with exhausted budget.
+	parentMetrics := metrics.New("openai", "gpt-4o")
+	parentMetrics.SetMaxCost(0.0001)
+	parentMetrics.AddTokens(10_000_000, 10_000_000) // huge cost
+
+	opts := &RunOptions{
+		AgentsDir:     agentsDir,
+		WorkingDir:    t.TempDir(),
+		Provider:      "openai-responses",
+		Model:         "gpt-4o",
+		MaxIterations: 1,
+		MaxCost:       1.00,
+	}
+	cfg := buildTaskConfig(opts)
+	cfg.ParentMetrics = parentMetrics
+
+	_, _, err := cfg.CallModel(
+		context.Background(),
+		agentsDir,
+		agentName,
+		"prompt",
+		opts.WorkingDir,
+		"",
+	)
+	if err == nil {
+		t.Fatal("expected error when budget is exhausted")
+	}
+	if !strings.Contains(err.Error(), "budget exceeded") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCallResponsesAPIMissingKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	opts := &RunOptions{APIKey: "", MaxIterations: 1}
+	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
+	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
+
+	_, _, err := callResponsesAPI(
+		context.Background(),
+		opts,
+		"gpt-4o",
+		"system",
+		bundle,
+		0.4,
+		100,
+		nil,
+		ex,
+	)
+	if err == nil || !strings.Contains(err.Error(), "API key required") {
+		t.Fatalf("expected API key error, got: %v", err)
+	}
+}
+
+func TestCallResponsesAPIOpenAIResponsesProvider(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":                  "resp-1",
+			"object":              "response",
+			"created_at":          0,
+			"model":               "gpt-4o",
+			"parallel_tool_calls": false,
+			"temperature":         0,
+			"tool_choice":         "auto",
+			"tools":               []any{},
+			"top_p":               1,
+			"error":               map[string]any{"code": "server_error", "message": ""},
+			"incomplete_details":  map[string]any{"reason": ""},
+			"instructions":        "system",
+			"metadata":            map[string]any{},
+			"output": []map[string]any{
+				{
+					"id":     "msg-1",
+					"type":   "message",
+					"role":   "assistant",
+					"status": "completed",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "ok"},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	// Use openai-responses provider explicitly.
+	opts := &RunOptions{
+		APIKey:        "key",
+		BaseURL:       server.URL,
+		Provider:      "openai-responses",
+		MaxIterations: 1,
+	}
+	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
+	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
+
+	response, m, err := callResponsesAPI(
+		context.Background(),
+		opts,
+		"gpt-4o",
+		"system",
+		bundle,
+		0.4,
+		4096,
+		nil,
+		ex,
+	)
+	if err != nil {
+		t.Fatalf("callResponsesAPI() error = %v", err)
+	}
+	if response != "ok" {
+		t.Fatalf("response = %q, want ok", response)
+	}
+	if m == nil {
+		t.Fatal("expected non-nil metrics")
+	}
+}
+
+func TestCallLangChainLLMWithTaskConfig(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"mistral","message":{"role":"assistant","content":"partial"},"done":true}`))
+	}))
+	defer server.Close()
+
+	opts := &RunOptions{Provider: "ollama", BaseURL: server.URL, MaxIterations: 1, MaxCost: 1.00}
+	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
+	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
+
+	// Pass a non-nil TaskConfig to exercise the ParentMetrics assignment path.
+	taskCfg := &tools.TaskConfig{}
+	response, retM, err := callLangChainLLM(
+		context.Background(),
+		opts,
+		"ollama",
+		"mistral",
+		bundle.System,
+		bundle,
+		0.4,
+		0,
+		taskCfg,
+		ex,
+	)
+	if err != nil {
+		t.Fatalf("callLangChainLLM() error = %v", err)
+	}
+	if response != "partial" {
+		t.Fatalf("response = %q, want partial", response)
+	}
+	if retM == nil {
+		t.Fatal("expected non-nil metrics")
+	}
+	// The function should have set ParentMetrics on the taskCfg.
+	if taskCfg.ParentMetrics == nil {
+		t.Fatal("taskCfg.ParentMetrics should be set by callLangChainLLM")
 	}
 }

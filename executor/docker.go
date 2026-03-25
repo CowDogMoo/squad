@@ -4,54 +4,82 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
+	"io"
 	"strings"
+
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	dockerclient "github.com/docker/docker/client"
 )
+
+// dockerAPI abstracts the Docker SDK calls for testing.
+type dockerAPI interface {
+	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, containerName string) (container.CreateResponse, error)
+	ContainerStart(ctx context.Context, containerID string) error
+	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
+	ContainerExecCreate(ctx context.Context, containerID string, options container.ExecOptions) (container.ExecCreateResponse, error)
+	ContainerExecAttach(ctx context.Context, execID string) (types.HijackedResponse, error)
+	ContainerExecInspect(ctx context.Context, execID string) (container.ExecInspect, error)
+	Close() error
+}
+
+// realDockerClient wraps the real Docker SDK client and implements dockerAPI.
+type realDockerClient struct {
+	cli *dockerclient.Client
+}
+
+func (r *realDockerClient) ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, containerName string) (container.CreateResponse, error) {
+	return r.cli.ContainerCreate(ctx, config, hostConfig, nil, nil, containerName)
+}
+
+func (r *realDockerClient) ContainerStart(ctx context.Context, containerID string) error {
+	return r.cli.ContainerStart(ctx, containerID, container.StartOptions{})
+}
+
+func (r *realDockerClient) ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error {
+	return r.cli.ContainerRemove(ctx, containerID, options)
+}
+
+func (r *realDockerClient) ContainerExecCreate(ctx context.Context, containerID string, options container.ExecOptions) (container.ExecCreateResponse, error) {
+	return r.cli.ContainerExecCreate(ctx, containerID, options)
+}
+
+func (r *realDockerClient) ContainerExecAttach(ctx context.Context, execID string) (types.HijackedResponse, error) {
+	return r.cli.ContainerExecAttach(ctx, execID, container.ExecAttachOptions{})
+}
+
+func (r *realDockerClient) ContainerExecInspect(ctx context.Context, execID string) (container.ExecInspect, error) {
+	return r.cli.ContainerExecInspect(ctx, execID)
+}
+
+func (r *realDockerClient) Close() error {
+	return r.cli.Close()
+}
 
 // DockerExecutor runs commands inside a long-lived Docker container.
 // The container is started on creation and removed on Close.
 type DockerExecutor struct {
 	containerID string
 	shell       string
-	runner      cmdRunner
-}
-
-// cmdRunner abstracts os/exec for testing.
-type cmdRunner interface {
-	Run(ctx context.Context, name string, args ...string) ([]byte, error)
-	RunInDir(ctx context.Context, dir, name string, args ...string) ([]byte, error)
-}
-
-// execRunner implements cmdRunner using real os/exec.
-type execRunner struct{}
-
-func (r *execRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
-	var buf bytes.Buffer
-	cmd := exec.Command(name, args...)
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err := cmd.Run()
-	return buf.Bytes(), err
-}
-
-func (r *execRunner) RunInDir(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
-	var buf bytes.Buffer
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err := cmd.Run()
-	return buf.Bytes(), err
+	client      dockerAPI
 }
 
 // NewDockerExecutor creates a Docker container from the given config
 // and returns an executor that runs commands inside it.
 func NewDockerExecutor(cfg *Config, workingDir string) (*DockerExecutor, error) {
-	return newDockerExecutor(cfg, workingDir, &execRunner{})
+	cli, err := dockerclient.NewClientWithOpts(
+		dockerclient.FromEnv,
+		dockerclient.WithAPIVersionNegotiation(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+	}
+	return newDockerExecutor(cfg, workingDir, &realDockerClient{cli: cli})
 }
 
-// newDockerExecutor is the internal constructor, injectable for testing.
-func newDockerExecutor(cfg *Config, workingDir string, runner cmdRunner) (*DockerExecutor, error) {
+// newDockerExecutor is the internal constructor. Pass a non-nil dockerAPI
+// to override the real client (for testing).
+func newDockerExecutor(cfg *Config, workingDir string, client dockerAPI) (*DockerExecutor, error) {
 	image := cfg.Options["image"]
 	if image == "" {
 		return nil, fmt.Errorf("docker executor requires 'image' option")
@@ -62,73 +90,112 @@ func newDockerExecutor(cfg *Config, workingDir string, runner cmdRunner) (*Docke
 		shell = "/bin/sh"
 	}
 
-	args := buildDockerRunArgs(cfg, workingDir)
-	args = append(args, image, "tail", "-f", "/dev/null")
-
-	out, err := runner.Run(context.Background(), "docker", args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start docker container: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-
-	containerID := strings.TrimSpace(string(out))
-	if containerID == "" {
-		return nil, fmt.Errorf("docker run returned empty container ID")
-	}
-
-	return &DockerExecutor{
-		containerID: containerID,
-		shell:       shell,
-		runner:      runner,
-	}, nil
-}
-
-// buildDockerRunArgs constructs the docker run arguments from config.
-func buildDockerRunArgs(cfg *Config, workingDir string) []string {
 	containerWorkDir := cfg.Options["working_dir"]
 	if containerWorkDir == "" {
 		containerWorkDir = "/work"
 	}
 
-	args := []string{"run", "-d", "--rm", "-w", containerWorkDir}
-
-	// Mount volumes.
-	if vols := cfg.Options["volumes"]; vols != "" {
-		for vol := range strings.SplitSeq(vols, ",") {
-			vol = strings.TrimSpace(vol)
-			if vol != "" {
-				args = append(args, "-v", vol)
-			}
-		}
+	containerCfg := &container.Config{
+		Image:      image,
+		Cmd:        []string{"tail", "-f", "/dev/null"},
+		WorkingDir: containerWorkDir,
 	}
-
-	// Mount the host working directory by default so file tools stay useful.
-	args = append(args, "-v", workingDir+":"+containerWorkDir)
 
 	// Environment variables.
 	if envs := cfg.Options["env"]; envs != "" {
 		for kv := range strings.SplitSeq(envs, ",") {
 			kv = strings.TrimSpace(kv)
 			if kv != "" {
-				args = append(args, "-e", kv)
+				containerCfg.Env = append(containerCfg.Env, kv)
 			}
 		}
 	}
 
-	// Platform override.
-	if platform := cfg.Options["platform"]; platform != "" {
-		args = append(args, "--platform", platform)
+	hostCfg := &container.HostConfig{
+		AutoRemove: true,
+		Binds:      []string{workingDir + ":" + containerWorkDir},
 	}
 
-	return args
+	// Additional volumes.
+	if vols := cfg.Options["volumes"]; vols != "" {
+		for vol := range strings.SplitSeq(vols, ",") {
+			vol = strings.TrimSpace(vol)
+			if vol != "" {
+				hostCfg.Binds = append(hostCfg.Binds, vol)
+			}
+		}
+	}
+
+	ctx := context.Background()
+	resp, err := client.ContainerCreate(ctx, containerCfg, hostCfg, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create docker container: %w", err)
+	}
+
+	if err := client.ContainerStart(ctx, resp.ID); err != nil {
+		// Clean up the created container on start failure.
+		_ = client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+		return nil, fmt.Errorf("failed to start docker container: %w", err)
+	}
+
+	return &DockerExecutor{
+		containerID: resp.ID,
+		shell:       shell,
+		client:      client,
+	}, nil
 }
 
 // Execute runs a command inside the Docker container.
 func (e *DockerExecutor) Execute(ctx context.Context, command string) ([]byte, error) {
-	return e.runner.RunInDir(ctx, "", "docker", "exec", e.containerID, e.shell, "-c", command)
+	execResp, err := e.client.ContainerExecCreate(ctx, e.containerID, container.ExecOptions{
+		Cmd:          []string{e.shell, "-c", command},
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("docker exec create failed: %w", err)
+	}
+
+	attachResp, err := e.client.ContainerExecAttach(ctx, execResp.ID)
+	if err != nil {
+		return nil, fmt.Errorf("docker exec attach failed: %w", err)
+	}
+	if attachResp.Conn != nil {
+		defer attachResp.Close()
+	}
+
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, attachResp.Reader)
+
+	// Check exit code.
+	inspect, err := e.client.ContainerExecInspect(ctx, execResp.ID)
+	if err != nil {
+		return buf.Bytes(), fmt.Errorf("docker exec inspect failed: %w", err)
+	}
+	if inspect.ExitCode != 0 {
+		return buf.Bytes(), fmt.Errorf("command exited with code %d", inspect.ExitCode)
+	}
+
+	return buf.Bytes(), nil
 }
 
 // Close stops and removes the Docker container.
 func (e *DockerExecutor) Close() error {
-	_, err := e.runner.Run(context.Background(), "docker", "rm", "-f", e.containerID)
-	return err
+	return e.client.ContainerRemove(context.Background(), e.containerID, container.RemoveOptions{Force: true})
+}
+
+// Type returns "docker".
+func (e *DockerExecutor) Type() string { return "docker" }
+
+// EnvironmentDescription returns a description of the Docker execution environment.
+func (e *DockerExecutor) EnvironmentDescription() string {
+	id := e.containerID
+	if len(id) > 12 {
+		id = id[:12]
+	}
+	return fmt.Sprintf(
+		"Commands execute inside Docker container %s (shell: %s). "+
+			"File paths are relative to the container filesystem, not the host.",
+		id, e.shell,
+	)
 }

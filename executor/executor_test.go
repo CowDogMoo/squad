@@ -129,3 +129,59 @@ func TestFactory_KubectlMissingPod(t *testing.T) {
 		t.Fatal("expected error for missing pod")
 	}
 }
+
+func TestLocalExecutor_Type(t *testing.T) {
+	t.Parallel()
+	ex := &LocalExecutor{WorkingDir: "/tmp"}
+	if ex.Type() != "local" {
+		t.Fatalf("Type() = %q, want local", ex.Type())
+	}
+}
+
+func TestLocalExecutor_EnvironmentDescription(t *testing.T) {
+	t.Parallel()
+	ex := &LocalExecutor{WorkingDir: "/work"}
+	desc := ex.EnvironmentDescription()
+	if !strings.Contains(desc, "/work") {
+		t.Fatalf("EnvironmentDescription() missing working dir: %s", desc)
+	}
+	if !strings.Contains(desc, "local host") {
+		t.Fatalf("EnvironmentDescription() missing 'local host': %s", desc)
+	}
+}
+
+func TestSSMExecutor_TypeAndDescription(t *testing.T) {
+	t.Parallel()
+	ex := &SSMExecutor{instanceID: "i-abc123", region: "us-east-1"}
+	if ex.Type() != "ssm" {
+		t.Fatalf("Type() = %q, want ssm", ex.Type())
+	}
+	desc := ex.EnvironmentDescription()
+	if !strings.Contains(desc, "i-abc123") {
+		t.Fatalf("EnvironmentDescription() missing instance ID: %s", desc)
+	}
+	if !strings.Contains(desc, "us-east-1") {
+		t.Fatalf("EnvironmentDescription() missing region: %s", desc)
+	}
+	if !strings.Contains(desc, "docker exec") {
+		t.Fatalf("EnvironmentDescription() missing docker exec guidance: %s", desc)
+	}
+}
+
+func TestDockerExecutor_TypeAndDescription(t *testing.T) {
+	t.Parallel()
+	ex := &DockerExecutor{containerID: "abc123def456abcd", shell: "/bin/bash"}
+	if ex.Type() != "docker" {
+		t.Fatalf("Type() = %q, want docker", ex.Type())
+	}
+	desc := ex.EnvironmentDescription()
+	if !strings.Contains(desc, "abc123def456") {
+		t.Fatalf("EnvironmentDescription() missing container ID prefix: %s", desc)
+	}
+	if !strings.Contains(desc, "/bin/bash") {
+		t.Fatalf("EnvironmentDescription() missing shell: %s", desc)
+	}
+	if !strings.Contains(desc, "container filesystem") {
+		t.Fatalf("EnvironmentDescription() missing filesystem note: %s", desc)
+	}
+}

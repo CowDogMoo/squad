@@ -657,6 +657,136 @@ func TestChildMetricsStruct(t *testing.T) {
 	}
 }
 
+func TestRemainingBudgetUnlimited(t *testing.T) {
+	t.Parallel()
+	m := New("openai", "gpt-4o")
+	m.AddTokens(1000, 500)
+	if m.RemainingBudget() != 0 {
+		t.Fatalf("RemainingBudget() = %v, want 0 for unlimited", m.RemainingBudget())
+	}
+}
+
+func TestRemainingBudgetWithCost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping pricing test in short mode")
+	}
+	m := New("openai", "gpt-4o")
+	m.SetMaxCost(1.00)
+	m.AddTokens(100_000, 50_000) // should cost something
+
+	remaining := m.RemainingBudget()
+	cost := m.TotalCostWithChildren()
+	if cost > 0 {
+		if remaining >= 1.00 {
+			t.Fatalf("RemainingBudget() = %v, should be less than MaxCost after spending", remaining)
+		}
+		if remaining+cost < 0.999 || remaining+cost > 1.001 {
+			t.Fatalf("remaining (%v) + cost (%v) should equal MaxCost (1.00)", remaining, cost)
+		}
+	}
+}
+
+func TestRemainingBudgetExhausted(t *testing.T) {
+	t.Parallel()
+	m := New("ollama", "llama3")
+	m.SetMaxCost(0.0001)
+	// Ollama is free, so budget is never actually spent
+	if m.RemainingBudget() != 0.0001 {
+		t.Fatalf("RemainingBudget() = %v, want 0.0001", m.RemainingBudget())
+	}
+}
+
+func TestRemainingBudgetWithChildren(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping pricing test in short mode")
+	}
+	parent := New("openai", "gpt-4o")
+	parent.SetMaxCost(10.00)
+
+	child := New("openai", "gpt-4o")
+	child.AddTokens(1_000_000, 500_000)
+	parent.AddChild("expensive-child", child)
+
+	remaining := parent.RemainingBudget()
+	totalCost := parent.TotalCostWithChildren()
+	if totalCost > 0 && remaining >= 10.00 {
+		t.Fatalf("RemainingBudget() = %v should be less than MaxCost after child spending", remaining)
+	}
+}
+
+func TestSummaryWithPricingWarning(t *testing.T) {
+	// This test manipulates pricing globals -- do not add t.Parallel().
+	// Trigger the sync.Once fetch first so it doesn't override our state.
+	ensurePricingLoaded()
+
+	originalCache, originalFetched, originalErr := getPricingState()
+	t.Cleanup(func() {
+		setPricingState(originalCache, originalFetched, originalErr)
+	})
+
+	// Simulate a failed pricing fetch for a non-ollama provider.
+	setPricingState(nil, false, fmt.Errorf("network down"))
+
+	m := New("openai", "gpt-4o")
+	m.AddTokens(100, 50)
+	m.IncrementIterations()
+	m.Finish()
+
+	summary := m.Summary()
+	if !strings.Contains(summary, "Pricing unavailable") {
+		t.Fatalf("Summary() should contain pricing warning when fetch failed, got:\n%s", summary)
+	}
+	if !strings.Contains(summary, "network down") {
+		t.Fatalf("Summary() should include fetch error message, got:\n%s", summary)
+	}
+}
+
+func TestSummaryOllamaNoPricingWarning(t *testing.T) {
+	// Ollama should NOT show pricing warning even if fetch failed.
+	// Trigger the sync.Once fetch first so it doesn't override our state.
+	ensurePricingLoaded()
+
+	originalCache, originalFetched, originalErr := getPricingState()
+	t.Cleanup(func() {
+		setPricingState(originalCache, originalFetched, originalErr)
+	})
+
+	setPricingState(nil, false, fmt.Errorf("network down"))
+
+	m := New("ollama", "llama3")
+	m.AddTokens(100, 50)
+	m.Finish()
+
+	summary := m.Summary()
+	if strings.Contains(summary, "Pricing unavailable") {
+		t.Fatalf("Summary() should NOT show pricing warning for ollama, got:\n%s", summary)
+	}
+}
+
+func TestCostStringEdgeCases(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		provider string
+		cost     float64
+		want     string
+	}{
+		{"tiny positive cost", "openai", 0.0001, "$0.0001"},
+		{"Ollama with uppercase", "Ollama", 0, "$0.00 (local)"},
+		{"OLLAMA all caps", "OLLAMA", 0, "$0.00 (local)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := &Metrics{Provider: tt.provider}
+			got := m.costString(tt.cost)
+			if got != tt.want {
+				t.Fatalf("costString(%v) = %q, want %q", tt.cost, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFetchPricingVariants(t *testing.T) {
 	// Subtests share pricing globals — do not add t.Parallel().
 	originalTransport := http.DefaultTransport

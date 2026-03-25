@@ -63,6 +63,7 @@ It provides a clean config + logging foundation for agent workflows.`,
 	})
 
 	rootCmd.AddCommand(newRunCmd())
+	rootCmd.AddCommand(newPipelineCmd())
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(newGradeCmd())
@@ -133,6 +134,7 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	if err := bindRunFlags(runCmd, v); err != nil {
 		return err
 	}
+	// Pipeline command flags are resolved directly via flagOrViper, no binding needed.
 
 	logLevel := v.GetString("log.level")
 	logFormat := v.GetString("log.format")
