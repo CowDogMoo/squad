@@ -1750,6 +1750,96 @@ func TestBuildHandlersWithFindings(t *testing.T) {
 	}
 }
 
+func TestFinishToolLoopBudgetExceededGraceCallFailsNoContent(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	// Grace call fails and there is no lastContent to fall back on.
+	llm := &stubLLM{err: errors.New("API error")}
+
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("output = %q, want empty", out)
+	}
+}
+
+func TestFinishToolLoopBudgetExceededEmptyGraceResponse(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	// Grace call succeeds but returns empty content.
+	llm := &stubLLM{
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: ""}}},
+	}
+
+	// With lastContent: should return it.
+	out, err := finishToolLoop(context.Background(), llm, nil, "fallback", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "fallback" {
+		t.Fatalf("output = %q, want %q", out, "fallback")
+	}
+}
+
+func TestFinishToolLoopBudgetExceededEmptyGraceAndNoContent(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	// Grace call succeeds but returns empty content, no lastContent either.
+	llm := &stubLLM{
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: ""}}},
+	}
+
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("output = %q, want empty", out)
+	}
+}
+
+func TestMergeChoicesMultipleWithMetrics(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	choices := []*llms.ContentChoice{
+		{
+			Content: "thinking...",
+			GenerationInfo: map[string]any{
+				"PromptTokens":     200,
+				"CompletionTokens": 100,
+			},
+		},
+		{
+			ToolCalls: []llms.ToolCall{{
+				ID:           "call-1",
+				FunctionCall: &llms.FunctionCall{Name: "Bash", Arguments: `{"command":"ls"}`},
+			}},
+		},
+	}
+
+	content, toolCalls := mergeChoices(context.Background(), choices, m)
+	if content != "thinking..." {
+		t.Fatalf("content = %q, want %q", content, "thinking...")
+	}
+	if len(toolCalls) != 1 {
+		t.Fatalf("toolCalls len = %d, want 1", len(toolCalls))
+	}
+	if m.InputTokens() != 200 || m.OutputTokens() != 100 {
+		t.Fatalf("tokens = %d/%d, want 200/100", m.InputTokens(), m.OutputTokens())
+	}
+}
+
 func TestBuildHandlersWithFindingsDefaultAgent(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

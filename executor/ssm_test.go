@@ -398,6 +398,138 @@ func TestSSMExecutor_Execute_InvocationNotExistThenSuccess(t *testing.T) {
 	}
 }
 
+func TestSSMExecutor_Execute_PendingThenSuccess(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			callCount++
+			if callCount <= 2 {
+				return &ssm.GetCommandInvocationOutput{
+					Status: ssmtypes.CommandInvocationStatusPending,
+				}, nil
+			}
+			return &ssm.GetCommandInvocationOutput{
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: aws.String("done"),
+			}, nil
+		},
+	}
+
+	ex := &SSMExecutor{
+		instanceID: "i-abc123",
+		timeout:    defaultSSMTimeout,
+		client:     client,
+	}
+
+	out, err := ex.Execute(context.Background(), "echo done")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(string(out), "done") {
+		t.Fatalf("output = %q, want 'done'", string(out))
+	}
+	if callCount < 3 {
+		t.Fatalf("expected at least 3 GetCommandInvocation calls (2 Pending + 1 Success), got %d", callCount)
+	}
+}
+
+func TestSSMExecutor_Execute_InProgressThenSuccess(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			callCount++
+			if callCount == 1 {
+				return &ssm.GetCommandInvocationOutput{
+					Status: ssmtypes.CommandInvocationStatusInProgress,
+				}, nil
+			}
+			return &ssm.GetCommandInvocationOutput{
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: aws.String("result"),
+			}, nil
+		},
+	}
+
+	ex := &SSMExecutor{
+		instanceID: "i-abc123",
+		timeout:    defaultSSMTimeout,
+		client:     client,
+	}
+
+	out, err := ex.Execute(context.Background(), "ls")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(string(out), "result") {
+		t.Fatalf("output = %q, want 'result'", string(out))
+	}
+}
+
+func TestSSMExecutor_Execute_DelayedThenSuccess(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			callCount++
+			if callCount == 1 {
+				return &ssm.GetCommandInvocationOutput{
+					Status: ssmtypes.CommandInvocationStatusDelayed,
+				}, nil
+			}
+			return &ssm.GetCommandInvocationOutput{
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: aws.String("ok"),
+			}, nil
+		},
+	}
+
+	ex := &SSMExecutor{
+		instanceID: "i-abc123",
+		timeout:    defaultSSMTimeout,
+		client:     client,
+	}
+
+	out, err := ex.Execute(context.Background(), "echo ok")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(string(out), "ok") {
+		t.Fatalf("output = %q, want 'ok'", string(out))
+	}
+}
+
+func TestSSMExecutor_Execute_ContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			return &ssm.GetCommandInvocationOutput{
+				Status: ssmtypes.CommandInvocationStatusInProgress,
+			}, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately so the polling loop sees it.
+	cancel()
+
+	ex := &SSMExecutor{
+		instanceID: "i-abc123",
+		timeout:    defaultSSMTimeout,
+		client:     client,
+	}
+
+	_, err := ex.Execute(ctx, "long-running")
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+}
+
 func TestSSMExecutor_Execute_CancelledStatus(t *testing.T) {
 	t.Parallel()
 

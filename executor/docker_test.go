@@ -5,12 +5,27 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 )
+
+// fakeConn implements net.Conn for testing the Close() path.
+type fakeConn struct{}
+
+func (c *fakeConn) Read(b []byte) (int, error)         { return 0, io.EOF }
+func (c *fakeConn) Write(b []byte) (int, error)        { return len(b), nil }
+func (c *fakeConn) Close() error                       { return nil }
+func (c *fakeConn) LocalAddr() net.Addr                { return nil }
+func (c *fakeConn) RemoteAddr() net.Addr               { return nil }
+func (c *fakeConn) SetDeadline(t time.Time) error      { return nil }
+func (c *fakeConn) SetReadDeadline(t time.Time) error  { return nil }
+func (c *fakeConn) SetWriteDeadline(t time.Time) error { return nil }
 
 // fakeDockerClient implements dockerAPI for testing.
 type fakeDockerClient struct {
@@ -384,6 +399,82 @@ func TestDockerExecutor_EnvironmentDescriptionShortID(t *testing.T) {
 	}
 	if !strings.Contains(desc, "/bin/sh") {
 		t.Fatalf("expected shell in description, got: %q", desc)
+	}
+}
+
+func TestNewDockerExecutor_EnvWithWhitespace(t *testing.T) {
+	t.Parallel()
+	client := &fakeDockerClient{}
+
+	_, err := newDockerExecutor(&Config{
+		Options: map[string]string{"image": "ubuntu:22.04", "env": " FOO=bar , , BAZ=qux "},
+	}, "/host", client)
+	if err != nil {
+		t.Fatalf("newDockerExecutor: %v", err)
+	}
+	env := client.createCalls[0].Env
+	// Should filter out empty entries after trimming
+	if len(env) != 2 || env[0] != "FOO=bar" || env[1] != "BAZ=qux" {
+		t.Fatalf("Env = %v, want [FOO=bar BAZ=qux]", env)
+	}
+}
+
+func TestNewDockerExecutor_VolumesWithWhitespace(t *testing.T) {
+	t.Parallel()
+	var capturedHostCfg *container.HostConfig
+	client := &fakeDockerClient{
+		createFn: func(_ context.Context, _ *container.Config, hc *container.HostConfig, _ string) (container.CreateResponse, error) {
+			capturedHostCfg = hc
+			return container.CreateResponse{ID: "test-container"}, nil
+		},
+	}
+
+	_, err := newDockerExecutor(&Config{
+		Options: map[string]string{
+			"image":   "ubuntu:22.04",
+			"volumes": " /a:/b , , /c:/d ",
+		},
+	}, "/tmp", client)
+	if err != nil {
+		t.Fatalf("newDockerExecutor: %v", err)
+	}
+	// Default bind + 2 valid volumes = 3 (empty string filtered out)
+	if len(capturedHostCfg.Binds) != 3 {
+		t.Fatalf("expected 3 binds, got %d: %v", len(capturedHostCfg.Binds), capturedHostCfg.Binds)
+	}
+}
+
+func TestDockerExecutor_ExecuteWithConn(t *testing.T) {
+	t.Parallel()
+	// Create a mock that returns a HijackedResponse with non-nil Conn
+	// to exercise the defer Close() path.
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = pw.Write([]byte("connected output"))
+		pw.Close()
+	}()
+
+	client := &fakeDockerClient{
+		execAttachFn: func(_ context.Context, _ string) (types.HijackedResponse, error) {
+			return types.HijackedResponse{
+				Reader: bufio.NewReader(pr),
+				Conn:   &fakeConn{},
+			}, nil
+		},
+	}
+
+	ex := &DockerExecutor{
+		containerID: "abc123",
+		shell:       "/bin/sh",
+		client:      client,
+	}
+
+	out, err := ex.Execute(context.Background(), "echo test")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(string(out), "connected output") {
+		t.Fatalf("output = %q, want 'connected output'", string(out))
 	}
 }
 
