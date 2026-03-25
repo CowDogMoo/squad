@@ -346,7 +346,7 @@ func convertMCPHandlers(handlers []mcp.ToolHandler) []tools.Handler {
 func connectMCPServers(ctx context.Context, servers []mcp.ServerConfig) ([]*mcp.Client, error) {
 	var clients []*mcp.Client
 	for _, cfg := range servers {
-		logging.InfoContext(ctx, "connecting MCP server %q (%s %v)", cfg.Name, cfg.Command, cfg.Args)
+		logging.InfoContext(ctx, "connecting MCP server %q (%s)", cfg.Name, cfg.ConnectString())
 		c, err := mcp.Connect(ctx, cfg)
 		if err != nil {
 			return clients, fmt.Errorf("MCP server %q failed: %w", cfg.Name, err)

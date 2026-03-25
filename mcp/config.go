@@ -3,6 +3,8 @@
 // and bridges them into squad's tool handler system.
 package mcp
 
+import "fmt"
+
 // ServerConfig defines how to connect to an MCP server.
 // Agents declare MCP dependencies in agent.yaml under mcp_servers.
 type ServerConfig struct {
@@ -39,4 +41,18 @@ func (c ServerConfig) TransportType() string {
 		return c.Transport
 	}
 	return "stdio"
+}
+
+// ConnectString returns a human-readable description of the connection
+// target, e.g. "stdio: /usr/bin/tool [--flag]" or "sse: http://localhost:9876".
+func (c ServerConfig) ConnectString() string {
+	switch c.TransportType() {
+	case "sse":
+		return "sse: " + c.URL
+	default:
+		if len(c.Args) == 0 {
+			return "stdio: " + c.Command
+		}
+		return "stdio: " + c.Command + " " + fmt.Sprint(c.Args)
+	}
 }
