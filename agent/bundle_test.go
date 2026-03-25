@@ -440,6 +440,111 @@ task: missing.md
 	}
 }
 
+func TestBuildBundle_WithEnvironment(t *testing.T) {
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+environment:
+  type: local
+  options:
+    target: "{{.Mode}}-env"
+    static: plain
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "edit", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	if bundle.Environment == nil {
+		t.Fatalf("expected environment config")
+	}
+	if bundle.Environment.Options["target"] != "edit-env" {
+		t.Fatalf("expected resolved env option, got %q", bundle.Environment.Options["target"])
+	}
+	if bundle.Environment.Options["static"] != "plain" {
+		t.Fatalf("static option changed: %q", bundle.Environment.Options["static"])
+	}
+}
+
+func TestBuildBundle_EnvironmentTemplateError(t *testing.T) {
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+environment:
+  type: local
+  options:
+    bad: "{{call .BadMethod}}"
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	_, err := BuildBundle(dir, "demo", "prompt", "/work", "edit", nil)
+	if err == nil {
+		t.Fatalf("expected error for bad environment template")
+	}
+}
+
+func TestBuildBundle_MCPServerTemplateError(t *testing.T) {
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+mcp_servers:
+  - name: bad
+    transport: sse
+    url: "{{call .BadMethod}}"
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	_, err := BuildBundle(dir, "demo", "prompt", "/work", "edit", nil)
+	if err == nil {
+		t.Fatalf("expected error for bad MCP server template")
+	}
+}
+
+func TestBuildBundle_MCPServerTemplateResolved(t *testing.T) {
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+mcp_servers:
+  - name: test-server
+    transport: sse
+    url: '{{.Default "SERVER_URL" "http://localhost:8080"}}'
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	vars := map[string]string{"SERVER_URL": "http://remote:9090"}
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "edit", vars)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	if len(bundle.MCPServers) != 1 {
+		t.Fatalf("expected 1 MCP server, got %d", len(bundle.MCPServers))
+	}
+	if bundle.MCPServers[0].URL != "http://remote:9090" {
+		t.Fatalf("MCP URL = %q, want http://remote:9090", bundle.MCPServers[0].URL)
+	}
+}
+
 func TestBuildBundle_DependsOn(t *testing.T) {
 	manifest := `name: Demo
 version: v1
@@ -599,6 +704,21 @@ func TestResolveEnvironmentTemplates(t *testing.T) {
 			t.Fatalf("expected parse error for invalid template")
 		}
 	})
+
+	t.Run("execute error", func(t *testing.T) {
+		t.Parallel()
+		cfg := &executor.Config{
+			Type:    "local",
+			Options: map[string]string{"bad": `{{call .BadMethod}}`},
+		}
+		err := resolveEnvironmentTemplates(cfg, TemplateData{})
+		if err == nil {
+			t.Fatalf("expected execute error")
+		}
+		if !strings.Contains(err.Error(), "failed to resolve environment option") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestResolveMCPServerTemplates(t *testing.T) {
@@ -662,6 +782,78 @@ func TestResolveMCPServerTemplates(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+}
+
+func TestResolveMCPServerTemplates_ExecuteError(t *testing.T) {
+	t.Parallel()
+	// {{.BadField}} will fail during Execute because BadField is not in TemplateData.
+	// Use a method call that doesn't exist to trigger execute error.
+	servers := []mcp.ServerConfig{
+		{Name: "bad", URL: `{{call .BadMethod}}`},
+	}
+	_, err := resolveMCPServerTemplates(servers, TemplateData{})
+	if err == nil {
+		t.Fatalf("expected execute error")
+	}
+	if !strings.Contains(err.Error(), "failed to resolve MCP server template") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveMCPServerTemplates_CommandError(t *testing.T) {
+	t.Parallel()
+	servers := []mcp.ServerConfig{
+		{Name: "bad", Command: `{{call .BadMethod}}`},
+	}
+	_, err := resolveMCPServerTemplates(servers, TemplateData{})
+	if err == nil {
+		t.Fatalf("expected error for bad command template")
+	}
+	if !strings.Contains(err.Error(), "failed to resolve MCP server template") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveMCPServerTemplates_ArgsError(t *testing.T) {
+	t.Parallel()
+	servers := []mcp.ServerConfig{
+		{Name: "bad", Command: "echo", Args: []string{`{{call .BadMethod}}`}},
+	}
+	_, err := resolveMCPServerTemplates(servers, TemplateData{})
+	if err == nil {
+		t.Fatalf("expected error for bad args template")
+	}
+	if !strings.Contains(err.Error(), "failed to resolve MCP server template") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveMCPServerTemplates_EnvError(t *testing.T) {
+	t.Parallel()
+	servers := []mcp.ServerConfig{
+		{Name: "bad", Command: "echo", Env: []string{`{{call .BadMethod}}`}},
+	}
+	_, err := resolveMCPServerTemplates(servers, TemplateData{})
+	if err == nil {
+		t.Fatalf("expected error for bad env template")
+	}
+	if !strings.Contains(err.Error(), "failed to resolve MCP server template") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveMCPServerTemplates_HeadersError(t *testing.T) {
+	t.Parallel()
+	servers := []mcp.ServerConfig{
+		{Name: "bad", Headers: []string{`{{call .BadMethod}}`}},
+	}
+	_, err := resolveMCPServerTemplates(servers, TemplateData{})
+	if err == nil {
+		t.Fatalf("expected error for bad headers template")
+	}
+	if !strings.Contains(err.Error(), "failed to resolve MCP server template") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestResolveMCPServerTemplatesAllFields(t *testing.T) {
