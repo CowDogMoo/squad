@@ -252,7 +252,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Int("max-iterations", 100, "Maximum tool-calling iterations (range: 10-1000)")
 	cmd.Flags().Float64("max-cost", 5, "Maximum cost budget in USD (0 = unlimited)")
 	cmd.Flags().StringArray("var", nil, "Template variable in KEY=VALUE format (can be repeated)")
-	cmd.Flags().StringArray("mcp-server", nil, "MCP server in NAME:COMMAND[:ARG1,ARG2,...] format (can be repeated)")
+	cmd.Flags().StringArray("mcp-server", nil, "MCP server: stdio NAME:COMMAND[:ARG1,ARG2,...] or SSE NAME:sse:URL (can be repeated)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 
@@ -308,7 +308,11 @@ func completeAgentNames(_ *cobra.Command, _ []string, toComplete string) ([]stri
 	return names, cobra.ShellCompDirectiveNoFileComp
 }
 
-// parseMCPServers parses NAME:COMMAND[:ARG1,ARG2,...] strings into ServerConfig.
+// parseMCPServers parses MCP server specs into ServerConfig.
+// Supported formats:
+//
+//	Stdio: NAME:COMMAND[:ARG1,ARG2,...]
+//	SSE:   NAME:sse:URL
 func parseMCPServers(specs []string) []mcp.ServerConfig {
 	if len(specs) == 0 {
 		return nil
@@ -319,6 +323,21 @@ func parseMCPServers(specs []string) []mcp.ServerConfig {
 		if len(parts) < 2 {
 			continue
 		}
+
+		// Detect SSE transport: NAME:sse:URL
+		if strings.EqualFold(parts[1], "sse") {
+			if len(parts) < 3 || parts[2] == "" {
+				continue
+			}
+			configs = append(configs, mcp.ServerConfig{
+				Name:      parts[0],
+				Transport: "sse",
+				URL:       parts[2],
+			})
+			continue
+		}
+
+		// Default: stdio transport NAME:COMMAND[:ARG1,ARG2,...]
 		cfg := mcp.ServerConfig{
 			Name:    parts[0],
 			Command: parts[1],

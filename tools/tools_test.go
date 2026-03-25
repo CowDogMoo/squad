@@ -197,10 +197,25 @@ func TestBuildHandlers(t *testing.T) {
 	tests := []struct {
 		name     string
 		withTask bool
+		extra    []Handler
 		wantDefs int
 	}{
-		{"without TaskConfig", false, 7},
-		{"with TaskConfig", true, 8},
+		{"without TaskConfig", false, nil, 7},
+		{"with TaskConfig", true, nil, 8},
+		{"with ExtraTools", true, []Handler{
+			{
+				Def: llms.Tool{
+					Type: "function",
+					Function: &llms.FunctionDefinition{
+						Name:        "mcp__test__extra_tool",
+						Description: "An extra MCP tool",
+					},
+				},
+				Call: func(_ context.Context, _ []byte) (string, error) {
+					return "ok", nil
+				},
+			},
+		}, 9},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -217,6 +232,7 @@ func TestBuildHandlers(t *testing.T) {
 					) (string, *metrics.Metrics, error) {
 						return "", nil, nil
 					},
+					ExtraTools: tt.extra,
 				}
 			}
 			handlers, defs := BuildHandlers(dir, cfg, &executor.LocalExecutor{WorkingDir: dir})
@@ -234,6 +250,11 @@ func TestBuildHandlers(t *testing.T) {
 					"tool defs = %d, want %d",
 					len(defs), tt.wantDefs,
 				)
+			}
+			if len(tt.extra) > 0 {
+				if _, ok := handlers["mcp__test__extra_tool"]; !ok {
+					t.Fatal("expected ExtraTools handler to be merged")
+				}
 			}
 			names := make([]string, len(defs))
 			for i, d := range defs {

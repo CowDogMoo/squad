@@ -3,8 +3,10 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -16,20 +18,47 @@ type Client struct {
 	connected bool
 }
 
-// Connect starts an MCP server subprocess and performs the protocol handshake.
-// It spawns the command from cfg, sends the initialize request, and
-// discovers available tools via tools/list.
+// Connect starts an MCP server connection and performs the protocol handshake.
+// For stdio transport, it spawns a subprocess. For SSE transport, it connects
+// to a running HTTP server. It then sends the initialize request and discovers
+// available tools via tools/list.
 func Connect(ctx context.Context, cfg ServerConfig) (*Client, error) {
 	if cfg.Name == "" {
 		return nil, fmt.Errorf("mcp server config missing name")
 	}
-	if cfg.Command == "" {
-		return nil, fmt.Errorf("mcp server %q missing command", cfg.Name)
-	}
 
-	inner, err := mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start MCP server %q (%s): %w", cfg.Name, cfg.Command, err)
+	var inner mcpclient.MCPClient
+	var err error
+
+	switch cfg.TransportType() {
+	case "stdio":
+		if cfg.Command == "" {
+			return nil, fmt.Errorf("mcp server %q missing command for stdio transport", cfg.Name)
+		}
+		inner, err = mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start MCP server %q (%s): %w", cfg.Name, cfg.Command, err)
+		}
+	case "sse":
+		if cfg.URL == "" {
+			return nil, fmt.Errorf("mcp server %q missing url for sse transport", cfg.Name)
+		}
+		var opts []transport.ClientOption
+		if len(cfg.Headers) > 0 {
+			hdrs := make(map[string]string, len(cfg.Headers))
+			for _, h := range cfg.Headers {
+				if idx := strings.Index(h, "="); idx > 0 {
+					hdrs[h[:idx]] = h[idx+1:]
+				}
+			}
+			opts = append(opts, transport.WithHeaders(hdrs))
+		}
+		inner, err = mcpclient.NewSSEMCPClient(cfg.URL, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to MCP server %q (%s): %w", cfg.Name, cfg.URL, err)
+		}
+	default:
+		return nil, fmt.Errorf("mcp server %q has unsupported transport %q (want stdio or sse)", cfg.Name, cfg.Transport)
 	}
 
 	c := &Client{

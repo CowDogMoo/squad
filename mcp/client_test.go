@@ -2,6 +2,9 @@ package mcp
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
@@ -20,9 +23,19 @@ func TestConnectValidation(t *testing.T) {
 			wantErr: "mcp server config missing name",
 		},
 		{
-			name:    "missing command",
+			name:    "missing command for stdio",
 			cfg:     ServerConfig{Name: "test"},
-			wantErr: `mcp server "test" missing command`,
+			wantErr: `mcp server "test" missing command for stdio transport`,
+		},
+		{
+			name:    "missing url for sse",
+			cfg:     ServerConfig{Name: "test", Transport: "sse"},
+			wantErr: `mcp server "test" missing url for sse transport`,
+		},
+		{
+			name:    "unsupported transport",
+			cfg:     ServerConfig{Name: "test", Transport: "grpc"},
+			wantErr: `mcp server "test" has unsupported transport "grpc" (want stdio or sse)`,
 		},
 	}
 	for _, tt := range tests {
@@ -84,6 +97,28 @@ func TestClientClose(t *testing.T) {
 				t.Fatalf("Close() error = %v, want nil", err)
 			}
 		})
+	}
+}
+
+func TestConnectSSEHandshakeFailure(t *testing.T) {
+	t.Parallel()
+	// Server returns non-SSE response so the MCP client fails during handshake.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, err := Connect(context.Background(), ServerConfig{
+		Name:      "test-sse",
+		Transport: "sse",
+		URL:       srv.URL,
+		Headers:   []string{"Authorization=Bearer token", "X-Custom=value"},
+	})
+	if err == nil {
+		t.Fatal("expected error from SSE handshake failure")
+	}
+	if !strings.Contains(err.Error(), "test-sse") {
+		t.Fatalf("error = %q, want to contain server name", err.Error())
 	}
 }
 

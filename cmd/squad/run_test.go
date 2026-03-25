@@ -712,12 +712,14 @@ func TestConfigFromContext(t *testing.T) {
 
 func TestParseMCPServers(t *testing.T) {
 	tests := []struct {
-		name      string
-		specs     []string
-		wantLen   int
-		wantFirst string
-		wantCmd   string
-		wantArgs  []string
+		name          string
+		specs         []string
+		wantLen       int
+		wantFirst     string
+		wantCmd       string
+		wantArgs      []string
+		wantTransport string
+		wantURL       string
 	}{
 		{
 			name:    "nil input",
@@ -762,6 +764,39 @@ func TestParseMCPServers(t *testing.T) {
 			wantFirst: "srv",
 			wantCmd:   "cmd",
 		},
+		{
+			name:          "sse transport",
+			specs:         []string{"burpsuite:sse:http://localhost:9876"},
+			wantLen:       1,
+			wantFirst:     "burpsuite",
+			wantTransport: "sse",
+			wantURL:       "http://localhost:9876",
+		},
+		{
+			name:          "sse transport uppercase",
+			specs:         []string{"myserver:SSE:http://example.com/mcp"},
+			wantLen:       1,
+			wantFirst:     "myserver",
+			wantTransport: "sse",
+			wantURL:       "http://example.com/mcp",
+		},
+		{
+			name:    "sse missing url",
+			specs:   []string{"bad:sse:"},
+			wantLen: 0,
+		},
+		{
+			name:    "sse no url part",
+			specs:   []string{"bad:sse"},
+			wantLen: 0,
+		},
+		{
+			name:          "mixed stdio and sse",
+			specs:         []string{"grafana:mcp-grafana", "burp:sse:http://localhost:9876"},
+			wantLen:       2,
+			wantFirst:     "grafana",
+			wantTransport: "", // first is stdio (default)
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -775,6 +810,12 @@ func TestParseMCPServers(t *testing.T) {
 				}
 				if tt.wantCmd != "" && got[0].Command != tt.wantCmd {
 					t.Errorf("Command = %q, want %q", got[0].Command, tt.wantCmd)
+				}
+				if tt.wantTransport != "" && got[0].Transport != tt.wantTransport {
+					t.Errorf("Transport = %q, want %q", got[0].Transport, tt.wantTransport)
+				}
+				if tt.wantURL != "" && got[0].URL != tt.wantURL {
+					t.Errorf("URL = %q, want %q", got[0].URL, tt.wantURL)
 				}
 				if tt.wantArgs != nil {
 					if len(got[0].Args) != len(tt.wantArgs) {
