@@ -57,7 +57,8 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 		if mcpErr != nil {
 			return "", nil, mcpErr
 		}
-		taskCfg.ExtraTools = mcp.BuildHandlers(clients)
+		mcpHandlers := mcp.BuildHandlers(clients)
+		taskCfg.ExtraTools = convertMCPHandlers(mcpHandlers)
 		logging.InfoContext(ctx, "MCP tools loaded: %d tools from %d server(s)", len(taskCfg.ExtraTools), len(clients))
 	}
 
@@ -327,6 +328,16 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		return InvokeModel(ctx, &childOpts, childBundle)
 	}
 	return cfg
+}
+
+// convertMCPHandlers converts MCP ToolHandlers to tools.Handler.
+// This bridge avoids an import cycle (agent → mcp → tools → metrics → agent).
+func convertMCPHandlers(handlers []mcp.ToolHandler) []tools.Handler {
+	result := make([]tools.Handler, len(handlers))
+	for i, h := range handlers {
+		result[i] = tools.Handler{Def: h.Def, Call: h.Call}
+	}
+	return result
 }
 
 // connectMCPServers starts all configured MCP server subprocesses and

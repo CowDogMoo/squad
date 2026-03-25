@@ -14,9 +14,11 @@ import (
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/executor"
+	"github.com/cowdogmoo/squad/mcp"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/responses"
 	"github.com/cowdogmoo/squad/tools"
+	"github.com/tmc/langchaingo/llms"
 )
 
 func TestNormalizeProvider(t *testing.T) {
@@ -79,6 +81,8 @@ func TestBuildCallOpts(t *testing.T) {
 		{"openai legacy max tokens", &RunOptions{OpenAICompatMax: true}, "openai", -1, 200, 2},
 		{"openai max completion tokens", &RunOptions{}, "openai", 0.0, 300, 2},
 		{"negative temp skips temp opt", &RunOptions{}, "openai", -1, 0, 0},
+		{"anthropic with temp and max", &RunOptions{}, "anthropic", 0.5, 2048, 3},
+		{"anthropic no max tokens", &RunOptions{}, "anthropic", 0.5, 0, 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -143,6 +147,29 @@ func TestBuildAnthropicLLM(t *testing.T) {
 	model, err := buildAnthropicLLM(opts, "claude-3")
 	if err != nil || model == nil {
 		t.Fatalf("buildAnthropicLLM() error = %v", err)
+	}
+}
+
+func TestBuildNativeOllamaLLM(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		opts *RunOptions
+	}{
+		{"defaults", &RunOptions{}},
+		{"custom", &RunOptions{BaseURL: "http://custom:11434", NumCtx: 65536}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			llm := buildNativeOllamaLLM(tt.opts, "llama3")
+			if llm == nil {
+				t.Fatal("buildNativeOllamaLLM returned nil")
+			}
+			if got := fmt.Sprintf("%T", llm); got != "*ollama.LLM" {
+				t.Fatalf("type = %s, want *ollama.LLM", got)
+			}
+		})
 	}
 }
 
@@ -548,48 +575,6 @@ func TestReasoningPrefixes(t *testing.T) {
 	}
 }
 
-func TestBuildNativeOllamaLLMDefaults(t *testing.T) {
-	t.Parallel()
-	opts := &RunOptions{} // empty BaseURL and NumCtx
-	llm := buildNativeOllamaLLM(opts, "llama3")
-	if llm == nil {
-		t.Fatal("buildNativeOllamaLLM returned nil")
-	}
-	got := fmt.Sprintf("%T", llm)
-	if got != "*ollama.LLM" {
-		t.Fatalf("type = %s, want *ollama.LLM", got)
-	}
-}
-
-func TestBuildNativeOllamaLLMCustom(t *testing.T) {
-	t.Parallel()
-	opts := &RunOptions{BaseURL: "http://custom:11434", NumCtx: 65536}
-	llm := buildNativeOllamaLLM(opts, "mistral")
-	if llm == nil {
-		t.Fatal("buildNativeOllamaLLM returned nil")
-	}
-}
-
-func TestBuildCallOptsAnthropic(t *testing.T) {
-	t.Parallel()
-	opts := &RunOptions{}
-	callOpts := buildCallOpts(opts, "anthropic", 0.5, 2048)
-	// Should have: temperature + prompt caching + maxTokens = 3
-	if len(callOpts) != 3 {
-		t.Fatalf("buildCallOpts(anthropic) len = %d, want 3", len(callOpts))
-	}
-}
-
-func TestBuildCallOptsAnthropicNoMaxTokens(t *testing.T) {
-	t.Parallel()
-	opts := &RunOptions{}
-	callOpts := buildCallOpts(opts, "anthropic", 0.5, 0)
-	// Should have: temperature + prompt caching = 2
-	if len(callOpts) != 2 {
-		t.Fatalf("buildCallOpts(anthropic, no max) len = %d, want 2", len(callOpts))
-	}
-}
-
 func TestInferMaxTokens(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -792,5 +777,114 @@ func TestCallLangChainLLMWithTaskConfig(t *testing.T) {
 	// The function should have set ParentMetrics on the taskCfg.
 	if taskCfg.ParentMetrics == nil {
 		t.Fatal("taskCfg.ParentMetrics should be set by callLangChainLLM")
+	}
+}
+
+func TestConvertMCPHandlers(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		handlers []mcp.ToolHandler
+		wantLen  int
+	}{
+		{
+			name:     "nil input",
+			handlers: nil,
+			wantLen:  0,
+		},
+		{
+			name: "single handler",
+			handlers: []mcp.ToolHandler{
+				{
+					Def: llms.Tool{
+						Type: "function",
+						Function: &llms.FunctionDefinition{
+							Name:        "mcp__test__tool1",
+							Description: "Test tool",
+						},
+					},
+					Call: func(_ context.Context, _ []byte) (string, error) {
+						return "ok", nil
+					},
+				},
+			},
+			wantLen: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := convertMCPHandlers(tt.handlers)
+			if len(result) != tt.wantLen {
+				t.Fatalf("expected %d handlers, got %d", tt.wantLen, len(result))
+			}
+			if tt.wantLen > 0 {
+				if result[0].Def.Function.Name != "mcp__test__tool1" {
+					t.Errorf("name = %q, want mcp__test__tool1", result[0].Def.Function.Name)
+				}
+				out, err := result[0].Call(context.Background(), nil)
+				if err != nil || out != "ok" {
+					t.Fatalf("Call() = (%q, %v), want (ok, nil)", out, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCloseMCPClients(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		clients []*mcp.Client
+	}{
+		{"nil slice", nil},
+		{"empty slice", []*mcp.Client{}},
+		{
+			"with clients",
+			[]*mcp.Client{
+				mcp.NewTestClient("a", nil),
+				mcp.NewTestClient("b", nil),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// Should not panic.
+			closeMCPClients(tt.clients)
+		})
+	}
+}
+
+func TestConnectMCPServers(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		servers []mcp.ServerConfig
+		wantErr bool
+	}{
+		{
+			name:    "empty",
+			servers: nil,
+			wantErr: false,
+		},
+		{
+			name:    "invalid command",
+			servers: []mcp.ServerConfig{{Name: "bad", Command: "/nonexistent/binary/xyz"}},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			clients, err := connectMCPServers(context.Background(), tt.servers)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("connectMCPServers() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && len(clients) != 0 {
+				t.Fatalf("expected 0 clients, got %d", len(clients))
+			}
+			closeMCPClients(clients)
+		})
 	}
 }

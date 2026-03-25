@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
@@ -81,24 +83,95 @@ func TestConvertInputSchemaRaw(t *testing.T) {
 	}
 }
 
-func TestFormatCallResult(t *testing.T) {
-	result := &mcptypes.CallToolResult{
-		Content: []mcptypes.Content{
-			mcptypes.TextContent{Type: "text", Text: "line one"},
-			mcptypes.TextContent{Type: "text", Text: "line two"},
+func TestConvertInputSchemaAdditionalProperties(t *testing.T) {
+	boolTrue := true
+	tool := mcptypes.Tool{
+		Name: "test_tool",
+		InputSchema: mcptypes.ToolInputSchema{
+			Type:                 "object",
+			AdditionalProperties: &boolTrue,
 		},
 	}
-
-	got := formatCallResult(result)
-	if got != "line one\nline two" {
-		t.Errorf("formatCallResult = %q, want %q", got, "line one\nline two")
+	schema := convertInputSchema(tool)
+	if schema["additionalProperties"] == nil {
+		t.Error("expected additionalProperties in schema")
 	}
 }
 
-func TestFormatCallResultNil(t *testing.T) {
-	got := formatCallResult(nil)
-	if got != "" {
-		t.Errorf("formatCallResult(nil) = %q, want empty", got)
+func TestConvertInputSchemaInvalidRaw(t *testing.T) {
+	// Invalid JSON in RawInputSchema should fall through to structured schema
+	tool := mcptypes.Tool{
+		Name:           "raw_invalid",
+		RawInputSchema: json.RawMessage(`not json`),
+		InputSchema: mcptypes.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"fallback": map[string]any{"type": "string"},
+			},
+		},
+	}
+	schema := convertInputSchema(tool)
+	wantSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"fallback": map[string]any{"type": "string"},
+		},
+	}
+	if !reflect.DeepEqual(schema, wantSchema) {
+		t.Errorf("schema = %v, want %v", schema, wantSchema)
+	}
+}
+
+func TestFormatCallResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *mcptypes.CallToolResult
+		want   string
+	}{
+		{
+			name:   "nil result",
+			result: nil,
+			want:   "",
+		},
+		{
+			name:   "empty content",
+			result: &mcptypes.CallToolResult{Content: []mcptypes.Content{}},
+			want:   "",
+		},
+		{
+			name: "multiple text parts",
+			result: &mcptypes.CallToolResult{
+				Content: []mcptypes.Content{
+					mcptypes.TextContent{Type: "text", Text: "line one"},
+					mcptypes.TextContent{Type: "text", Text: "line two"},
+				},
+			},
+			want: "line one\nline two",
+		},
+		{
+			name: "non-text content included",
+			result: &mcptypes.CallToolResult{
+				Content: []mcptypes.Content{
+					mcptypes.TextContent{Type: "text", Text: "text part"},
+					mcptypes.ImageContent{Type: "image", Data: "base64data", MIMEType: "image/png"},
+				},
+			},
+			want: "base64data", // verify non-text content is serialized
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatCallResult(tt.result)
+			if tt.want == "" {
+				if got != "" {
+					t.Errorf("formatCallResult() = %q, want empty", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("formatCallResult() = %q, want to contain %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -106,14 +179,6 @@ func TestBuildHandlersEmpty(t *testing.T) {
 	handlers := BuildHandlers(nil)
 	if len(handlers) != 0 {
 		t.Errorf("BuildHandlers(nil) returned %d handlers, want 0", len(handlers))
-	}
-}
-
-// mockClient creates a Client with pre-populated tools for testing handler building.
-func mockClient(name string, tools []mcptypes.Tool) *Client {
-	return &Client{
-		name:  name,
-		tools: tools,
 	}
 }
 
@@ -139,7 +204,7 @@ func TestBuildHandlersNamespacing(t *testing.T) {
 		},
 	}
 
-	c := mockClient("burpsuite", tools)
+	c := NewTestClient("burpsuite", tools)
 	handlers := BuildHandlers([]*Client{c})
 
 	if len(handlers) != 2 {
@@ -159,13 +224,36 @@ func TestBuildHandlersNamespacing(t *testing.T) {
 	}
 }
 
-func TestBuildHandlersCallReturnsErrorOnNilClient(t *testing.T) {
-	// The handler wraps c.CallTool which will fail since inner is nil.
-	// This tests that the handler gracefully handles the error path.
-	c := mockClient("test", []mcptypes.Tool{
+func TestBuildHandlersMultipleClients(t *testing.T) {
+	c1 := NewTestClient("server1", []mcptypes.Tool{
+		{Name: "tool_a", InputSchema: mcptypes.ToolInputSchema{Type: "object"}},
+	})
+	c2 := NewTestClient("server2", []mcptypes.Tool{
+		{Name: "tool_b", InputSchema: mcptypes.ToolInputSchema{Type: "object"}},
+		{Name: "tool_c", InputSchema: mcptypes.ToolInputSchema{Type: "object"}},
+	})
+
+	handlers := BuildHandlers([]*Client{c1, c2})
+	if len(handlers) != 3 {
+		t.Fatalf("expected 3 handlers, got %d", len(handlers))
+	}
+
+	names := make(map[string]bool)
+	for _, h := range handlers {
+		names[h.Def.Function.Name] = true
+	}
+	for _, want := range []string{"mcp__server1__tool_a", "mcp__server2__tool_b", "mcp__server2__tool_c"} {
+		if !names[want] {
+			t.Errorf("missing handler %s", want)
+		}
+	}
+}
+
+func TestBuildHandlerDescription(t *testing.T) {
+	c := NewTestClient("myserver", []mcptypes.Tool{
 		{
-			Name:        "fail_tool",
-			Description: "Will fail",
+			Name:        "my_tool",
+			Description: "Does something useful",
 			InputSchema: mcptypes.ToolInputSchema{Type: "object"},
 		},
 	})
@@ -173,9 +261,102 @@ func TestBuildHandlersCallReturnsErrorOnNilClient(t *testing.T) {
 	if len(handlers) != 1 {
 		t.Fatalf("expected 1 handler, got %d", len(handlers))
 	}
+	if handlers[0].Def.Function.Description != "Does something useful" {
+		t.Errorf("description = %q, want 'Does something useful'", handlers[0].Def.Function.Description)
+	}
+	if handlers[0].Def.Type != "function" {
+		t.Errorf("type = %q, want 'function'", handlers[0].Def.Type)
+	}
+}
 
-	_, err := handlers[0].Call(context.Background(), []byte(`{}`))
-	if err == nil {
-		t.Error("expected error from handler with nil inner client, got nil")
+func TestBuildHandlerCall(t *testing.T) {
+	tests := []struct {
+		name    string
+		mock    *mockMCPClient
+		args    []byte
+		want    string
+		wantErr string
+	}{
+		{
+			name: "success",
+			mock: &mockMCPClient{
+				callResult: &mcptypes.CallToolResult{
+					Content: []mcptypes.Content{
+						mcptypes.TextContent{Type: "text", Text: "success output"},
+					},
+				},
+			},
+			args: []byte(`{"key":"value"}`),
+			want: "success output",
+		},
+		{
+			name: "error result",
+			mock: &mockMCPClient{
+				callResult: &mcptypes.CallToolResult{
+					IsError: true,
+					Content: []mcptypes.Content{
+						mcptypes.TextContent{Type: "text", Text: "tool error message"},
+					},
+				},
+			},
+			wantErr: "tool error message",
+		},
+		{
+			name:    "invalid JSON",
+			args:    []byte(`not json`),
+			wantErr: "invalid MCP tool args",
+		},
+		{
+			name:    "nil inner client",
+			wantErr: "MCP tool",
+		},
+		{
+			name: "truncation",
+			mock: &mockMCPClient{
+				callResult: &mcptypes.CallToolResult{
+					Content: []mcptypes.Content{
+						mcptypes.TextContent{Type: "text", Text: strings.Repeat("x", maxMCPToolResult+100)},
+					},
+				},
+			},
+			want: "...output truncated",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var c *Client
+			if tt.mock != nil {
+				c = NewTestClient("test", []mcptypes.Tool{
+					{Name: "tool", InputSchema: mcptypes.ToolInputSchema{Type: "object"}},
+				}, tt.mock)
+			} else {
+				c = NewTestClient("test", []mcptypes.Tool{
+					{Name: "tool", InputSchema: mcptypes.ToolInputSchema{Type: "object"}},
+				})
+			}
+
+			handlers := BuildHandlers([]*Client{c})
+			if len(handlers) != 1 {
+				t.Fatalf("expected 1 handler, got %d", len(handlers))
+			}
+
+			got, err := handlers[0].Call(context.Background(), tt.args)
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %q, want to contain %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("output = %q, want to contain %q", got, tt.want)
+			}
+		})
 	}
 }

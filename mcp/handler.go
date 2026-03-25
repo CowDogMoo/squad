@@ -6,10 +6,16 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cowdogmoo/squad/tools"
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
 	"github.com/tmc/langchaingo/llms"
 )
+
+// ToolHandler represents a bridged MCP tool with its definition and call function.
+// This mirrors tools.Handler but avoids an import cycle (agent → mcp → tools → metrics → agent).
+type ToolHandler struct {
+	Def  llms.Tool
+	Call func(ctx context.Context, rawArgs []byte) (string, error)
+}
 
 // maxMCPToolResult caps MCP tool output to avoid blowing up context.
 const maxMCPToolResult = 32 * 1024
@@ -24,8 +30,8 @@ func PrefixedName(serverName, toolName string) string {
 
 // BuildHandlers converts all tools from a set of MCP clients into
 // squad tool handlers. Each tool is namespaced as mcp__<server>__<tool>.
-func BuildHandlers(clients []*Client) []tools.Handler {
-	var handlers []tools.Handler
+func BuildHandlers(clients []*Client) []ToolHandler {
+	var handlers []ToolHandler
 	for _, c := range clients {
 		for _, t := range c.Tools() {
 			handlers = append(handlers, buildHandler(c, t))
@@ -35,7 +41,7 @@ func BuildHandlers(clients []*Client) []tools.Handler {
 }
 
 // buildHandler creates a single squad Handler for one MCP tool.
-func buildHandler(c *Client, t mcptypes.Tool) tools.Handler {
+func buildHandler(c *Client, t mcptypes.Tool) ToolHandler {
 	prefixed := PrefixedName(c.Name(), t.Name)
 
 	// Convert the MCP tool's input schema to the langchaingo parameter format.
@@ -77,7 +83,7 @@ func buildHandler(c *Client, t mcptypes.Tool) tools.Handler {
 		return output, nil
 	}
 
-	return tools.Handler{Def: def, Call: call}
+	return ToolHandler{Def: def, Call: call}
 }
 
 // convertInputSchema converts an MCP tool's input schema to the

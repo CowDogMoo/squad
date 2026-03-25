@@ -710,6 +710,87 @@ func TestConfigFromContext(t *testing.T) {
 	}
 }
 
+func TestParseMCPServers(t *testing.T) {
+	tests := []struct {
+		name      string
+		specs     []string
+		wantLen   int
+		wantFirst string
+		wantCmd   string
+		wantArgs  []string
+	}{
+		{
+			name:    "nil input",
+			specs:   nil,
+			wantLen: 0,
+		},
+		{
+			name:    "empty input",
+			specs:   []string{},
+			wantLen: 0,
+		},
+		{
+			name:      "name and command only",
+			specs:     []string{"burpsuite:burp-mcp"},
+			wantLen:   1,
+			wantFirst: "burpsuite",
+			wantCmd:   "burp-mcp",
+		},
+		{
+			name:      "name command and args",
+			specs:     []string{"chrome:chrome-mcp:--headless,--port=9222"},
+			wantLen:   1,
+			wantFirst: "chrome",
+			wantCmd:   "chrome-mcp",
+			wantArgs:  []string{"--headless", "--port=9222"},
+		},
+		{
+			name:    "invalid spec (no colon)",
+			specs:   []string{"invalid"},
+			wantLen: 0,
+		},
+		{
+			name:      "multiple servers",
+			specs:     []string{"a:cmd1", "b:cmd2:arg1"},
+			wantLen:   2,
+			wantFirst: "a",
+		},
+		{
+			name:      "empty args section",
+			specs:     []string{"srv:cmd:"},
+			wantLen:   1,
+			wantFirst: "srv",
+			wantCmd:   "cmd",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseMCPServers(tt.specs)
+			if len(got) != tt.wantLen {
+				t.Fatalf("parseMCPServers() len = %d, want %d", len(got), tt.wantLen)
+			}
+			if tt.wantLen > 0 {
+				if got[0].Name != tt.wantFirst {
+					t.Errorf("Name = %q, want %q", got[0].Name, tt.wantFirst)
+				}
+				if tt.wantCmd != "" && got[0].Command != tt.wantCmd {
+					t.Errorf("Command = %q, want %q", got[0].Command, tt.wantCmd)
+				}
+				if tt.wantArgs != nil {
+					if len(got[0].Args) != len(tt.wantArgs) {
+						t.Fatalf("Args len = %d, want %d", len(got[0].Args), len(tt.wantArgs))
+					}
+					for i, a := range tt.wantArgs {
+						if got[0].Args[i] != a {
+							t.Errorf("Args[%d] = %q, want %q", i, got[0].Args[i], a)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestInitConfigMissingConfigFlag(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
