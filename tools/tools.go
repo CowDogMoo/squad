@@ -537,6 +537,10 @@ func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor)
 			}
 			add(Handler{Def: definitionReportFinding(), Call: reportFindingTool(taskCfg.Findings, agentName)})
 		}
+		// Merge additional tools from external providers (e.g., MCP servers).
+		for _, h := range taskCfg.ExtraTools {
+			add(h)
+		}
 	}
 
 	toolDefs := make([]llms.Tool, 0, len(handlers))

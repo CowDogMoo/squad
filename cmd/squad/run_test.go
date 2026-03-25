@@ -710,6 +710,128 @@ func TestConfigFromContext(t *testing.T) {
 	}
 }
 
+func TestParseMCPServers(t *testing.T) {
+	tests := []struct {
+		name          string
+		specs         []string
+		wantLen       int
+		wantFirst     string
+		wantCmd       string
+		wantArgs      []string
+		wantTransport string
+		wantURL       string
+	}{
+		{
+			name:    "nil input",
+			specs:   nil,
+			wantLen: 0,
+		},
+		{
+			name:    "empty input",
+			specs:   []string{},
+			wantLen: 0,
+		},
+		{
+			name:      "name and command only",
+			specs:     []string{"burpsuite:burp-mcp"},
+			wantLen:   1,
+			wantFirst: "burpsuite",
+			wantCmd:   "burp-mcp",
+		},
+		{
+			name:      "name command and args",
+			specs:     []string{"chrome:chrome-mcp:--headless,--port=9222"},
+			wantLen:   1,
+			wantFirst: "chrome",
+			wantCmd:   "chrome-mcp",
+			wantArgs:  []string{"--headless", "--port=9222"},
+		},
+		{
+			name:    "invalid spec (no colon)",
+			specs:   []string{"invalid"},
+			wantLen: 0,
+		},
+		{
+			name:      "multiple servers",
+			specs:     []string{"a:cmd1", "b:cmd2:arg1"},
+			wantLen:   2,
+			wantFirst: "a",
+		},
+		{
+			name:      "empty args section",
+			specs:     []string{"srv:cmd:"},
+			wantLen:   1,
+			wantFirst: "srv",
+			wantCmd:   "cmd",
+		},
+		{
+			name:          "sse transport",
+			specs:         []string{"burpsuite:sse:http://localhost:9876"},
+			wantLen:       1,
+			wantFirst:     "burpsuite",
+			wantTransport: "sse",
+			wantURL:       "http://localhost:9876",
+		},
+		{
+			name:          "sse transport uppercase",
+			specs:         []string{"myserver:SSE:http://example.com/mcp"},
+			wantLen:       1,
+			wantFirst:     "myserver",
+			wantTransport: "sse",
+			wantURL:       "http://example.com/mcp",
+		},
+		{
+			name:    "sse missing url",
+			specs:   []string{"bad:sse:"},
+			wantLen: 0,
+		},
+		{
+			name:    "sse no url part",
+			specs:   []string{"bad:sse"},
+			wantLen: 0,
+		},
+		{
+			name:          "mixed stdio and sse",
+			specs:         []string{"grafana:mcp-grafana", "burp:sse:http://localhost:9876"},
+			wantLen:       2,
+			wantFirst:     "grafana",
+			wantTransport: "", // first is stdio (default)
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseMCPServers(tt.specs)
+			if len(got) != tt.wantLen {
+				t.Fatalf("parseMCPServers() len = %d, want %d", len(got), tt.wantLen)
+			}
+			if tt.wantLen > 0 {
+				if got[0].Name != tt.wantFirst {
+					t.Errorf("Name = %q, want %q", got[0].Name, tt.wantFirst)
+				}
+				if tt.wantCmd != "" && got[0].Command != tt.wantCmd {
+					t.Errorf("Command = %q, want %q", got[0].Command, tt.wantCmd)
+				}
+				if tt.wantTransport != "" && got[0].Transport != tt.wantTransport {
+					t.Errorf("Transport = %q, want %q", got[0].Transport, tt.wantTransport)
+				}
+				if tt.wantURL != "" && got[0].URL != tt.wantURL {
+					t.Errorf("URL = %q, want %q", got[0].URL, tt.wantURL)
+				}
+				if tt.wantArgs != nil {
+					if len(got[0].Args) != len(tt.wantArgs) {
+						t.Fatalf("Args len = %d, want %d", len(got[0].Args), len(tt.wantArgs))
+					}
+					for i, a := range tt.wantArgs {
+						if got[0].Args[i] != a {
+							t.Errorf("Args[%d] = %q, want %q", i, got[0].Args[i], a)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestInitConfigMissingConfigFlag(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
