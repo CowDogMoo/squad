@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -164,6 +165,68 @@ func TestReportFindingToolErrors(t *testing.T) {
 				t.Fatalf("error = %q, want containing %q", err.Error(), tt.wantContains)
 			}
 		})
+	}
+}
+
+func TestFindingsStoreFormatMarkdownWithAgent(t *testing.T) {
+	t.Parallel()
+	store := NewFindingsStore()
+	store.Add(Finding{
+		Title:       "Open Port",
+		Severity:    "high",
+		Description: "Port 22 open.",
+		Agent:       "net-scanner",
+	})
+
+	md := store.FormatMarkdown()
+	if !strings.Contains(md, "**Reported by:** net-scanner") {
+		t.Fatalf("expected agent attribution in markdown, got:\n%s", md)
+	}
+}
+
+func TestFindingsStoreSameSeveritySorting(t *testing.T) {
+	t.Parallel()
+	store := NewFindingsStore()
+	store.Add(Finding{Title: "Zulu Issue", Severity: "high", Description: "z"})
+	store.Add(Finding{Title: "Alpha Issue", Severity: "high", Description: "a"})
+	store.Add(Finding{Title: "Mike Issue", Severity: "high", Description: "m"})
+
+	md := store.FormatMarkdown()
+	alphaIdx := strings.Index(md, "Alpha Issue")
+	mikeIdx := strings.Index(md, "Mike Issue")
+	zuluIdx := strings.Index(md, "Zulu Issue")
+
+	if alphaIdx > mikeIdx || mikeIdx > zuluIdx {
+		t.Fatalf("same-severity findings not sorted alphabetically: alpha=%d mike=%d zulu=%d", alphaIdx, mikeIdx, zuluIdx)
+	}
+}
+
+func TestFindingsStoreConcurrent(t *testing.T) {
+	t.Parallel()
+	store := NewFindingsStore()
+	const goroutines = 20
+
+	done := make(chan struct{})
+	for i := 0; i < goroutines; i++ {
+		go func(n int) {
+			store.Add(Finding{
+				Title:       fmt.Sprintf("Finding-%d", n),
+				Severity:    "info",
+				Description: "concurrent",
+			})
+			done <- struct{}{}
+		}(i)
+	}
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+
+	if store.Count() != goroutines {
+		t.Fatalf("Count() = %d, want %d", store.Count(), goroutines)
+	}
+	all := store.All()
+	if len(all) != goroutines {
+		t.Fatalf("All() len = %d, want %d", len(all), goroutines)
 	}
 }
 

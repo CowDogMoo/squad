@@ -1676,3 +1676,108 @@ func TestToolArgsSummary(t *testing.T) {
 		})
 	}
 }
+
+func TestToInt64(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		val  any
+		want int64
+	}{
+		{"int", int(42), 42},
+		{"int64", int64(99), 99},
+		{"float64", float64(7.9), 7},
+		{"string unsupported", "hello", 0},
+		{"nil", nil, 0},
+		{"bool unsupported", true, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := toInt64(tt.val)
+			if got != tt.want {
+				t.Fatalf("toInt64(%v) = %d, want %d", tt.val, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildHandlersWithFindings(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := NewFindingsStore()
+	cfg := &TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Registry:   NewBackgroundTaskRegistry(),
+		Findings:   store,
+		AgentName:  "test-agent",
+		CallModel: func(
+			_ context.Context,
+			_, _, _, _, _ string,
+		) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+	}
+	handlers, defs := BuildHandlers(dir, cfg, &executor.LocalExecutor{WorkingDir: dir})
+
+	if _, ok := handlers["ReportFinding"]; !ok {
+		t.Fatalf("expected ReportFinding handler when Findings store is set")
+	}
+	// 7 base + Task + TaskResult + ReportFinding = 10
+	if len(defs) != 10 {
+		t.Fatalf("tool defs = %d, want 10", len(defs))
+	}
+
+	// Verify the handler actually works and attributes to the agent
+	payload, _ := json.Marshal(map[string]string{
+		"title":       "Test Finding",
+		"severity":    "high",
+		"description": "Found something.",
+	})
+	out, err := handlers["ReportFinding"].Call(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("ReportFinding: %v", err)
+	}
+	if !strings.Contains(out, "Finding recorded") {
+		t.Fatalf("unexpected output: %s", out)
+	}
+	if store.Count() != 1 {
+		t.Fatalf("store count = %d, want 1", store.Count())
+	}
+	if store.All()[0].Agent != "test-agent" {
+		t.Fatalf("agent = %q, want test-agent", store.All()[0].Agent)
+	}
+}
+
+func TestBuildHandlersWithFindingsDefaultAgent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := NewFindingsStore()
+	cfg := &TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		Findings:   store,
+		AgentName:  "", // empty agent name should default to "unknown"
+		CallModel: func(
+			_ context.Context,
+			_, _, _, _, _ string,
+		) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+	}
+	handlers, _ := BuildHandlers(dir, cfg, &executor.LocalExecutor{WorkingDir: dir})
+
+	payload, _ := json.Marshal(map[string]string{
+		"title":       "Test",
+		"severity":    "info",
+		"description": "desc",
+	})
+	_, err := handlers["ReportFinding"].Call(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("ReportFinding: %v", err)
+	}
+	if store.All()[0].Agent != "unknown" {
+		t.Fatalf("agent = %q, want unknown", store.All()[0].Agent)
+	}
+}

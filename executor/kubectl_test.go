@@ -281,3 +281,50 @@ func TestBuildRestConfig_WithContext(t *testing.T) {
 		t.Fatal("expected error for invalid kubeconfig path")
 	}
 }
+
+func TestKubeExecutor_Type(t *testing.T) {
+	t.Parallel()
+	ex := &KubeExecutor{}
+	if got := ex.Type(); got != "kubectl" {
+		t.Fatalf("Type() = %q, want 'kubectl'", got)
+	}
+}
+
+func TestKubeExecutor_EnvironmentDescription(t *testing.T) {
+	t.Parallel()
+	ex := &KubeExecutor{
+		pod:       "my-pod",
+		namespace: "my-ns",
+		shell:     "/bin/sh",
+	}
+	desc := ex.EnvironmentDescription()
+	if !strings.Contains(desc, "my-ns/my-pod") {
+		t.Fatalf("expected namespace/pod in description, got: %q", desc)
+	}
+	if !strings.Contains(desc, "/bin/sh") {
+		t.Fatalf("expected shell in description, got: %q", desc)
+	}
+	if strings.Contains(desc, "Container:") {
+		t.Fatalf("expected no container in description when empty, got: %q", desc)
+	}
+}
+
+func TestKubeExecutor_EnvironmentDescriptionWithContainer(t *testing.T) {
+	t.Parallel()
+	ex := &KubeExecutor{
+		pod:       "my-pod",
+		namespace: "default",
+		container: "sidecar",
+		shell:     "/bin/bash",
+	}
+	desc := ex.EnvironmentDescription()
+	if !strings.Contains(desc, "default/my-pod") {
+		t.Fatalf("expected namespace/pod in description, got: %q", desc)
+	}
+	if !strings.Contains(desc, "Container: sidecar") {
+		t.Fatalf("expected container name in description, got: %q", desc)
+	}
+	if !strings.Contains(desc, "/bin/bash") {
+		t.Fatalf("expected shell in description, got: %q", desc)
+	}
+}

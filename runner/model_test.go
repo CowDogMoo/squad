@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/responses"
 )
@@ -499,5 +500,90 @@ func TestCallLangChainLLMUnknownProvider(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestReasoningPrefixes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		opts *RunOptions
+		want []string
+	}{
+		{
+			"nil config uses defaults",
+			&RunOptions{Config: nil},
+			config.Defaults().Model.ReasoningPrefixes,
+		},
+		{
+			"empty prefixes uses defaults",
+			&RunOptions{Config: &config.Config{}},
+			config.Defaults().Model.ReasoningPrefixes,
+		},
+		{
+			"custom prefixes",
+			&RunOptions{Config: &config.Config{
+				Model: config.ModelConfig{
+					ReasoningPrefixes: []string{"o1", "o3"},
+				},
+			}},
+			[]string{"o1", "o3"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := reasoningPrefixes(tt.opts)
+			if len(got) != len(tt.want) {
+				t.Fatalf("reasoningPrefixes() len = %d, want %d", len(got), len(tt.want))
+			}
+			for i, v := range got {
+				if v != tt.want[i] {
+					t.Fatalf("reasoningPrefixes()[%d] = %q, want %q", i, v, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestBuildNativeOllamaLLMDefaults(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{} // empty BaseURL and NumCtx
+	llm := buildNativeOllamaLLM(opts, "llama3")
+	if llm == nil {
+		t.Fatal("buildNativeOllamaLLM returned nil")
+	}
+	got := fmt.Sprintf("%T", llm)
+	if got != "*ollama.LLM" {
+		t.Fatalf("type = %s, want *ollama.LLM", got)
+	}
+}
+
+func TestBuildNativeOllamaLLMCustom(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{BaseURL: "http://custom:11434", NumCtx: 65536}
+	llm := buildNativeOllamaLLM(opts, "mistral")
+	if llm == nil {
+		t.Fatal("buildNativeOllamaLLM returned nil")
+	}
+}
+
+func TestBuildCallOptsAnthropic(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{}
+	callOpts := buildCallOpts(opts, "anthropic", 0.5, 2048)
+	// Should have: temperature + prompt caching + maxTokens = 3
+	if len(callOpts) != 3 {
+		t.Fatalf("buildCallOpts(anthropic) len = %d, want 3", len(callOpts))
+	}
+}
+
+func TestBuildCallOptsAnthropicNoMaxTokens(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{}
+	callOpts := buildCallOpts(opts, "anthropic", 0.5, 0)
+	// Should have: temperature + prompt caching = 2
+	if len(callOpts) != 2 {
+		t.Fatalf("buildCallOpts(anthropic, no max) len = %d, want 2", len(callOpts))
 	}
 }

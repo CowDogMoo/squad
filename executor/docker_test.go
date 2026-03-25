@@ -301,3 +301,96 @@ func TestDockerExecutor_EnvironmentDescription(t *testing.T) {
 		t.Fatalf("expected shell in description, got: %q", desc)
 	}
 }
+
+func TestDockerExecutor_ExecAttachFailure(t *testing.T) {
+	t.Parallel()
+	client := &fakeDockerClient{
+		execAttachFn: func(_ context.Context, _ string) (types.HijackedResponse, error) {
+			return types.HijackedResponse{}, fmt.Errorf("connection reset")
+		},
+	}
+
+	ex := &DockerExecutor{containerID: "abc123", shell: "/bin/sh", client: client}
+	_, err := ex.Execute(context.Background(), "ls")
+	if err == nil || !strings.Contains(err.Error(), "exec attach failed") {
+		t.Fatalf("expected exec attach error, got: %v", err)
+	}
+}
+
+func TestDockerExecutor_ExecInspectFailure(t *testing.T) {
+	t.Parallel()
+	client := &fakeDockerClient{
+		execAttachFn: func(_ context.Context, _ string) (types.HijackedResponse, error) {
+			return types.HijackedResponse{
+				Reader: bufio.NewReader(bytes.NewBufferString("some output")),
+			}, nil
+		},
+		execInspectFn: func(_ context.Context, _ string) (container.ExecInspect, error) {
+			return container.ExecInspect{}, fmt.Errorf("inspect unavailable")
+		},
+	}
+
+	ex := &DockerExecutor{containerID: "abc123", shell: "/bin/sh", client: client}
+	out, err := ex.Execute(context.Background(), "ls")
+	if err == nil || !strings.Contains(err.Error(), "exec inspect failed") {
+		t.Fatalf("expected exec inspect error, got: %v", err)
+	}
+	// Should still return partial output even on inspect failure.
+	if !strings.Contains(string(out), "some output") {
+		t.Fatalf("expected partial output, got: %q", string(out))
+	}
+}
+
+func TestNewDockerExecutor_WithVolumes(t *testing.T) {
+	t.Parallel()
+	var capturedHostCfg *container.HostConfig
+	client := &fakeDockerClient{
+		createFn: func(_ context.Context, _ *container.Config, hc *container.HostConfig, _ string) (container.CreateResponse, error) {
+			capturedHostCfg = hc
+			return container.CreateResponse{ID: "vol-container"}, nil
+		},
+	}
+
+	_, err := newDockerExecutor(&Config{
+		Options: map[string]string{
+			"image":   "ubuntu:22.04",
+			"volumes": "/host/data:/data, /host/config:/config",
+		},
+	}, "/tmp", client)
+	if err != nil {
+		t.Fatalf("newDockerExecutor: %v", err)
+	}
+	if capturedHostCfg == nil {
+		t.Fatal("expected hostConfig to be captured")
+	}
+	// Default bind + 2 additional volumes = 3 total.
+	if len(capturedHostCfg.Binds) != 3 {
+		t.Fatalf("expected 3 binds, got %d: %v", len(capturedHostCfg.Binds), capturedHostCfg.Binds)
+	}
+	if capturedHostCfg.Binds[1] != "/host/data:/data" {
+		t.Fatalf("bind[1] = %q, want /host/data:/data", capturedHostCfg.Binds[1])
+	}
+	if capturedHostCfg.Binds[2] != "/host/config:/config" {
+		t.Fatalf("bind[2] = %q, want /host/config:/config", capturedHostCfg.Binds[2])
+	}
+}
+
+func TestDockerExecutor_EnvironmentDescriptionShortID(t *testing.T) {
+	t.Parallel()
+	ex := &DockerExecutor{containerID: "short123", shell: "/bin/sh"}
+	desc := ex.EnvironmentDescription()
+	if !strings.Contains(desc, "short123") {
+		t.Fatalf("expected full short container ID in description, got: %q", desc)
+	}
+	if !strings.Contains(desc, "/bin/sh") {
+		t.Fatalf("expected shell in description, got: %q", desc)
+	}
+}
+
+func TestDockerExecutor_Type(t *testing.T) {
+	t.Parallel()
+	ex := &DockerExecutor{}
+	if got := ex.Type(); got != "docker" {
+		t.Fatalf("Type() = %q, want 'docker'", got)
+	}
+}

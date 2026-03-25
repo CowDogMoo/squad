@@ -324,3 +324,100 @@ func TestSSMExecutor_EnvironmentDescription(t *testing.T) {
 		t.Fatalf("expected working dir in description, got: %q", desc)
 	}
 }
+
+func TestSSMExecutor_Type(t *testing.T) {
+	t.Parallel()
+	ex := &SSMExecutor{}
+	if got := ex.Type(); got != "ssm" {
+		t.Fatalf("Type() = %q, want 'ssm'", got)
+	}
+}
+
+func TestSSMExecutor_EnvironmentDescriptionNoRegion(t *testing.T) {
+	t.Parallel()
+	ex := &SSMExecutor{instanceID: "i-abc123", workingDir: "/work"}
+	desc := ex.EnvironmentDescription()
+	if !strings.Contains(desc, "i-abc123") {
+		t.Fatalf("expected instance ID in description, got: %q", desc)
+	}
+	if strings.Contains(desc, "Region:") {
+		t.Fatalf("expected no region in description, got: %q", desc)
+	}
+	if !strings.Contains(desc, "/work") {
+		t.Fatalf("expected working dir in description, got: %q", desc)
+	}
+}
+
+func TestSSMExecutor_EnvironmentDescriptionNoWorkDir(t *testing.T) {
+	t.Parallel()
+	ex := &SSMExecutor{instanceID: "i-abc123", region: "eu-west-1"}
+	desc := ex.EnvironmentDescription()
+	if !strings.Contains(desc, "i-abc123") {
+		t.Fatalf("expected instance ID in description, got: %q", desc)
+	}
+	if !strings.Contains(desc, "eu-west-1") {
+		t.Fatalf("expected region in description, got: %q", desc)
+	}
+	if strings.Contains(desc, "Working directory:") {
+		t.Fatalf("expected no working dir in description, got: %q", desc)
+	}
+}
+
+func TestSSMExecutor_Execute_InvocationNotExistThenSuccess(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, fmt.Errorf("InvocationDoesNotExist: command not delivered yet")
+			}
+			return &ssm.GetCommandInvocationOutput{
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: aws.String("done"),
+			}, nil
+		},
+	}
+
+	ex := &SSMExecutor{
+		instanceID: "i-abc123",
+		timeout:    defaultSSMTimeout,
+		client:     client,
+	}
+
+	out, err := ex.Execute(context.Background(), "echo done")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(string(out), "done") {
+		t.Fatalf("output = %q, want 'done'", string(out))
+	}
+	if callCount < 2 {
+		t.Fatalf("expected at least 2 GetCommandInvocation calls, got %d", callCount)
+	}
+}
+
+func TestSSMExecutor_Execute_CancelledStatus(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			return &ssm.GetCommandInvocationOutput{
+				Status:                ssmtypes.CommandInvocationStatusCancelled,
+				StandardOutputContent: aws.String("partial"),
+			}, nil
+		},
+	}
+
+	ex := &SSMExecutor{
+		instanceID: "i-abc123",
+		timeout:    defaultSSMTimeout,
+		client:     client,
+	}
+
+	_, err := ex.Execute(context.Background(), "cmd")
+	if err == nil || !strings.Contains(err.Error(), "Cancelled") {
+		t.Fatalf("expected Cancelled error, got: %v", err)
+	}
+}
