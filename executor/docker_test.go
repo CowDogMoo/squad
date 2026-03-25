@@ -450,8 +450,12 @@ func TestDockerExecutor_ExecuteWithConn(t *testing.T) {
 	// to exercise the defer Close() path.
 	pr, pw := io.Pipe()
 	go func() {
-		_, _ = pw.Write([]byte("connected output"))
-		pw.Close()
+		if _, err := pw.Write([]byte("connected output")); err != nil {
+			return
+		}
+		if err := pw.Close(); err != nil {
+			return
+		}
 	}()
 
 	client := &fakeDockerClient{
