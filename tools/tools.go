@@ -167,7 +167,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 	for i := 0; i < maxIter; i++ {
 		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxIter)
 		iterStart := time.Now()
-		response, err := llm.GenerateContent(ctx, messages, callOpts...)
+		response, err := retryGenerateContent(ctx, llm, messages, callOpts)
 		iterDuration := time.Since(iterStart)
 		if err != nil {
 			logging.InfoContext(ctx, "model call failed in %s: %v", iterDuration.Round(time.Millisecond), err)
@@ -300,7 +300,7 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 	copy(finalOpts, callOpts)
 	finalOpts = append(finalOpts, llms.WithToolChoice("none"))
 
-	response, err := llm.GenerateContent(ctx, messages, finalOpts...)
+	response, err := retryGenerateContent(ctx, llm, messages, finalOpts)
 	if err == nil && response != nil && len(response.Choices) > 0 {
 		if m != nil {
 			m.IncrementIterations()

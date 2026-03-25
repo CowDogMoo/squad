@@ -107,6 +107,7 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 	logging.InfoContext(ctx, "responses API: initial request (model=%s)", model)
 	resp, err := client.Responses.New(ctx, params)
 	if err != nil {
+		logAPIError(ctx, err, "initial request")
 		return "", fmt.Errorf("responses API call failed: %w", err)
 	}
 	logOutputItems(ctx, resp, "initial")
@@ -196,6 +197,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 		var err error
 		resp, err = client.Responses.New(ctx, params)
 		if err != nil {
+			logAPIError(ctx, err, fmt.Sprintf("follow-up iteration %d", i+1))
 			return resp, "", fmt.Errorf("responses API follow-up failed at iteration %d: %w", i+1, err)
 		}
 		logOutputItems(ctx, resp, fmt.Sprintf("follow-up-iter-%d", i+1))
@@ -260,6 +262,7 @@ func requestFinal(ctx context.Context, client openai.Client, previousID, systemP
 	logging.InfoContext(ctx, "responses API: requesting final response with tool_choice=none")
 	resp, err := client.Responses.New(ctx, params)
 	if err != nil {
+		logAPIError(ctx, err, "final request")
 		return "", fmt.Errorf("responses API final call failed: %w", err)
 	}
 	logOutputItems(ctx, resp, "final-call")
@@ -385,6 +388,30 @@ func logOutputItems(ctx context.Context, resp *oairesponses.Response, label stri
 		}
 		logging.DebugContext(ctx, "responses API [%s]: output[%d] type=%s: %s",
 			label, i, item.Type, preview)
+	}
+}
+
+// logAPIError logs structured context about a Responses API failure.
+// The OpenAI SDK already retries transient errors, so this only adds
+// diagnostic information to help operators understand what happened.
+func logAPIError(ctx context.Context, err error, label string) {
+	if err == nil {
+		return
+	}
+	lower := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(lower, "429") || strings.Contains(lower, "rate limit"):
+		logging.InfoContext(ctx, "responses API %s: rate limited — SDK will auto-retry", label)
+	case strings.Contains(lower, "500") || strings.Contains(lower, "internal server error"):
+		logging.InfoContext(ctx, "responses API %s: server error (500) — SDK will auto-retry", label)
+	case strings.Contains(lower, "503") || strings.Contains(lower, "service unavailable") || strings.Contains(lower, "overloaded"):
+		logging.InfoContext(ctx, "responses API %s: service unavailable (503) — SDK will auto-retry", label)
+	case strings.Contains(lower, "401") || strings.Contains(lower, "authentication"):
+		logging.InfoContext(ctx, "responses API %s: authentication failure — check API key", label)
+	case strings.Contains(lower, "context canceled"):
+		logging.InfoContext(ctx, "responses API %s: context canceled", label)
+	default:
+		logging.InfoContext(ctx, "responses API %s: %v", label, err)
 	}
 }
 
