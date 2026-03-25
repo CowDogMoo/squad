@@ -13,6 +13,7 @@ import (
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/mcp"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/source"
 	"github.com/cowdogmoo/squad/tools"
@@ -52,6 +53,7 @@ type RunOptions struct {
 	Config            *config.Config
 	Findings          *tools.FindingsStore // shared findings store (set by pipeline runner)
 	AgentName         string               // current agent name for finding attribution
+	MCPServers        []mcp.ServerConfig   // MCP servers from CLI --mcp-server flags
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.

@@ -12,6 +12,7 @@ import (
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/mcp"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/ollama"
 	"github.com/cowdogmoo/squad/responses"
@@ -46,6 +47,20 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 	}
 
 	taskCfg := buildTaskConfig(opts)
+
+	// Connect MCP servers declared in the agent manifest and/or CLI flags.
+	mcpServers := bundle.MCPServers
+	mcpServers = append(mcpServers, opts.MCPServers...)
+	if len(mcpServers) > 0 {
+		clients, mcpErr := connectMCPServers(ctx, mcpServers)
+		defer closeMCPClients(clients)
+		if mcpErr != nil {
+			return "", nil, mcpErr
+		}
+		taskCfg.ExtraTools = mcp.BuildHandlers(clients)
+		logging.InfoContext(ctx, "MCP tools loaded: %d tools from %d server(s)", len(taskCfg.ExtraTools), len(clients))
+	}
+
 	return callModel(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
 }
 
@@ -312,4 +327,28 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		return InvokeModel(ctx, &childOpts, childBundle)
 	}
 	return cfg
+}
+
+// connectMCPServers starts all configured MCP server subprocesses and
+// performs the protocol handshake. Returns connected clients and any error.
+// On error, already-connected clients are still returned for cleanup.
+func connectMCPServers(ctx context.Context, servers []mcp.ServerConfig) ([]*mcp.Client, error) {
+	var clients []*mcp.Client
+	for _, cfg := range servers {
+		logging.InfoContext(ctx, "connecting MCP server %q (%s %v)", cfg.Name, cfg.Command, cfg.Args)
+		c, err := mcp.Connect(ctx, cfg)
+		if err != nil {
+			return clients, fmt.Errorf("MCP server %q failed: %w", cfg.Name, err)
+		}
+		logging.InfoContext(ctx, "MCP server %q connected (%d tools)", cfg.Name, len(c.Tools()))
+		clients = append(clients, c)
+	}
+	return clients, nil
+}
+
+// closeMCPClients shuts down all MCP server subprocesses.
+func closeMCPClients(clients []*mcp.Client) {
+	for _, c := range clients {
+		_ = c.Close()
+	}
 }

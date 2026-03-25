@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cowdogmoo/squad/mcp"
 	"github.com/cowdogmoo/squad/runner"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -72,6 +73,10 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 	// Parse --var flags into a map
 	varStrings, _ := cmd.Flags().GetStringArray("var")
 	vars := parseVars(varStrings)
+
+	// Parse --mcp-server flags into MCP server configs
+	mcpStrings, _ := cmd.Flags().GetStringArray("mcp-server")
+	mcpServers := parseMCPServers(mcpStrings)
 
 	maxIter := v.GetInt("run.max_iterations")
 	if maxIter < 10 {
@@ -116,6 +121,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		Vars:              vars,
 		ConfigAvailable:   cfg != nil,
 		Config:            cfg,
+		MCPServers:        mcpServers,
 	}
 }
 
@@ -246,6 +252,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Int("max-iterations", 100, "Maximum tool-calling iterations (range: 10-1000)")
 	cmd.Flags().Float64("max-cost", 5, "Maximum cost budget in USD (0 = unlimited)")
 	cmd.Flags().StringArray("var", nil, "Template variable in KEY=VALUE format (can be repeated)")
+	cmd.Flags().StringArray("mcp-server", nil, "MCP server in NAME:COMMAND[:ARG1,ARG2,...] format (can be repeated)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 
@@ -299,4 +306,27 @@ func completeAgentNames(_ *cobra.Command, _ []string, toComplete string) ([]stri
 		}
 	}
 	return names, cobra.ShellCompDirectiveNoFileComp
+}
+
+// parseMCPServers parses NAME:COMMAND[:ARG1,ARG2,...] strings into ServerConfig.
+func parseMCPServers(specs []string) []mcp.ServerConfig {
+	if len(specs) == 0 {
+		return nil
+	}
+	var configs []mcp.ServerConfig
+	for _, spec := range specs {
+		parts := strings.SplitN(spec, ":", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		cfg := mcp.ServerConfig{
+			Name:    parts[0],
+			Command: parts[1],
+		}
+		if len(parts) == 3 && parts[2] != "" {
+			cfg.Args = strings.Split(parts[2], ",")
+		}
+		configs = append(configs, cfg)
+	}
+	return configs
 }

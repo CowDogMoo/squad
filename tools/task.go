@@ -152,6 +152,7 @@ type TaskConfig struct {
 	ParentMetrics *metrics.Metrics // parent metrics for cost aggregation
 	Findings      *FindingsStore   // shared findings store for ReportFinding tool
 	AgentName     string           // current agent name (for finding attribution)
+	ExtraTools    []Handler        // additional tools injected by MCP servers or other providers
 }
 
 type taskArgs struct {

@@ -12,21 +12,23 @@ import (
 	"text/template"
 
 	"github.com/cowdogmoo/squad/executor"
+	"github.com/cowdogmoo/squad/mcp"
 	"gopkg.in/yaml.v3"
 )
 
 // Manifest represents the structure of an agent's manifest file.
 type Manifest struct {
-	Name        string           `yaml:"name"`
-	Version     string           `yaml:"version"`
-	EntryPoint  string           `yaml:"entrypoint"`
-	Wrapper     string           `yaml:"wrapper"`
-	References  []string         `yaml:"references"`
-	Task        string           `yaml:"task,omitempty"`
-	Environment *executor.Config `yaml:"environment,omitempty"`
-	DependsOn   []string         `yaml:"depends_on,omitempty"`
-	Output      *OutputConfig    `yaml:"output,omitempty"`
-	Budget      *BudgetConfig    `yaml:"budget,omitempty"`
+	Name        string             `yaml:"name"`
+	Version     string             `yaml:"version"`
+	EntryPoint  string             `yaml:"entrypoint"`
+	Wrapper     string             `yaml:"wrapper"`
+	References  []string           `yaml:"references"`
+	Task        string             `yaml:"task,omitempty"`
+	Environment *executor.Config   `yaml:"environment,omitempty"`
+	DependsOn   []string           `yaml:"depends_on,omitempty"`
+	Output      *OutputConfig      `yaml:"output,omitempty"`
+	Budget      *BudgetConfig      `yaml:"budget,omitempty"`
+	MCPServers  []mcp.ServerConfig `yaml:"mcp_servers,omitempty"`
 }
 
 // BudgetConfig provides static hints for cost estimation.
@@ -69,7 +71,8 @@ type Bundle struct {
 	User        string // user request (CLI prompt or default)
 	Combined    []byte // concatenated for --print-bundle/--bundle-out
 	WorkDir     string
-	Environment *executor.Config // execution environment from agent manifest
+	Environment *executor.Config   // execution environment from agent manifest
+	MCPServers  []mcp.ServerConfig // MCP server dependencies declared in agent.yaml
 }
 
 // TemplateData holds the data passed to prompt templates.
@@ -338,5 +341,6 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		Combined:    combined.Bytes(),
 		WorkDir:     workingDir,
 		Environment: manifest.Environment,
+		MCPServers:  manifest.MCPServers,
 	}, nil
 }
