@@ -113,6 +113,16 @@ func CacheFile(filename string) (string, error) {
 	return cachePath, nil
 }
 
+// CacheDir returns the squad cache directory (e.g., ~/.cache/squad).
+// Returns empty string if the cache home cannot be determined.
+func CacheDir() string {
+	cacheHome := getCacheHome()
+	if cacheHome == "" {
+		return ""
+	}
+	return filepath.Join(cacheHome, "squad")
+}
+
 // AgentsCacheDir returns the directory for caching cloned agent repositories.
 func AgentsCacheDir() (string, error) {
 	cacheHome := getCacheHome()

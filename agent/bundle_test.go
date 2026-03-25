@@ -460,10 +460,10 @@ depends_on:
 		t.Fatalf("BuildBundle: %v", err)
 	}
 
-	// Verify manifest parsing via loadManifest.
-	m, err := loadManifest(filepath.Join(dir, "demo"))
+	// Verify manifest parsing via LoadManifest.
+	m, err := LoadManifest(filepath.Join(dir, "demo"))
 	if err != nil {
-		t.Fatalf("loadManifest: %v", err)
+		t.Fatalf("LoadManifest: %v", err)
 	}
 	if len(m.DependsOn) != 2 || m.DependsOn[0] != "go-cobra" || m.DependsOn[1] != "go-review" {
 		t.Fatalf("depends_on = %v, want [go-cobra go-review]", m.DependsOn)

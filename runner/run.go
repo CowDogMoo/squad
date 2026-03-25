@@ -81,6 +81,7 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	cmd.SetContext(ctx)
 	tools.ResetEditsApplied(ctx)
 	response, m, err := InvokeModel(ctx, opts, bundle)
+	logRunHistory(opts, m)
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Run stopped: cost budget of $%.4f exceeded (actual: $%.4f)\n", opts.MaxCost, m.TotalCostWithChildren())
@@ -153,6 +154,12 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 	}
 
 	if opts.DryRun {
+		estimate, err := metrics.EstimateCost(agentsDir, opts.Agent, opts.Provider, opts.Model)
+		if err != nil {
+			logging.Warn("cost estimation failed: %v", err)
+		} else {
+			_, _ = fmt.Fprint(cmd.ErrOrStderr(), metrics.FormatEstimate(estimate, opts.Provider, opts.Model))
+		}
 		return nil, nil
 	}
 
@@ -193,6 +200,18 @@ func writeResponse(cmd *cobra.Command, response string, opts *RunOptions) error 
 		logging.InfoContext(cmd.Context(), "response written to %s", opts.Output)
 	}
 	return nil
+}
+
+// logRunHistory persists token usage to the cost history cache.
+func logRunHistory(opts *RunOptions, m *metrics.Metrics) {
+	if m == nil || opts.Agent == "" {
+		return
+	}
+	cacheDir := config.CacheDir()
+	if cacheDir == "" {
+		return
+	}
+	metrics.LogRunHistory(cacheDir, opts.Agent, m)
 }
 
 func readPrompt(cmd *cobra.Command, args []string) (string, error) {

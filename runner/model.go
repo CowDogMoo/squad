@@ -99,6 +99,34 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 	return response, m, nil
 }
 
+// DefaultMaxTokensWithTask is the output-token floor for agents that have
+// access to the Task tool.  Task prompts embed file lists, prior-agent
+// context, and hard constraints, easily requiring 4K+ tokens in a single
+// tool-call argument.  langchaingo's default of 2048 silently truncates
+// these arguments, causing the child dispatch to fail with "prompt is
+// required".
+const DefaultMaxTokensWithTask = 16384
+
+// DefaultMaxTokensLeaf is the output-token floor for leaf agents (no Task
+// tool).  Leaf agents mostly emit Edit/Write/Bash tool calls whose
+// arguments are modest, but 4096 gives comfortable headroom for long
+// file-write operations.
+const DefaultMaxTokensLeaf = 4096
+
+// inferMaxTokens applies a sensible output-token floor when the caller did
+// not explicitly set --max-tokens.  Orchestrator agents (with Task tool)
+// need a much larger budget than leaf agents because the Task tool's prompt
+// argument can be thousands of tokens.
+func inferMaxTokens(maxTokens int, hasTaskTool bool) int {
+	if maxTokens > 0 {
+		return maxTokens // explicit user override — respect it
+	}
+	if hasTaskTool {
+		return DefaultMaxTokensWithTask
+	}
+	return DefaultMaxTokensLeaf
+}
+
 // callLangChainLLM runs the prompt via a LangChain-compatible LLM.
 func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor) (string, *metrics.Metrics, error) {
 	llm, err := buildLLM(opts, provider, model)
@@ -106,6 +134,8 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		return "", nil, err
 	}
 
+	maxTokens = inferMaxTokens(maxTokens, taskCfg != nil)
+	logging.DebugContext(ctx, "max_tokens=%d (hasTaskTool=%v)", maxTokens, taskCfg != nil)
 	callOpts := buildCallOpts(opts, provider, temperature, maxTokens)
 
 	m := metrics.New(provider, model)
