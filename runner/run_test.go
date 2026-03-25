@@ -349,7 +349,7 @@ func TestInvokeModelMissingAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	opts := &RunOptions{Provider: "openai-responses", Model: "gpt-5"}
 	bundle := &agent.Bundle{System: "sys", User: "user", WorkDir: "."}
-	_, _, err := invokeModel(context.Background(), opts, bundle)
+	_, _, err := InvokeModel(context.Background(), opts, bundle)
 	if err == nil {
 		t.Fatalf("expected error for missing API key")
 	}

@@ -69,6 +69,22 @@ func (m *Metrics) BudgetExceeded() bool {
 	return maxCost > 0 && m.TotalCostWithChildren() >= maxCost
 }
 
+// RemainingBudget returns the remaining cost budget in USD.
+// Returns 0 if no budget is set (unlimited).
+func (m *Metrics) RemainingBudget() float64 {
+	m.mu.Lock()
+	maxCost := m.MaxCost
+	m.mu.Unlock()
+	if maxCost <= 0 {
+		return 0
+	}
+	remaining := maxCost - m.TotalCostWithChildren()
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 // AddTokens adds input and output token counts to the run totals.
 func (m *Metrics) AddTokens(input, output int64) {
 	m.mu.Lock()

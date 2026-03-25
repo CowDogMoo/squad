@@ -199,8 +199,8 @@ func TestBuildHandlers(t *testing.T) {
 		withTask bool
 		wantDefs int
 	}{
-		{"without TaskConfig", false, 6},
-		{"with TaskConfig", true, 7},
+		{"without TaskConfig", false, 7},
+		{"with TaskConfig", true, 8},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1411,10 +1411,11 @@ func TestToolLoopBudgetExceeded(t *testing.T) {
 
 	// LLM returns a tool call, then after tool execution budget is checked.
 	// We pre-load metrics with enough tokens to exceed the budget.
+	// The second response is the grace call's final structured output.
 	llm := &fakeLLM{responses: []*llms.ContentResponse{
 		{
 			Choices: []*llms.ContentChoice{{
-				Content: "partial",
+				Content: "partial status message",
 				ToolCalls: []llms.ToolCall{{
 					ID:   "1",
 					Type: "function",
@@ -1429,6 +1430,12 @@ func TestToolLoopBudgetExceeded(t *testing.T) {
 				},
 			}},
 		},
+		// Grace call response: the model produces its final report.
+		{
+			Choices: []*llms.ContentChoice{{
+				Content: "## Final Report\nComplete structured output from grace call.",
+			}},
+		},
 	}}
 
 	m := metrics.New("openai", "gpt-4o")
@@ -1436,9 +1443,13 @@ func TestToolLoopBudgetExceeded(t *testing.T) {
 	// Pre-load tokens so budget is exceeded after the first tool call
 	m.AddTokens(1_000_000, 1_000_000)
 
-	_, err := RunWithTools(context.Background(), llm, "", "user", dir, 10, nil, m, &executor.LocalExecutor{WorkingDir: dir})
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 10, nil, m, &executor.LocalExecutor{WorkingDir: dir})
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	// The grace call should produce the final report, not the partial status message.
+	if out != "## Final Report\nComplete structured output from grace call." {
+		t.Fatalf("output = %q, want final report from grace call", out)
 	}
 }
 
@@ -1448,16 +1459,18 @@ func TestFinishToolLoopBudgetExceededWithContent(t *testing.T) {
 	m.SetMaxCost(0.0001)
 	m.AddTokens(1_000_000, 1_000_000)
 
+	// The grace call should produce the final structured output.
 	llm := &stubLLM{
-		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final structured report"}}},
 	}
 
 	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, m, nil)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
-	if out != "partial" {
-		t.Fatalf("output = %q, want %q", out, "partial")
+	// Grace call succeeds, so we get the model's final output, not the partial content.
+	if out != "final structured report" {
+		t.Fatalf("output = %q, want %q", out, "final structured report")
 	}
 }
 
@@ -1467,16 +1480,38 @@ func TestFinishToolLoopBudgetExceededNoContent(t *testing.T) {
 	m.SetMaxCost(0.0001)
 	m.AddTokens(1_000_000, 1_000_000)
 
+	// Grace call produces a final report even when there was no prior content.
 	llm := &stubLLM{
-		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
+		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final report"}}},
 	}
 
 	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
-	if out != "" {
-		t.Fatalf("output = %q, want empty", out)
+	// Grace call succeeds, so we get the model's final output.
+	if out != "final report" {
+		t.Fatalf("output = %q, want %q", out, "final report")
+	}
+}
+
+func TestFinishToolLoopBudgetExceededGraceCallFails(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	// Grace call fails — should fall back to lastContent.
+	llm := &stubLLM{
+		err: errors.New("API error"),
+	}
+
+	out, err := finishToolLoop(context.Background(), llm, nil, "partial fallback", 1, m, nil)
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
+	}
+	if out != "partial fallback" {
+		t.Fatalf("output = %q, want %q", out, "partial fallback")
 	}
 }
 
@@ -1584,8 +1619,8 @@ func TestBuildHandlersWithRegistry(t *testing.T) {
 	if _, ok := handlers["TaskResult"]; !ok {
 		t.Fatalf("expected TaskResult handler when registry is set")
 	}
-	if len(defs) != 8 {
-		t.Fatalf("tool defs = %d, want 8 (6 base + Task + TaskResult)", len(defs))
+	if len(defs) != 9 {
+		t.Fatalf("tool defs = %d, want 9 (7 base + Task + TaskResult)", len(defs))
 	}
 }
 

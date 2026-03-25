@@ -542,6 +542,87 @@ func TestFormatReportMarkdown(t *testing.T) {
 	}
 }
 
+func TestRunnerBudgetTracking(t *testing.T) {
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{Name: "review", Agent: "go-review"},
+			{Name: "test", Agent: "go-tests", DependsOn: []string{"review"}},
+		},
+	}
+
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		MaxCost:    1.00,
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			m := metrics.New("ollama", "llama3") // free
+			m.AddTokens(1000, 500)
+			return "ok", m, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Status != StatusPassed {
+		t.Fatalf("status = %s, want passed", report.Status)
+	}
+	// Both agents should have run (ollama is free, within budget)
+	if len(report.Stages) != 2 {
+		t.Fatalf("stages = %d, want 2", len(report.Stages))
+	}
+}
+
+func TestRunnerBudgetExhausted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping pricing test in short mode")
+	}
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{Name: "expensive", Agent: "agent-a"},
+			{Name: "cheap", Agent: "agent-b", DependsOn: []string{"expensive"}},
+		},
+	}
+
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		MaxCost:    0.0001, // very small budget
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			m := metrics.New("openai", "gpt-4o")
+			m.AddTokens(1_000_000, 500_000) // expensive
+			return "ok", m, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	// The first agent runs and spends over budget, second should be skipped
+	cost := runner.remainingBudget()
+	if report != nil && len(report.Stages) >= 2 {
+		secondAgent := report.Stages[1].Agents[0]
+		if secondAgent.Status == StatusPassed && cost == 0 {
+			t.Fatalf("second agent should have failed when budget exhausted")
+		}
+	}
+	_ = err // may or may not error depending on pricing availability
+}
+
+func TestRunnerRemainingBudgetUnlimited(t *testing.T) {
+	t.Parallel()
+	runner := &Runner{MaxCost: 0}
+	if runner.remainingBudget() != 0 {
+		t.Fatalf("remainingBudget() = %v, want 0 for unlimited", runner.remainingBudget())
+	}
+}
+
 func TestRunnerStageVarsAndMode(t *testing.T) {
 	p := &Pipeline{
 		Name:    "test",

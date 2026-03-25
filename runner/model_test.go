@@ -446,7 +446,7 @@ func TestInvokeModel_ExecutorError(t *testing.T) {
 	}
 	opts := &RunOptions{Provider: "openai", Model: "gpt-4o", APIKey: "key"}
 
-	_, _, err := invokeModel(context.Background(), opts, bundle)
+	_, _, err := InvokeModel(context.Background(), opts, bundle)
 	if err == nil {
 		t.Fatal("expected error from unknown executor type")
 	}
@@ -457,7 +457,7 @@ func TestInvokeModel_ExecutorError(t *testing.T) {
 
 func TestInvokeModel_SystemOverride(t *testing.T) {
 	t.Parallel()
-	// This tests the system override path in invokeModel.
+	// This tests the system override path in InvokeModel.
 	// It will fail on API call but exercises the system override code path.
 	bundle := &agent.Bundle{
 		System:  "base system",
@@ -471,7 +471,7 @@ func TestInvokeModel_SystemOverride(t *testing.T) {
 		// No API key → will fail at API call
 	}
 
-	_, _, err := invokeModel(context.Background(), opts, bundle)
+	_, _, err := InvokeModel(context.Background(), opts, bundle)
 	if err == nil {
 		t.Fatal("expected error (no API key)")
 	}

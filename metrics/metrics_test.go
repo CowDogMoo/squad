@@ -657,6 +657,63 @@ func TestChildMetricsStruct(t *testing.T) {
 	}
 }
 
+func TestRemainingBudgetUnlimited(t *testing.T) {
+	t.Parallel()
+	m := New("openai", "gpt-4o")
+	m.AddTokens(1000, 500)
+	if m.RemainingBudget() != 0 {
+		t.Fatalf("RemainingBudget() = %v, want 0 for unlimited", m.RemainingBudget())
+	}
+}
+
+func TestRemainingBudgetWithCost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping pricing test in short mode")
+	}
+	m := New("openai", "gpt-4o")
+	m.SetMaxCost(1.00)
+	m.AddTokens(100_000, 50_000) // should cost something
+
+	remaining := m.RemainingBudget()
+	cost := m.TotalCostWithChildren()
+	if cost > 0 {
+		if remaining >= 1.00 {
+			t.Fatalf("RemainingBudget() = %v, should be less than MaxCost after spending", remaining)
+		}
+		if remaining+cost < 0.999 || remaining+cost > 1.001 {
+			t.Fatalf("remaining (%v) + cost (%v) should equal MaxCost (1.00)", remaining, cost)
+		}
+	}
+}
+
+func TestRemainingBudgetExhausted(t *testing.T) {
+	t.Parallel()
+	m := New("ollama", "llama3")
+	m.SetMaxCost(0.0001)
+	// Ollama is free, so budget is never actually spent
+	if m.RemainingBudget() != 0.0001 {
+		t.Fatalf("RemainingBudget() = %v, want 0.0001", m.RemainingBudget())
+	}
+}
+
+func TestRemainingBudgetWithChildren(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping pricing test in short mode")
+	}
+	parent := New("openai", "gpt-4o")
+	parent.SetMaxCost(10.00)
+
+	child := New("openai", "gpt-4o")
+	child.AddTokens(1_000_000, 500_000)
+	parent.AddChild("expensive-child", child)
+
+	remaining := parent.RemainingBudget()
+	totalCost := parent.TotalCostWithChildren()
+	if totalCost > 0 && remaining >= 10.00 {
+		t.Fatalf("RemainingBudget() = %v should be less than MaxCost after child spending", remaining)
+	}
+}
+
 func TestFetchPricingVariants(t *testing.T) {
 	// Subtests share pricing globals — do not add t.Parallel().
 	originalTransport := http.DefaultTransport

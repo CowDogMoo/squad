@@ -14,4 +14,12 @@ type Executor interface {
 	// Close releases any resources held by the executor
 	// (e.g., stops a long-lived Docker container).
 	Close() error
+
+	// Type returns the executor backend name (e.g., "local", "docker", "ssm", "kubectl").
+	Type() string
+
+	// EnvironmentDescription returns a human-readable summary of the execution
+	// environment, suitable for injection into agent system prompts so the model
+	// knows where its tool commands will run.
+	EnvironmentDescription() string
 }

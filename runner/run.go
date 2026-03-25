@@ -50,6 +50,8 @@ type RunOptions struct {
 	Vars              map[string]string // Template variables (e.g., COVERAGE_TARGET=85)
 	ConfigAvailable   bool
 	Config            *config.Config
+	Findings          *tools.FindingsStore // shared findings store (set by pipeline runner)
+	AgentName         string               // current agent name for finding attribution
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.
@@ -78,7 +80,7 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	ctx := tools.InitEdits(cmd.Context())
 	cmd.SetContext(ctx)
 	tools.ResetEditsApplied(ctx)
-	response, m, err := invokeModel(ctx, opts, bundle)
+	response, m, err := InvokeModel(ctx, opts, bundle)
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Run stopped: cost budget of $%.4f exceeded (actual: $%.4f)\n", opts.MaxCost, m.TotalCostWithChildren())

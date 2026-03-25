@@ -2,15 +2,46 @@ package executor
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
+
+// fakeSSMClient implements ssmAPI for testing.
+type fakeSSMClient struct {
+	sendCommandFn        func(ctx context.Context, params *ssm.SendCommandInput) (*ssm.SendCommandOutput, error)
+	getCommandInvocation func(ctx context.Context, params *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error)
+	// Track calls for assertions.
+	sendCalls []ssm.SendCommandInput
+}
+
+func (f *fakeSSMClient) SendCommand(ctx context.Context, params *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
+	f.sendCalls = append(f.sendCalls, *params)
+	if f.sendCommandFn != nil {
+		return f.sendCommandFn(ctx, params)
+	}
+	return &ssm.SendCommandOutput{
+		Command: &ssmtypes.Command{CommandId: aws.String("cmd-fake")},
+	}, nil
+}
+
+func (f *fakeSSMClient) GetCommandInvocation(ctx context.Context, params *ssm.GetCommandInvocationInput, _ ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error) {
+	if f.getCommandInvocation != nil {
+		return f.getCommandInvocation(ctx, params)
+	}
+	return &ssm.GetCommandInvocationOutput{
+		Status:                ssmtypes.CommandInvocationStatusSuccess,
+		StandardOutputContent: aws.String("ok"),
+	}, nil
+}
 
 func TestNewSSMExecutor_MissingInstanceID(t *testing.T) {
 	t.Parallel()
-	_, err := newSSMExecutor(&Config{Options: map[string]string{}}, &fakeCmdRunner{})
+	_, err := newSSMExecutor(&Config{Options: map[string]string{}}, "", &fakeSSMClient{})
 	if err == nil || !strings.Contains(err.Error(), "instance_id") {
 		t.Fatalf("expected instance_id error, got: %v", err)
 	}
@@ -24,7 +55,7 @@ func TestNewSSMExecutor_Success(t *testing.T) {
 			"region":      "us-east-1",
 			"profile":     "dev",
 		},
-	}, &fakeCmdRunner{})
+	}, "/work", &fakeSSMClient{})
 	if err != nil {
 		t.Fatalf("newSSMExecutor: %v", err)
 	}
@@ -34,54 +65,40 @@ func TestNewSSMExecutor_Success(t *testing.T) {
 	if ex.region != "us-east-1" {
 		t.Fatalf("region = %q, want us-east-1", ex.region)
 	}
-	if ex.profile != "dev" {
-		t.Fatalf("profile = %q, want dev", ex.profile)
+	if ex.workingDir != "/work" {
+		t.Fatalf("workingDir = %q, want /work", ex.workingDir)
+	}
+	if ex.timeout != defaultSSMTimeout {
+		t.Fatalf("timeout = %d, want %d", ex.timeout, int32(defaultSSMTimeout))
 	}
 }
 
-func TestSSMExecutor_BaseArgs(t *testing.T) {
+func TestNewSSMExecutor_CustomTimeout(t *testing.T) {
 	t.Parallel()
-
-	tests := []struct {
-		name     string
-		executor *SSMExecutor
-		input    []string
-		want     []string
-	}{
-		{
-			name:     "no region or profile",
-			executor: &SSMExecutor{instanceID: "i-abc"},
-			input:    []string{"ssm", "send-command"},
-			want:     []string{"ssm", "send-command"},
+	ex, err := newSSMExecutor(&Config{
+		Options: map[string]string{
+			"instance_id": "i-abc123",
+			"timeout":     "900",
 		},
-		{
-			name:     "with region",
-			executor: &SSMExecutor{instanceID: "i-abc", region: "us-west-2"},
-			input:    []string{"ssm", "send-command"},
-			want:     []string{"--region", "us-west-2", "ssm", "send-command"},
-		},
-		{
-			name:     "with profile",
-			executor: &SSMExecutor{instanceID: "i-abc", profile: "prod"},
-			input:    []string{"ssm", "send-command"},
-			want:     []string{"--profile", "prod", "ssm", "send-command"},
-		},
-		{
-			name:     "with both",
-			executor: &SSMExecutor{instanceID: "i-abc", region: "eu-west-1", profile: "staging"},
-			input:    []string{"ssm", "send-command"},
-			want:     []string{"--region", "eu-west-1", "--profile", "staging", "ssm", "send-command"},
-		},
+	}, "", &fakeSSMClient{})
+	if err != nil {
+		t.Fatalf("newSSMExecutor: %v", err)
 	}
+	if ex.timeout != 900 {
+		t.Fatalf("timeout = %d, want 900", ex.timeout)
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := tt.executor.baseArgs(tt.input...)
-			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
-				t.Errorf("baseArgs = %v, want %v", got, tt.want)
-			}
-		})
+func TestNewSSMExecutor_InvalidTimeout(t *testing.T) {
+	t.Parallel()
+	_, err := newSSMExecutor(&Config{
+		Options: map[string]string{
+			"instance_id": "i-abc123",
+			"timeout":     "not-a-number",
+		},
+	}, "", &fakeSSMClient{})
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("expected timeout error, got: %v", err)
 	}
 }
 
@@ -93,48 +110,23 @@ func TestSSMExecutor_Close(t *testing.T) {
 	}
 }
 
-// makeSendCommandResponse creates a fake SSM send-command JSON response.
-func makeSendCommandResponse(commandID string) []byte {
-	resp := struct {
-		Command struct {
-			CommandID string `json:"CommandId"`
-		} `json:"Command"`
-	}{}
-	resp.Command.CommandID = commandID
-	data, _ := json.Marshal(resp)
-	return data
-}
-
-// makeInvocationResponse creates a fake SSM get-command-invocation JSON response.
-func makeInvocationResponse(stdout, stderr, status string) []byte {
-	resp := struct {
-		StandardOutputContent string `json:"StandardOutputContent"`
-		StandardErrorContent  string `json:"StandardErrorContent"`
-		Status                string `json:"Status"`
-	}{
-		StandardOutputContent: stdout,
-		StandardErrorContent:  stderr,
-		Status:                status,
-	}
-	data, _ := json.Marshal(resp)
-	return data
-}
-
 func TestSSMExecutor_Execute_Success(t *testing.T) {
 	t.Parallel()
 
-	runner := &fakeCmdRunner{
-		results: []fakeResult{
-			{Output: makeSendCommandResponse("cmd-123")}, // send-command
-			{Output: nil}, // wait
-			{Output: makeInvocationResponse("hello\n", "", "Success")}, // get-command-invocation
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			return &ssm.GetCommandInvocationOutput{
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: aws.String("hello\n"),
+			}, nil
 		},
 	}
 
 	ex := &SSMExecutor{
 		instanceID: "i-abc123",
 		region:     "us-east-1",
-		runner:     runner,
+		timeout:    defaultSSMTimeout,
+		client:     client,
 	}
 
 	out, err := ex.Execute(context.Background(), "echo hello")
@@ -145,24 +137,67 @@ func TestSSMExecutor_Execute_Success(t *testing.T) {
 		t.Fatalf("output = %q, want 'hello'", string(out))
 	}
 
-	// Verify 3 AWS CLI calls were made.
-	if len(runner.calls) != 3 {
-		t.Fatalf("expected 3 calls, got %d", len(runner.calls))
+	// Verify SendCommand was called with correct timeout.
+	if len(client.sendCalls) != 1 {
+		t.Fatalf("expected 1 SendCommand call, got %d", len(client.sendCalls))
+	}
+	if ts := client.sendCalls[0].TimeoutSeconds; ts == nil || *ts != defaultSSMTimeout {
+		t.Fatalf("TimeoutSeconds = %v, want %d", ts, defaultSSMTimeout)
+	}
+}
+
+func TestSSMExecutor_Execute_WithWorkingDir(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			return &ssm.GetCommandInvocationOutput{
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: aws.String("ok"),
+			}, nil
+		},
+	}
+
+	ex := &SSMExecutor{
+		instanceID: "i-abc123",
+		workingDir: "/opt/app",
+		timeout:    defaultSSMTimeout,
+		client:     client,
+	}
+
+	_, err := ex.Execute(context.Background(), "ls")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// Verify the command was wrapped with cd.
+	if len(client.sendCalls) != 1 {
+		t.Fatalf("expected 1 SendCommand call, got %d", len(client.sendCalls))
+	}
+	cmds := client.sendCalls[0].Parameters["commands"]
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(cmds))
+	}
+	wantCmd := "mkdir -p /opt/app && cd /opt/app && ls"
+	if cmds[0] != wantCmd {
+		t.Fatalf("command = %q, want %q", cmds[0], wantCmd)
 	}
 }
 
 func TestSSMExecutor_Execute_WithStderr(t *testing.T) {
 	t.Parallel()
 
-	runner := &fakeCmdRunner{
-		results: []fakeResult{
-			{Output: makeSendCommandResponse("cmd-123")},
-			{Output: nil},
-			{Output: makeInvocationResponse("out", "warn", "Success")},
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			return &ssm.GetCommandInvocationOutput{
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: aws.String("out"),
+				StandardErrorContent:  aws.String("warn"),
+			}, nil
 		},
 	}
 
-	ex := &SSMExecutor{instanceID: "i-abc123", runner: runner}
+	ex := &SSMExecutor{instanceID: "i-abc123", timeout: defaultSSMTimeout, client: client}
 
 	out, err := ex.Execute(context.Background(), "cmd")
 	if err != nil {
@@ -176,47 +211,32 @@ func TestSSMExecutor_Execute_WithStderr(t *testing.T) {
 func TestSSMExecutor_Execute_SendCommandFails(t *testing.T) {
 	t.Parallel()
 
-	runner := &fakeCmdRunner{
-		results: []fakeResult{
-			{Output: []byte("error"), Err: fmt.Errorf("aws error")},
+	client := &fakeSSMClient{
+		sendCommandFn: func(_ context.Context, _ *ssm.SendCommandInput) (*ssm.SendCommandOutput, error) {
+			return nil, fmt.Errorf("access denied")
 		},
 	}
 
-	ex := &SSMExecutor{instanceID: "i-abc123", runner: runner}
+	ex := &SSMExecutor{instanceID: "i-abc123", timeout: defaultSSMTimeout, client: client}
 
 	_, err := ex.Execute(context.Background(), "cmd")
-	if err == nil || !strings.Contains(err.Error(), "send-command failed") {
-		t.Fatalf("expected send-command error, got: %v", err)
-	}
-}
-
-func TestSSMExecutor_Execute_InvalidSendResponse(t *testing.T) {
-	t.Parallel()
-
-	runner := &fakeCmdRunner{
-		results: []fakeResult{
-			{Output: []byte("not json")},
-		},
-	}
-
-	ex := &SSMExecutor{instanceID: "i-abc123", runner: runner}
-
-	_, err := ex.Execute(context.Background(), "cmd")
-	if err == nil || !strings.Contains(err.Error(), "parse send-command response") {
-		t.Fatalf("expected parse error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "SendCommand failed") {
+		t.Fatalf("expected SendCommand error, got: %v", err)
 	}
 }
 
 func TestSSMExecutor_Execute_EmptyCommandID(t *testing.T) {
 	t.Parallel()
 
-	runner := &fakeCmdRunner{
-		results: []fakeResult{
-			{Output: makeSendCommandResponse("")},
+	client := &fakeSSMClient{
+		sendCommandFn: func(_ context.Context, _ *ssm.SendCommandInput) (*ssm.SendCommandOutput, error) {
+			return &ssm.SendCommandOutput{
+				Command: &ssmtypes.Command{CommandId: aws.String("")},
+			}, nil
 		},
 	}
 
-	ex := &SSMExecutor{instanceID: "i-abc123", runner: runner}
+	ex := &SSMExecutor{instanceID: "i-abc123", timeout: defaultSSMTimeout, client: client}
 
 	_, err := ex.Execute(context.Background(), "cmd")
 	if err == nil || !strings.Contains(err.Error(), "empty CommandId") {
@@ -227,53 +247,34 @@ func TestSSMExecutor_Execute_EmptyCommandID(t *testing.T) {
 func TestSSMExecutor_Execute_GetInvocationFails(t *testing.T) {
 	t.Parallel()
 
-	runner := &fakeCmdRunner{
-		results: []fakeResult{
-			{Output: makeSendCommandResponse("cmd-123")},
-			{Output: nil}, // wait
-			{Output: []byte("err"), Err: fmt.Errorf("get failed")}, // get-command-invocation
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			return nil, fmt.Errorf("get failed")
 		},
 	}
 
-	ex := &SSMExecutor{instanceID: "i-abc123", runner: runner}
+	ex := &SSMExecutor{instanceID: "i-abc123", timeout: defaultSSMTimeout, client: client}
 
 	_, err := ex.Execute(context.Background(), "cmd")
-	if err == nil || !strings.Contains(err.Error(), "get-command-invocation failed") {
-		t.Fatalf("expected get-command-invocation error, got: %v", err)
-	}
-}
-
-func TestSSMExecutor_Execute_InvalidInvocationResponse(t *testing.T) {
-	t.Parallel()
-
-	runner := &fakeCmdRunner{
-		results: []fakeResult{
-			{Output: makeSendCommandResponse("cmd-123")},
-			{Output: nil},
-			{Output: []byte("not json")},
-		},
-	}
-
-	ex := &SSMExecutor{instanceID: "i-abc123", runner: runner}
-
-	_, err := ex.Execute(context.Background(), "cmd")
-	if err == nil || !strings.Contains(err.Error(), "parse invocation response") {
-		t.Fatalf("expected parse error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "GetCommandInvocation failed") {
+		t.Fatalf("expected GetCommandInvocation error, got: %v", err)
 	}
 }
 
 func TestSSMExecutor_Execute_CommandFailedStatus(t *testing.T) {
 	t.Parallel()
 
-	runner := &fakeCmdRunner{
-		results: []fakeResult{
-			{Output: makeSendCommandResponse("cmd-123")},
-			{Output: nil},
-			{Output: makeInvocationResponse("partial output", "", "Failed")},
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			return &ssm.GetCommandInvocationOutput{
+				Status:                ssmtypes.CommandInvocationStatusFailed,
+				StandardOutputContent: aws.String("partial output"),
+				ResponseCode:          1,
+			}, nil
 		},
 	}
 
-	ex := &SSMExecutor{instanceID: "i-abc123", runner: runner}
+	ex := &SSMExecutor{instanceID: "i-abc123", timeout: defaultSSMTimeout, client: client}
 
 	out, err := ex.Execute(context.Background(), "cmd")
 	// "Failed" status means the command ran but exited non-zero — this is
@@ -286,5 +287,40 @@ func TestSSMExecutor_Execute_CommandFailedStatus(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "[exit code") {
 		t.Fatalf("expected exit code annotation, got: %q", string(out))
+	}
+}
+
+func TestSSMExecutor_Execute_TimedOutStatus(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeSSMClient{
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			return &ssm.GetCommandInvocationOutput{
+				Status:                ssmtypes.CommandInvocationStatusTimedOut,
+				StandardOutputContent: aws.String("partial"),
+			}, nil
+		},
+	}
+
+	ex := &SSMExecutor{instanceID: "i-abc123", timeout: defaultSSMTimeout, client: client}
+
+	_, err := ex.Execute(context.Background(), "cmd")
+	if err == nil || !strings.Contains(err.Error(), "TimedOut") {
+		t.Fatalf("expected TimedOut error, got: %v", err)
+	}
+}
+
+func TestSSMExecutor_EnvironmentDescription(t *testing.T) {
+	t.Parallel()
+	ex := &SSMExecutor{instanceID: "i-abc123", region: "us-east-1", workingDir: "/tmp/work"}
+	desc := ex.EnvironmentDescription()
+	if !strings.Contains(desc, "i-abc123") {
+		t.Fatalf("expected instance ID in description, got: %q", desc)
+	}
+	if !strings.Contains(desc, "us-east-1") {
+		t.Fatalf("expected region in description, got: %q", desc)
+	}
+	if !strings.Contains(desc, "/tmp/work") {
+		t.Fatalf("expected working dir in description, got: %q", desc)
 	}
 }

@@ -2,115 +2,163 @@ package executor
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
+
+// defaultSSMTimeout is the default command timeout in seconds (10 minutes).
+// Tools like httpx, trufflehog, and gau can scan hundreds of subdomains and
+// need significantly more than the default 100s SSM timeout.
+const defaultSSMTimeout = 600
+
+// ssmAPI abstracts the SSM SDK calls for testing.
+type ssmAPI interface {
+	SendCommand(ctx context.Context, params *ssm.SendCommandInput, optFns ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)
+	GetCommandInvocation(ctx context.Context, params *ssm.GetCommandInvocationInput, optFns ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error)
+}
 
 // SSMExecutor runs commands on an EC2 instance via AWS Systems Manager.
 type SSMExecutor struct {
 	instanceID string
 	region     string
-	profile    string
-	runner     cmdRunner
+	workingDir string
+	timeout    int32
+	client     ssmAPI
 }
 
 // NewSSMExecutor creates an SSM executor targeting the given EC2 instance.
-func NewSSMExecutor(cfg *Config) (*SSMExecutor, error) {
-	return newSSMExecutor(cfg, &execRunner{})
+func NewSSMExecutor(cfg *Config, workingDir string) (*SSMExecutor, error) {
+	return newSSMExecutor(cfg, workingDir, nil)
 }
 
-// newSSMExecutor is the internal constructor, injectable for testing.
-func newSSMExecutor(cfg *Config, runner cmdRunner) (*SSMExecutor, error) {
+// newSSMExecutor is the internal constructor. Pass a non-nil ssmAPI to
+// override the real client (for testing).
+func newSSMExecutor(cfg *Config, workingDir string, client ssmAPI) (*SSMExecutor, error) {
 	instanceID := cfg.Options["instance_id"]
 	if instanceID == "" {
 		return nil, fmt.Errorf("ssm executor requires 'instance_id' option")
 	}
 
-	return &SSMExecutor{
+	timeout := int32(defaultSSMTimeout)
+	if t := cfg.Options["timeout"]; t != "" {
+		parsed, err := strconv.Atoi(t)
+		if err != nil {
+			return nil, fmt.Errorf("ssm option 'timeout' must be an integer (seconds): %w", err)
+		}
+		timeout = int32(parsed)
+	}
+
+	ex := &SSMExecutor{
 		instanceID: instanceID,
 		region:     cfg.Options["region"],
-		profile:    cfg.Options["profile"],
-		runner:     runner,
-	}, nil
+		workingDir: workingDir,
+		timeout:    timeout,
+		client:     client,
+	}
+
+	// Build a real SDK client when none was injected (production path).
+	if client == nil {
+		var opts []func(*awsconfig.LoadOptions) error
+		if ex.region != "" {
+			opts = append(opts, awsconfig.WithRegion(ex.region))
+		}
+		if profile := cfg.Options["profile"]; profile != "" {
+			opts = append(opts, awsconfig.WithSharedConfigProfile(profile))
+		}
+		awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), opts...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load AWS config: %w", err)
+		}
+		ex.client = ssm.NewFromConfig(awsCfg)
+	}
+
+	return ex, nil
 }
 
-// Execute runs a command on the EC2 instance via ssm send-command
-// and waits for the result.
+// Execute runs a command on the EC2 instance via SSM SendCommand
+// and polls for the result.
 func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, error) {
-	// Build the parameters as proper JSON so that multi-line commands
-	// (containing newlines) are correctly encoded.  The previous approach
-	// using fmt.Sprintf(`commands=[%q]`, command) relied on Go's %q verb
-	// which produces Go-escaped strings — the AWS CLI shorthand parser
-	// does not interpret \n as a newline, causing literal "backslash-n"
-	// to appear in commands and corrupt filenames.
-	params := struct {
-		Commands []string `json:"commands"`
-	}{
-		Commands: []string{command},
+	// Prepend a cd into the working directory when one is configured so
+	// that commands run in the expected location on the remote host.
+	if e.workingDir != "" {
+		command = fmt.Sprintf("mkdir -p %s && cd %s && %s", e.workingDir, e.workingDir, command)
 	}
-	paramsJSON, err := json.Marshal(params)
+
+	sendOut, err := e.client.SendCommand(ctx, &ssm.SendCommandInput{
+		InstanceIds:  []string{e.instanceID},
+		DocumentName: aws.String("AWS-RunShellScript"),
+		Parameters: map[string][]string{
+			"commands": {command},
+		},
+		TimeoutSeconds: aws.Int32(e.timeout),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal SSM parameters: %w", err)
+		return nil, fmt.Errorf("ssm SendCommand failed: %w", err)
 	}
 
-	sendArgs := e.baseArgs("ssm", "send-command",
-		"--instance-ids", e.instanceID,
-		"--document-name", "AWS-RunShellScript",
-		"--parameters", string(paramsJSON),
-		"--output", "json",
-	)
-
-	sendOut, err := e.runner.Run(ctx, "aws", sendArgs...)
-	if err != nil {
-		return sendOut, fmt.Errorf("ssm send-command failed: %w", err)
-	}
-
-	// Extract the command ID from the response.
-	var result struct {
-		Command struct {
-			CommandID string `json:"CommandId"`
-		} `json:"Command"`
-	}
-	if err := json.Unmarshal(sendOut, &result); err != nil {
-		return sendOut, fmt.Errorf("failed to parse send-command response: %w", err)
-	}
-	commandID := result.Command.CommandID
+	commandID := aws.ToString(sendOut.Command.CommandId)
 	if commandID == "" {
-		return sendOut, fmt.Errorf("send-command returned empty CommandId")
+		return nil, fmt.Errorf("SendCommand returned empty CommandId")
 	}
 
-	// Wait for the command to complete and get output.
-	waitArgs := e.baseArgs("ssm", "wait", "command-executed",
-		"--command-id", commandID,
-		"--instance-id", e.instanceID,
-	)
-	_, _ = e.runner.Run(ctx, "aws", waitArgs...) // best-effort wait
-
-	// Retrieve the output.
-	getArgs := e.baseArgs("ssm", "get-command-invocation",
-		"--command-id", commandID,
-		"--instance-id", e.instanceID,
-		"--output", "json",
-	)
-
-	getOut, err := e.runner.Run(ctx, "aws", getArgs...)
-	if err != nil {
-		return getOut, fmt.Errorf("ssm get-command-invocation failed: %w", err)
+	// Poll for command completion. The SDK waiter can be flaky with long
+	// timeouts, so we poll manually with exponential backoff.
+	var invocation *ssm.GetCommandInvocationOutput
+	pollInput := &ssm.GetCommandInvocationInput{
+		CommandId:  aws.String(commandID),
+		InstanceId: aws.String(e.instanceID),
 	}
 
-	var invocation struct {
-		StandardOutputContent string `json:"StandardOutputContent"`
-		StandardErrorContent  string `json:"StandardErrorContent"`
-		Status                string `json:"Status"`
-		ResponseCode          int    `json:"ResponseCode"`
-	}
-	if err := json.Unmarshal(getOut, &invocation); err != nil {
-		return getOut, fmt.Errorf("failed to parse invocation response: %w", err)
+	deadline := time.Duration(e.timeout) * time.Second
+	timer := time.NewTimer(deadline + 30*time.Second)
+	defer timer.Stop()
+	delay := 2 * time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			return nil, fmt.Errorf("timed out waiting for SSM command %s", commandID)
+		default:
+		}
+
+		time.Sleep(delay)
+		if delay < 10*time.Second {
+			delay = delay * 3 / 2
+		}
+
+		invocation, err = e.client.GetCommandInvocation(ctx, pollInput)
+		if err != nil {
+			// InvocationDoesNotExist means the command hasn't been delivered yet.
+			if strings.Contains(err.Error(), "InvocationDoesNotExist") {
+				continue
+			}
+			return nil, fmt.Errorf("ssm GetCommandInvocation failed: %w", err)
+		}
+
+		switch invocation.Status {
+		case ssmtypes.CommandInvocationStatusPending,
+			ssmtypes.CommandInvocationStatusInProgress,
+			ssmtypes.CommandInvocationStatusDelayed:
+			continue
+		default:
+			// Terminal status — break out of the poll loop.
+			goto done
+		}
 	}
 
-	output := invocation.StandardOutputContent
-	if invocation.StandardErrorContent != "" {
-		output += "\nSTDERR:\n" + invocation.StandardErrorContent
+done:
+	output := aws.ToString(invocation.StandardOutputContent)
+	if stderr := aws.ToString(invocation.StandardErrorContent); stderr != "" {
+		output += "\nSTDERR:\n" + stderr
 	}
 
 	// Only treat SSM infrastructure failures as errors (e.g., delivery
@@ -118,30 +166,38 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 	// non-zero (Status "Failed", ResponseCode > 0) is a normal tool
 	// result — return the output so the model can interpret it.
 	switch invocation.Status {
-	case "Success":
+	case ssmtypes.CommandInvocationStatusSuccess:
 		return []byte(output), nil
-	case "Failed":
-		// Command executed but exited non-zero.  Append the exit code
-		// so the model knows, but don't return an error.
+	case ssmtypes.CommandInvocationStatusFailed:
+		// Command executed but exited non-zero.
 		output += fmt.Sprintf("\n[exit code %d]", invocation.ResponseCode)
 		return []byte(output), nil
 	default:
-		// InProgress, TimedOut, Cancelled, etc. — real infrastructure issues.
-		return []byte(output), fmt.Errorf("command status: %s", invocation.Status)
+		// TimedOut, Cancelled, etc. — real infrastructure issues.
+		return []byte(output), fmt.Errorf("command status: %s", string(invocation.Status))
 	}
 }
 
 // Close is a no-op for SSM (stateless per-command).
 func (e *SSMExecutor) Close() error { return nil }
 
-// baseArgs prepends region and profile flags to AWS CLI arguments.
-func (e *SSMExecutor) baseArgs(args ...string) []string {
-	var base []string
+// Type returns "ssm".
+func (e *SSMExecutor) Type() string { return "ssm" }
+
+// EnvironmentDescription returns a description of the SSM execution environment.
+func (e *SSMExecutor) EnvironmentDescription() string {
+	desc := fmt.Sprintf(
+		"Commands execute on EC2 instance %s via AWS Systems Manager (SSM).",
+		e.instanceID,
+	)
 	if e.region != "" {
-		base = append(base, "--region", e.region)
+		desc += fmt.Sprintf(" Region: %s.", e.region)
 	}
-	if e.profile != "" {
-		base = append(base, "--profile", e.profile)
+	if e.workingDir != "" {
+		desc += fmt.Sprintf(" Working directory: %s.", e.workingDir)
 	}
-	return append(base, args...)
+	desc += " Tools like Bash run remotely on the EC2 host, not locally. " +
+		"If tools are installed inside Docker containers on the host, " +
+		"you must use 'docker exec <container> <command>' to reach them."
+	return desc
 }

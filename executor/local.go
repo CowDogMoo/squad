@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os/exec"
 )
 
@@ -25,3 +26,11 @@ func (e *LocalExecutor) Execute(ctx context.Context, command string) ([]byte, er
 
 // Close is a no-op for the local executor.
 func (e *LocalExecutor) Close() error { return nil }
+
+// Type returns "local".
+func (e *LocalExecutor) Type() string { return "local" }
+
+// EnvironmentDescription returns a description of the local execution environment.
+func (e *LocalExecutor) EnvironmentDescription() string {
+	return fmt.Sprintf("Commands execute on the local host in directory %q via bash.", e.WorkingDir)
+}
