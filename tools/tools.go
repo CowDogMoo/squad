@@ -178,7 +178,12 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 	var lastContent string
 	var repeat RepeatTracker
 	for i := 0; i < maxIter; i++ {
-		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxIter)
+		if m != nil {
+			logging.InfoContext(ctx, "model iteration %d/%d (cost=$%.4f, tokens=%d/%d)",
+				i+1, maxIter, m.TotalCostWithChildren(), m.InputTokens(), m.OutputTokens())
+		} else {
+			logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxIter)
+		}
 		iterStart := time.Now()
 		response, err := retryGenerateContent(ctx, llm, messages, callOpts)
 		iterDuration := time.Since(iterStart)
@@ -1027,6 +1032,15 @@ func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (s
 		if command == "" {
 			return "", fmt.Errorf("command is required")
 		}
+
+		// Add executor metadata to the current span so traces show
+		// what command ran and which executor backend handled it.
+		span := trace.SpanFromContext(ctx)
+		span.SetAttributes(
+			attribute.String("squad.executor.type", ex.Type()),
+			attribute.String("squad.tool.command", TruncateString(command, 1000)),
+		)
+
 		output, err := ex.Execute(ctx, command)
 		if err != nil {
 			return string(limitOutput(output)), fmt.Errorf("command failed: %w", err)

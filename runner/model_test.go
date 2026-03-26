@@ -201,7 +201,8 @@ func TestCallLangChainLLMWithOllama(t *testing.T) {
 	opts := &RunOptions{Provider: "ollama", BaseURL: server.URL, MaxIterations: 1}
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
 	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
-	response, _, err := callLangChainLLM(
+	m := metrics.New("ollama", "mistral")
+	response, err := callLangChainLLM(
 		context.Background(),
 		opts,
 		"ollama",
@@ -212,6 +213,7 @@ func TestCallLangChainLLMWithOllama(t *testing.T) {
 		0,
 		nil,
 		ex,
+		m,
 	)
 	if err != nil {
 		t.Fatalf("callLangChainLLM() error = %v", err)
@@ -278,7 +280,8 @@ func TestCallResponsesAPIRoundTrip(t *testing.T) {
 	opts := &RunOptions{APIKey: "key", BaseURL: server.URL, MaxIterations: 1}
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
 	ex2 := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
-	response, _, err := callResponsesAPI(
+	m := metrics.New("openai", "gpt-5")
+	response, err := callResponsesAPI(
 		context.Background(),
 		opts,
 		"gpt-5",
@@ -288,6 +291,7 @@ func TestCallResponsesAPIRoundTrip(t *testing.T) {
 		100,
 		nil,
 		ex2,
+		m,
 	)
 	if err != nil {
 		t.Fatalf("callResponsesAPI() error = %v", err)
@@ -441,6 +445,7 @@ func TestCallModelRoutes(t *testing.T) {
 
 			bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
 			ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
+			m := metrics.New(tt.provider, tt.model)
 			got, _, err := callModel(
 				context.Background(),
 				opts,
@@ -452,6 +457,7 @@ func TestCallModelRoutes(t *testing.T) {
 				0,
 				nil,
 				ex,
+				m,
 			)
 			if err != nil {
 				t.Fatalf("callModel() error = %v", err)
@@ -515,7 +521,8 @@ func TestCallLangChainLLMUnknownProvider(t *testing.T) {
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
 	opts := &RunOptions{Provider: "unknown"}
 	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
-	_, _, err := callLangChainLLM(
+	m := metrics.New("unknown", "model")
+	_, err := callLangChainLLM(
 		context.Background(),
 		opts,
 		"unknown",
@@ -526,6 +533,7 @@ func TestCallLangChainLLMUnknownProvider(t *testing.T) {
 		0,
 		nil,
 		ex,
+		m,
 	)
 	if err == nil {
 		t.Fatalf("expected error")
@@ -658,7 +666,8 @@ func TestCallResponsesAPIMissingKey(t *testing.T) {
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
 	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
 
-	_, _, err := callResponsesAPI(
+	m := metrics.New("openai", "gpt-4o")
+	_, err := callResponsesAPI(
 		context.Background(),
 		opts,
 		"gpt-4o",
@@ -668,6 +677,7 @@ func TestCallResponsesAPIMissingKey(t *testing.T) {
 		100,
 		nil,
 		ex,
+		m,
 	)
 	if err == nil || !strings.Contains(err.Error(), "API key required") {
 		t.Fatalf("expected API key error, got: %v", err)
@@ -717,7 +727,8 @@ func TestCallResponsesAPIOpenAIResponsesProvider(t *testing.T) {
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
 	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
 
-	response, m, err := callResponsesAPI(
+	m := metrics.New("openai-responses", "gpt-4o")
+	response, err := callResponsesAPI(
 		context.Background(),
 		opts,
 		"gpt-4o",
@@ -727,6 +738,7 @@ func TestCallResponsesAPIOpenAIResponsesProvider(t *testing.T) {
 		4096,
 		nil,
 		ex,
+		m,
 	)
 	if err != nil {
 		t.Fatalf("callResponsesAPI() error = %v", err)
@@ -753,7 +765,8 @@ func TestCallLangChainLLMWithTaskConfig(t *testing.T) {
 
 	// Pass a non-nil TaskConfig to exercise the ParentMetrics assignment path.
 	taskCfg := &tools.TaskConfig{}
-	response, retM, err := callLangChainLLM(
+	m := metrics.New("ollama", "mistral")
+	response, err := callLangChainLLM(
 		context.Background(),
 		opts,
 		"ollama",
@@ -764,15 +777,13 @@ func TestCallLangChainLLMWithTaskConfig(t *testing.T) {
 		0,
 		taskCfg,
 		ex,
+		m,
 	)
 	if err != nil {
 		t.Fatalf("callLangChainLLM() error = %v", err)
 	}
 	if response != "partial" {
 		t.Fatalf("response = %q, want partial", response)
-	}
-	if retM == nil {
-		t.Fatal("expected non-nil metrics")
 	}
 	// The function should have set ParentMetrics on the taskCfg.
 	if taskCfg.ParentMetrics == nil {

@@ -123,7 +123,28 @@ func retryGenerateContent(ctx context.Context, llm llms.Model, messages []llms.M
 			return nil, ctx.Err()
 		}
 
+		// Log a heartbeat every 30s while waiting for the API so the
+		// operator knows the process isn't stuck.
+		callStart := time.Now()
+		heartbeatDone := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-heartbeatDone:
+					return
+				case <-ctx.Done():
+					return
+				case t := <-ticker.C:
+					elapsed := t.Sub(callStart).Round(time.Second)
+					logging.InfoContext(ctx, "  … waiting for model response (%s elapsed)", elapsed)
+				}
+			}
+		}()
+
 		resp, err := llm.GenerateContent(ctx, messages, callOpts...)
+		close(heartbeatDone)
 		if err == nil {
 			span.SetAttributes(attribute.Int("llm.retry.attempts", attempt+1))
 			if attempt > 0 {

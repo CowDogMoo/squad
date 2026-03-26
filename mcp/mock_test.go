@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"time"
 
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
 )
@@ -63,3 +64,14 @@ func (m *mockMCPClient) Complete(_ context.Context, _ mcptypes.CompleteRequest) 
 }
 func (m *mockMCPClient) Close() error                                                     { return nil }
 func (m *mockMCPClient) OnNotification(_ func(notification mcptypes.JSONRPCNotification)) {}
+
+// slowCloseMCPClient simulates an MCP server that hangs on Close().
+type slowCloseMCPClient struct {
+	mockMCPClient
+	delay time.Duration
+}
+
+func (m *slowCloseMCPClient) Close() error {
+	time.Sleep(m.delay)
+	return nil
+}

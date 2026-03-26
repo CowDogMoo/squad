@@ -2,6 +2,8 @@ package telemetry
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"go.opentelemetry.io/otel/trace"
@@ -68,6 +70,128 @@ func TestStripScheme(t *testing.T) {
 		if got := stripScheme(tt.input); got != tt.want {
 			t.Errorf("stripScheme(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestInitWithEndpoint(t *testing.T) {
+	// Start a test HTTP server to act as an OTLP collector.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Accept any OTLP request and return success.
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// Clear env vars so the endpoint comes solely from the argument.
+	for _, key := range []string{
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_INSECURE",
+	} {
+		t.Setenv(key, "")
+	}
+
+	ctx := context.Background()
+	shutdown, err := Init(ctx, "test-svc", server.URL)
+	if err != nil {
+		t.Fatalf("Init() with endpoint returned error: %v", err)
+	}
+
+	// The tracer should produce recording spans.
+	tracer := Tracer()
+	_, span := tracer.Start(ctx, "test-span")
+	if !span.IsRecording() {
+		t.Error("expected recording span when endpoint is configured")
+	}
+	span.End()
+
+	// Shutdown should flush without error.
+	if err := shutdown(ctx); err != nil {
+		t.Fatalf("shutdown() returned error: %v", err)
+	}
+}
+
+func TestInitWithHTTPSEndpoint(t *testing.T) {
+	// Test that an https endpoint does not use insecure transport.
+	// We use a TLS test server.
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	for _, key := range []string{
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_INSECURE",
+	} {
+		t.Setenv(key, "")
+	}
+
+	ctx := context.Background()
+	// Init should succeed even though we can't actually export (cert mismatch).
+	// The exporter is created lazily so Init itself should not fail.
+	shutdown, err := Init(ctx, "test-svc-tls", server.URL)
+	if err != nil {
+		t.Fatalf("Init() with TLS endpoint returned error: %v", err)
+	}
+	if err := shutdown(ctx); err != nil {
+		t.Fatalf("shutdown() returned error: %v", err)
+	}
+}
+
+func TestInitWithEnvEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// Set endpoint via env var, pass empty string to Init.
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", server.URL)
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "")
+
+	ctx := context.Background()
+	shutdown, err := Init(ctx, "test-svc-env", "")
+	if err != nil {
+		t.Fatalf("Init() with env endpoint returned error: %v", err)
+	}
+
+	tracer := Tracer()
+	_, span := tracer.Start(ctx, "env-span")
+	if !span.IsRecording() {
+		t.Error("expected recording span when env endpoint is configured")
+	}
+	span.End()
+
+	if err := shutdown(ctx); err != nil {
+		t.Fatalf("shutdown() returned error: %v", err)
+	}
+}
+
+func TestInitWithTracesEnvEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", server.URL)
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "")
+
+	ctx := context.Background()
+	shutdown, err := Init(ctx, "test-svc-traces", "")
+	if err != nil {
+		t.Fatalf("Init() with traces env endpoint returned error: %v", err)
+	}
+
+	tracer := Tracer()
+	_, span := tracer.Start(ctx, "traces-span")
+	if !span.IsRecording() {
+		t.Error("expected recording span when traces env endpoint is configured")
+	}
+	span.End()
+
+	if err := shutdown(ctx); err != nil {
+		t.Fatalf("shutdown() returned error: %v", err)
 	}
 }
 

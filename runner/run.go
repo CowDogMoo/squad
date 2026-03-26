@@ -83,7 +83,16 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	cmd.SetContext(ctx)
 	tools.ResetEditsApplied(ctx)
 	response, m, err := InvokeModel(ctx, opts, bundle)
-	logRunHistory(opts, m)
+
+	// Always log history and print metrics, even on interrupt or error.
+	// This defer guarantees cost visibility when the user ctrl+c's.
+	defer func() {
+		logRunHistory(opts, m)
+		if metricsErr := printMetrics(cmd, m); metricsErr != nil {
+			logging.Warn("failed to print metrics: %v", metricsErr)
+		}
+	}()
+
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Run stopped: cost budget of $%.4f exceeded (actual: $%.4f)\n", opts.MaxCost, m.TotalCostWithChildren())
@@ -92,25 +101,15 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 					logging.Warn("failed to handle partial response: %v", handleErr)
 				}
 			}
-			if metricsErr := printMetrics(cmd, m); metricsErr != nil {
-				logging.Warn("failed to print metrics: %v", metricsErr)
-			}
-			return err
-		}
-		if metricsErr := printMetrics(cmd, m); metricsErr != nil {
-			logging.Warn("failed to print metrics: %v", metricsErr)
 		}
 		return err
 	}
 
 	if err := handleResponse(cmd, opts, response, workingDir); err != nil {
-		if metricsErr := printMetrics(cmd, m); metricsErr != nil {
-			logging.Warn("failed to print metrics: %v", metricsErr)
-		}
 		return err
 	}
 
-	return printMetrics(cmd, m)
+	return nil
 }
 
 // printMetrics outputs the metrics summary to stderr.

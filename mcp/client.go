@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cowdogmoo/squad/telemetry"
 	mcpclient "github.com/mark3labs/mcp-go/client"
@@ -13,6 +14,11 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// closeTimeout is the maximum time to wait for an MCP server subprocess to
+// exit during Close(). MCP servers that maintain long-lived connections
+// (WebSocket, HTTP keep-alive) often ignore stdin EOF and hang indefinitely.
+const closeTimeout = 5 * time.Second
 
 // Client wraps an MCP server connection with its configuration.
 type Client struct {
@@ -144,10 +150,24 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 }
 
 // Close shuts down the MCP server subprocess and releases resources.
+// It applies a timeout because mcp-go's Close() blocks on cmd.Wait()
+// after closing stdin — MCP servers with long-lived connections (e.g.
+// WebSocket, HTTP) often don't exit on stdin EOF.
 func (c *Client) Close() error {
 	if c.inner == nil {
 		return nil
 	}
 	c.connected = false
-	return c.inner.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- c.inner.Close()
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(closeTimeout):
+		return fmt.Errorf("MCP server %q did not shut down within %s", c.name, closeTimeout)
+	}
 }
