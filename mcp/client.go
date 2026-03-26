@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cowdogmoo/squad/telemetry"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Client wraps an MCP server connection with its configuration.
@@ -23,6 +27,14 @@ type Client struct {
 // to a running HTTP server. It then sends the initialize request and discovers
 // available tools via tools/list.
 func Connect(ctx context.Context, cfg ServerConfig) (*Client, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "mcp.connect",
+		trace.WithAttributes(
+			attribute.String("mcp.server.name", cfg.Name),
+			attribute.String("mcp.transport", cfg.TransportType()),
+		),
+	)
+	defer span.End()
+
 	if cfg.Name == "" {
 		return nil, fmt.Errorf("mcp server config missing name")
 	}
@@ -94,6 +106,7 @@ func Connect(ctx context.Context, cfg ServerConfig) (*Client, error) {
 
 	c.tools = toolsResult.Tools
 	c.connected = true
+	span.SetAttributes(attribute.Int("mcp.tools.count", len(c.tools)))
 	return c, nil
 }
 
@@ -105,13 +118,29 @@ func (c *Client) Tools() []mcptypes.Tool { return c.tools }
 
 // CallTool invokes a tool on the MCP server by its original (un-prefixed) name.
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (*mcptypes.CallToolResult, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "mcp.call_tool",
+		trace.WithAttributes(
+			attribute.String("mcp.server.name", c.name),
+			attribute.String("mcp.tool.name", name),
+		),
+	)
+	defer span.End()
+
 	if c.inner == nil {
-		return nil, fmt.Errorf("MCP client %q is not connected", c.name)
+		err := fmt.Errorf("MCP client %q is not connected", c.name)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 	req := mcptypes.CallToolRequest{}
 	req.Params.Name = name
 	req.Params.Arguments = args
-	return c.inner.CallTool(ctx, req)
+	result, err := c.inner.CallTool(ctx, req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return result, err
 }
 
 // Close shuts down the MCP server subprocess and releases resources.

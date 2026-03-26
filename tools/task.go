@@ -9,7 +9,11 @@ import (
 
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/tmc/langchaingo/llms"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // taskDepthKey is the context key for tracking Task tool nesting depth.
@@ -56,6 +60,9 @@ func (r *BackgroundTaskRegistry) SpawnTask(ctx context.Context, cfg TaskConfig, 
 	r.tasks[id] = result
 	r.mu.Unlock()
 
+	// Capture the parent span context for linking.
+	parentSpanCtx := trace.SpanContextFromContext(ctx)
+
 	go func() {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -75,6 +82,30 @@ func (r *BackgroundTaskRegistry) SpawnTask(ctx context.Context, cfg TaskConfig, 
 
 		depth := TaskDepth(ctx)
 		childCtx := WithTaskDepth(ctx, depth+1)
+
+		// Create a linked span for the background task (not a child span,
+		// because the goroutine outlives the parent).
+		var linkOpts []trace.SpanStartOption
+		linkOpts = append(linkOpts,
+			trace.WithAttributes(
+				attribute.String("squad.task.id", id),
+				attribute.String("squad.task.agent", args.Agent),
+				attribute.Int("squad.task.depth", depth+1),
+			),
+			trace.WithNewRoot(),
+		)
+		if parentSpanCtx.IsValid() {
+			linkOpts = append(linkOpts, trace.WithLinks(trace.Link{SpanContext: parentSpanCtx}))
+		}
+		var taskSpan trace.Span
+		childCtx, taskSpan = telemetry.Tracer().Start(childCtx, "task.background", linkOpts...)
+		defer func() {
+			if result.Err != nil {
+				taskSpan.RecordError(result.Err)
+				taskSpan.SetStatus(codes.Error, result.Err.Error())
+			}
+			taskSpan.End()
+		}()
 		// Give child agents a prefixed logger so their output is distinguishable.
 		parentLogger := logging.FromContext(ctx)
 		childLogger := parentLogger.WithPrefix(fmt.Sprintf("[%s] ", id))

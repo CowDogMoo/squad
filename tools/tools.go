@@ -17,7 +17,11 @@ import (
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/tmc/langchaingo/llms"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const MaxToolIterations = 100
@@ -142,6 +146,13 @@ func (t *RepeatTracker) Exceeded() bool {
 }
 
 func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations int, taskCfg *TaskConfig, m *metrics.Metrics, ex executor.Executor, callOpts ...llms.CallOption) (string, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "tool.loop",
+		trace.WithAttributes(
+			attribute.Int("squad.tool_loop.max_iterations", maxIterations),
+		),
+	)
+	defer span.End()
+
 	handlers, toolDefs := BuildHandlers(workingDir, taskCfg, ex)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
@@ -155,6 +166,8 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 		return lastContent, nil
 	}
 	if loopErr != nil && !errors.Is(loopErr, metrics.ErrBudgetExceeded) {
+		span.RecordError(loopErr)
+		span.SetStatus(codes.Error, loopErr.Error())
 		return lastContent, loopErr
 	}
 
@@ -430,25 +443,36 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 		return toolResponse
 	}
 
-	toolResponse.Name = toolCall.FunctionCall.Name
-	argsSummary := toolArgsSummary(toolCall.FunctionCall.Name, toolCall.FunctionCall.Arguments)
-	logging.InfoContext(ctx, "  → %s %s", toolCall.FunctionCall.Name, argsSummary)
-	logging.DebugContext(ctx, "tool %s full args: %s", toolCall.FunctionCall.Name, TruncateString(toolCall.FunctionCall.Arguments, 500))
+	toolName := toolCall.FunctionCall.Name
+	ctx, span := telemetry.Tracer().Start(ctx, "tool."+toolName,
+		trace.WithAttributes(
+			attribute.String("squad.tool.name", toolName),
+		),
+	)
+	defer span.End()
+
+	toolResponse.Name = toolName
+	argsSummary := toolArgsSummary(toolName, toolCall.FunctionCall.Arguments)
+	logging.InfoContext(ctx, "  → %s %s", toolName, argsSummary)
+	logging.DebugContext(ctx, "tool %s full args: %s", toolName, TruncateString(toolCall.FunctionCall.Arguments, 500))
 	toolStart := time.Now()
 	output, err := handler.Call(ctx, []byte(toolCall.FunctionCall.Arguments))
 	toolDuration := time.Since(toolStart)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		// Include both output (e.g., command stdout/stderr) and error message
 		if output != "" {
 			toolResponse.Content = fmt.Sprintf("%s\n\nerror: %v", output, err)
 		} else {
 			toolResponse.Content = fmt.Sprintf("error: %v", err)
 		}
-		logging.InfoContext(ctx, "  ✗ %s failed in %s: %s", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), TruncateString(err.Error(), 200))
+		logging.InfoContext(ctx, "  ✗ %s failed in %s: %s", toolName, toolDuration.Round(time.Millisecond), TruncateString(err.Error(), 200))
 	} else {
 		toolResponse.Content = output
-		logging.InfoContext(ctx, "  ✓ %s done in %s (%d bytes)", toolCall.FunctionCall.Name, toolDuration.Round(time.Millisecond), len(output))
+		logging.InfoContext(ctx, "  ✓ %s done in %s (%d bytes)", toolName, toolDuration.Round(time.Millisecond), len(output))
 	}
+	span.SetAttributes(attribute.Int("squad.tool.output_bytes", len(toolResponse.Content)))
 	return toolResponse
 }
 

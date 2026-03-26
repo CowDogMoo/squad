@@ -16,15 +16,28 @@ import (
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/ollama"
 	"github.com/cowdogmoo/squad/responses"
+	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/cowdogmoo/squad/tools"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
 	"github.com/tmc/langchaingo/llms/openai"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // InvokeModel resolves provider settings and calls the appropriate model backend.
 // It is exported so the pipeline runner can call it directly.
 func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (string, *metrics.Metrics, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "agent.invoke",
+		trace.WithAttributes(
+			attribute.String("gen_ai.system", normalizeProvider(opts.Provider)),
+			attribute.String("gen_ai.request.model", opts.Model),
+			attribute.String("squad.agent", opts.Agent),
+		),
+	)
+	defer span.End()
+
 	provider := normalizeProvider(opts.Provider)
 	model := opts.Model
 	temperature := opts.Temperature
@@ -67,10 +80,38 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 
 // callModel dispatches the prompt to the appropriate model backend and returns the response.
 func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor) (string, *metrics.Metrics, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "llm.call",
+		trace.WithAttributes(
+			attribute.String("gen_ai.system", provider),
+			attribute.String("gen_ai.request.model", model),
+			attribute.Float64("gen_ai.request.temperature", temperature),
+			attribute.Int("gen_ai.request.max_tokens", maxTokens),
+		),
+	)
+	defer span.End()
+
+	var response string
+	var m *metrics.Metrics
+	var err error
 	if responses.UseResponsesAPI(provider, model, reasoningPrefixes(opts)) {
-		return callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
+		response, m, err = callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
+	} else {
+		response, m, err = callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
 	}
-	return callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
+
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	if m != nil {
+		span.SetAttributes(
+			attribute.Int64("gen_ai.usage.input_tokens", m.InputTokens()),
+			attribute.Int64("gen_ai.usage.output_tokens", m.OutputTokens()),
+			attribute.Float64("gen_ai.usage.cost_usd", m.Cost()),
+			attribute.Int("gen_ai.usage.iterations", m.Iterations()),
+		)
+	}
+	return response, m, err
 }
 
 // callResponsesAPI runs the prompt via the OpenAI Responses API.
