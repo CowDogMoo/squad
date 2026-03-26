@@ -11,6 +11,10 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/cowdogmoo/squad/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // defaultSSMTimeout is the default command timeout in seconds (10 minutes).
@@ -85,6 +89,15 @@ func newSSMExecutor(cfg *Config, workingDir string, client ssmAPI) (*SSMExecutor
 // Execute runs a command on the EC2 instance via SSM SendCommand
 // and polls for the result.
 func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "executor.ssm",
+		trace.WithAttributes(
+			attribute.String("squad.executor.instance_id", e.instanceID),
+			attribute.String("squad.executor.region", e.region),
+			attribute.String("squad.executor.command", command),
+		),
+	)
+	defer span.End()
+
 	// Prepend a cd into the working directory when one is configured so
 	// that commands run in the expected location on the remote host.
 	if e.workingDir != "" {
@@ -100,6 +113,8 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 		TimeoutSeconds: aws.Int32(e.timeout),
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("ssm SendCommand failed: %w", err)
 	}
 
@@ -165,6 +180,12 @@ done:
 	// timeout, agent not reachable).  A command that runs but exits
 	// non-zero (Status "Failed", ResponseCode > 0) is a normal tool
 	// result — return the output so the model can interpret it.
+	span.SetAttributes(
+		attribute.String("squad.executor.ssm.command_id", commandID),
+		attribute.String("squad.executor.ssm.status", string(invocation.Status)),
+		attribute.Int("squad.executor.exit_code", int(invocation.ResponseCode)),
+	)
+
 	switch invocation.Status {
 	case ssmtypes.CommandInvocationStatusSuccess:
 		return []byte(output), nil
@@ -174,7 +195,10 @@ done:
 		return []byte(output), nil
 	default:
 		// TimedOut, Cancelled, etc. — real infrastructure issues.
-		return []byte(output), fmt.Errorf("command status: %s", string(invocation.Status))
+		err := fmt.Errorf("command status: %s", string(invocation.Status))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return []byte(output), err
 	}
 }
 

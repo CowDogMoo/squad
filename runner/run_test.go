@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/spf13/cobra"
 )
@@ -506,6 +507,127 @@ func TestPrintMetricsNil(t *testing.T) {
 
 	if errBuf.Len() != 0 {
 		t.Fatalf("printMetrics(nil) should not output anything, got: %q", errBuf.String())
+	}
+}
+
+func TestFindAgentDir(t *testing.T) {
+	t.Parallel()
+
+	t.Run("explicit dir", func(t *testing.T) {
+		t.Parallel()
+		tmp := t.TempDir()
+		got, err := findAgentDir("myagent", tmp, nil)
+		if err != nil {
+			t.Fatalf("findAgentDir() error = %v", err)
+		}
+		want := filepath.Join(tmp, "myagent")
+		if got != want {
+			t.Fatalf("findAgentDir() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("nil config falls back to legacy", func(t *testing.T) {
+		t.Parallel()
+		// Save/restore cwd
+		cwd, _ := os.Getwd()
+		tmp := t.TempDir()
+		agentsDir := filepath.Join(tmp, "agents")
+		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		defer func() { _ = os.Chdir(cwd) }()
+		if err := os.Chdir(tmp); err != nil {
+			t.Fatalf("Chdir: %v", err)
+		}
+
+		got, err := findAgentDir("myagent", "", nil)
+		if err != nil {
+			t.Fatalf("findAgentDir() error = %v", err)
+		}
+		// Should resolve to <tmp>/agents/myagent via legacy resolution
+		gotEval, _ := filepath.EvalSymlinks(got)
+		wantEval, _ := filepath.EvalSymlinks(filepath.Join(agentsDir, "myagent"))
+		if gotEval != wantEval {
+			t.Fatalf("findAgentDir() = %q, want %q", gotEval, wantEval)
+		}
+	})
+
+	t.Run("config with no sources falls back to legacy", func(t *testing.T) {
+		t.Parallel()
+		cwd, _ := os.Getwd()
+		tmp := t.TempDir()
+		agentsDir := filepath.Join(tmp, "agents")
+		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		defer func() { _ = os.Chdir(cwd) }()
+		if err := os.Chdir(tmp); err != nil {
+			t.Fatalf("Chdir: %v", err)
+		}
+
+		cfg := &config.Config{}
+		got, err := findAgentDir("myagent", "", cfg)
+		if err != nil {
+			t.Fatalf("findAgentDir() error = %v", err)
+		}
+		gotEval, _ := filepath.EvalSymlinks(got)
+		wantEval, _ := filepath.EvalSymlinks(filepath.Join(agentsDir, "myagent"))
+		if gotEval != wantEval {
+			t.Fatalf("findAgentDir() = %q, want %q", gotEval, wantEval)
+		}
+	})
+}
+
+func TestLogRunHistory(t *testing.T) {
+	t.Run("nil metrics", func(t *testing.T) {
+		t.Parallel()
+		opts := &RunOptions{Agent: "test"}
+		// Should not panic.
+		logRunHistory(opts, nil)
+	})
+
+	t.Run("empty agent", func(t *testing.T) {
+		t.Parallel()
+		m := metrics.New("openai", "gpt-4o")
+		opts := &RunOptions{Agent: ""}
+		// Should return early without panic.
+		logRunHistory(opts, m)
+	})
+
+	t.Run("valid run", func(t *testing.T) {
+		// Cannot use t.Parallel() here because t.Setenv is used.
+		tmp := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", tmp)
+
+		m := metrics.New("openai", "gpt-4o")
+		m.AddTokens(100, 50)
+		m.Finish()
+
+		opts := &RunOptions{Agent: "test-agent"}
+		logRunHistory(opts, m)
+		// No error means it ran the logging path successfully.
+	})
+}
+
+func TestWriteResponsePrintAndFile(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	outFile := filepath.Join(t.TempDir(), "out.txt")
+	opts := &RunOptions{Print: true, Output: outFile}
+	if err := writeResponse(cmd, "both", opts); err != nil {
+		t.Fatalf("writeResponse() error = %v", err)
+	}
+	if !strings.Contains(buf.String(), "both") {
+		t.Fatalf("expected stdout to contain response")
+	}
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "both" {
+		t.Fatalf("file content = %q, want %q", string(data), "both")
 	}
 }
 

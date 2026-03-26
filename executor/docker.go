@@ -7,9 +7,13 @@ import (
 	"io"
 	"strings"
 
+	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	dockerclient "github.com/docker/docker/client"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // dockerAPI abstracts the Docker SDK calls for testing.
@@ -147,17 +151,36 @@ func newDockerExecutor(cfg *Config, workingDir string, client dockerAPI) (*Docke
 
 // Execute runs a command inside the Docker container.
 func (e *DockerExecutor) Execute(ctx context.Context, command string) ([]byte, error) {
-	execResp, err := e.client.ContainerExecCreate(ctx, e.containerID, container.ExecOptions{
+	containerID := e.containerID
+	shortID := containerID
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+
+	ctx, span := telemetry.Tracer().Start(ctx, "executor.docker",
+		trace.WithAttributes(
+			attribute.String("squad.executor.container_id", shortID),
+			attribute.String("squad.executor.shell", e.shell),
+			attribute.String("squad.executor.command", command),
+		),
+	)
+	defer span.End()
+
+	execResp, err := e.client.ContainerExecCreate(ctx, containerID, container.ExecOptions{
 		Cmd:          []string{e.shell, "-c", command},
 		AttachStdout: true,
 		AttachStderr: true,
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("docker exec create failed: %w", err)
 	}
 
 	attachResp, err := e.client.ContainerExecAttach(ctx, execResp.ID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("docker exec attach failed: %w", err)
 	}
 	if attachResp.Conn != nil {
@@ -170,10 +193,16 @@ func (e *DockerExecutor) Execute(ctx context.Context, command string) ([]byte, e
 	// Check exit code.
 	inspect, err := e.client.ContainerExecInspect(ctx, execResp.ID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return buf.Bytes(), fmt.Errorf("docker exec inspect failed: %w", err)
 	}
+	span.SetAttributes(attribute.Int("squad.executor.exit_code", inspect.ExitCode))
 	if inspect.ExitCode != 0 {
-		return buf.Bytes(), fmt.Errorf("command exited with code %d", inspect.ExitCode)
+		err := fmt.Errorf("command exited with code %d", inspect.ExitCode)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return buf.Bytes(), err
 	}
 
 	return buf.Bytes(), nil

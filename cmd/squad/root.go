@@ -30,9 +30,11 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -54,6 +56,7 @@ It provides a clean config + logging foundation for agent workflows.`,
 	rootCmd.PersistentFlags().String("log-format", "", "Log format (text, json, color)")
 	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "Quiet mode - only show errors")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Verbose mode - show debug output")
+	rootCmd.PersistentFlags().String("otel-endpoint", "", "OpenTelemetry OTLP endpoint (e.g. localhost:4318). Enables trace export.")
 
 	_ = rootCmd.RegisterFlagCompletionFunc("log-level", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"debug", "info", "warn", "error"}, cobra.ShellCompDirectiveNoFileComp
@@ -74,11 +77,37 @@ It provides a clean config + logging foundation for agent workflows.`,
 	return rootCmd
 }
 
+// otelShutdown holds the current telemetry shutdown function. It is package-level
+// so that initConfig can replace it when --otel-endpoint overrides the env-based
+// provider, and Execute's defer always calls the latest one.
+var otelShutdown func(context.Context) error
+
 // Execute runs the root command.
 // It installs signal handling so the CLI exits cleanly on interruption.
 func Execute() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Initialize telemetry early so spans are captured from the start.
+	// The endpoint flag isn't parsed yet, so Init reads OTEL_EXPORTER_OTLP_ENDPOINT
+	// from the environment. If --otel-endpoint is provided, a second Init happens
+	// in initConfig (which replaces the provider).
+	var err error
+	otelShutdown, err = telemetry.Init(ctx, "squad", "")
+	if err != nil {
+		logging.Warn("failed to initialize telemetry: %v", err)
+	}
+	defer func() {
+		if otelShutdown != nil {
+			// Use a short deadline so a broken exporter endpoint doesn't
+			// block process exit (the batch exporter would otherwise retry
+			// until its own 30 s timeout expires).
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = otelShutdown(shutCtx)
+		}
+	}()
+
 	rootCmd := NewRootCmd()
 	rootCmd.SetContext(ctx)
 	return rootCmd.Execute()
@@ -109,29 +138,7 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 		v.AutomaticEnv()
 	}
 
-	// Bind persistent (root) flags.
-	if err := v.BindPFlag("config", cmd.Root().PersistentFlags().Lookup("config")); err != nil {
-		return fmt.Errorf("failed to bind config flag: %w", err)
-	}
-	if err := v.BindPFlag("log.level", cmd.Root().PersistentFlags().Lookup("log-level")); err != nil {
-		return fmt.Errorf("failed to bind log-level flag: %w", err)
-	}
-	if err := v.BindPFlag("log.format", cmd.Root().PersistentFlags().Lookup("log-format")); err != nil {
-		return fmt.Errorf("failed to bind log-format flag: %w", err)
-	}
-	if err := v.BindPFlag("quiet", cmd.Root().PersistentFlags().Lookup("quiet")); err != nil {
-		return fmt.Errorf("failed to bind quiet flag: %w", err)
-	}
-	if err := v.BindPFlag("verbose", cmd.Root().PersistentFlags().Lookup("verbose")); err != nil {
-		return fmt.Errorf("failed to bind verbose flag: %w", err)
-	}
-
-	// Bind run command flags so Viper can resolve them via env/config.
-	runCmd := findRunCmd(cmd.Root())
-	if runCmd == nil {
-		return fmt.Errorf("run command not found for flag binding")
-	}
-	if err := bindRunFlags(runCmd, v); err != nil {
+	if err := bindPersistentFlags(cmd, v); err != nil {
 		return err
 	}
 	// Pipeline command flags are resolved directly via flagOrViper, no binding needed.
@@ -154,6 +161,19 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to apply config overrides: %w", err)
 	}
 
+	// Re-initialize telemetry if --otel-endpoint was explicitly provided.
+	// This replaces the package-level otelShutdown so Execute's defer
+	// flushes the correct provider.
+	otelEndpoint := v.GetString("otel.endpoint")
+	if otelEndpoint != "" {
+		newShutdown, otelErr := telemetry.Init(cmd.Context(), "squad", otelEndpoint)
+		if otelErr != nil {
+			logging.Warn("failed to re-initialize telemetry with endpoint %s: %v", otelEndpoint, otelErr)
+		} else {
+			otelShutdown = newShutdown
+		}
+	}
+
 	logger := logging.FromContext(cmd.Context())
 	ctx := withConfig(cmd.Context(), cfg)
 	ctx = withViper(ctx, v)
@@ -161,6 +181,32 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	cmd.SetContext(ctx)
 
 	return nil
+}
+
+// bindPersistentFlags binds root persistent flags and run-command flags to Viper.
+func bindPersistentFlags(cmd *cobra.Command, v *viper.Viper) error {
+	bindings := []struct {
+		key  string
+		flag string
+	}{
+		{"config", "config"},
+		{"log.level", "log-level"},
+		{"log.format", "log-format"},
+		{"quiet", "quiet"},
+		{"verbose", "verbose"},
+		{"otel.endpoint", "otel-endpoint"},
+	}
+	for _, b := range bindings {
+		if err := v.BindPFlag(b.key, cmd.Root().PersistentFlags().Lookup(b.flag)); err != nil {
+			return fmt.Errorf("failed to bind %s flag: %w", b.flag, err)
+		}
+	}
+
+	runCmd := findRunCmd(cmd.Root())
+	if runCmd == nil {
+		return fmt.Errorf("run command not found for flag binding")
+	}
+	return bindRunFlags(runCmd, v)
 }
 
 func findRunCmd(root *cobra.Command) *cobra.Command {

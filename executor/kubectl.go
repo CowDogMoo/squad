@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/cowdogmoo/squad/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -79,6 +83,21 @@ func newKubeExecutor(client kubernetes.Interface, restConfig *rest.Config, cfg *
 
 // Execute runs a command in the Kubernetes pod via SPDY exec streaming.
 func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, error) {
+	spanAttrs := []attribute.KeyValue{
+		attribute.String("squad.executor.pod", e.pod),
+		attribute.String("squad.executor.namespace", e.namespace),
+		attribute.String("squad.executor.shell", e.shell),
+		attribute.String("squad.executor.command", command),
+	}
+	if e.container != "" {
+		spanAttrs = append(spanAttrs, attribute.String("squad.executor.container", e.container))
+	}
+
+	ctx, span := telemetry.Tracer().Start(ctx, "executor.kubectl",
+		trace.WithAttributes(spanAttrs...),
+	)
+	defer span.End()
+
 	execOpts := &corev1.PodExecOptions{
 		Command: []string{e.shell, "-c", command},
 		Stdout:  true,
@@ -97,6 +116,8 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 
 	spdy, err := e.newSPDY(e.config, "POST", req.URL())
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("failed to create SPDY executor: %w", err)
 	}
 
@@ -112,6 +133,8 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 	}
 
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return combined, fmt.Errorf("command failed: %w", err)
 	}
 

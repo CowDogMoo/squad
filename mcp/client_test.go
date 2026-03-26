@@ -2,10 +2,12 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
 )
@@ -137,5 +139,40 @@ func TestClientCallToolWithMock(t *testing.T) {
 	}
 	if len(result.Content) != 1 {
 		t.Fatalf("expected 1 content, got %d", len(result.Content))
+	}
+}
+
+func TestClientCallToolError(t *testing.T) {
+	t.Parallel()
+	c := NewTestClient("mock-server", nil, &mockMCPClient{
+		callErr: fmt.Errorf("tool execution failed"),
+	})
+	_, err := c.CallTool(context.Background(), "broken_tool", nil)
+	if err == nil {
+		t.Fatal("expected error from CallTool")
+	}
+	if !strings.Contains(err.Error(), "tool execution failed") {
+		t.Fatalf("error = %q, want to contain 'tool execution failed'", err.Error())
+	}
+}
+
+func TestCloseTimeout(t *testing.T) {
+	t.Parallel()
+	c := NewTestClient("hanging-server", nil, &slowCloseMCPClient{
+		delay: closeTimeout + 2*time.Second,
+	})
+	start := time.Now()
+	err := c.Close()
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error from Close()")
+	}
+	if !strings.Contains(err.Error(), "did not shut down") {
+		t.Fatalf("error = %q, want timeout message", err.Error())
+	}
+	// Should return after closeTimeout, not after the full delay.
+	if elapsed > closeTimeout+time.Second {
+		t.Fatalf("Close() took %v, expected ~%v", elapsed, closeTimeout)
 	}
 }

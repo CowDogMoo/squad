@@ -12,7 +12,11 @@ import (
 
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/cowdogmoo/squad/tools"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // StageStatus represents the outcome of a pipeline stage.
@@ -71,6 +75,13 @@ type Runner struct {
 
 // Run executes the pipeline and returns a structured report.
 func (r *Runner) Run(ctx context.Context) (*Report, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "pipeline.run",
+		trace.WithAttributes(
+			attribute.String("squad.pipeline.name", r.Pipeline.Name),
+		),
+	)
+	defer span.End()
+
 	start := time.Now()
 
 	// Create a shared findings store if not already set.
@@ -222,6 +233,14 @@ func (r *Runner) remainingBudget() float64 {
 
 // runAgent executes a single agent and returns its result.
 func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, promptContext string) AgentResult {
+	ctx, agentSpan := telemetry.Tracer().Start(ctx, "pipeline.agent",
+		trace.WithAttributes(
+			attribute.String("squad.agent", agentName),
+			attribute.String("squad.pipeline.stage", stage.Name),
+		),
+	)
+	defer agentSpan.End()
+
 	start := time.Now()
 	result := AgentResult{
 		Agent:  agentName,
@@ -264,6 +283,8 @@ func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, pr
 	if err != nil {
 		result.Status = StatusFailed
 		result.Output = output // preserve partial output
+		agentSpan.RecordError(err)
+		agentSpan.SetStatus(codes.Error, err.Error())
 		logging.InfoContext(ctx, "pipeline: agent %q failed: %v", agentName, err)
 	} else {
 		logging.InfoContext(ctx, "pipeline: agent %q completed (%d bytes)", agentName, len(output))

@@ -8,7 +8,11 @@ import (
 	"time"
 
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/tmc/langchaingo/llms"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -105,6 +109,13 @@ func isRetryable(err error) bool {
 // backoff for transient errors. It returns the first successful response or
 // the last error after exhausting retries.
 func retryGenerateContent(ctx context.Context, llm llms.Model, messages []llms.MessageContent, callOpts []llms.CallOption) (*llms.ContentResponse, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "llm.generate",
+		trace.WithAttributes(
+			attribute.Int("llm.retry.max_attempts", maxRetries+1),
+		),
+	)
+	defer span.End()
+
 	var lastErr error
 	attempts := maxRetries + 1
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -112,8 +123,30 @@ func retryGenerateContent(ctx context.Context, llm llms.Model, messages []llms.M
 			return nil, ctx.Err()
 		}
 
+		// Log a heartbeat every 30s while waiting for the API so the
+		// operator knows the process isn't stuck.
+		callStart := time.Now()
+		heartbeatDone := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-heartbeatDone:
+					return
+				case <-ctx.Done():
+					return
+				case t := <-ticker.C:
+					elapsed := t.Sub(callStart).Round(time.Second)
+					logging.InfoContext(ctx, "  … waiting for model response (%s elapsed)", elapsed)
+				}
+			}
+		}()
+
 		resp, err := llm.GenerateContent(ctx, messages, callOpts...)
+		close(heartbeatDone)
 		if err == nil {
+			span.SetAttributes(attribute.Int("llm.retry.attempts", attempt+1))
 			if attempt > 0 {
 				logging.InfoContext(ctx, "LLM call succeeded on attempt %d/%d", attempt+1, attempts)
 			}
@@ -123,6 +156,12 @@ func retryGenerateContent(ctx context.Context, llm llms.Model, messages []llms.M
 
 		if !isRetryable(err) {
 			classified := classifyError(err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(
+				attribute.Int("llm.retry.attempts", attempt+1),
+				attribute.String("llm.error.code", string(classified.Code)),
+			)
 			logging.InfoContext(ctx, "LLM call failed (non-retryable, code=%s): %v", classified.Code, err)
 			return nil, err
 		}
@@ -133,6 +172,11 @@ func retryGenerateContent(ctx context.Context, llm llms.Model, messages []llms.M
 
 		delay := backoffDelay(attempt)
 		classified := classifyError(err)
+		span.AddEvent("llm.retry", trace.WithAttributes(
+			attribute.Int("llm.retry.attempt", attempt+1),
+			attribute.String("llm.error.code", string(classified.Code)),
+			attribute.String("llm.retry.delay", delay.String()),
+		))
 		logging.InfoContext(ctx, "LLM call failed (attempt %d/%d, code=%s, retrying in %s): %v",
 			attempt+1, attempts, classified.Code, delay.Round(time.Millisecond), err)
 
@@ -144,6 +188,12 @@ func retryGenerateContent(ctx context.Context, llm llms.Model, messages []llms.M
 	}
 
 	classified := classifyError(lastErr)
+	span.RecordError(lastErr)
+	span.SetStatus(codes.Error, lastErr.Error())
+	span.SetAttributes(
+		attribute.Int("llm.retry.attempts", attempts),
+		attribute.String("llm.error.code", string(classified.Code)),
+	)
 	logging.InfoContext(ctx, "LLM call failed after %d attempts (code=%s): %v", attempts, classified.Code, lastErr)
 	return nil, lastErr
 }

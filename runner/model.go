@@ -16,19 +16,41 @@ import (
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/ollama"
 	"github.com/cowdogmoo/squad/responses"
+	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/cowdogmoo/squad/tools"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
 	"github.com/tmc/langchaingo/llms/openai"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // InvokeModel resolves provider settings and calls the appropriate model backend.
 // It is exported so the pipeline runner can call it directly.
+//
+// The returned *metrics.Metrics is always non-nil so callers can report
+// partial cost even when the run is interrupted (e.g. ctrl+c during MCP
+// server initialization).
 func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (string, *metrics.Metrics, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "agent.invoke",
+		trace.WithAttributes(
+			attribute.String("gen_ai.system", normalizeProvider(opts.Provider)),
+			attribute.String("gen_ai.request.model", opts.Model),
+			attribute.String("squad.agent", opts.Agent),
+		),
+	)
+	defer span.End()
+
 	provider := normalizeProvider(opts.Provider)
 	model := opts.Model
 	temperature := opts.Temperature
 	maxTokens := opts.MaxTokens
+
+	// Create metrics early so partial cost is always available, even if
+	// we fail during executor or MCP setup.
+	m := metrics.New(provider, model)
+	m.SetMaxCost(opts.MaxCost)
 
 	systemPrompt := bundle.System
 	if opts.System != "" {
@@ -37,7 +59,8 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 
 	ex, err := executor.New(bundle.Environment, bundle.WorkDir)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to create executor: %w", err)
+		m.Finish()
+		return "", m, fmt.Errorf("failed to create executor: %w", err)
 	}
 	defer func() { _ = ex.Close() }()
 
@@ -55,32 +78,60 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 		clients, mcpErr := connectMCPServers(ctx, mcpServers)
 		defer closeMCPClients(clients)
 		if mcpErr != nil {
-			return "", nil, mcpErr
+			m.Finish()
+			return "", m, mcpErr
 		}
 		mcpHandlers := mcp.BuildHandlers(clients)
 		taskCfg.ExtraTools = convertMCPHandlers(mcpHandlers)
 		logging.InfoContext(ctx, "MCP tools loaded: %d tools from %d server(s)", len(taskCfg.ExtraTools), len(clients))
 	}
 
-	return callModel(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
+	return callModel(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex, m)
 }
 
 // callModel dispatches the prompt to the appropriate model backend and returns the response.
-func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor) (string, *metrics.Metrics, error) {
+// The caller-provided metrics m is passed through to the backend so token
+// counts accumulate on the same object that was created in InvokeModel.
+func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor, m *metrics.Metrics) (string, *metrics.Metrics, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "llm.call",
+		trace.WithAttributes(
+			attribute.String("gen_ai.system", provider),
+			attribute.String("gen_ai.request.model", model),
+			attribute.Float64("gen_ai.request.temperature", temperature),
+			attribute.Int("gen_ai.request.max_tokens", maxTokens),
+		),
+	)
+	defer span.End()
+
+	var response string
+	var err error
 	if responses.UseResponsesAPI(provider, model, reasoningPrefixes(opts)) {
-		return callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
+		response, err = callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex, m)
+	} else {
+		response, err = callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex, m)
 	}
-	return callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex)
+
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	span.SetAttributes(
+		attribute.Int64("gen_ai.usage.input_tokens", m.InputTokens()),
+		attribute.Int64("gen_ai.usage.output_tokens", m.OutputTokens()),
+		attribute.Float64("gen_ai.usage.cost_usd", m.Cost()),
+		attribute.Int("gen_ai.usage.iterations", m.Iterations()),
+	)
+	return response, m, err
 }
 
 // callResponsesAPI runs the prompt via the OpenAI Responses API.
-func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor) (string, *metrics.Metrics, error) {
+func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor, m *metrics.Metrics) (string, error) {
 	apiKey := opts.APIKey
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
 	if apiKey == "" {
-		return "", nil, fmt.Errorf("API key required for OpenAI Responses API: use --api-key, config provider.token, or OPENAI_API_KEY env var")
+		return "", fmt.Errorf("API key required for OpenAI Responses API: use --api-key, config provider.token, or OPENAI_API_KEY env var")
 	}
 
 	// Reasoning models (gpt-5*) consume output tokens on internal reasoning
@@ -92,13 +143,6 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 		maxTokens = responses.DefaultMaxOutputTokens
 	}
 
-	provider := "openai"
-	if responses.UseResponsesAPI(opts.Provider, model, reasoningPrefixes(opts)) && opts.Provider == "openai-responses" {
-		provider = "openai-responses"
-	}
-
-	m := metrics.New(provider, model)
-	m.SetMaxCost(opts.MaxCost)
 	if taskCfg != nil {
 		taskCfg.ParentMetrics = m
 	}
@@ -107,12 +151,12 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 	m.Finish()
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
-			return response, m, metrics.ErrBudgetExceeded
+			return response, metrics.ErrBudgetExceeded
 		}
-		return "", m, fmt.Errorf("model call failed: %w", err)
+		return "", fmt.Errorf("model call failed: %w", err)
 	}
 	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", m.Duration().Round(time.Millisecond), len(response))
-	return response, m, nil
+	return response, nil
 }
 
 // DefaultMaxTokensWithTask is the output-token floor for agents that have
@@ -144,18 +188,16 @@ func inferMaxTokens(maxTokens int, hasTaskTool bool) int {
 }
 
 // callLangChainLLM runs the prompt via a LangChain-compatible LLM.
-func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor) (string, *metrics.Metrics, error) {
+func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor, m *metrics.Metrics) (string, error) {
 	llm, err := buildLLM(opts, provider, model)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 
 	maxTokens = inferMaxTokens(maxTokens, taskCfg != nil)
 	logging.DebugContext(ctx, "max_tokens=%d (hasTaskTool=%v)", maxTokens, taskCfg != nil)
 	callOpts := buildCallOpts(opts, provider, temperature, maxTokens)
 
-	m := metrics.New(provider, model)
-	m.SetMaxCost(opts.MaxCost)
 	if taskCfg != nil {
 		taskCfg.ParentMetrics = m
 	}
@@ -164,12 +206,12 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	m.Finish()
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
-			return response, m, metrics.ErrBudgetExceeded
+			return response, metrics.ErrBudgetExceeded
 		}
-		return "", m, fmt.Errorf("model call failed: %w", err)
+		return "", fmt.Errorf("model call failed: %w", err)
 	}
 	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", m.Duration().Round(time.Millisecond), len(response))
-	return response, m, nil
+	return response, nil
 }
 
 // buildCallOpts constructs LLM call options from provider settings.
@@ -360,6 +402,8 @@ func connectMCPServers(ctx context.Context, servers []mcp.ServerConfig) ([]*mcp.
 // closeMCPClients shuts down all MCP server subprocesses.
 func closeMCPClients(clients []*mcp.Client) {
 	for _, c := range clients {
-		_ = c.Close()
+		if err := c.Close(); err != nil {
+			logging.Warn("MCP server %q shutdown: %v", c.Name(), err)
+		}
 	}
 }

@@ -44,6 +44,12 @@ type Config struct {
 	Provider ProviderConfig `mapstructure:"provider" yaml:"provider"`
 	Model    ModelConfig    `mapstructure:"model" yaml:"model"`
 	Agents   AgentsConfig   `mapstructure:"agents" yaml:"agents"`
+	Otel     OtelConfig     `mapstructure:"otel" yaml:"otel"`
+}
+
+// OtelConfig holds OpenTelemetry configuration.
+type OtelConfig struct {
+	Endpoint string `mapstructure:"endpoint" yaml:"endpoint"`
 }
 
 // AgentsConfig holds agent source configuration.
@@ -180,4 +186,5 @@ func SetDefaults(v *viper.Viper) {
 		"official": "https://github.com/cowdogmoo/squad-agents.git",
 	})
 	v.SetDefault("agents.local_paths", []string{})
+	v.SetDefault("otel.endpoint", "")
 }

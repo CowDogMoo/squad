@@ -11,11 +11,15 @@ import (
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/cowdogmoo/squad/tools"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	oairesponses "github.com/openai/openai-go/v3/responses"
 	"github.com/tmc/langchaingo/llms"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // FunctionCall holds the parsed details of a function_call item
@@ -79,6 +83,14 @@ func UseResponsesAPI(provider, model string, prefixes []string) bool {
 
 // RunWithTools drives a tool-calling loop using the OpenAI Responses API.
 func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations int, reasoningPrefixes []string, taskCfg *tools.TaskConfig, m *metrics.Metrics, ex executor.Executor) (string, error) {
+	ctx, span := telemetry.Tracer().Start(ctx, "responses.tool_loop",
+		trace.WithAttributes(
+			attribute.String("gen_ai.request.model", model),
+			attribute.Int("squad.tool_loop.max_iterations", maxIterations),
+		),
+	)
+	defer span.End()
+
 	client := newClient(apiKey, baseURL, organization)
 	handlers, toolDefs := tools.BuildHandlers(workingDir, taskCfg, ex)
 	if maxIterations <= 0 {
@@ -432,25 +444,35 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			continue
 		}
 
-		logging.InfoContext(ctx, "responses API: calling %s args=%s", call.Name, tools.TruncateString(call.Arguments, 200))
+		callCtx, toolSpan := telemetry.Tracer().Start(ctx, "tool."+call.Name,
+			trace.WithAttributes(
+				attribute.String("squad.tool.name", call.Name),
+			),
+		)
+
+		logging.InfoContext(callCtx, "responses API: calling %s args=%s", call.Name, tools.TruncateString(call.Arguments, 200))
 		toolStart := time.Now()
-		result, err := handler.Call(ctx, []byte(call.Arguments))
+		result, err := handler.Call(callCtx, []byte(call.Arguments))
 		toolDuration := time.Since(toolStart)
 
 		var output string
 		if err != nil {
+			toolSpan.RecordError(err)
+			toolSpan.SetStatus(codes.Error, err.Error())
 			// Include both result (e.g., command output) and error message
 			if result != "" {
 				output = fmt.Sprintf("%s\n\nerror: %v", result, err)
-				logging.InfoContext(ctx, "responses API: %s failed in %s: %v (output: %d bytes)", call.Name, toolDuration.Round(time.Millisecond), err, len(result))
+				logging.InfoContext(callCtx, "responses API: %s failed in %s: %v (output: %d bytes)", call.Name, toolDuration.Round(time.Millisecond), err, len(result))
 			} else {
 				output = fmt.Sprintf("error: %v", err)
-				logging.InfoContext(ctx, "responses API: %s failed in %s: %v (no output)", call.Name, toolDuration.Round(time.Millisecond), err)
+				logging.InfoContext(callCtx, "responses API: %s failed in %s: %v (no output)", call.Name, toolDuration.Round(time.Millisecond), err)
 			}
 		} else {
 			output = result
-			logging.InfoContext(ctx, "responses API: %s completed in %s (%d bytes)", call.Name, toolDuration.Round(time.Millisecond), len(result))
+			logging.InfoContext(callCtx, "responses API: %s completed in %s (%d bytes)", call.Name, toolDuration.Round(time.Millisecond), len(result))
 		}
+		toolSpan.SetAttributes(attribute.Int("squad.tool.output_bytes", len(output)))
+		toolSpan.End()
 
 		output = tools.TruncateToolOutputHeadTail(output, 32*1024)
 
