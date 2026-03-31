@@ -54,6 +54,7 @@ type RunOptions struct {
 	Findings          *tools.FindingsStore // shared findings store (set by pipeline runner)
 	AgentName         string               // current agent name for finding attribution
 	MCPServers        []mcp.ServerConfig   // MCP servers from CLI --mcp-server flags
+	Stream            bool                 // stream model output tokens to stderr as they arrive
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.

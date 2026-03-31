@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/telemetry"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -28,6 +29,60 @@ type Client struct {
 	connected bool
 }
 
+// createTransport starts the appropriate MCP transport (stdio or SSE).
+func createTransport(ctx context.Context, cfg ServerConfig) (mcpclient.MCPClient, error) {
+	switch cfg.TransportType() {
+	case "stdio":
+		if cfg.Command == "" {
+			return nil, fmt.Errorf("mcp server %q missing command for stdio transport", cfg.Name)
+		}
+		inner, err := mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start MCP server %q (%s): %w", cfg.Name, cfg.Command, err)
+		}
+		return inner, nil
+	case "sse":
+		return createSSETransport(ctx, cfg)
+	default:
+		return nil, fmt.Errorf("mcp server %q has unsupported transport %q (want stdio or sse)", cfg.Name, cfg.Transport)
+	}
+}
+
+// createSSETransport creates and starts an SSE transport connection.
+func createSSETransport(ctx context.Context, cfg ServerConfig) (mcpclient.MCPClient, error) {
+	if cfg.URL == "" {
+		return nil, fmt.Errorf("mcp server %q missing url for sse transport", cfg.Name)
+	}
+	var opts []transport.ClientOption
+	if len(cfg.Headers) > 0 {
+		hdrs := make(map[string]string, len(cfg.Headers))
+		for _, h := range cfg.Headers {
+			if idx := strings.Index(h, "="); idx > 0 {
+				hdrs[h[:idx]] = h[idx+1:]
+			}
+		}
+		opts = append(opts, transport.WithHeaders(hdrs))
+	}
+	sseClient, err := mcpclient.NewSSEMCPClient(cfg.URL, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to MCP server %q (%s): %w", cfg.Name, cfg.URL, err)
+	}
+	if startErr := sseClient.Start(ctx); startErr != nil {
+		if cerr := sseClient.Close(); cerr != nil {
+			logging.Warn("MCP server %q close after start failure: %v", cfg.Name, cerr)
+		}
+		return nil, fmt.Errorf("failed to start MCP server %q (%s): %w", cfg.Name, cfg.URL, startErr)
+	}
+	return sseClient, nil
+}
+
+// closeOnError closes an MCP client and logs any close error.
+func closeOnError(inner mcpclient.MCPClient, name, context string) {
+	if cerr := inner.Close(); cerr != nil {
+		logging.Warn("MCP server %q close after %s failure: %v", name, context, cerr)
+	}
+}
+
 // Connect starts an MCP server connection and performs the protocol handshake.
 // For stdio transport, it spawns a subprocess. For SSE transport, it connects
 // to a running HTTP server. It then sends the initialize request and discovers
@@ -45,49 +100,9 @@ func Connect(ctx context.Context, cfg ServerConfig) (*Client, error) {
 		return nil, fmt.Errorf("mcp server config missing name")
 	}
 
-	var inner mcpclient.MCPClient
-	var err error
-
-	switch cfg.TransportType() {
-	case "stdio":
-		if cfg.Command == "" {
-			return nil, fmt.Errorf("mcp server %q missing command for stdio transport", cfg.Name)
-		}
-		inner, err = mcpclient.NewStdioMCPClient(cfg.Command, cfg.Env, cfg.Args...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to start MCP server %q (%s): %w", cfg.Name, cfg.Command, err)
-		}
-	case "sse":
-		if cfg.URL == "" {
-			return nil, fmt.Errorf("mcp server %q missing url for sse transport", cfg.Name)
-		}
-		var opts []transport.ClientOption
-		if len(cfg.Headers) > 0 {
-			hdrs := make(map[string]string, len(cfg.Headers))
-			for _, h := range cfg.Headers {
-				if idx := strings.Index(h, "="); idx > 0 {
-					hdrs[h[:idx]] = h[idx+1:]
-				}
-			}
-			opts = append(opts, transport.WithHeaders(hdrs))
-		}
-		sseClient, sseErr := mcpclient.NewSSEMCPClient(cfg.URL, opts...)
-		if sseErr != nil {
-			return nil, fmt.Errorf("failed to connect to MCP server %q (%s): %w", cfg.Name, cfg.URL, sseErr)
-		}
-		// SSE transport requires an explicit Start() call (stdio auto-starts).
-		if startErr := sseClient.Start(ctx); startErr != nil {
-			_ = sseClient.Close()
-			return nil, fmt.Errorf("failed to start MCP server %q (%s): %w", cfg.Name, cfg.URL, startErr)
-		}
-		inner = sseClient
-	default:
-		return nil, fmt.Errorf("mcp server %q has unsupported transport %q (want stdio or sse)", cfg.Name, cfg.Transport)
-	}
-
-	c := &Client{
-		name:  cfg.Name,
-		inner: inner,
+	inner, err := createTransport(ctx, cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	// Protocol handshake.
@@ -99,19 +114,23 @@ func Connect(ctx context.Context, cfg ServerConfig) (*Client, error) {
 	}
 
 	if _, err := inner.Initialize(ctx, initReq); err != nil {
-		_ = inner.Close()
+		closeOnError(inner, cfg.Name, "init")
 		return nil, fmt.Errorf("MCP server %q initialization failed: %w", cfg.Name, err)
 	}
 
 	// Discover tools.
 	toolsResult, err := inner.ListTools(ctx, mcptypes.ListToolsRequest{})
 	if err != nil {
-		_ = inner.Close()
+		closeOnError(inner, cfg.Name, "tools/list")
 		return nil, fmt.Errorf("MCP server %q tools/list failed: %w", cfg.Name, err)
 	}
 
-	c.tools = toolsResult.Tools
-	c.connected = true
+	c := &Client{
+		name:      cfg.Name,
+		inner:     inner,
+		tools:     toolsResult.Tools,
+		connected: true,
+	}
 	span.SetAttributes(attribute.Int("mcp.tools.count", len(c.tools)))
 	return c, nil
 }

@@ -122,6 +122,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		ConfigAvailable:   cfg != nil,
 		Config:            cfg,
 		MCPServers:        mcpServers,
+		Stream:            v.GetBool("run.stream"),
 	}
 }
 
@@ -185,6 +186,7 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 		{"run.mode", "mode"},
 		{"run.max_iterations", "max-iterations"},
 		{"run.max_cost", "max-cost"},
+		{"run.stream", "stream"},
 	} {
 		if err := bind(pair[0], pair[1]); err != nil {
 			return err
@@ -253,6 +255,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Float64("max-cost", 5, "Maximum cost budget in USD (0 = unlimited)")
 	cmd.Flags().StringArray("var", nil, "Template variable in KEY=VALUE format (can be repeated)")
 	cmd.Flags().StringArray("mcp-server", nil, "MCP server: stdio NAME:COMMAND[:ARG1,ARG2,...] or SSE NAME:sse:URL (can be repeated)")
+	cmd.Flags().Bool("stream", false, "Stream model output tokens to stderr as they arrive")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 

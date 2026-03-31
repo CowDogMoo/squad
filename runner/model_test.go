@@ -108,12 +108,13 @@ func TestBuildLLMVariants(t *testing.T) {
 		{"ollama", "ollama", "mistral", &RunOptions{}, "*ollama.LLM", false},
 		{"openai", "openai", "gpt-4o", &RunOptions{APIKey: "token"}, "*openai.LLM", false},
 		{"anthropic", "anthropic", "claude-3", &RunOptions{APIKey: "token"}, "*anthropic.LLM", false},
+		{"gemini", "gemini", "gemini-2.0-flash", &RunOptions{APIKey: "token"}, "*googleai.GoogleAI", false},
 		{"unknown provider", "unknown", "model", &RunOptions{}, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			model, err := buildLLM(tt.opts, tt.provider, tt.model)
+			model, err := buildLLM(context.Background(), tt.opts, tt.provider, tt.model)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("buildLLM() error = %v, wantErr %v", err, tt.wantErr)
 			}

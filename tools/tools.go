@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cowdogmoo/squad/executor"
@@ -418,14 +419,50 @@ func appendToolCallMessage(messages []llms.MessageContent, textContent string, t
 	})
 }
 
+// serialTools are tools that must not run concurrently because they
+// mutate shared state (filesystem, executor) in order-dependent ways.
+var serialTools = map[string]bool{
+	"Bash":  true,
+	"Edit":  true,
+	"Write": true,
+	"Task":  true,
+}
+
 func executeToolCalls(ctx context.Context, messages []llms.MessageContent, toolCalls []llms.ToolCall, handlers map[string]Handler) []llms.MessageContent {
 	// Batch all tool results into a single message.  Anthropic requires every
 	// tool_result to be in the same user message that follows the assistant
 	// message containing the corresponding tool_use blocks.
-	parts := make([]llms.ContentPart, 0, len(toolCalls))
-	for _, toolCall := range toolCalls {
-		parts = append(parts, executeToolCall(ctx, toolCall, handlers))
+	parts := make([]llms.ContentPart, len(toolCalls))
+
+	// Determine if we can parallelize: only when there are multiple calls
+	// and none of them are serial (state-mutating) tools.
+	canParallelize := len(toolCalls) > 1
+	if canParallelize {
+		for _, tc := range toolCalls {
+			if tc.FunctionCall != nil && serialTools[tc.FunctionCall.Name] {
+				canParallelize = false
+				break
+			}
+		}
 	}
+
+	if canParallelize {
+		logging.InfoContext(ctx, "executing %d tool calls in parallel", len(toolCalls))
+		var wg sync.WaitGroup
+		wg.Add(len(toolCalls))
+		for i, toolCall := range toolCalls {
+			go func(idx int, tc llms.ToolCall) {
+				defer wg.Done()
+				parts[idx] = executeToolCall(ctx, tc, handlers)
+			}(i, toolCall)
+		}
+		wg.Wait()
+	} else {
+		for i, toolCall := range toolCalls {
+			parts[i] = executeToolCall(ctx, toolCall, handlers)
+		}
+	}
+
 	return append(messages, llms.MessageContent{
 		Role:  llms.ChatMessageTypeTool,
 		Parts: parts,

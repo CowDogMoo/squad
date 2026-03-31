@@ -104,7 +104,9 @@ func Execute() error {
 			// until its own 30 s timeout expires).
 			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_ = otelShutdown(shutCtx)
+			if err := otelShutdown(shutCtx); err != nil {
+				logging.Warn("telemetry shutdown error: %v", err)
+			}
 		}
 	}()
 
