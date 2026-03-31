@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"io"
+
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/executor"
@@ -20,6 +22,7 @@ import (
 	"github.com/cowdogmoo/squad/tools"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
+	"github.com/tmc/langchaingo/llms/googleai"
 	"github.com/tmc/langchaingo/llms/openai"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -62,7 +65,11 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 		m.Finish()
 		return "", m, fmt.Errorf("failed to create executor: %w", err)
 	}
-	defer func() { _ = ex.Close() }()
+	defer func() {
+		if cerr := ex.Close(); cerr != nil {
+			logging.Warn("failed to close executor: %v", cerr)
+		}
+	}()
 
 	logging.InfoContext(ctx, "executor created (type=%s)", ex.Type())
 	if ex.Type() != "local" {
@@ -189,9 +196,16 @@ func inferMaxTokens(maxTokens int, hasTaskTool bool) int {
 
 // callLangChainLLM runs the prompt via a LangChain-compatible LLM.
 func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor, m *metrics.Metrics) (string, error) {
-	llm, err := buildLLM(opts, provider, model)
+	llm, err := buildLLM(ctx, opts, provider, model)
 	if err != nil {
 		return "", err
+	}
+	if closer, ok := llm.(io.Closer); ok {
+		defer func() {
+			if cerr := closer.Close(); cerr != nil {
+				logging.Warn("failed to close LLM client: %v", cerr)
+			}
+		}()
 	}
 
 	maxTokens = inferMaxTokens(maxTokens, taskCfg != nil)
@@ -226,6 +240,12 @@ func buildCallOpts(opts *RunOptions, provider string, temperature float64, maxTo
 	if provider == "anthropic" {
 		callOpts = append(callOpts, anthropic.WithPromptCaching())
 	}
+	if opts.Stream {
+		callOpts = append(callOpts, llms.WithStreamingFunc(func(_ context.Context, chunk []byte) error {
+			_, err := os.Stderr.Write(chunk)
+			return err
+		}))
+	}
 	if maxTokens <= 0 {
 		return callOpts
 	}
@@ -240,7 +260,7 @@ func buildCallOpts(opts *RunOptions, provider string, temperature float64, maxTo
 }
 
 // buildLLM constructs an LLM model instance based on the provider and configuration.
-func buildLLM(opts *RunOptions, provider, model string) (llms.Model, error) {
+func buildLLM(ctx context.Context, opts *RunOptions, provider, model string) (llms.Model, error) {
 	switch provider {
 	case "ollama":
 		return buildNativeOllamaLLM(opts, model), nil
@@ -248,6 +268,8 @@ func buildLLM(opts *RunOptions, provider, model string) (llms.Model, error) {
 		return buildOpenAICompatLLM(opts, provider, model)
 	case "anthropic":
 		return buildAnthropicLLM(opts, model)
+	case "gemini":
+		return buildGeminiLLM(ctx, opts, model)
 	default:
 		return nil, fmt.Errorf("provider not implemented: %s", provider)
 	}
@@ -299,6 +321,17 @@ func buildAnthropicLLM(opts *RunOptions, model string) (llms.Model, error) {
 	}
 
 	return anthropic.New(aOpts...)
+}
+
+func buildGeminiLLM(ctx context.Context, opts *RunOptions, model string) (llms.Model, error) {
+	gOpts := []googleai.Option{}
+	if model != "" {
+		gOpts = append(gOpts, googleai.WithDefaultModel(model))
+	}
+	if opts.APIKey != "" {
+		gOpts = append(gOpts, googleai.WithAPIKey(opts.APIKey))
+	}
+	return googleai.New(ctx, gOpts...)
 }
 
 func normalizeProvider(provider string) string {

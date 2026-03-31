@@ -2,6 +2,7 @@
 package ollama
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -45,6 +46,44 @@ func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOptio
 	return llms.GenerateFromSinglePrompt(ctx, o, prompt, options...)
 }
 
+// buildChatRequest constructs the Ollama /api/chat request body from call options.
+func (o *LLM) buildChatRequest(chatMsgs []ollamaMessage, opts llms.CallOptions) chatRequest {
+	var tools []ollamaTool
+	if opts.ToolChoice != "none" {
+		tools = convertTools(opts.Tools)
+	}
+	stream := opts.StreamingFunc != nil && len(tools) == 0
+	reqBody := chatRequest{
+		Model:    o.model,
+		Messages: chatMsgs,
+		Tools:    tools,
+		Stream:   stream,
+		Options: map[string]any{
+			"num_ctx": o.numCtx,
+		},
+	}
+	if opts.Temperature != 0 {
+		reqBody.Options["temperature"] = opts.Temperature
+	}
+	if opts.MaxTokens > 0 {
+		reqBody.Options["num_predict"] = opts.MaxTokens
+	}
+	return reqBody
+}
+
+// readFullResponse reads a non-streaming Ollama response.
+func readFullResponse(body io.Reader) (*llms.ContentResponse, error) {
+	respBody, err := io.ReadAll(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read ollama response: %w", err)
+	}
+	var chatResp chatResponse
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		return nil, fmt.Errorf("failed to parse ollama response: %w", err)
+	}
+	return convertResponse(chatResp), nil
+}
+
 // GenerateContent implements llms.Model via Ollama's native /api/chat endpoint.
 func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (resp *llms.ContentResponse, retErr error) {
 	opts := llms.CallOptions{}
@@ -56,27 +95,8 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	if err != nil {
 		return nil, err
 	}
-	var tools []ollamaTool
-	if opts.ToolChoice != "none" {
-		tools = convertTools(opts.Tools)
-	}
 
-	reqBody := chatRequest{
-		Model:    o.model,
-		Messages: chatMsgs,
-		Tools:    tools,
-		Stream:   false,
-		Options: map[string]any{
-			"num_ctx": o.numCtx,
-		},
-	}
-	if opts.Temperature != 0 {
-		reqBody.Options["temperature"] = opts.Temperature
-	}
-	if opts.MaxTokens > 0 {
-		reqBody.Options["num_predict"] = opts.MaxTokens
-	}
-
+	reqBody := o.buildChatRequest(chatMsgs, opts)
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal ollama request: %w", err)
@@ -98,20 +118,49 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 		}
 	}()
 
-	respBody, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read ollama response: %w", err)
-	}
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama returned %d: %s", httpResp.StatusCode, strings.TrimSpace(string(respBody)))
+		errBody, _ := io.ReadAll(httpResp.Body)
+		return nil, fmt.Errorf("ollama returned %d: %s", httpResp.StatusCode, strings.TrimSpace(string(errBody)))
 	}
 
-	var chatResp chatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("failed to parse ollama response: %w", err)
+	if reqBody.Stream {
+		return o.readStream(ctx, httpResp.Body, opts.StreamingFunc)
 	}
 
-	return convertResponse(chatResp), nil
+	return readFullResponse(httpResp.Body)
+}
+
+// readStream processes NDJSON streaming responses from Ollama, calling
+// streamFn for each content chunk. It accumulates the final response
+// including token counts from the last (done=true) message.
+func (o *LLM) readStream(ctx context.Context, body io.Reader, streamFn func(ctx context.Context, chunk []byte) error) (*llms.ContentResponse, error) {
+	scanner := bufio.NewScanner(body)
+	var full chatResponse
+	for scanner.Scan() {
+		var chunk chatResponse
+		if err := json.Unmarshal(scanner.Bytes(), &chunk); err != nil {
+			continue
+		}
+		if chunk.Message != nil && chunk.Message.Content != "" {
+			if err := streamFn(ctx, []byte(chunk.Message.Content)); err != nil {
+				return nil, fmt.Errorf("streaming callback failed: %w", err)
+			}
+			if full.Message == nil {
+				full.Message = &ollamaMessage{Role: "assistant"}
+			}
+			full.Message.Content += chunk.Message.Content
+		}
+		if chunk.Done {
+			full.Done = true
+			full.PromptEvalCount = chunk.PromptEvalCount
+			full.EvalCount = chunk.EvalCount
+			full.Model = chunk.Model
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read ollama stream: %w", err)
+	}
+	return convertResponse(full), nil
 }
 
 // --- Ollama native API types ---

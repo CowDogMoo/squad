@@ -12,6 +12,7 @@ import (
 	"text/template"
 
 	"github.com/cowdogmoo/squad/executor"
+	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/mcp"
 	"gopkg.in/yaml.v3"
 )
@@ -113,7 +114,11 @@ func makeIncludeFunc(agentsDir string) func(string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to include template %s: %w", path, err)
 		}
-		defer func() { _ = f.Close() }()
+		defer func() {
+			if cerr := f.Close(); cerr != nil {
+				logging.Warn("failed to close template %s: %v", path, cerr)
+			}
+		}()
 		content, err := io.ReadAll(f)
 		if err != nil {
 			return "", fmt.Errorf("failed to read template %s: %w", path, err)
@@ -149,12 +154,16 @@ func processTemplate(name, content, agentsDir string, data TemplateData) (string
 }
 
 // loadReferences reads all reference files and returns formatted content.
-func readFileInRoot(root, path string) ([]byte, error) {
+func readFileInRoot(root, path string) (data []byte, retErr error) {
 	f, err := os.OpenInRoot(root, path)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && retErr == nil {
+			retErr = fmt.Errorf("failed to close %s: %w", path, cerr)
+		}
+	}()
 	return io.ReadAll(f)
 }
 
