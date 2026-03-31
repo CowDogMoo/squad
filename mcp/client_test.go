@@ -205,6 +205,137 @@ func TestCloseOnErrorLogsWarning(t *testing.T) {
 	closeOnError(mock, "test-server", "test")
 }
 
+func TestCloseOnErrorWithCloseFailure(t *testing.T) {
+	t.Parallel()
+	// closeOnError with a client that returns error on Close should not panic.
+	mock := &errorCloseMCPClient{closeErr: fmt.Errorf("close failed")}
+	closeOnError(mock, "test-server", "init")
+}
+
+func TestCreateSSETransportStartFailure(t *testing.T) {
+	t.Parallel()
+	// Server that returns non-SSE response to trigger Start() failure.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, err := createSSETransport(context.Background(), ServerConfig{
+		Name:      "test-sse",
+		Transport: "sse",
+		URL:       srv.URL,
+	})
+	if err == nil {
+		t.Fatal("expected error from SSE start failure")
+	}
+	if !strings.Contains(err.Error(), "test-sse") {
+		t.Fatalf("error = %q, want to contain server name", err.Error())
+	}
+}
+
+func TestCreateSSETransportInvalidURL(t *testing.T) {
+	t.Parallel()
+	_, err := createSSETransport(context.Background(), ServerConfig{
+		Name:      "test-sse",
+		Transport: "sse",
+		URL:       "://invalid-url",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid URL")
+	}
+	if !strings.Contains(err.Error(), "test-sse") {
+		t.Fatalf("error = %q, want to contain server name", err.Error())
+	}
+}
+
+func TestCreateSSETransportWithHeaders(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, err := createSSETransport(context.Background(), ServerConfig{
+		Name:      "test-sse",
+		Transport: "sse",
+		URL:       srv.URL,
+		Headers:   []string{"Authorization=Bearer token", "X-Custom=value"},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestHandshakeSuccess(t *testing.T) {
+	t.Parallel()
+	mock := &mockMCPClient{}
+	c, err := handshake(context.Background(), "test-server", mock)
+	if err != nil {
+		t.Fatalf("handshake() error = %v", err)
+	}
+	if c.Name() != "test-server" {
+		t.Fatalf("name = %q, want test-server", c.Name())
+	}
+	if !c.connected {
+		t.Fatal("expected connected=true")
+	}
+}
+
+func TestHandshakeInitFailure(t *testing.T) {
+	t.Parallel()
+	mock := &failInitMCPClient{initErr: fmt.Errorf("init refused")}
+	_, err := handshake(context.Background(), "test-server", mock)
+	if err == nil {
+		t.Fatal("expected error from init failure")
+	}
+	if !strings.Contains(err.Error(), "initialization failed") {
+		t.Fatalf("error = %q, want initialization failed", err.Error())
+	}
+}
+
+func TestHandshakeInitFailureWithCloseError(t *testing.T) {
+	t.Parallel()
+	// Compose: fails init AND fails close — both error paths exercised.
+	mock := &failInitAndCloseClient{
+		initErr:  fmt.Errorf("init refused"),
+		closeErr: fmt.Errorf("close broken"),
+	}
+	_, err := handshake(context.Background(), "test-server", mock)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "initialization failed") {
+		t.Fatalf("error = %q, want initialization failed", err.Error())
+	}
+}
+
+func TestHandshakeListToolsFailure(t *testing.T) {
+	t.Parallel()
+	mock := &failListToolsMCPClient{listErr: fmt.Errorf("list denied")}
+	_, err := handshake(context.Background(), "test-server", mock)
+	if err == nil {
+		t.Fatal("expected error from list tools failure")
+	}
+	if !strings.Contains(err.Error(), "tools/list failed") {
+		t.Fatalf("error = %q, want tools/list failed", err.Error())
+	}
+}
+
+func TestHandshakeListToolsFailureWithCloseError(t *testing.T) {
+	t.Parallel()
+	mock := &failListToolsAndCloseClient{
+		listErr:  fmt.Errorf("list denied"),
+		closeErr: fmt.Errorf("close broken"),
+	}
+	_, err := handshake(context.Background(), "test-server", mock)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "tools/list failed") {
+		t.Fatalf("error = %q, want tools/list failed", err.Error())
+	}
+}
+
 func TestCloseTimeout(t *testing.T) {
 	t.Parallel()
 	c := NewTestClient("hanging-server", nil, &slowCloseMCPClient{

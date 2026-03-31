@@ -456,7 +456,23 @@ func TestReadFullResponse(t *testing.T) {
 			t.Fatalf("error = %v, want parse error", err)
 		}
 	})
+
+	t.Run("read error", func(t *testing.T) {
+		t.Parallel()
+		_, err := readFullResponse(&errReader{err: fmt.Errorf("io broken")})
+		if err == nil {
+			t.Fatal("expected error for broken reader")
+		}
+		if !strings.Contains(err.Error(), "failed to read ollama response") {
+			t.Fatalf("error = %v, want read error", err)
+		}
+	})
 }
+
+// errReader is an io.Reader that always returns an error.
+type errReader struct{ err error }
+
+func (r *errReader) Read(_ []byte) (int, error) { return 0, r.err }
 
 func TestReadStream(t *testing.T) {
 	t.Parallel()
@@ -487,6 +503,41 @@ func TestReadStream(t *testing.T) {
 		}
 	})
 
+	t.Run("skips invalid json lines", func(t *testing.T) {
+		t.Parallel()
+		ndjson := `not-valid-json
+{"message":{"role":"assistant","content":"ok"},"done":false}
+{"done":true,"prompt_eval_count":1,"eval_count":1,"model":"mistral"}
+`
+		var chunks []string
+		resp, err := llm.readStream(context.Background(), strings.NewReader(ndjson), func(_ context.Context, chunk []byte) error {
+			chunks = append(chunks, string(chunk))
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("readStream() error = %v", err)
+		}
+		if resp.Choices[0].Content != "ok" {
+			t.Fatalf("content = %q, want ok", resp.Choices[0].Content)
+		}
+		if len(chunks) != 1 {
+			t.Fatalf("chunks = %d, want 1 (bad line skipped)", len(chunks))
+		}
+	})
+
+	t.Run("scanner error", func(t *testing.T) {
+		t.Parallel()
+		_, err := llm.readStream(context.Background(), &errReader{err: fmt.Errorf("read broken")}, func(_ context.Context, _ []byte) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("expected error from broken reader")
+		}
+		if !strings.Contains(err.Error(), "failed to read ollama stream") {
+			t.Fatalf("error = %v, want stream read error", err)
+		}
+	})
+
 	t.Run("streaming callback error", func(t *testing.T) {
 		t.Parallel()
 		ndjson := `{"message":{"role":"assistant","content":"hello"},"done":false}
@@ -501,6 +552,38 @@ func TestReadStream(t *testing.T) {
 			t.Fatalf("error = %v, want callback failed", err)
 		}
 	})
+}
+
+func TestGenerateContentConvertMessagesError(t *testing.T) {
+	t.Parallel()
+	llm := New("http://localhost:19999", "mistral", 256)
+	// ToolCall with invalid JSON arguments triggers convertMessages error.
+	_, err := llm.GenerateContent(context.Background(), []llms.MessageContent{{
+		Role: llms.ChatMessageTypeAI,
+		Parts: []llms.ContentPart{
+			llms.ToolCall{FunctionCall: &llms.FunctionCall{Name: "Bad", Arguments: "not-json"}},
+		},
+	}})
+	if err == nil {
+		t.Fatal("expected error for bad tool call arguments")
+	}
+}
+
+func TestGenerateContentCanceledContext(t *testing.T) {
+	t.Parallel()
+	llm := New("http://localhost:19999", "mistral", 256)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := llm.GenerateContent(ctx, []llms.MessageContent{{
+		Role:  llms.ChatMessageTypeHuman,
+		Parts: []llms.ContentPart{llms.TextPart("hi")},
+	}})
+	if err == nil {
+		t.Fatal("expected error for canceled context")
+	}
+	if !strings.Contains(err.Error(), "ollama request failed") {
+		t.Fatalf("error = %v, want request failed", err)
+	}
 }
 
 func TestGenerateContentStreaming(t *testing.T) {

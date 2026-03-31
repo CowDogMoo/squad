@@ -75,3 +75,63 @@ func (m *slowCloseMCPClient) Close() error {
 	time.Sleep(m.delay)
 	return nil
 }
+
+// errorCloseMCPClient returns an error on Close().
+type errorCloseMCPClient struct {
+	mockMCPClient
+	closeErr error
+}
+
+func (m *errorCloseMCPClient) Close() error {
+	return m.closeErr
+}
+
+// failInitMCPClient fails on Initialize().
+type failInitMCPClient struct {
+	mockMCPClient
+	initErr error
+}
+
+func (m *failInitMCPClient) Initialize(_ context.Context, _ mcptypes.InitializeRequest) (*mcptypes.InitializeResult, error) {
+	return nil, m.initErr
+}
+
+// failListToolsMCPClient fails on ListTools().
+type failListToolsMCPClient struct {
+	mockMCPClient
+	listErr error
+}
+
+func (m *failListToolsMCPClient) ListTools(_ context.Context, _ mcptypes.ListToolsRequest) (*mcptypes.ListToolsResult, error) {
+	return nil, m.listErr
+}
+
+// failInitAndCloseClient fails on both Initialize and Close.
+type failInitAndCloseClient struct {
+	mockMCPClient
+	initErr  error
+	closeErr error
+}
+
+func (m *failInitAndCloseClient) Initialize(_ context.Context, _ mcptypes.InitializeRequest) (*mcptypes.InitializeResult, error) {
+	return nil, m.initErr
+}
+
+func (m *failInitAndCloseClient) Close() error {
+	return m.closeErr
+}
+
+// failListToolsAndCloseClient fails on both ListTools and Close.
+type failListToolsAndCloseClient struct {
+	mockMCPClient
+	listErr  error
+	closeErr error
+}
+
+func (m *failListToolsAndCloseClient) ListTools(_ context.Context, _ mcptypes.ListToolsRequest) (*mcptypes.ListToolsResult, error) {
+	return nil, m.listErr
+}
+
+func (m *failListToolsAndCloseClient) Close() error {
+	return m.closeErr
+}

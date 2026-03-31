@@ -83,6 +83,35 @@ func closeOnError(inner mcpclient.MCPClient, name, context string) {
 	}
 }
 
+// handshake performs the MCP protocol initialization and tool discovery on
+// an already-connected transport. On failure it closes inner and returns an error.
+func handshake(ctx context.Context, name string, inner mcpclient.MCPClient) (*Client, error) {
+	initReq := mcptypes.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcptypes.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcptypes.Implementation{
+		Name:    "squad",
+		Version: "0.1.0",
+	}
+
+	if _, err := inner.Initialize(ctx, initReq); err != nil {
+		closeOnError(inner, name, "init")
+		return nil, fmt.Errorf("MCP server %q initialization failed: %w", name, err)
+	}
+
+	toolsResult, err := inner.ListTools(ctx, mcptypes.ListToolsRequest{})
+	if err != nil {
+		closeOnError(inner, name, "tools/list")
+		return nil, fmt.Errorf("MCP server %q tools/list failed: %w", name, err)
+	}
+
+	return &Client{
+		name:      name,
+		inner:     inner,
+		tools:     toolsResult.Tools,
+		connected: true,
+	}, nil
+}
+
 // Connect starts an MCP server connection and performs the protocol handshake.
 // For stdio transport, it spawns a subprocess. For SSE transport, it connects
 // to a running HTTP server. It then sends the initialize request and discovers
@@ -105,31 +134,9 @@ func Connect(ctx context.Context, cfg ServerConfig) (*Client, error) {
 		return nil, err
 	}
 
-	// Protocol handshake.
-	initReq := mcptypes.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcptypes.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcptypes.Implementation{
-		Name:    "squad",
-		Version: "0.1.0",
-	}
-
-	if _, err := inner.Initialize(ctx, initReq); err != nil {
-		closeOnError(inner, cfg.Name, "init")
-		return nil, fmt.Errorf("MCP server %q initialization failed: %w", cfg.Name, err)
-	}
-
-	// Discover tools.
-	toolsResult, err := inner.ListTools(ctx, mcptypes.ListToolsRequest{})
+	c, err := handshake(ctx, cfg.Name, inner)
 	if err != nil {
-		closeOnError(inner, cfg.Name, "tools/list")
-		return nil, fmt.Errorf("MCP server %q tools/list failed: %w", cfg.Name, err)
-	}
-
-	c := &Client{
-		name:      cfg.Name,
-		inner:     inner,
-		tools:     toolsResult.Tools,
-		connected: true,
+		return nil, err
 	}
 	span.SetAttributes(attribute.Int("mcp.tools.count", len(c.tools)))
 	return c, nil
