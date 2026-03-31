@@ -156,6 +156,55 @@ func TestClientCallToolError(t *testing.T) {
 	}
 }
 
+func TestCreateTransportValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		cfg     ServerConfig
+		wantErr string
+	}{
+		{
+			name:    "stdio missing command",
+			cfg:     ServerConfig{Name: "test"},
+			wantErr: `mcp server "test" missing command for stdio transport`,
+		},
+		{
+			name:    "sse missing url",
+			cfg:     ServerConfig{Name: "test", Transport: "sse"},
+			wantErr: `mcp server "test" missing url for sse transport`,
+		},
+		{
+			name:    "unsupported transport",
+			cfg:     ServerConfig{Name: "test", Transport: "grpc"},
+			wantErr: `mcp server "test" has unsupported transport "grpc"`,
+		},
+		{
+			name:    "invalid stdio command",
+			cfg:     ServerConfig{Name: "test", Command: "/nonexistent/binary"},
+			wantErr: "failed to start MCP server",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := createTransport(context.Background(), tt.cfg)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %q, want to contain %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestCloseOnErrorLogsWarning(t *testing.T) {
+	t.Parallel()
+	// closeOnError should not panic with a working mock client.
+	mock := &mockMCPClient{}
+	closeOnError(mock, "test-server", "test")
+}
+
 func TestCloseTimeout(t *testing.T) {
 	t.Parallel()
 	c := NewTestClient("hanging-server", nil, &slowCloseMCPClient{

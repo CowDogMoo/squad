@@ -1892,3 +1892,116 @@ func TestBuildHandlersWithFindingsDefaultAgent(t *testing.T) {
 		t.Fatalf("agent = %q, want unknown", store.All()[0].Agent)
 	}
 }
+
+func TestExecuteToolCallsParallel(t *testing.T) {
+	t.Parallel()
+	// Read-only tools should run in parallel.
+	handlers := map[string]Handler{
+		"Read": {
+			Def: llms.Tool{Function: &llms.FunctionDefinition{Name: "Read"}},
+			Call: func(_ context.Context, _ []byte) (string, error) {
+				return "read-result", nil
+			},
+		},
+		"Glob": {
+			Def: llms.Tool{Function: &llms.FunctionDefinition{Name: "Glob"}},
+			Call: func(_ context.Context, _ []byte) (string, error) {
+				return "glob-result", nil
+			},
+		},
+	}
+	toolCalls := []llms.ToolCall{
+		{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{"path":"a.go"}`}},
+		{ID: "2", FunctionCall: &llms.FunctionCall{Name: "Glob", Arguments: `{"pattern":"*.go"}`}},
+	}
+
+	messages := executeToolCalls(context.Background(), nil, toolCalls, handlers)
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	if len(messages[0].Parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(messages[0].Parts))
+	}
+	// Verify results are in order despite parallel execution.
+	assertToolResponse(t, messages[0].Parts[0], "read-result")
+	assertToolResponse(t, messages[0].Parts[1], "glob-result")
+}
+
+func TestExecuteToolCallsSerialWhenMutating(t *testing.T) {
+	t.Parallel()
+	// If any tool is serial (e.g. Bash), all should run sequentially.
+	callOrder := make([]string, 0, 2)
+	handlers := map[string]Handler{
+		"Read": {
+			Def: llms.Tool{Function: &llms.FunctionDefinition{Name: "Read"}},
+			Call: func(_ context.Context, _ []byte) (string, error) {
+				callOrder = append(callOrder, "Read")
+				return "ok", nil
+			},
+		},
+		"Bash": {
+			Def: llms.Tool{Function: &llms.FunctionDefinition{Name: "Bash"}},
+			Call: func(_ context.Context, _ []byte) (string, error) {
+				callOrder = append(callOrder, "Bash")
+				return "ok", nil
+			},
+		},
+	}
+	toolCalls := []llms.ToolCall{
+		{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{}`}},
+		{ID: "2", FunctionCall: &llms.FunctionCall{Name: "Bash", Arguments: `{"command":"echo hi"}`}},
+	}
+
+	messages := executeToolCalls(context.Background(), nil, toolCalls, handlers)
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	// Sequential execution: order should be preserved.
+	if len(callOrder) != 2 || callOrder[0] != "Read" || callOrder[1] != "Bash" {
+		t.Fatalf("callOrder = %v, want [Read Bash]", callOrder)
+	}
+}
+
+func TestExecuteToolCallsSingleCallNoParallel(t *testing.T) {
+	t.Parallel()
+	handlers := map[string]Handler{
+		"Read": {
+			Def: llms.Tool{Function: &llms.FunctionDefinition{Name: "Read"}},
+			Call: func(_ context.Context, _ []byte) (string, error) {
+				return "ok", nil
+			},
+		},
+	}
+	toolCalls := []llms.ToolCall{
+		{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{}`}},
+	}
+
+	messages := executeToolCalls(context.Background(), nil, toolCalls, handlers)
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+}
+
+func TestSerialToolsSet(t *testing.T) {
+	t.Parallel()
+	expected := []string{"Bash", "Edit", "Write", "Task"}
+	for _, name := range expected {
+		if !serialTools[name] {
+			t.Errorf("expected %q to be in serialTools", name)
+		}
+	}
+	if serialTools["Read"] {
+		t.Error("Read should not be in serialTools")
+	}
+}
+
+func assertToolResponse(t *testing.T, part llms.ContentPart, wantContent string) {
+	t.Helper()
+	resp, ok := part.(llms.ToolCallResponse)
+	if !ok {
+		t.Fatalf("part is %T, want ToolCallResponse", part)
+	}
+	if resp.Content != wantContent {
+		t.Fatalf("content = %q, want %q", resp.Content, wantContent)
+	}
+}

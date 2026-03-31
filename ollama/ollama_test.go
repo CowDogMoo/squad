@@ -380,3 +380,172 @@ func TestCallUsesGenerateFromSinglePrompt(t *testing.T) {
 		t.Fatalf("response = %q, want %q", resp, "hello")
 	}
 }
+
+func TestBuildChatRequest(t *testing.T) {
+	t.Parallel()
+	llm := New("http://localhost:11434", "mistral", 4096)
+
+	t.Run("with tools disables streaming", func(t *testing.T) {
+		t.Parallel()
+		opts := llms.CallOptions{
+			StreamingFunc: func(_ context.Context, _ []byte) error { return nil },
+			Tools:         []llms.Tool{{Function: &llms.FunctionDefinition{Name: "Echo"}}},
+		}
+		req := llm.buildChatRequest(nil, opts)
+		if req.Stream {
+			t.Fatal("expected Stream=false when tools are present")
+		}
+	})
+
+	t.Run("streaming enabled without tools", func(t *testing.T) {
+		t.Parallel()
+		opts := llms.CallOptions{
+			StreamingFunc: func(_ context.Context, _ []byte) error { return nil },
+		}
+		req := llm.buildChatRequest(nil, opts)
+		if !req.Stream {
+			t.Fatal("expected Stream=true when no tools and StreamingFunc set")
+		}
+	})
+
+	t.Run("no streaming without func", func(t *testing.T) {
+		t.Parallel()
+		opts := llms.CallOptions{}
+		req := llm.buildChatRequest(nil, opts)
+		if req.Stream {
+			t.Fatal("expected Stream=false when StreamingFunc is nil")
+		}
+	})
+
+	t.Run("tool_choice none disables tools", func(t *testing.T) {
+		t.Parallel()
+		opts := llms.CallOptions{
+			ToolChoice: "none",
+			Tools:      []llms.Tool{{Function: &llms.FunctionDefinition{Name: "Echo"}}},
+		}
+		req := llm.buildChatRequest(nil, opts)
+		if len(req.Tools) != 0 {
+			t.Fatalf("expected no tools with ToolChoice=none, got %d", len(req.Tools))
+		}
+	})
+}
+
+func TestReadFullResponse(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid response", func(t *testing.T) {
+		t.Parallel()
+		body := strings.NewReader(`{"model":"mistral","message":{"role":"assistant","content":"hello"},"done":true,"prompt_eval_count":10,"eval_count":5}`)
+		resp, err := readFullResponse(body)
+		if err != nil {
+			t.Fatalf("readFullResponse() error = %v", err)
+		}
+		if resp.Choices[0].Content != "hello" {
+			t.Fatalf("content = %q, want hello", resp.Choices[0].Content)
+		}
+	})
+
+	t.Run("invalid json", func(t *testing.T) {
+		t.Parallel()
+		body := strings.NewReader("not-json")
+		_, err := readFullResponse(body)
+		if err == nil {
+			t.Fatal("expected error for invalid JSON")
+		}
+		if !strings.Contains(err.Error(), "failed to parse ollama response") {
+			t.Fatalf("error = %v, want parse error", err)
+		}
+	})
+}
+
+func TestReadStream(t *testing.T) {
+	t.Parallel()
+	llm := New("http://localhost:11434", "mistral", 4096)
+
+	t.Run("accumulates chunks", func(t *testing.T) {
+		t.Parallel()
+		ndjson := `{"message":{"role":"assistant","content":"good "},"done":false}
+{"message":{"role":"assistant","content":"morning"},"done":false}
+{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5,"model":"mistral"}
+`
+		var chunks []string
+		resp, err := llm.readStream(context.Background(), strings.NewReader(ndjson), func(_ context.Context, chunk []byte) error {
+			chunks = append(chunks, string(chunk))
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("readStream() error = %v", err)
+		}
+		if resp.Choices[0].Content != "good morning" {
+			t.Fatalf("content = %q, want 'good morning'", resp.Choices[0].Content)
+		}
+		if len(chunks) != 2 {
+			t.Fatalf("chunks = %v, want 2 chunks", chunks)
+		}
+		if chunks[0] != "good " || chunks[1] != "morning" {
+			t.Fatalf("chunks = %v, want [good  morning]", chunks)
+		}
+	})
+
+	t.Run("streaming callback error", func(t *testing.T) {
+		t.Parallel()
+		ndjson := `{"message":{"role":"assistant","content":"hello"},"done":false}
+`
+		_, err := llm.readStream(context.Background(), strings.NewReader(ndjson), func(_ context.Context, _ []byte) error {
+			return fmt.Errorf("callback failed")
+		})
+		if err == nil {
+			t.Fatal("expected error from streaming callback")
+		}
+		if !strings.Contains(err.Error(), "callback failed") {
+			t.Fatalf("error = %v, want callback failed", err)
+		}
+	})
+}
+
+func TestGenerateContentStreaming(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !req.Stream {
+			t.Errorf("expected stream=true")
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		lines := []string{
+			`{"message":{"role":"assistant","content":"good "},"done":false}`,
+			`{"message":{"role":"assistant","content":"day"},"done":false}`,
+			`{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":5,"eval_count":3,"model":"mistral"}`,
+		}
+		for _, line := range lines {
+			_, _ = fmt.Fprintln(w, line)
+		}
+	}))
+	defer server.Close()
+
+	llm := New(server.URL, "mistral", 4096)
+	var streamed []string
+	resp, err := llm.GenerateContent(
+		context.Background(),
+		[]llms.MessageContent{{
+			Role:  llms.ChatMessageTypeHuman,
+			Parts: []llms.ContentPart{llms.TextPart("hi")},
+		}},
+		llms.WithStreamingFunc(func(_ context.Context, chunk []byte) error {
+			streamed = append(streamed, string(chunk))
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("GenerateContent() error = %v", err)
+	}
+	if resp.Choices[0].Content != "good day" {
+		t.Fatalf("content = %q, want 'good day'", resp.Choices[0].Content)
+	}
+	if len(streamed) != 2 {
+		t.Fatalf("streamed chunks = %d, want 2", len(streamed))
+	}
+}

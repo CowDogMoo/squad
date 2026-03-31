@@ -83,6 +83,8 @@ func TestBuildCallOpts(t *testing.T) {
 		{"negative temp skips temp opt", &RunOptions{}, "openai", -1, 0, 0},
 		{"anthropic with temp and max", &RunOptions{}, "anthropic", 0.5, 2048, 3},
 		{"anthropic no max tokens", &RunOptions{}, "anthropic", 0.5, 0, 2},
+		{"streaming adds func", &RunOptions{Stream: true}, "openai", 0.3, 0, 2},
+		{"streaming with anthropic", &RunOptions{Stream: true}, "anthropic", 0.5, 2048, 4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -148,6 +150,18 @@ func TestBuildAnthropicLLM(t *testing.T) {
 	model, err := buildAnthropicLLM(opts, "claude-3")
 	if err != nil || model == nil {
 		t.Fatalf("buildAnthropicLLM() error = %v", err)
+	}
+}
+
+func TestBuildGeminiLLM(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{APIKey: "test-key"}
+	model, err := buildGeminiLLM(context.Background(), opts, "gemini-2.0-flash")
+	if err != nil {
+		t.Fatalf("buildGeminiLLM() error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("expected non-nil model")
 	}
 }
 
