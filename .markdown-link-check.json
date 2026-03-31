@@ -3,9 +3,6 @@
     {
       "pattern": "^mailto:"
     },
-    {
-      "pattern": "github.com/[Cc]ow[Dd]og[Mm]oo/squad-agents"
-    }
   ],
   "timeout": "20s",
   "retryOn429": true,
