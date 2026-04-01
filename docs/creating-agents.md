@@ -42,7 +42,46 @@ wrapper: agent.md
 references:
   - references/criteria.md
 task: task.md
+
+# Optional: execution environment (local, docker, ssm, kubectl)
+environment:
+  type: docker
+  options:
+    image: golang:1.23
+    volumes: ".:/workspace"
+    working_dir: /workspace
+
+# Optional: cost estimation hints for --dry-run
+budget:
+  max_tokens: 4000
+  estimated_iterations: 12
+  scale_factor: files          # cost scales with source file count
+  files_per_iteration: 4
+  children:                    # child agents dispatched via Task tool
+    - go-review
+    - go-security-audit
+
+# Optional: structured output contract
+output:
+  format: json                 # json | markdown (default: markdown)
+  schema:
+    type: object
+    properties:
+      findings:
+        type: array
+
+# Optional: MCP server dependencies
+mcp_servers:
+  - name: grafana
+    transport: sse
+    url: https://grafana.example.com/mcp
+  - name: mytools
+    command: npx
+    args: ["@myorg/mcp-server"]
 ```
+
+Only `name`, `entrypoint`, `wrapper`, and `task` are required. Everything
+else is optional.
 
 ### system.md (Main Prompt)
 
@@ -72,6 +111,14 @@ You are an analysis agent. Report issues but do NOT modify files.
 4. Emit report
 ```
 
+### Template Variables
+
+Prompts support Go template syntax with these built-in variables:
+
+- `{{.Mode}}` - Current mode (`edit` or `readonly`)
+- `{{.Var "KEY"}}` - Custom variable passed via `--var KEY=VALUE`
+- `{{.Vars.KEY}}` - Alternate syntax for custom variables
+
 ### Mode Conditionals
 
 Use `{{if eq .Mode "edit"}}...{{end}}` for edit-mode-only content:
@@ -85,6 +132,32 @@ Use `{{if eq .Mode "edit"}}...{{end}}` for edit-mode-only content:
 Do NOT modify any files. Report only.
 {{end}}
 ```
+
+### Execution Backends
+
+Agents run commands locally by default. To run in a different environment,
+set the `environment` field in `agent.yaml`:
+
+| Backend   | Description               | Required Options    |
+| --------- | ------------------------- | ------------------- |
+| `local`   | Default local shell       | _(none)_            |
+| `docker`  | Docker container          | `image`             |
+| `ssm`     | AWS Systems Manager (EC2) | `instance_id`       |
+| `kubectl` | Kubernetes pod            | `pod`               |
+
+The agent's system prompt automatically receives an environment description
+so the model knows where its commands will execute.
+
+### MCP Server Integration
+
+Agents can declare MCP server dependencies in `agent.yaml`. These are
+automatically connected when the agent starts, providing additional tools
+like database queries, monitoring APIs, or custom services.
+
+Two transport types are supported:
+
+- **stdio**: Launches a local process (`command` + `args`)
+- **sse**: Connects to a remote HTTP endpoint (`url`)
 
 ## Creating From Existing Agents
 
@@ -273,6 +346,20 @@ Ensure conditionals use exact syntax:
 {{if eq .Mode "edit"}}...{{end}}     # Correct
 {{if .Mode == "edit"}}...{{end}}     # Wrong
 ```
+
+## Pipelines
+
+Combine multiple agents into a declarative pipeline:
+
+```bash
+# Scaffold a pipeline
+squad init pipeline my-pipeline
+
+# Run the pipeline
+squad pipeline run my-pipeline.yaml "Review and test this project"
+```
+
+See the [README](../README.md#pipelines) for full pipeline YAML syntax.
 
 ## Reference
 

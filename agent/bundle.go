@@ -62,7 +62,6 @@ type OutputConfig struct {
 	Format string `yaml:"format,omitempty"`
 
 	// Schema is a JSON Schema definition for the agent's output.
-	// Only used when Format is "json".
 	Schema map[string]any `yaml:"schema,omitempty"`
 }
 

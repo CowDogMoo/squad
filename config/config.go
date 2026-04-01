@@ -165,7 +165,6 @@ func loadConfigWithViper(setup func(*viper.Viper) error) (*Config, *viper.Viper,
 }
 
 // SetDefaults registers all hardcoded default values on a Viper instance.
-// This is the single source of truth for default configuration values.
 func SetDefaults(v *viper.Viper) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")

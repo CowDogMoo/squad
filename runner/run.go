@@ -77,7 +77,6 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 		return nil // dry-run
 	}
 
-	// Ensure resolved paths are available for TaskConfig.
 	opts.WorkingDir = workingDir
 
 	ctx := tools.InitEdits(cmd.Context())
@@ -85,8 +84,6 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	tools.ResetEditsApplied(ctx)
 	response, m, err := InvokeModel(ctx, opts, bundle)
 
-	// Always log history and print metrics, even on interrupt or error.
-	// This defer guarantees cost visibility when the user ctrl+c's.
 	defer func() {
 		logRunHistory(opts, m)
 		if metricsErr := printMetrics(cmd, m); metricsErr != nil {
@@ -124,14 +121,11 @@ func printMetrics(cmd *cobra.Command, m *metrics.Metrics) error {
 
 // prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
 func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir string) (*agent.Bundle, error) {
-	// Find the agent directory using the source manager
 	agentDir, err := findAgentDir(opts.Agent, opts.AgentsDir, opts.Config)
 	if err != nil {
 		return nil, err
 	}
 
-	// Extract the parent directory (agentsDir) for BuildBundle
-	// This allows _templates to be found relative to the agent source
 	agentsDir := filepath.Dir(agentDir)
 	opts.AgentsDir = agentsDir
 
@@ -221,11 +215,9 @@ func readPrompt(cmd *cobra.Command, args []string) (string, error) {
 		return strings.Join(args, " "), nil
 	}
 
-	// Check if stdin has piped input.
 	if f, ok := cmd.InOrStdin().(*os.File); ok {
 		fi, err := f.Stat()
 		if err == nil && (fi.Mode()&os.ModeCharDevice) == 0 {
-			// stdin has piped input
 			input, err := io.ReadAll(f)
 			if err != nil {
 				return "", fmt.Errorf("failed to read stdin: %w", err)
@@ -237,7 +229,6 @@ func readPrompt(cmd *cobra.Command, args []string) (string, error) {
 		}
 	}
 
-	// Return empty string - the agent bundle will use its default user_prompt if available.
 	return "", nil
 }
 
@@ -253,7 +244,6 @@ func resolveAgentsDir(explicit string) (string, error) {
 		return filepath.Abs(explicit)
 	}
 
-	// Check local ./agents directory first
 	if stat, err := os.Stat("agents"); err == nil && stat.IsDir() {
 		return filepath.Abs("agents")
 	}
@@ -266,7 +256,6 @@ func resolveAgentsDir(explicit string) (string, error) {
 		}
 	}
 
-	// Return the first XDG config path as default (will be created if needed)
 	dirs := config.GetConfigDirs()
 	if len(dirs) > 0 {
 		return filepath.Join(dirs[0], "agents"), nil

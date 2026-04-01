@@ -255,16 +255,12 @@ func runAgentsSources(cmd *cobra.Command, args []string) error {
 }
 
 func guessRepoName(gitURL string) string {
-	// Extract repo name from URL
-	// Handle git@github.com:user/repo.git format
 	if idx := strings.LastIndex(gitURL, ":"); idx != -1 && !strings.HasPrefix(gitURL, "http") {
 		gitURL = gitURL[idx+1:]
 	}
-	// Handle https://github.com/user/repo.git format
 	if idx := strings.LastIndex(gitURL, "/"); idx != -1 {
 		gitURL = gitURL[idx+1:]
 	}
-	// Remove .git suffix
 	gitURL = strings.TrimSuffix(gitURL, ".git")
 	return gitURL
 }

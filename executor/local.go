@@ -8,7 +8,6 @@ import (
 )
 
 // LocalExecutor runs commands via local bash shell.
-// This is the default executor when no environment is configured.
 type LocalExecutor struct {
 	WorkingDir string
 }

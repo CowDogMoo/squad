@@ -114,7 +114,6 @@ func CacheFile(filename string) (string, error) {
 }
 
 // CacheDir returns the squad cache directory (e.g., ~/.cache/squad).
-// Returns empty string if the cache home cannot be determined.
 func CacheDir() string {
 	cacheHome := getCacheHome()
 	if cacheHome == "" {

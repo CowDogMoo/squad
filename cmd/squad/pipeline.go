@@ -312,7 +312,6 @@ func mergeVars(base, override map[string]string) map[string]string {
 
 // resolveAgentsDirForPipeline finds the agents directory using the same logic as the run command.
 func resolveAgentsDirForPipeline(cfg *config.Config) (string, error) {
-	// Check local ./agents directory first.
 	if stat, err := os.Stat("agents"); err == nil && stat.IsDir() {
 		return filepath.Abs("agents")
 	}

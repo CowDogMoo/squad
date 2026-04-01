@@ -127,6 +127,212 @@ squad run --agent go-cobra \
 This spawns both agents concurrently, reducing total wall time compared to
 sequential execution.
 
+## Pipelines
+
+Declarative multi-agent pipelines run multiple agents across stages with
+dependency ordering, parallel execution, regression gates, and structured
+output.
+
+```bash
+# Run a pipeline
+squad pipeline run security-audit.yaml "Assess the target system"
+
+# Run with cost limit and output file
+squad pipeline run recon.yaml --max-cost 5.00 --out report.md
+
+# Validate without running
+squad pipeline run recon.yaml --dry-run
+
+# Force JSON output
+squad pipeline run recon.yaml --json
+```
+
+### Pipeline YAML Format
+
+```yaml
+name: security-audit
+version: v1
+description: Multi-stage security review
+
+stages:
+  - name: review
+    agent: go-review
+
+  # Parallel agents within a stage
+  - name: analysis
+    agents:
+      - go-review
+      - go-security-audit
+
+  # Stage with dependencies, mode, and variables
+  - name: testing
+    agent: go-tests
+    depends_on: [review]
+    mode: edit
+    vars:
+      COVERAGE_TARGET: "85"
+
+# Regression gates run shell commands after a stage completes
+gates:
+  - after: review
+    command: "go build ./..."
+    on_failure: revert   # revert | stop (default: stop)
+  - after: testing
+    command: "go test ./..."
+    on_failure: stop
+
+# Output format for the pipeline report
+output:
+  format: json  # json | markdown (default: markdown)
+```
+
+**Features:**
+
+- **Dependency ordering**: Stages execute in topological order
+- **Parallel agents**: Multiple agents in a stage run concurrently
+- **Regression gates**: Shell commands validate state between stages
+- **Gate actions**: `revert` undoes stage changes on failure; `stop` halts
+  the pipeline
+- **Cost budgeting**: `--max-cost` limits total spend across all agents
+- **Structured output**: JSON or Markdown reports with per-stage results
+
+### Scaffold a Pipeline
+
+```bash
+squad init pipeline my-pipeline
+```
+
+## Streaming Output
+
+Stream model output tokens to stderr as they arrive:
+
+```bash
+squad run --agent go-review --stream
+```
+
+This is useful for watching agent progress in real time. Tokens appear on
+stderr so they don't interfere with the final output on stdout.
+
+## MCP Servers
+
+Agents can connect to [Model Context Protocol](https://modelcontextprotocol.io/)
+servers for additional tool access (databases, APIs, monitoring systems).
+
+### CLI Flags
+
+```bash
+# Stdio transport: NAME:COMMAND[:ARG1,ARG2,...]
+squad run --agent go-review \
+  --mcp-server mytools:npx:@myorg/mcp-server
+
+# SSE transport: NAME:sse:URL
+squad run --agent go-review \
+  --mcp-server grafana:sse:https://grafana.example.com/mcp
+```
+
+### Agent Manifest
+
+Declare MCP servers in `agent.yaml` so they're always available:
+
+```yaml
+mcp_servers:
+  - name: grafana
+    transport: sse
+    url: https://grafana.example.com/mcp
+  - name: mytools
+    command: npx
+    args: ["@myorg/mcp-server"]
+```
+
+## OpenTelemetry Tracing
+
+Export traces from agent runs to any OTLP-compatible backend:
+
+```bash
+# Via CLI flag
+squad run --agent go-review --otel-endpoint localhost:4318
+
+# Via environment variable
+export OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4318
+squad run --agent go-review
+```
+
+Traces cover agent execution, tool calls, model invocations, pipeline stages,
+and MCP interactions.
+
+### Config File
+
+```yaml
+otel:
+  endpoint: localhost:4318
+```
+
+## Execution Backends
+
+Agents can run commands in different execution environments. The backend is
+declared in the agent's `agent.yaml` manifest.
+
+| Backend  | Description                      | Key Options                          |
+| -------- | -------------------------------- | ------------------------------------ |
+| `local`  | Default local shell              | _(none)_                             |
+| `docker` | Docker container                 | `image`, `volumes`, `env`, `shell`   |
+| `ssm`    | AWS Systems Manager (EC2)        | `instance_id`, `region`, `profile`   |
+| `kubectl`| Kubernetes pod                   | `pod`, `namespace`, `container`      |
+
+### Example: Docker Backend
+
+```yaml
+# agent.yaml
+environment:
+  type: docker
+  options:
+    image: golang:1.23
+    volumes: ".:/workspace"
+    working_dir: /workspace
+    shell: /bin/bash
+```
+
+### Example: Kubernetes Backend
+
+```yaml
+# agent.yaml
+environment:
+  type: kubectl
+  options:
+    pod: build-pod
+    namespace: ci
+    container: golang
+    shell: /bin/bash
+```
+
+## Cost Budgeting
+
+Limit spend with `--max-cost` (in USD). The agent stops when the budget is
+exhausted.
+
+```bash
+# Single agent with $2 budget
+squad run --agent go-review --max-cost 2.00
+
+# Pipeline with $10 total budget
+squad pipeline run audit.yaml --max-cost 10.00
+```
+
+Agents can declare cost estimation hints in `agent.yaml`:
+
+```yaml
+budget:
+  max_tokens: 4000
+  estimated_iterations: 12
+  scale_factor: files
+  files_per_iteration: 4
+  children:
+    - go-review
+    - go-security-audit
+```
+
+Use `--dry-run` to see cost estimates before running.
+
 ## Providers
 
 Providers are OpenAI-compatible by default. Configure with flags, environment
@@ -238,14 +444,16 @@ squad config get provider.default
 
 ### Environment Variables
 
-| Variable                  | Description                          |
-| ------------------------- | ------------------------------------ |
-| `SQUAD_PROVIDER_DEFAULT`  | Default provider                     |
-| `SQUAD_PROVIDER_TOKEN`    | API key                              |
-| `SQUAD_PROVIDER_BASE_URL` | Base URL override                    |
-| `SQUAD_MODEL_DEFAULT`     | Default model                        |
-| `SQUAD_LOG_LEVEL`         | Log level (debug, info, warn, error) |
-| `SQUAD_LOG_FORMAT`        | Log format (text, json, color)       |
+| Variable                           | Description                          |
+| ---------------------------------- | ------------------------------------ |
+| `SQUAD_PROVIDER_DEFAULT`           | Default provider                     |
+| `SQUAD_PROVIDER_TOKEN`             | API key                              |
+| `SQUAD_PROVIDER_BASE_URL`          | Base URL override                    |
+| `SQUAD_MODEL_DEFAULT`              | Default model                        |
+| `SQUAD_LOG_LEVEL`                  | Log level (debug, info, warn, error) |
+| `SQUAD_LOG_FORMAT`                 | Log format (text, json, color)       |
+| `SQUAD_OTEL_ENDPOINT`              | OpenTelemetry OTLP endpoint          |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`     | Standard OTEL endpoint (also works)  |
 
 ### Example Config
 
@@ -269,4 +477,7 @@ agents:
     official: https://github.com/cowdogmoo/squad-agents.git
   local_paths:
     - ~/dev/my-agents
+
+otel:
+  endpoint: localhost:4318
 ```

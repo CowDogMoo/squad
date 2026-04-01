@@ -211,8 +211,7 @@ func TestGetPricingCaseInsensitive(t *testing.T) {
 }
 
 func TestGetPricingLiteLLMFetch(t *testing.T) {
-	// This test verifies that LiteLLM pricing is fetched for known models.
-	// It requires network access and may be skipped in CI.
+	// Requires network access.
 	if testing.Short() {
 		t.Skip("skipping network test in short mode")
 	}
@@ -401,8 +400,7 @@ func TestCostString(t *testing.T) {
 }
 
 func TestPricingStatus(t *testing.T) {
-	// This test verifies PricingStatus returns sensible values.
-	// It requires network access for a successful fetch.
+	// Requires network access.
 	if testing.Short() {
 		t.Skip("skipping network test in short mode")
 	}

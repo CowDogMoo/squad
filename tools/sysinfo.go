@@ -86,7 +86,6 @@ func systemInfoTool(ex executor.Executor) func(ctx context.Context, rawArgs []by
 }
 
 // execTrim runs a command via the executor and returns trimmed output.
-// Returns empty string on error.
 func execTrim(ctx context.Context, ex executor.Executor, command string) string {
 	out, err := ex.Execute(ctx, command)
 	if err != nil {

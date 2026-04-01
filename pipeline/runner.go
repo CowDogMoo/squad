@@ -157,7 +157,6 @@ func (r *Runner) runStage(ctx context.Context, stage Stage, completed map[string
 		Status: StatusPassed,
 	}
 
-	// Check skip condition.
 	if stage.Condition != "" {
 		logging.InfoContext(ctx, "pipeline: stage %q has condition %q (evaluation delegated to orchestrator)", stage.Name, stage.Condition)
 	}
@@ -165,11 +164,9 @@ func (r *Runner) runStage(ctx context.Context, stage Stage, completed map[string
 	agents := stage.AgentList()
 	logging.InfoContext(ctx, "pipeline: running stage %q with %d agent(s)", stage.Name, len(agents))
 
-	// Build context from completed stages for the prompt.
 	promptContext := r.buildPromptContext(stage, completed)
 
 	if len(agents) == 1 {
-		// Single agent: run directly.
 		ar := r.runAgent(ctx, agents[0], stage, promptContext)
 		result.Agents = []AgentResult{ar}
 		if ar.Status == StatusFailed {
@@ -177,7 +174,6 @@ func (r *Runner) runStage(ctx context.Context, stage Stage, completed map[string
 			result.Error = fmt.Sprintf("agent %q failed", ar.Agent)
 		}
 	} else {
-		// Multiple agents: run in parallel.
 		result.Agents = r.runAgentsParallel(ctx, agents, stage, promptContext)
 		for _, ar := range result.Agents {
 			if ar.Status == StatusFailed {
@@ -247,7 +243,6 @@ func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, pr
 		Status: StatusPassed,
 	}
 
-	// Check pipeline budget before starting agent.
 	if r.MaxCost > 0 {
 		remaining := r.remainingBudget()
 		if remaining <= 0 {

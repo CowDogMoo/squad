@@ -630,8 +630,6 @@ func trackEdits(call func(ctx context.Context, rawArgs []byte) (string, error)) 
 	}
 }
 
-// --- Tool definitions ---
-
 func definitionRead() llms.Tool {
 	return llms.Tool{
 		Type: "function",
@@ -740,8 +738,6 @@ func definitionBash() llms.Tool {
 		},
 	}
 }
-
-// --- Tool implementations ---
 
 func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (string, error) {
 	type args struct {
@@ -1086,8 +1082,6 @@ func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (s
 	}
 }
 
-// --- Context management ---
-
 func estimateTokens(messages []llms.MessageContent) int {
 	total := 0
 	for _, msg := range messages {
@@ -1180,8 +1174,6 @@ func TruncateToolOutputHeadTail(output string, maxBytes int) string {
 	return fmt.Sprintf("%s\n\n... [%d lines omitted from tool output — total %d bytes] ...\n\n%s",
 		head[:headEnd], omitted, len(output), tail[tailStart:])
 }
-
-// --- Utilities ---
 
 // FlexBool unmarshals both JSON booleans and string representations
 // ("true"/"false") that LLMs sometimes produce for boolean fields.

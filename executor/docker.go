@@ -137,7 +137,6 @@ func newDockerExecutor(cfg *Config, workingDir string, client dockerAPI) (*Docke
 	}
 
 	if err := client.ContainerStart(ctx, resp.ID); err != nil {
-		// Clean up the created container on start failure.
 		_ = client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
 		return nil, fmt.Errorf("failed to start docker container: %w", err)
 	}
@@ -190,7 +189,6 @@ func (e *DockerExecutor) Execute(ctx context.Context, command string) ([]byte, e
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, attachResp.Reader)
 
-	// Check exit code.
 	inspect, err := e.client.ContainerExecInspect(ctx, execResp.ID)
 	if err != nil {
 		span.RecordError(err)

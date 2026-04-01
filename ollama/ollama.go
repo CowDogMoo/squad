@@ -163,8 +163,6 @@ func (o *LLM) readStream(ctx context.Context, body io.Reader, streamFn func(ctx 
 	return convertResponse(full), nil
 }
 
-// --- Ollama native API types ---
-
 type chatRequest struct {
 	Model    string          `json:"model"`
 	Messages []ollamaMessage `json:"messages"`
@@ -206,8 +204,6 @@ type chatResponse struct {
 	PromptEvalCount int            `json:"prompt_eval_count,omitempty"`
 	EvalCount       int            `json:"eval_count,omitempty"`
 }
-
-// --- Conversion helpers ---
 
 func convertMessages(messages []llms.MessageContent) ([]ollamaMessage, error) {
 	out := make([]ollamaMessage, 0, len(messages))

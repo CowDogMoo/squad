@@ -138,7 +138,6 @@ func TestEstimateCostDepthLimit(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	// Create a chain of 7 agents, each referencing the next
 	for i := 0; i < 7; i++ {
 		name := agentNameForDepth(i)
 		child := ""

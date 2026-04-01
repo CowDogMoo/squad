@@ -3,6 +3,12 @@
     {
       "pattern": "^mailto:"
     },
+    {
+      "pattern": "^https://github\\.com/CowDogMoo/squad"
+    },
+    {
+      "pattern": "^https://github\\.com/cowdogmoo/squad"
+    }
   ],
   "timeout": "20s",
   "retryOn429": true,

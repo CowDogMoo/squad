@@ -70,7 +70,6 @@ func (m *Metrics) BudgetExceeded() bool {
 }
 
 // RemainingBudget returns the remaining cost budget in USD.
-// Returns 0 if no budget is set (unlimited).
 func (m *Metrics) RemainingBudget() float64 {
 	m.mu.Lock()
 	maxCost := m.MaxCost

@@ -45,7 +45,6 @@ func NewGitOperations(cacheDir string) *GitOperations {
 }
 
 // CloneOrUpdate clones a repository if it doesn't exist, or updates it if it does.
-// Returns the local path to the repository.
 func (g *GitOperations) CloneOrUpdate(gitURL string) (string, error) {
 	repoPath := g.getCachePath(gitURL)
 
@@ -100,7 +99,6 @@ func (g *GitOperations) pull(repoPath string) error {
 
 // getCachePath generates a cache path for a repository.
 func (g *GitOperations) getCachePath(gitURL string) string {
-	// Clean the URL for use in path
 	cleanURL := strings.TrimPrefix(gitURL, "https://")
 	cleanURL = strings.TrimPrefix(cleanURL, "http://")
 	cleanURL = strings.TrimPrefix(cleanURL, "git@")

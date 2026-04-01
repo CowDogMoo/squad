@@ -33,7 +33,6 @@ func (n *EstimateNode) TotalTreeCost() float64 {
 const defaultIterations = 25
 
 // defaultInputPerIter is a rough average of input tokens per iteration.
-// This accounts for system prompt re-sends and tool results.
 const defaultInputPerIter int64 = 6000
 
 // defaultOutputPerIter is a rough average of output tokens per iteration.
