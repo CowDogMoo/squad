@@ -15,8 +15,6 @@ vim agents/my-review/system.md
 squad run --agent my-review --print
 ```
 
-That's it. Your agent is ready to use.
-
 ## Agent Structure
 
 Every agent needs these files:
@@ -136,17 +134,8 @@ Do NOT modify any files. Report only.
 ### Execution Backends
 
 Agents run commands locally by default. To run in a different environment,
-set the `environment` field in `agent.yaml`:
-
-| Backend   | Description               | Required Options    |
-| --------- | ------------------------- | ------------------- |
-| `local`   | Default local shell       | _(none)_            |
-| `docker`  | Docker container          | `image`             |
-| `ssm`     | AWS Systems Manager (EC2) | `instance_id`       |
-| `kubectl` | Kubernetes pod            | `pod`               |
-
-The agent's system prompt automatically receives an environment description
-so the model knows where its commands will execute.
+set the `environment` field in `agent.yaml`. See
+[Execution Backends](./execution-backends.md) for all options and examples.
 
 ### MCP Server Integration
 
@@ -204,13 +193,8 @@ Track iterations to ensure efficiency:
 squad run --agent my-review --verbose
 ```
 
-**Targets:**
-
-| Codebase | Target | Max |
-|----------|--------|-----|
-| Small (≤20 files) | ≤12 iterations | 18 |
-| Medium (21-50 files) | ≤25 iterations | 35 |
-| Large (50+ files) | ≤40 iterations | 60 |
+See [Agent Quality Rubric](./agent-quality.md#3-iteration-efficiency-15-of-grade)
+for iteration targets by codebase size.
 
 ### Grading
 
@@ -347,22 +331,9 @@ Ensure conditionals use exact syntax:
 {{if .Mode == "edit"}}...{{end}}     # Wrong
 ```
 
-## Pipelines
-
-Combine multiple agents into a declarative pipeline:
-
-```bash
-# Scaffold a pipeline
-squad init pipeline my-pipeline
-
-# Run the pipeline
-squad pipeline run my-pipeline.yaml "Review and test this project"
-```
-
-See the [README](../README.md#pipelines) for full pipeline YAML syntax.
-
 ## Reference
 
+- [Pipelines](./pipelines.md) - Multi-agent orchestration
 - [Agent Quality Rubric](./agent-quality.md) - Evaluation criteria
 - [squad-agents](https://github.com/cowdogmoo/squad-agents) - Official agents
-- [CONTRIBUTING.md](https://github.com/cowdogmoo/squad-agents/blob/main/CONTRIBUTING.md) - Detailed guidelines
+- [CONTRIBUTING.md](https://github.com/cowdogmoo/squad-agents/blob/main/CONTRIBUTING.md) - Contribution guidelines
