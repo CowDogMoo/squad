@@ -15,33 +15,29 @@
 
 ## Overview
 
-Squad lets you build, share, and run AI agents from the command line.
-Inspired by [Daniel Miessler's Fabric](https://github.com/danielmiessler/fabric)
-— where Fabric gives you composable prompts for single tasks, Squad gives you
-composable *agents* that can read, write, and execute code autonomously. Define
-an agent in a few markdown files, point it at any LLM provider, and let it work.
+Build, share, and run AI agents from the command line. Inspired by
+[Daniel Miessler's Fabric](https://github.com/danielmiessler/fabric).
+Define an agent in markdown and YAML, point it at any LLM, and turn it
+loose on a codebase.
 
-**Why Squad?**
+- Works with OpenAI, Anthropic, Google AI, Ollama, and Azure
+- Agents are just files: markdown prompts + YAML manifest, checked into git
+- Built-in tools: Read, Write, Edit, Glob, Grep, Bash, plus any MCP server
+- Multi-agent pipelines with dependency ordering, parallel stages, and regression gates
+- Runs locally, in Docker, on Kubernetes, or over AWS SSM
 
-- **Provider-agnostic** — OpenAI, Anthropic, Google AI, Ollama, Azure
-- **Agents are just files** — Markdown prompts + YAML manifest, version-controlled and shareable
-- **Real tools** — Read, Write, Edit, Glob, Grep, Bash, plus any MCP server
-- **Pipelines** — Chain agents across stages with dependency ordering, parallel execution, and regression gates
-- **Run anywhere** — Local shell, Docker, Kubernetes, or AWS SSM
+**Built for:**
 
-**Useful for:**
-
-- Security teams automating code review, audits, and recon pipelines
-- Platform engineers enforcing standards across repositories
-- Developers building custom review and refactoring workflows
-- Anyone who wants Fabric-style composability with agentic execution
+- Security teams running code review, audits, and recon
+- Platform engineers enforcing standards across repos
+- Developers building review and refactoring workflows
 
 ## Prerequisites
 
 | Requirement    | Version | Notes                         |
 | -------------- | ------- | ----------------------------- |
 | **Go**         | 1.24+   | Required for `go install`     |
-| **LLM access** | —       | OpenAI, Anthropic, Ollama, etc. |
+| **LLM access** | -      | OpenAI, Anthropic, Ollama, etc. |
 
 ## Quick Start
 
@@ -69,27 +65,27 @@ squad pipeline run security-audit.yaml "Review this codebase"
 
 ### Getting Started
 
-- **[Configuration](docs/configuration.md)** — Providers, environment variables,
+- **[Configuration](docs/configuration.md)** - Providers, environment variables,
   and config file reference
-- **[Creating Agents](docs/creating-agents.md)** — Build your own agents from
+- **[Creating Agents](docs/creating-agents.md)** - Build your own agents from
   scratch or from templates
 
 ### Guides
 
-- **[Pipelines](docs/pipelines.md)** — Multi-agent orchestration with stages,
+- **[Pipelines](docs/pipelines.md)** - Multi-agent orchestration with stages,
   gates, and cost budgets
-- **[Execution Backends](docs/execution-backends.md)** — Run agents in Docker,
+- **[Execution Backends](docs/execution-backends.md)** - Run agents in Docker,
   Kubernetes, or AWS SSM
-- **[MCP Servers](docs/mcp-servers.md)** — Connect agents to external tools
+- **[MCP Servers](docs/mcp-servers.md)** - Connect agents to external tools
   via Model Context Protocol
-- **[Observability](docs/observability.md)** — Streaming output, OpenTelemetry
+- **[Observability](docs/observability.md)** - Streaming output, OpenTelemetry
   tracing, cost budgeting, and grading
 
 ### Agents
 
-- **[Official Agents](https://github.com/CowDogMoo/squad-agents)** — Production-ready
+- **[Official Agents](https://github.com/CowDogMoo/squad-agents)** - Production-ready
   agents for Go, Python, Ansible, and Molecule
-- **[Agent Quality Guide](docs/agent-quality.md)** — Tuning methodology and
+- **[Agent Quality Guide](docs/agent-quality.md)** - Tuning methodology and
   grading rubric
 
 ## Features
