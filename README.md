@@ -20,7 +20,7 @@ Build, share, and run AI agents from the command line. Inspired by
 Define an agent in markdown and YAML, point it at any LLM, and turn it
 loose on a codebase.
 
-- Works with OpenAI, Anthropic, Google AI, Ollama, and Azure
+- Works with OpenAI, Anthropic, Google AI, and Ollama
 - Agents are just files: markdown prompts + YAML manifest, checked into git
 - Built-in tools: Read, Write, Edit, Glob, Grep, Bash, plus any MCP server
 - Multi-agent pipelines with dependency ordering, parallel stages, and regression gates
@@ -37,7 +37,7 @@ loose on a codebase.
 | Requirement    | Version | Notes                         |
 | -------------- | ------- | ----------------------------- |
 | **Go**         | 1.24+   | Required for `go install`     |
-| **LLM access** | -      | OpenAI, Anthropic, Ollama, etc. |
+| **LLM access** | -      | OpenAI, Anthropic, Google AI, or Ollama |
 
 ## Quick Start
 
@@ -54,7 +54,7 @@ squad agents list
 # Run an agent against your codebase
 squad run --agent go-review --provider openai --model gpt-4.1-mini
 
-# Run with local Ollama instead
+# Run with local Ollama
 squad run --agent go-review --provider ollama --model qwen2.5-coder:7b-instruct
 
 # Run a multi-agent pipeline
@@ -95,7 +95,7 @@ squad pipeline run security-audit.yaml "Review this codebase"
 | Feature                     | Description                                        |
 | --------------------------- | -------------------------------------------------- |
 | **Agent Execution**         | Run agents with Read, Write, Edit, Glob, Grep, Bash |
-| **Multi-provider**          | OpenAI, Anthropic, Google AI, Ollama, Azure OpenAI |
+| **Multi-provider**          | OpenAI, Anthropic, Google AI, Ollama               |
 | **Streaming Output**        | Real-time token streaming to stderr                |
 | **Fix + Analyze Modes**     | Agents can apply fixes or report-only              |
 | **Agent Scaffolding**       | `squad init agent` from templates or existing agents |
