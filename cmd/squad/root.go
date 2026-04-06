@@ -20,7 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-// Package main implements the squad CLI for model-agnostic agent workflows.
+// Package main implements the squad CLI for building, sharing, and running AI agents.
 package main
 
 import (
@@ -44,9 +44,9 @@ import (
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "squad",
-		Short: "squad - model-agnostic agent CLI",
-		Long: `squad is a model-agnostic agent CLI built on LangChainGo.
-It provides a clean config + logging foundation for agent workflows.`,
+		Short: "Fabric for AI agents",
+		Long: `Build, share, and run AI agents from the command line.
+Define an agent in markdown and YAML, point it at any LLM, and turn it loose on a codebase.`,
 		Version:           version,
 		PersistentPreRunE: initConfig,
 	}
