@@ -606,7 +606,9 @@ func TestInferMaxTokens(t *testing.T) {
 		hasTaskTool bool
 		want        int
 	}{
-		{"explicit override with task tool", 8192, true, 8192},
+		{"explicit override above floor with task tool", 32768, true, 32768},
+		{"explicit override below floor with task tool", 1024, true, DefaultMaxTokensWithTask},
+		{"config default with task tool", 1024, true, DefaultMaxTokensWithTask},
 		{"explicit override without task tool", 2048, false, 2048},
 		{"no override with task tool", 0, true, DefaultMaxTokensWithTask},
 		{"no override without task tool", 0, false, DefaultMaxTokensLeaf},

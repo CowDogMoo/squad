@@ -180,16 +180,18 @@ const DefaultMaxTokensWithTask = 16384
 // file-write operations.
 const DefaultMaxTokensLeaf = 4096
 
-// inferMaxTokens applies a sensible output-token floor when the caller did
-// not explicitly set --max-tokens.  Orchestrator agents (with Task tool)
-// need a much larger budget than leaf agents because the Task tool's prompt
-// argument can be thousands of tokens.
+// inferMaxTokens applies a sensible output-token floor.  Orchestrator agents
+// (with Task tool) need a much larger budget than leaf agents because the
+// Task tool's prompt argument can be thousands of tokens.  The floor is
+// enforced even when a config default is present, because the config default
+// of 1024 is too small for orchestrators and would silently truncate the
+// Task prompt argument to empty.
 func inferMaxTokens(maxTokens int, hasTaskTool bool) int {
-	if maxTokens > 0 {
-		return maxTokens // explicit user override — respect it
-	}
-	if hasTaskTool {
+	if hasTaskTool && maxTokens < DefaultMaxTokensWithTask {
 		return DefaultMaxTokensWithTask
+	}
+	if maxTokens > 0 {
+		return maxTokens
 	}
 	return DefaultMaxTokensLeaf
 }
