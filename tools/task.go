@@ -225,7 +225,7 @@ func taskTool(cfg TaskConfig) func(ctx context.Context, rawArgs []byte) (string,
 			return "", fmt.Errorf("agent is required")
 		}
 		if args.Prompt == "" {
-			return "", fmt.Errorf("prompt is required")
+			return "", fmt.Errorf("prompt is required — the prompt parameter was empty; build the full prompt string (context + constraints + file list) with all placeholders substituted, then retry the Task call")
 		}
 
 		depth := TaskDepth(ctx)
