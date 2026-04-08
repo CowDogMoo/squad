@@ -402,6 +402,7 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		childOpts.AgentName = agentName
 
 		// Apply model/provider overrides from the child agent's manifest.
+		// Uses the primary (first) model from the ranked preferences list.
 		if childBundle.Model != "" {
 			childOpts.Model = childBundle.Model
 			logging.InfoContext(ctx, "child agent %s using manifest model override: %s", agentName, childBundle.Model)
@@ -409,6 +410,13 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		if childBundle.Provider != "" {
 			childOpts.Provider = childBundle.Provider
 			logging.InfoContext(ctx, "child agent %s using manifest provider override: %s", agentName, childBundle.Provider)
+		}
+		if len(childBundle.Models) > 1 {
+			altModels := make([]string, 0, len(childBundle.Models)-1)
+			for _, m := range childBundle.Models[1:] {
+				altModels = append(altModels, m.Provider+"/"+m.Model)
+			}
+			logging.InfoContext(ctx, "child agent %s has %d alternate model(s): %v", agentName, len(altModels), altModels)
 		}
 
 		// Propagate budget to child agent. Per-child dedicated caps take

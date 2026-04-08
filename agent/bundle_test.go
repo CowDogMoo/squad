@@ -1162,3 +1162,108 @@ func TestBuildBundle_DisableTaskPropagated(t *testing.T) {
 		t.Fatal("expected Bundle.DisableTask to be true")
 	}
 }
+
+func TestResolvedModels_FromModelsList(t *testing.T) {
+	t.Parallel()
+	m := &Manifest{
+		Models: []ModelPreference{
+			{Model: "gemini-2.5-flash", Provider: "google"},
+			{Model: "gpt-4.1-mini", Provider: "openai"},
+		},
+	}
+	resolved := m.ResolvedModels()
+	if len(resolved) != 2 {
+		t.Fatalf("len = %d, want 2", len(resolved))
+	}
+	if resolved[0].Model != "gemini-2.5-flash" || resolved[0].Provider != "google" {
+		t.Fatalf("resolved[0] = %+v", resolved[0])
+	}
+	if resolved[1].Model != "gpt-4.1-mini" || resolved[1].Provider != "openai" {
+		t.Fatalf("resolved[1] = %+v", resolved[1])
+	}
+}
+
+func TestResolvedModels_FallbackToSingleModelField(t *testing.T) {
+	t.Parallel()
+	m := &Manifest{
+		Model:    "claude-sonnet-4-6",
+		Provider: "anthropic",
+	}
+	resolved := m.ResolvedModels()
+	if len(resolved) != 1 {
+		t.Fatalf("len = %d, want 1", len(resolved))
+	}
+	if resolved[0].Model != "claude-sonnet-4-6" || resolved[0].Provider != "anthropic" {
+		t.Fatalf("resolved[0] = %+v", resolved[0])
+	}
+}
+
+func TestResolvedModels_ModelsListTakesPrecedence(t *testing.T) {
+	t.Parallel()
+	m := &Manifest{
+		Model:    "old-model",
+		Provider: "old-provider",
+		Models: []ModelPreference{
+			{Model: "new-model", Provider: "new-provider"},
+		},
+	}
+	resolved := m.ResolvedModels()
+	if len(resolved) != 1 {
+		t.Fatalf("len = %d, want 1", len(resolved))
+	}
+	if resolved[0].Model != "new-model" {
+		t.Fatalf("Model = %q, want new-model", resolved[0].Model)
+	}
+}
+
+func TestResolvedModels_Empty(t *testing.T) {
+	t.Parallel()
+	m := &Manifest{}
+	resolved := m.ResolvedModels()
+	if resolved != nil {
+		t.Fatalf("resolved = %v, want nil", resolved)
+	}
+}
+
+func TestBuildBundle_ModelsListPropagated(t *testing.T) {
+	t.Parallel()
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+models:
+  - model: gemini-2.5-flash
+    provider: google
+  - model: gpt-4.1-mini
+    provider: openai
+  - model: claude-sonnet-4-6
+    provider: anthropic
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	// Primary model/provider should be first entry
+	if bundle.Model != "gemini-2.5-flash" {
+		t.Fatalf("Model = %q, want gemini-2.5-flash", bundle.Model)
+	}
+	if bundle.Provider != "google" {
+		t.Fatalf("Provider = %q, want google", bundle.Provider)
+	}
+	// Full list should be propagated
+	if len(bundle.Models) != 3 {
+		t.Fatalf("Models len = %d, want 3", len(bundle.Models))
+	}
+	if bundle.Models[1].Model != "gpt-4.1-mini" {
+		t.Fatalf("Models[1].Model = %q, want gpt-4.1-mini", bundle.Models[1].Model)
+	}
+	if bundle.Models[2].Model != "claude-sonnet-4-6" {
+		t.Fatalf("Models[2].Model = %q, want claude-sonnet-4-6", bundle.Models[2].Model)
+	}
+}

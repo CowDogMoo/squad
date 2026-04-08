@@ -17,12 +17,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ModelPreference represents a ranked model recommendation for an agent.
+// The first entry in a models list is the primary (preferred) model.
+type ModelPreference struct {
+	Model    string `yaml:"model"`
+	Provider string `yaml:"provider"`
+}
+
 // Manifest represents the structure of an agent's manifest file.
 type Manifest struct {
 	Name        string             `yaml:"name"`
 	Version     string             `yaml:"version"`
-	Model       string             `yaml:"model,omitempty"`    // model override (e.g., claude-haiku-4-5)
-	Provider    string             `yaml:"provider,omitempty"` // provider override (e.g., anthropic)
+	Model       string             `yaml:"model,omitempty"`    // single model override (backwards compat)
+	Provider    string             `yaml:"provider,omitempty"` // single provider override (backwards compat)
+	Models      []ModelPreference  `yaml:"models,omitempty"`   // ranked model preferences (takes precedence over model/provider)
 	EntryPoint  string             `yaml:"entrypoint"`
 	Wrapper     string             `yaml:"wrapper"`
 	References  []string           `yaml:"references"`
@@ -33,6 +41,19 @@ type Manifest struct {
 	Budget      *BudgetConfig      `yaml:"budget,omitempty"`
 	MCPServers  []mcp.ServerConfig `yaml:"mcp_servers,omitempty"`
 	DisableTask bool               `yaml:"disable_task,omitempty"`
+}
+
+// ResolvedModels returns the ordered list of model preferences.
+// If the models list is set, it takes precedence. Otherwise, the
+// single model/provider fields are used as a one-element list.
+func (m *Manifest) ResolvedModels() []ModelPreference {
+	if len(m.Models) > 0 {
+		return m.Models
+	}
+	if m.Model != "" {
+		return []ModelPreference{{Model: m.Model, Provider: m.Provider}}
+	}
+	return nil
 }
 
 // BudgetConfig provides static hints for cost estimation.
@@ -128,8 +149,9 @@ type Bundle struct {
 	User        string // user request (CLI prompt or default)
 	Combined    []byte // concatenated for --print-bundle/--bundle-out
 	WorkDir     string
-	Model       string             // model override from manifest (empty = inherit parent)
-	Provider    string             // provider override from manifest (empty = inherit parent)
+	Model       string             // primary model override (first from models list or single model field)
+	Provider    string             // primary provider override (first from models list or single provider field)
+	Models      []ModelPreference  // ranked model preferences from manifest
 	Budget      *BudgetConfig      // budget configuration from manifest
 	Environment *executor.Config   // execution environment from agent manifest
 	MCPServers  []mcp.ServerConfig // MCP server dependencies declared in agent.yaml
@@ -460,13 +482,21 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		return nil, err
 	}
 
+	resolved := manifest.ResolvedModels()
+	var primaryModel, primaryProvider string
+	if len(resolved) > 0 {
+		primaryModel = resolved[0].Model
+		primaryProvider = resolved[0].Provider
+	}
+
 	return &Bundle{
 		System:      sys.String(),
 		User:        userMessage,
 		Combined:    combined.Bytes(),
 		WorkDir:     workingDir,
-		Model:       manifest.Model,
-		Provider:    manifest.Provider,
+		Model:       primaryModel,
+		Provider:    primaryProvider,
+		Models:      resolved,
 		Budget:      manifest.Budget,
 		Environment: manifest.Environment,
 		MCPServers:  resolvedMCP,
