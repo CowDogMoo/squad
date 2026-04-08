@@ -8,6 +8,7 @@ import (
 
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/mcp"
+	yamlPkg "gopkg.in/yaml.v3"
 )
 
 // writeTestFiles writes multiple files to the given directory.
@@ -939,6 +940,208 @@ func TestLoadManifest_DisableTask(t *testing.T) {
 				t.Fatalf("DisableTask = %v, want %v", m.DisableTask, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildBundle_ModelProviderOverride(t *testing.T) {
+	t.Parallel()
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+model: claude-haiku-4-5
+provider: anthropic
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	if bundle.Model != "claude-haiku-4-5" {
+		t.Fatalf("Model = %q, want claude-haiku-4-5", bundle.Model)
+	}
+	if bundle.Provider != "anthropic" {
+		t.Fatalf("Provider = %q, want anthropic", bundle.Provider)
+	}
+}
+
+func TestBuildBundle_ModelProviderEmpty(t *testing.T) {
+	t.Parallel()
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	if bundle.Model != "" {
+		t.Fatalf("Model = %q, want empty", bundle.Model)
+	}
+	if bundle.Provider != "" {
+		t.Fatalf("Provider = %q, want empty", bundle.Provider)
+	}
+}
+
+func TestChildBudget_UnmarshalYAML_PlainString(t *testing.T) {
+	t.Parallel()
+
+	var config BudgetConfig
+	yaml := `
+estimated_iterations: 10
+children:
+  - go-review
+  - go-tests
+`
+	if err := yamlPkg.Unmarshal([]byte(yaml), &config); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(config.Children) != 2 {
+		t.Fatalf("Children = %d, want 2", len(config.Children))
+	}
+	if config.Children[0].Name != "go-review" || config.Children[0].MaxCost != 0 {
+		t.Fatalf("Children[0] = %+v, want {Name:go-review MaxCost:0}", config.Children[0])
+	}
+	if config.Children[1].Name != "go-tests" || config.Children[1].MaxCost != 0 {
+		t.Fatalf("Children[1] = %+v, want {Name:go-tests MaxCost:0}", config.Children[1])
+	}
+}
+
+func TestChildBudget_UnmarshalYAML_Structured(t *testing.T) {
+	t.Parallel()
+
+	var config BudgetConfig
+	yaml := `
+estimated_iterations: 10
+children:
+  - name: go-review
+    max_cost: 3.50
+  - name: go-tests
+    max_cost: 5.00
+`
+	if err := yamlPkg.Unmarshal([]byte(yaml), &config); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(config.Children) != 2 {
+		t.Fatalf("Children = %d, want 2", len(config.Children))
+	}
+	if config.Children[0].Name != "go-review" || config.Children[0].MaxCost != 3.50 {
+		t.Fatalf("Children[0] = %+v", config.Children[0])
+	}
+	if config.Children[1].Name != "go-tests" || config.Children[1].MaxCost != 5.00 {
+		t.Fatalf("Children[1] = %+v", config.Children[1])
+	}
+}
+
+func TestChildBudget_UnmarshalYAML_Mixed(t *testing.T) {
+	t.Parallel()
+
+	var config BudgetConfig
+	yaml := `
+children:
+  - go-review
+  - name: go-tests
+    max_cost: 5.00
+`
+	if err := yamlPkg.Unmarshal([]byte(yaml), &config); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(config.Children) != 2 {
+		t.Fatalf("Children = %d, want 2", len(config.Children))
+	}
+	if config.Children[0].Name != "go-review" || config.Children[0].MaxCost != 0 {
+		t.Fatalf("Children[0] = %+v", config.Children[0])
+	}
+	if config.Children[1].Name != "go-tests" || config.Children[1].MaxCost != 5.00 {
+		t.Fatalf("Children[1] = %+v", config.Children[1])
+	}
+}
+
+func TestBudgetConfig_ChildNames(t *testing.T) {
+	t.Parallel()
+	config := &BudgetConfig{
+		Children: []ChildBudget{
+			{Name: "agent-a"},
+			{Name: "agent-b", MaxCost: 2.0},
+		},
+	}
+	names := config.ChildNames()
+	if len(names) != 2 || names[0] != "agent-a" || names[1] != "agent-b" {
+		t.Fatalf("ChildNames() = %v", names)
+	}
+}
+
+func TestBudgetConfig_ChildNames_Nil(t *testing.T) {
+	t.Parallel()
+	var config *BudgetConfig
+	names := config.ChildNames()
+	if names != nil {
+		t.Fatalf("ChildNames() on nil = %v, want nil", names)
+	}
+}
+
+func TestBudgetConfig_ChildMaxCost(t *testing.T) {
+	t.Parallel()
+	config := &BudgetConfig{
+		Children: []ChildBudget{
+			{Name: "cheap-agent", MaxCost: 0.50},
+			{Name: "expensive-agent", MaxCost: 10.0},
+			{Name: "default-agent"},
+		},
+	}
+	if got := config.ChildMaxCost("cheap-agent"); got != 0.50 {
+		t.Fatalf("ChildMaxCost(cheap-agent) = %f, want 0.50", got)
+	}
+	if got := config.ChildMaxCost("expensive-agent"); got != 10.0 {
+		t.Fatalf("ChildMaxCost(expensive-agent) = %f, want 10.0", got)
+	}
+	if got := config.ChildMaxCost("default-agent"); got != 0 {
+		t.Fatalf("ChildMaxCost(default-agent) = %f, want 0", got)
+	}
+	if got := config.ChildMaxCost("unknown-agent"); got != 0 {
+		t.Fatalf("ChildMaxCost(unknown-agent) = %f, want 0", got)
+	}
+}
+
+func TestBuildBundle_BudgetPropagated(t *testing.T) {
+	t.Parallel()
+	manifest := `name: Demo
+version: v1
+entrypoint: system.txt
+wrapper: wrapper.txt
+budget:
+  estimated_iterations: 10
+  children:
+    - name: go-review
+      max_cost: 3.50
+`
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	if bundle.Budget == nil {
+		t.Fatal("expected Budget to be set")
+	}
+	if bundle.Budget.ChildMaxCost("go-review") != 3.50 {
+		t.Fatalf("ChildMaxCost(go-review) = %f, want 3.50", bundle.Budget.ChildMaxCost("go-review"))
 	}
 }
 

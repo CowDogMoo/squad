@@ -21,6 +21,8 @@ import (
 type Manifest struct {
 	Name        string             `yaml:"name"`
 	Version     string             `yaml:"version"`
+	Model       string             `yaml:"model,omitempty"`    // model override (e.g., claude-haiku-4-5)
+	Provider    string             `yaml:"provider,omitempty"` // provider override (e.g., anthropic)
 	EntryPoint  string             `yaml:"entrypoint"`
 	Wrapper     string             `yaml:"wrapper"`
 	References  []string           `yaml:"references"`
@@ -43,8 +45,9 @@ type BudgetConfig struct {
 	// EstimatedIterations is the expected number of model iterations.
 	EstimatedIterations int `yaml:"estimated_iterations,omitempty"`
 
-	// Children lists agent names this orchestrator dispatches via the Task tool.
-	Children []string `yaml:"children,omitempty"`
+	// Children lists child agents this orchestrator dispatches via the Task tool.
+	// Each entry can be a plain string (agent name) or a ChildBudget with max_cost.
+	Children []ChildBudget `yaml:"children,omitempty"`
 
 	// ScaleFactor describes what makes this agent's cost scale.
 	// Currently supported: "files" (cost scales with source file count).
@@ -53,6 +56,59 @@ type BudgetConfig struct {
 	// FilesPerIteration is how many files the agent typically processes
 	// per model iteration, used when ScaleFactor is "files".
 	FilesPerIteration int `yaml:"files_per_iteration,omitempty"`
+}
+
+// ChildBudget represents a child agent with an optional dedicated cost cap.
+// Supports both plain string (just agent name) and object with max_cost.
+type ChildBudget struct {
+	Name    string  `yaml:"name"`
+	MaxCost float64 `yaml:"max_cost,omitempty"` // dedicated cost cap in USD (0 = use remaining budget)
+}
+
+// UnmarshalYAML allows ChildBudget to be specified as either a plain string
+// or as an object with name and max_cost fields.
+func (c *ChildBudget) UnmarshalYAML(unmarshal func(any) error) error {
+	// Try plain string first (backwards compatible).
+	var name string
+	if err := unmarshal(&name); err == nil {
+		c.Name = name
+		return nil
+	}
+
+	// Try structured object.
+	type childBudgetAlias ChildBudget
+	var obj childBudgetAlias
+	if err := unmarshal(&obj); err != nil {
+		return err
+	}
+	*c = ChildBudget(obj)
+	return nil
+}
+
+// ChildNames returns the list of child agent names for backwards compatibility.
+func (b *BudgetConfig) ChildNames() []string {
+	if b == nil {
+		return nil
+	}
+	names := make([]string, len(b.Children))
+	for i, c := range b.Children {
+		names[i] = c.Name
+	}
+	return names
+}
+
+// ChildMaxCost returns the dedicated cost cap for the named child agent.
+// Returns 0 if no dedicated cap is configured (use remaining budget).
+func (b *BudgetConfig) ChildMaxCost(agentName string) float64 {
+	if b == nil {
+		return 0
+	}
+	for _, c := range b.Children {
+		if c.Name == agentName {
+			return c.MaxCost
+		}
+	}
+	return 0
 }
 
 // OutputConfig specifies the structured output contract for an agent.
@@ -72,6 +128,9 @@ type Bundle struct {
 	User        string // user request (CLI prompt or default)
 	Combined    []byte // concatenated for --print-bundle/--bundle-out
 	WorkDir     string
+	Model       string             // model override from manifest (empty = inherit parent)
+	Provider    string             // provider override from manifest (empty = inherit parent)
+	Budget      *BudgetConfig      // budget configuration from manifest
 	Environment *executor.Config   // execution environment from agent manifest
 	MCPServers  []mcp.ServerConfig // MCP server dependencies declared in agent.yaml
 	DisableTask bool               // when true, the Task tool is not registered for this agent
@@ -406,6 +465,9 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		User:        userMessage,
 		Combined:    combined.Bytes(),
 		WorkDir:     workingDir,
+		Model:       manifest.Model,
+		Provider:    manifest.Provider,
+		Budget:      manifest.Budget,
 		Environment: manifest.Environment,
 		MCPServers:  resolvedMCP,
 		DisableTask: manifest.DisableTask,

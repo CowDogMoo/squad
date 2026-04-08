@@ -68,7 +68,7 @@ func estimateAgent(agentsDir, agentName, provider, model string, depth int) (*Es
 		if budget.EstimatedIterations > 0 {
 			iters = budget.EstimatedIterations
 		}
-		childNames = budget.Children
+		childNames = budget.ChildNames()
 		isOrchestrator = len(childNames) > 0
 	}
 

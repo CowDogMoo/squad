@@ -173,6 +173,10 @@ type CallModelFunc func(ctx context.Context, agentsDir, agentName, prompt, worki
 
 // TaskConfig holds the configuration needed to spawn child agent runs
 // from within the Task tool.
+// ChildMaxCostFunc returns the dedicated cost cap for the named child agent.
+// Returns 0 if no dedicated cap is configured (use remaining budget).
+type ChildMaxCostFunc func(agentName string) float64
+
 type TaskConfig struct {
 	AgentsDir     string
 	WorkingDir    string
@@ -184,6 +188,7 @@ type TaskConfig struct {
 	Findings      *FindingsStore   // shared findings store for ReportFinding tool
 	AgentName     string           // current agent name (for finding attribution)
 	ExtraTools    []Handler        // additional tools injected by MCP servers or other providers
+	ChildMaxCost  ChildMaxCostFunc // per-child budget lookup (nil = use remaining budget)
 }
 
 type taskArgs struct {

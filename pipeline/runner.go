@@ -149,6 +149,65 @@ func (r *Runner) runTier(ctx context.Context, stages []Stage, completed map[stri
 	return results
 }
 
+// runPreGates executes pre-gate commands and returns their combined output
+// for injection into agent prompts.
+func (r *Runner) runPreGates(ctx context.Context, stage Stage) (string, error) {
+	if len(stage.PreGates) == 0 {
+		return "", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Static Analysis Output\n\n")
+
+	for _, pg := range stage.PreGates {
+		label := pg.Label
+		if label == "" {
+			label = pg.Command
+		}
+		logging.InfoContext(ctx, "pipeline: running pre-gate %q for stage %q", label, stage.Name)
+
+		cmd := exec.CommandContext(ctx, "bash", "-lc", pg.Command)
+		cmd.Dir = r.WorkingDir
+		var buf bytes.Buffer
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+
+		err := cmd.Run()
+		output := buf.String()
+
+		if err != nil {
+			onError := pg.OnError
+			if onError == "" {
+				onError = "continue"
+			}
+			switch onError {
+			case "skip":
+				logging.InfoContext(ctx, "pipeline: pre-gate %q failed (skipping stage): %v", label, err)
+				return "", fmt.Errorf("pre-gate %q failed: %w", label, err)
+			case "stop":
+				return "", fmt.Errorf("pre-gate %q failed (stopping pipeline): %w", label, err)
+			default: // "continue"
+				logging.InfoContext(ctx, "pipeline: pre-gate %q failed (continuing): %v", label, err)
+			}
+		}
+
+		fmt.Fprintf(&sb, "### %s\n\n", label)
+		if output == "" {
+			sb.WriteString("(no output — all checks passed)\n\n")
+		} else {
+			// Cap pre-gate output to avoid blowing up context.
+			if len(output) > 8192 {
+				output = output[:8192] + "\n...(truncated)"
+			}
+			sb.WriteString("```\n")
+			sb.WriteString(output)
+			sb.WriteString("```\n\n")
+		}
+	}
+
+	return sb.String(), nil
+}
+
 // runStage runs a single stage, executing its agents sequentially or in parallel.
 func (r *Runner) runStage(ctx context.Context, stage Stage, completed map[string]*StageResult) StageResult {
 	start := time.Now()
@@ -161,10 +220,24 @@ func (r *Runner) runStage(ctx context.Context, stage Stage, completed map[string
 		logging.InfoContext(ctx, "pipeline: stage %q has condition %q (evaluation delegated to orchestrator)", stage.Name, stage.Condition)
 	}
 
+	// Run pre-gates (static analysis tools) before agents.
+	preGateOutput, preGateErr := r.runPreGates(ctx, stage)
+	if preGateErr != nil {
+		result.Status = StatusSkipped
+		result.Error = preGateErr.Error()
+		result.Duration = time.Since(start).Round(time.Millisecond).String()
+		return result
+	}
+
 	agents := stage.AgentList()
 	logging.InfoContext(ctx, "pipeline: running stage %q with %d agent(s)", stage.Name, len(agents))
 
 	promptContext := r.buildPromptContext(stage, completed)
+
+	// Prepend pre-gate output to the prompt context so agents get static analysis results.
+	if preGateOutput != "" {
+		promptContext = preGateOutput + "\n" + promptContext
+	}
 
 	if len(agents) == 1 {
 		ar := r.runAgent(ctx, agents[0], stage, promptContext)
@@ -289,6 +362,8 @@ func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, pr
 }
 
 // buildPromptContext creates context from prior stage results to pass to the next agent.
+// When a shared FindingsStore is available, structured findings are included instead of
+// raw output, providing compressed handoffs that reduce downstream token waste.
 func (r *Runner) buildPromptContext(stage Stage, completed map[string]*StageResult) string {
 	if len(stage.DependsOn) == 0 {
 		return ""
@@ -296,6 +371,20 @@ func (r *Runner) buildPromptContext(stage Stage, completed map[string]*StageResu
 
 	var sb strings.Builder
 	sb.WriteString("## Prior Stage Results\n\n")
+
+	// Include structured findings if available (compressed handoff).
+	if r.Findings != nil && r.Findings.Count() > 0 {
+		sb.WriteString("### Structured Findings from Prior Stages\n\n")
+		findingsJSON, err := r.Findings.FormatJSON()
+		if err == nil && len(findingsJSON) > 0 {
+			sb.WriteString("The following findings were reported by prior agents. Focus on these\n")
+			sb.WriteString("rather than re-reading files to discover the same issues.\n\n")
+			sb.WriteString("```json\n")
+			sb.WriteString(findingsJSON)
+			sb.WriteString("\n```\n\n")
+		}
+	}
+
 	for _, dep := range stage.DependsOn {
 		sr, ok := completed[dep]
 		if !ok {
@@ -316,9 +405,35 @@ func (r *Runner) buildPromptContext(stage Stage, completed map[string]*StageResu
 	return sb.String()
 }
 
+// hasUncommittedChanges checks whether the working directory has any
+// uncommitted file changes. Returns false if not a git repo or on error.
+func (r *Runner) hasUncommittedChanges(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "git", "diff", "--stat", "HEAD")
+	cmd.Dir = r.WorkingDir
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		// Not a git repo or other error — assume changes exist to be safe.
+		return true
+	}
+	return strings.TrimSpace(buf.String()) != ""
+}
+
 // runGates executes all gates configured after the named stage.
+// Gates are skipped when the stage produced no file changes (nothing to regress).
 func (r *Runner) runGates(ctx context.Context, stageName string, completed map[string]*StageResult) error {
 	gates := r.Pipeline.GatesAfter(stageName)
+	if len(gates) == 0 {
+		return nil
+	}
+
+	// Skip gates if no files were changed — nothing to regress.
+	if !r.hasUncommittedChanges(ctx) {
+		logging.InfoContext(ctx, "pipeline: skipping gates after %q — no file changes detected", stageName)
+		return nil
+	}
+
 	for _, gate := range gates {
 		logging.InfoContext(ctx, "pipeline: running gate after %q: %s", stageName, gate.Command)
 

@@ -863,6 +863,212 @@ func TestRunnerRunWithFindings(t *testing.T) {
 	}
 }
 
+func TestRunnerPreGates(t *testing.T) {
+	t.Parallel()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{
+				Name:  "review",
+				Agent: "go-review",
+				PreGates: []PreGate{
+					{Command: "echo 'clippy: no warnings'", Label: "cargo clippy"},
+					{Command: "echo 'all tests pass'", Label: "cargo test"},
+				},
+			},
+		},
+	}
+
+	var capturedPrompt string
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			capturedPrompt = prompt
+			return "ok", nil, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Status != StatusPassed {
+		t.Fatalf("status = %s, want passed", report.Status)
+	}
+
+	// The agent should receive pre-gate output in its prompt.
+	if !strings.Contains(capturedPrompt, "Static Analysis Output") {
+		t.Fatalf("expected Static Analysis Output in prompt, got: %s", capturedPrompt[:min(200, len(capturedPrompt))])
+	}
+	if !strings.Contains(capturedPrompt, "cargo clippy") {
+		t.Fatalf("expected cargo clippy label in prompt")
+	}
+	if !strings.Contains(capturedPrompt, "clippy: no warnings") {
+		t.Fatalf("expected clippy output in prompt")
+	}
+}
+
+func TestRunnerPreGatesSkipOnError(t *testing.T) {
+	t.Parallel()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{
+				Name:  "review",
+				Agent: "go-review",
+				PreGates: []PreGate{
+					{Command: "false", Label: "failing gate", OnError: "skip"},
+				},
+			},
+		},
+	}
+
+	agentRan := false
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			agentRan = true
+			return "ok", nil, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Stage should be skipped, agent should not run.
+	if agentRan {
+		t.Fatal("agent should not have run when pre-gate failed with on_error=skip")
+	}
+	if report.Stages[0].Status != StatusSkipped {
+		t.Fatalf("stage status = %s, want skipped", report.Stages[0].Status)
+	}
+}
+
+func TestRunnerPreGatesContinueOnError(t *testing.T) {
+	t.Parallel()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{
+				Name:  "review",
+				Agent: "go-review",
+				PreGates: []PreGate{
+					{Command: "false", Label: "failing gate", OnError: "continue"},
+				},
+			},
+		},
+	}
+
+	agentRan := false
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			agentRan = true
+			return "ok", nil, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Agent should still run despite failed pre-gate with on_error=continue.
+	if !agentRan {
+		t.Fatal("agent should have run when pre-gate failed with on_error=continue")
+	}
+	if report.Status != StatusPassed {
+		t.Fatalf("status = %s, want passed", report.Status)
+	}
+}
+
+func TestBuildPromptContextWithFindings(t *testing.T) {
+	t.Parallel()
+
+	store := tools.NewFindingsStore()
+	store.Add(tools.Finding{
+		Title:       "SQL Injection",
+		Severity:    "critical",
+		Description: "User input not sanitized",
+		Agent:       "security-review",
+	})
+
+	stage := Stage{
+		Name:      "fix",
+		Agent:     "fixer",
+		DependsOn: []string{"review"},
+	}
+	completed := map[string]*StageResult{
+		"review": {
+			Name:   "review",
+			Status: StatusPassed,
+			Agents: []AgentResult{
+				{Agent: "security-review", Status: StatusPassed, Output: "found issues"},
+			},
+		},
+	}
+
+	runner := &Runner{
+		Pipeline: &Pipeline{Name: "test", Version: "v1"},
+		Findings: store,
+	}
+
+	ctx := runner.buildPromptContext(stage, completed)
+
+	if !strings.Contains(ctx, "Structured Findings") {
+		t.Fatalf("expected structured findings section in context")
+	}
+	if !strings.Contains(ctx, "SQL Injection") {
+		t.Fatalf("expected finding title in context")
+	}
+	if !strings.Contains(ctx, "critical") {
+		t.Fatalf("expected severity in context")
+	}
+}
+
+func TestParsePreGates(t *testing.T) {
+	t.Parallel()
+
+	yaml := `
+name: test-pipeline
+version: v1
+stages:
+  - name: review
+    agent: go-review
+    pre_gates:
+      - command: "cargo clippy --message-format=json"
+        label: "clippy"
+      - command: "cargo test"
+        label: "unit tests"
+        on_error: skip
+`
+	p, err := Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(p.Stages[0].PreGates) != 2 {
+		t.Fatalf("pre_gates = %d, want 2", len(p.Stages[0].PreGates))
+	}
+	if p.Stages[0].PreGates[0].Label != "clippy" {
+		t.Fatalf("pre_gate[0].Label = %q, want clippy", p.Stages[0].PreGates[0].Label)
+	}
+	if p.Stages[0].PreGates[1].OnError != "skip" {
+		t.Fatalf("pre_gate[1].OnError = %q, want skip", p.Stages[0].PreGates[1].OnError)
+	}
+}
+
 func TestRunnerAttachFindings(t *testing.T) {
 	t.Parallel()
 

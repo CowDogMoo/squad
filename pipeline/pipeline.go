@@ -30,6 +30,7 @@ type Stage struct {
 	Mode      string            `yaml:"mode,omitempty"`      // edit | readonly
 	Vars      map[string]string `yaml:"vars,omitempty"`      // stage-specific template vars
 	Condition string            `yaml:"condition,omitempty"` // skip condition (evaluated by orchestrator)
+	PreGates  []PreGate         `yaml:"pre_gates,omitempty"` // commands to run before agents, output injected into prompt
 }
 
 // AgentList returns all agents in the stage (normalizing single vs parallel).
@@ -45,6 +46,15 @@ type Gate struct {
 	After     string `yaml:"after"`                // stage name to run after
 	Command   string `yaml:"command"`              // shell command to run
 	OnFailure string `yaml:"on_failure,omitempty"` // revert | stop (default: stop)
+}
+
+// PreGate runs a command before an agent and injects its output into the prompt.
+// This is useful for running static analysis tools (clippy, ruff, eslint) and
+// feeding structured output to the agent so it doesn't rediscover known issues.
+type PreGate struct {
+	Command string `yaml:"command"`            // shell command to run
+	Label   string `yaml:"label,omitempty"`    // label for the output section (default: command)
+	OnError string `yaml:"on_error,omitempty"` // skip | continue | stop (default: continue)
 }
 
 // Output configures the pipeline's output format.

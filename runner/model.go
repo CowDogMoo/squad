@@ -77,6 +77,7 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 	}
 
 	taskCfg := buildTaskConfig(opts)
+	applyBundleBudget(taskCfg, bundle)
 	if bundle.DisableTask {
 		logging.InfoContext(ctx, "Task tool disabled for this agent")
 		taskCfg.CallModel = nil
@@ -400,20 +401,53 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		childOpts.System = ""
 		childOpts.AgentName = agentName
 
-		// Propagate remaining budget from parent metrics so child agents
-		// cannot each spend the full original budget independently.
+		// Apply model/provider overrides from the child agent's manifest.
+		if childBundle.Model != "" {
+			childOpts.Model = childBundle.Model
+			logging.InfoContext(ctx, "child agent %s using manifest model override: %s", agentName, childBundle.Model)
+		}
+		if childBundle.Provider != "" {
+			childOpts.Provider = childBundle.Provider
+			logging.InfoContext(ctx, "child agent %s using manifest provider override: %s", agentName, childBundle.Provider)
+		}
+
+		// Propagate budget to child agent. Per-child dedicated caps take
+		// precedence over the remaining-budget fallback.
 		if cfg.ParentMetrics != nil && opts.MaxCost > 0 {
 			remaining := cfg.ParentMetrics.RemainingBudget()
 			if remaining <= 0 {
 				return "", nil, metrics.ErrBudgetExceeded
 			}
-			childOpts.MaxCost = remaining
-			logging.InfoContext(ctx, "child agent %s budget: $%.4f remaining of $%.4f total", agentName, remaining, opts.MaxCost)
+
+			// Check for a dedicated per-child budget cap.
+			var childBudget float64
+			if cfg.ChildMaxCost != nil {
+				childBudget = cfg.ChildMaxCost(agentName)
+			}
+			if childBudget > 0 {
+				// Use the dedicated cap, but don't exceed remaining budget.
+				if childBudget > remaining {
+					childBudget = remaining
+				}
+				childOpts.MaxCost = childBudget
+				logging.InfoContext(ctx, "child agent %s budget: $%.4f dedicated (pipeline remaining: $%.4f)", agentName, childBudget, remaining)
+			} else {
+				childOpts.MaxCost = remaining
+				logging.InfoContext(ctx, "child agent %s budget: $%.4f remaining of $%.4f total", agentName, remaining, opts.MaxCost)
+			}
 		}
 
 		return InvokeModel(ctx, &childOpts, childBundle)
 	}
 	return cfg
+}
+
+// applyBundleBudget wires up per-child budget lookups from the parent bundle's
+// budget config into the TaskConfig.
+func applyBundleBudget(cfg *tools.TaskConfig, bundle *agent.Bundle) {
+	if bundle.Budget != nil && len(bundle.Budget.Children) > 0 {
+		cfg.ChildMaxCost = bundle.Budget.ChildMaxCost
+	}
 }
 
 // convertMCPHandlers converts MCP ToolHandlers to tools.Handler.
