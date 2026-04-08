@@ -77,10 +77,16 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 	}
 
 	taskCfg := buildTaskConfig(opts)
+	if bundle.DisableTask {
+		logging.InfoContext(ctx, "Task tool disabled for this agent")
+		taskCfg.CallModel = nil
+		taskCfg.Registry = nil
+	}
 
 	// Connect MCP servers declared in the agent manifest and/or CLI flags.
 	mcpServers := bundle.MCPServers
 	mcpServers = append(mcpServers, opts.MCPServers...)
+	var extraMCPTools []tools.Handler
 	if len(mcpServers) > 0 {
 		clients, mcpErr := connectMCPServers(ctx, mcpServers)
 		defer closeMCPClients(clients)
@@ -89,8 +95,11 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 			return "", m, mcpErr
 		}
 		mcpHandlers := mcp.BuildHandlers(clients)
-		taskCfg.ExtraTools = convertMCPHandlers(mcpHandlers)
-		logging.InfoContext(ctx, "MCP tools loaded: %d tools from %d server(s)", len(taskCfg.ExtraTools), len(clients))
+		extraMCPTools = convertMCPHandlers(mcpHandlers)
+		if taskCfg != nil {
+			taskCfg.ExtraTools = extraMCPTools
+		}
+		logging.InfoContext(ctx, "MCP tools loaded: %d tools from %d server(s)", len(extraMCPTools), len(clients))
 	}
 
 	return callModel(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex, m)

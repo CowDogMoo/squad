@@ -592,9 +592,13 @@ func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor)
 	add(Handler{Def: definitionSystemInfo(), Call: systemInfoTool(ex)})
 
 	if taskCfg != nil {
-		add(Handler{Def: definitionTask(), Call: taskTool(*taskCfg)})
-		if taskCfg.Registry != nil {
-			add(Handler{Def: definitionTaskResult(), Call: taskResultTool(*taskCfg)})
+		// Only register Task/TaskResult when the agent is allowed to spawn children.
+		// DisableTask nils CallModel while keeping taskCfg alive for ExtraTools.
+		if taskCfg.CallModel != nil {
+			add(Handler{Def: definitionTask(), Call: taskTool(*taskCfg)})
+			if taskCfg.Registry != nil {
+				add(Handler{Def: definitionTaskResult(), Call: taskResultTool(*taskCfg)})
+			}
 		}
 		if taskCfg.Findings != nil {
 			agentName := taskCfg.AgentName

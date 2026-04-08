@@ -30,6 +30,7 @@ type Manifest struct {
 	Output      *OutputConfig      `yaml:"output,omitempty"`
 	Budget      *BudgetConfig      `yaml:"budget,omitempty"`
 	MCPServers  []mcp.ServerConfig `yaml:"mcp_servers,omitempty"`
+	DisableTask bool               `yaml:"disable_task,omitempty"`
 }
 
 // BudgetConfig provides static hints for cost estimation.
@@ -73,6 +74,7 @@ type Bundle struct {
 	WorkDir     string
 	Environment *executor.Config   // execution environment from agent manifest
 	MCPServers  []mcp.ServerConfig // MCP server dependencies declared in agent.yaml
+	DisableTask bool               // when true, the Task tool is not registered for this agent
 }
 
 // TemplateData holds the data passed to prompt templates.
@@ -406,5 +408,6 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		WorkDir:     workingDir,
 		Environment: manifest.Environment,
 		MCPServers:  resolvedMCP,
+		DisableTask: manifest.DisableTask,
 	}, nil
 }

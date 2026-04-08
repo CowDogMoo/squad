@@ -884,6 +884,61 @@ func TestCloseMCPClients(t *testing.T) {
 	}
 }
 
+func TestDisableTaskNilsTaskConfig(t *testing.T) {
+	t.Parallel()
+
+	// Set up a fake Ollama server that returns a simple response.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"mistral","message":{"role":"assistant","content":"done"},"done":true}`))
+	}))
+	defer server.Close()
+
+	opts := &RunOptions{Provider: "ollama", BaseURL: server.URL, MaxIterations: 1}
+	bundle := &agent.Bundle{
+		System:      "system",
+		User:        "user",
+		WorkDir:     t.TempDir(),
+		DisableTask: true,
+	}
+	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
+	m := metrics.New("ollama", "mistral")
+
+	// When DisableTask is true, model.go nils CallModel and Registry but keeps
+	// taskCfg alive so MCP ExtraTools can still be attached. tools.go then
+	// checks CallModel != nil before registering Task/TaskResult.
+
+	taskCfg := buildTaskConfig(opts)
+	if bundle.DisableTask {
+		taskCfg.CallModel = nil
+		taskCfg.Registry = nil
+	}
+
+	response, err := callLangChainLLM(
+		context.Background(),
+		opts,
+		"ollama",
+		"mistral",
+		bundle.System,
+		bundle,
+		0.4,
+		0,
+		taskCfg,
+		ex,
+		m,
+	)
+	if err != nil {
+		t.Fatalf("callLangChainLLM() error = %v", err)
+	}
+	if response != "done" {
+		t.Fatalf("response = %q, want done", response)
+	}
+	// taskCfg is non-nil but CallModel should still be nil (Task tool not registered).
+	if taskCfg.CallModel != nil {
+		t.Fatal("expected taskCfg.CallModel to be nil when DisableTask is true")
+	}
+}
+
 func TestConnectMCPServers(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -898,3 +898,64 @@ func TestResolveMCPServerTemplatesAllFields(t *testing.T) {
 		t.Fatalf("chrome env = %q, want DEBUG=false", resolved[1].Env[0])
 	}
 }
+
+func TestLoadManifest_DisableTask(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		manifest string
+		want     bool
+	}{
+		{
+			"disable_task true",
+			"name: Demo\nversion: v1\nentrypoint: system.txt\nwrapper: wrapper.txt\ndisable_task: true\n",
+			true,
+		},
+		{
+			"disable_task false",
+			"name: Demo\nversion: v1\nentrypoint: system.txt\nwrapper: wrapper.txt\ndisable_task: false\n",
+			false,
+		},
+		{
+			"disable_task omitted",
+			"name: Demo\nversion: v1\nentrypoint: system.txt\nwrapper: wrapper.txt\n",
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir, _ := setupTestAgent(t, "demo", map[string]string{
+				"agent.yaml":  tt.manifest,
+				"system.txt":  "system",
+				"wrapper.txt": "wrapper",
+			})
+			m, err := LoadManifest(filepath.Join(dir, "demo"))
+			if err != nil {
+				t.Fatalf("LoadManifest: %v", err)
+			}
+			if m.DisableTask != tt.want {
+				t.Fatalf("DisableTask = %v, want %v", m.DisableTask, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildBundle_DisableTaskPropagated(t *testing.T) {
+	t.Parallel()
+	manifest := "name: Demo\nversion: v1\nentrypoint: system.txt\nwrapper: wrapper.txt\ndisable_task: true\n"
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	if !bundle.DisableTask {
+		t.Fatal("expected Bundle.DisableTask to be true")
+	}
+}
