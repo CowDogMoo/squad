@@ -1069,6 +1069,279 @@ stages:
 	}
 }
 
+func TestRunnerPreGatesStopOnError(t *testing.T) {
+	t.Parallel()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{
+				Name:  "review",
+				Agent: "go-review",
+				PreGates: []PreGate{
+					{Command: "false", Label: "lint", OnError: "stop"},
+				},
+			},
+		},
+	}
+
+	agentRan := false
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			agentRan = true
+			return "ok", nil, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if agentRan {
+		t.Fatal("agent should not have run when pre-gate failed with on_error=stop")
+	}
+	if report.Stages[0].Status != StatusSkipped {
+		t.Fatalf("stage status = %s, want skipped", report.Stages[0].Status)
+	}
+	if !strings.Contains(report.Stages[0].Error, "stopping pipeline") {
+		t.Fatalf("error = %q, want stopping pipeline message", report.Stages[0].Error)
+	}
+}
+
+func TestRunnerPreGatesDefaultOnError(t *testing.T) {
+	t.Parallel()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{
+				Name:  "review",
+				Agent: "go-review",
+				PreGates: []PreGate{
+					{Command: "false", Label: "lint"},
+				},
+			},
+		},
+	}
+
+	agentRan := false
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			agentRan = true
+			return "ok", nil, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !agentRan {
+		t.Fatal("agent should have run with default on_error (continue)")
+	}
+	if report.Status != StatusPassed {
+		t.Fatalf("status = %s, want passed", report.Status)
+	}
+}
+
+func TestRunnerPreGatesTruncation(t *testing.T) {
+	t.Parallel()
+
+	longCmd := "python3 -c \"print('x' * 10000)\""
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{
+				Name:  "review",
+				Agent: "go-review",
+				PreGates: []PreGate{
+					{Command: longCmd, Label: "verbose lint"},
+				},
+			},
+		},
+	}
+
+	var capturedPrompt string
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			capturedPrompt = prompt
+			return "ok", nil, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Status != StatusPassed {
+		t.Fatalf("status = %s, want passed", report.Status)
+	}
+	if !strings.Contains(capturedPrompt, "...(truncated)") {
+		t.Fatal("expected truncation marker in pre-gate output")
+	}
+}
+
+func TestRunnerPreGatesNoPreGates(t *testing.T) {
+	t.Parallel()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{Name: "review", Agent: "go-review"},
+		},
+	}
+
+	var capturedPrompt string
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			capturedPrompt = prompt
+			return "ok", nil, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Status != StatusPassed {
+		t.Fatalf("status = %s, want passed", report.Status)
+	}
+	if strings.Contains(capturedPrompt, "Static Analysis Output") {
+		t.Fatal("expected no Static Analysis Output in prompt when no pre-gates configured")
+	}
+}
+
+func TestRunnerPreGatesLabelFallback(t *testing.T) {
+	t.Parallel()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{
+				Name:  "review",
+				Agent: "go-review",
+				PreGates: []PreGate{
+					{Command: "echo hello"},
+				},
+			},
+		},
+	}
+
+	var capturedPrompt string
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			capturedPrompt = prompt
+			return "ok", nil, nil
+		},
+	}
+
+	_, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(capturedPrompt, "### echo hello") {
+		t.Fatal("expected command used as label fallback")
+	}
+}
+
+func TestHasUncommittedChanges(t *testing.T) {
+	t.Parallel()
+
+	t.Run("non-git directory returns true", func(t *testing.T) {
+		t.Parallel()
+		runner := &Runner{
+			Pipeline:   &Pipeline{Name: "test"},
+			WorkingDir: t.TempDir(),
+		}
+		if !runner.hasUncommittedChanges(context.Background()) {
+			t.Fatal("expected true for non-git directory")
+		}
+	})
+}
+
+func TestRunnerGatesSkippedWhenNoChanges(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{Name: "review", Agent: "go-review"},
+		},
+		Gates: []Gate{
+			{After: "review", Command: "false", OnFailure: "stop"},
+		},
+	}
+
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: dir,
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			return "ok", nil, nil
+		},
+	}
+
+	_, err := runner.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error from gate failure in non-git dir")
+	}
+}
+
+func TestRunnerGatesNoGatesAfterStage(t *testing.T) {
+	t.Parallel()
+
+	p := &Pipeline{
+		Name:    "test",
+		Version: "v1",
+		Stages: []Stage{
+			{Name: "review", Agent: "go-review"},
+		},
+		Gates: []Gate{
+			{After: "other-stage", Command: "false", OnFailure: "stop"},
+		},
+	}
+
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			return "ok", nil, nil
+		},
+	}
+
+	report, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v (no gates should run for this stage)", err)
+	}
+	if report.Status != StatusPassed {
+		t.Fatalf("status = %s, want passed", report.Status)
+	}
+}
+
 func TestRunnerAttachFindings(t *testing.T) {
 	t.Parallel()
 

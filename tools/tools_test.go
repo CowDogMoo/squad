@@ -2005,3 +2005,56 @@ func assertToolResponse(t *testing.T, part llms.ContentPart, wantContent string)
 		t.Fatalf("content = %q, want %q", resp.Content, wantContent)
 	}
 }
+
+func TestBuildHandlersDisableTask(t *testing.T) {
+	t.Parallel()
+	workDir := t.TempDir()
+	ex := &executor.LocalExecutor{WorkingDir: workDir}
+
+	taskCfg := &TaskConfig{
+		CallModel: nil,
+		Registry:  NewBackgroundTaskRegistry(),
+	}
+	handlers, _ := BuildHandlers(workDir, taskCfg, ex)
+
+	for name := range handlers {
+		if name == "Task" || name == "TaskResult" {
+			t.Fatalf("handler %q should not be registered when CallModel is nil", name)
+		}
+	}
+}
+
+func TestBuildHandlersWithTask(t *testing.T) {
+	t.Parallel()
+	workDir := t.TempDir()
+	ex := &executor.LocalExecutor{WorkingDir: workDir}
+
+	taskCfg := &TaskConfig{
+		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
+			return "", nil, nil
+		},
+		Registry: NewBackgroundTaskRegistry(),
+	}
+	handlers, _ := BuildHandlers(workDir, taskCfg, ex)
+
+	if _, ok := handlers["Task"]; !ok {
+		t.Fatal("expected Task handler when CallModel is set")
+	}
+	if _, ok := handlers["TaskResult"]; !ok {
+		t.Fatal("expected TaskResult handler when CallModel and Registry are set")
+	}
+}
+
+func TestBuildHandlersNilTaskConfig(t *testing.T) {
+	t.Parallel()
+	workDir := t.TempDir()
+	ex := &executor.LocalExecutor{WorkingDir: workDir}
+
+	handlers, _ := BuildHandlers(workDir, nil, ex)
+
+	for name := range handlers {
+		if name == "Task" || name == "TaskResult" {
+			t.Fatalf("handler %q should not be registered when taskCfg is nil", name)
+		}
+	}
+}

@@ -939,6 +939,266 @@ func TestDisableTaskNilsTaskConfig(t *testing.T) {
 	}
 }
 
+func TestApplyBundleBudget(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sets ChildMaxCost from budget", func(t *testing.T) {
+		t.Parallel()
+		cfg := &tools.TaskConfig{}
+		bundle := &agent.Bundle{
+			Budget: &agent.BudgetConfig{
+				Children: []agent.ChildBudget{
+					{Name: "agent-a", MaxCost: 5.0},
+					{Name: "agent-b"},
+				},
+			},
+		}
+		applyBundleBudget(cfg, bundle)
+		if cfg.ChildMaxCost == nil {
+			t.Fatal("expected ChildMaxCost to be set")
+		}
+		if got := cfg.ChildMaxCost("agent-a"); got != 5.0 {
+			t.Fatalf("ChildMaxCost(agent-a) = %f, want 5.0", got)
+		}
+		if got := cfg.ChildMaxCost("agent-b"); got != 0 {
+			t.Fatalf("ChildMaxCost(agent-b) = %f, want 0", got)
+		}
+	})
+
+	t.Run("nil budget leaves ChildMaxCost nil", func(t *testing.T) {
+		t.Parallel()
+		cfg := &tools.TaskConfig{}
+		bundle := &agent.Bundle{}
+		applyBundleBudget(cfg, bundle)
+		if cfg.ChildMaxCost != nil {
+			t.Fatal("expected ChildMaxCost to remain nil")
+		}
+	})
+
+	t.Run("empty children leaves ChildMaxCost nil", func(t *testing.T) {
+		t.Parallel()
+		cfg := &tools.TaskConfig{}
+		bundle := &agent.Bundle{
+			Budget: &agent.BudgetConfig{},
+		}
+		applyBundleBudget(cfg, bundle)
+		if cfg.ChildMaxCost != nil {
+			t.Fatal("expected ChildMaxCost to remain nil for empty children")
+		}
+	})
+}
+
+func TestBuildTaskConfigChildModelOverride(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+
+	agentsDir := t.TempDir()
+	agentName := "child"
+	agentDir := filepath.Join(agentsDir, agentName)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := strings.Join([]string{
+		"name: child",
+		"version: '1.0'",
+		"entrypoint: system.md",
+		"wrapper: agent.md",
+		"model: claude-haiku-4-5",
+		"provider: anthropic",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("system"), 0o644); err != nil {
+		t.Fatalf("WriteFile system: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrapper"), 0o644); err != nil {
+		t.Fatalf("WriteFile wrapper: %v", err)
+	}
+
+	opts := &RunOptions{
+		AgentsDir:     agentsDir,
+		WorkingDir:    t.TempDir(),
+		Provider:      "openai-responses",
+		Model:         "gpt-4o",
+		MaxIterations: 1,
+	}
+	cfg := buildTaskConfig(opts)
+
+	_, _, err := cfg.CallModel(
+		context.Background(),
+		agentsDir,
+		agentName,
+		"prompt",
+		opts.WorkingDir,
+		"",
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "API key") && !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildTaskConfigChildBudgetDedicated(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+
+	agentsDir := t.TempDir()
+	agentName := "child"
+	agentDir := filepath.Join(agentsDir, agentName)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := "name: child\nversion: '1.0'\nentrypoint: system.md\nwrapper: agent.md\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("system"), 0o644); err != nil {
+		t.Fatalf("WriteFile system: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrapper"), 0o644); err != nil {
+		t.Fatalf("WriteFile wrapper: %v", err)
+	}
+
+	parentMetrics := metrics.New("openai", "gpt-4o")
+	parentMetrics.SetMaxCost(10.0)
+
+	opts := &RunOptions{
+		AgentsDir:     agentsDir,
+		WorkingDir:    t.TempDir(),
+		Provider:      "openai-responses",
+		Model:         "gpt-4o",
+		MaxIterations: 1,
+		MaxCost:       10.0,
+	}
+	cfg := buildTaskConfig(opts)
+	cfg.ParentMetrics = parentMetrics
+	cfg.ChildMaxCost = func(name string) float64 {
+		if name == "child" {
+			return 2.50
+		}
+		return 0
+	}
+
+	_, _, err := cfg.CallModel(
+		context.Background(),
+		agentsDir,
+		agentName,
+		"prompt",
+		opts.WorkingDir,
+		"",
+	)
+	if err == nil {
+		t.Fatal("expected error (no API key)")
+	}
+}
+
+func TestBuildTaskConfigChildBudgetCappedByRemaining(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+
+	agentsDir := t.TempDir()
+	agentName := "child"
+	agentDir := filepath.Join(agentsDir, agentName)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := "name: child\nversion: '1.0'\nentrypoint: system.md\nwrapper: agent.md\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("system"), 0o644); err != nil {
+		t.Fatalf("WriteFile system: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrapper"), 0o644); err != nil {
+		t.Fatalf("WriteFile wrapper: %v", err)
+	}
+
+	parentMetrics := metrics.New("openai", "gpt-4o")
+	parentMetrics.SetMaxCost(1.0)
+
+	opts := &RunOptions{
+		AgentsDir:     agentsDir,
+		WorkingDir:    t.TempDir(),
+		Provider:      "openai-responses",
+		Model:         "gpt-4o",
+		MaxIterations: 1,
+		MaxCost:       1.0,
+	}
+	cfg := buildTaskConfig(opts)
+	cfg.ParentMetrics = parentMetrics
+	cfg.ChildMaxCost = func(name string) float64 {
+		return 5.0
+	}
+
+	_, _, err := cfg.CallModel(
+		context.Background(),
+		agentsDir,
+		agentName,
+		"prompt",
+		opts.WorkingDir,
+		"",
+	)
+	if err == nil {
+		t.Fatal("expected error (no API key)")
+	}
+}
+
+func TestBuildTaskConfigChildAlternateModels(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+
+	agentsDir := t.TempDir()
+	agentName := "child"
+	agentDir := filepath.Join(agentsDir, agentName)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := strings.Join([]string{
+		"name: child",
+		"version: '1.0'",
+		"entrypoint: system.md",
+		"wrapper: agent.md",
+		"models:",
+		"  - model: gemini-2.5-flash",
+		"    provider: gemini",
+		"  - model: gpt-4.1-mini",
+		"    provider: openai",
+		"  - model: claude-haiku-4-5",
+		"    provider: anthropic",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("system"), 0o644); err != nil {
+		t.Fatalf("WriteFile system: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrapper"), 0o644); err != nil {
+		t.Fatalf("WriteFile wrapper: %v", err)
+	}
+
+	opts := &RunOptions{
+		AgentsDir:     agentsDir,
+		WorkingDir:    t.TempDir(),
+		Provider:      "openai-responses",
+		Model:         "gpt-4o",
+		MaxIterations: 1,
+	}
+	cfg := buildTaskConfig(opts)
+
+	_, _, err := cfg.CallModel(
+		context.Background(),
+		agentsDir,
+		agentName,
+		"prompt",
+		opts.WorkingDir,
+		"",
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestConnectMCPServers(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
