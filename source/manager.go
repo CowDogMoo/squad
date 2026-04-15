@@ -164,15 +164,11 @@ func (m *Manager) GetSearchPaths() ([]string, error) {
 		}
 	}
 
-	// 3. Cached git repositories
+	// 3. Cached git repositories (use local cache only, no network access)
 	for _, url := range m.cfg.Agents.Repositories {
-		repoPath, err := m.gitOps.CloneOrUpdate(url)
-		if err != nil {
-			// Log warning but continue - repository might be unavailable
-			fmt.Fprintf(os.Stderr, "warning: failed to update %s: %v\n", url, err)
-			continue
+		if repoPath, ok := m.gitOps.CachePath(url); ok {
+			paths = append(paths, repoPath)
 		}
-		paths = append(paths, repoPath)
 	}
 
 	// 4. User config agents directories from XDG paths (fallback)

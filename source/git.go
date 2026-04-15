@@ -44,6 +44,17 @@ func NewGitOperations(cacheDir string) *GitOperations {
 	return &GitOperations{cacheDir: cacheDir}
 }
 
+// CachePath returns the local cache path for a repository URL without
+// performing any network operations. It returns the path and true if the
+// repository is already cached locally, or empty string and false otherwise.
+func (g *GitOperations) CachePath(gitURL string) (string, bool) {
+	repoPath := g.getCachePath(gitURL)
+	if stat, err := os.Stat(repoPath); err == nil && stat.IsDir() {
+		return repoPath, true
+	}
+	return "", false
+}
+
 // CloneOrUpdate clones a repository if it doesn't exist, or updates it if it does.
 func (g *GitOperations) CloneOrUpdate(gitURL string) (string, error) {
 	repoPath := g.getCachePath(gitURL)

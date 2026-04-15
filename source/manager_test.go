@@ -671,6 +671,54 @@ func TestManagerGetSearchPathsWithRepoAndConfigDir(t *testing.T) {
 	}
 }
 
+func TestManagerGetSearchPathsCachedRepo(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Agents.Repositories = map[string]string{
+		"test-agents": "https://example.com/org/test-agents.git",
+	}
+	cfg.Agents.LocalPaths = []string{}
+
+	manager := newTestManager(t, cfg)
+
+	// Pre-populate the cache directory so CachePath finds it
+	cacheDir, err := config.AgentsCacheDir()
+	if err != nil {
+		t.Fatalf("AgentsCacheDir() error = %v", err)
+	}
+	ops := source.NewGitOperations(cacheDir)
+	cachedPath, _ := ops.CachePath("https://example.com/org/test-agents.git")
+	if cachedPath != "" {
+		t.Fatalf("expected no cached path before setup")
+	}
+
+	// Create the expected cache directory
+	gitURL := "https://example.com/org/test-agents.git"
+	expected := expectedCachePath(cacheDir, gitURL)
+	if err := os.MkdirAll(expected, config.DirPermReadWriteExec); err != nil {
+		t.Fatalf("create cached repo dir: %v", err)
+	}
+
+	// Use a work dir without a local agents/ directory
+	workDir := t.TempDir()
+	withWorkDir(t, workDir)
+
+	paths, err := manager.GetSearchPaths()
+	if err != nil {
+		t.Fatalf("GetSearchPaths() error = %v", err)
+	}
+
+	found := false
+	for _, p := range paths {
+		if resolvedPath(t, p) == resolvedPath(t, expected) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("cached repo path %q not found in search paths: %v", expected, paths)
+	}
+}
+
 func TestManagerSaveConfigWriteError(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Agents.Repositories = map[string]string{}

@@ -163,6 +163,55 @@ func TestGitOperationsCloneOrUpdate(t *testing.T) {
 	}
 }
 
+func TestGitOperationsCachePath(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(t *testing.T, cacheDir string) string
+		wantOK bool
+	}{
+		{
+			name: "cached directory exists",
+			setup: func(t *testing.T, cacheDir string) string {
+				gitURL := "https://example.com/org/repo.git"
+				expected := expectedCachePath(cacheDir, gitURL)
+				if err := os.MkdirAll(expected, 0o700); err != nil {
+					t.Fatalf("MkdirAll() error = %v", err)
+				}
+				return gitURL
+			},
+			wantOK: true,
+		},
+		{
+			name: "not cached",
+			setup: func(t *testing.T, cacheDir string) string {
+				return "https://example.com/org/missing.git"
+			},
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cacheDir := t.TempDir()
+			gitURL := tt.setup(t, cacheDir)
+			ops := source.NewGitOperations(cacheDir)
+
+			path, ok := ops.CachePath(gitURL)
+			if ok != tt.wantOK {
+				t.Fatalf("CachePath() ok = %v, want %v", ok, tt.wantOK)
+			}
+			if tt.wantOK {
+				expected := expectedCachePath(cacheDir, gitURL)
+				if path != expected {
+					t.Fatalf("CachePath() path = %q, want %q", path, expected)
+				}
+			} else if path != "" {
+				t.Fatalf("CachePath() path = %q, want empty", path)
+			}
+		})
+	}
+}
+
 func expectedCachePath(cacheDir, gitURL string) string {
 	cleanURL := strings.TrimPrefix(gitURL, "https://")
 	cleanURL = strings.TrimPrefix(cleanURL, "http://")
