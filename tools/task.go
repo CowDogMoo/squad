@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"sync/atomic"
 
+	"github.com/cowdogmoo/squad/csync"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/telemetry"
@@ -35,8 +35,7 @@ type BackgroundTaskResult struct {
 
 // BackgroundTaskRegistry manages background task spawning and results.
 type BackgroundTaskRegistry struct {
-	mu        sync.RWMutex
-	tasks     map[string]*BackgroundTaskResult
+	tasks     *csync.Map[string, *BackgroundTaskResult]
 	counter   uint64
 	semaphore chan struct{}
 }
@@ -48,7 +47,7 @@ func NewBackgroundTaskRegistry(concurrency int) *BackgroundTaskRegistry {
 		concurrency = DefaultConcurrentTasks
 	}
 	return &BackgroundTaskRegistry{
-		tasks:     make(map[string]*BackgroundTaskResult),
+		tasks:     csync.NewMap[string, *BackgroundTaskResult](),
 		semaphore: make(chan struct{}, concurrency),
 	}
 }
@@ -60,9 +59,7 @@ func (r *BackgroundTaskRegistry) SpawnTask(ctx context.Context, cfg TaskConfig, 
 		Done: make(chan struct{}),
 	}
 
-	r.mu.Lock()
-	r.tasks[id] = result
-	r.mu.Unlock()
+	r.tasks.Set(id, result)
 
 	// Capture the parent span context for linking.
 	parentSpanCtx := trace.SpanContextFromContext(ctx)
@@ -143,10 +140,7 @@ func (r *BackgroundTaskRegistry) SpawnTask(ctx context.Context, cfg TaskConfig, 
 
 // GetResult returns the result for a task ID, blocking until complete if wait is true.
 func (r *BackgroundTaskRegistry) GetResult(taskID string, wait bool) (*BackgroundTaskResult, bool) {
-	r.mu.RLock()
-	result, ok := r.tasks[taskID]
-	r.mu.RUnlock()
-
+	result, ok := r.tasks.Get(taskID)
 	if !ok {
 		return nil, false
 	}

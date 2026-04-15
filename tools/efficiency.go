@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cowdogmoo/squad/csync"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/tmc/langchaingo/llms"
 )
@@ -28,13 +29,12 @@ type ReadCacheEntry struct {
 // ReadCache tracks files already read in the current session to avoid
 // wasting tokens on redundant re-reads. Thread-safe.
 type ReadCache struct {
-	mu      sync.RWMutex
-	entries map[string]ReadCacheEntry // key: absolute file path
+	entries *csync.Map[string, ReadCacheEntry]
 }
 
 // NewReadCache creates an empty read cache.
 func NewReadCache() *ReadCache {
-	return &ReadCache{entries: make(map[string]ReadCacheEntry)}
+	return &ReadCache{entries: csync.NewMap[string, ReadCacheEntry]()}
 }
 
 // InitReadCache attaches a ReadCache to the context.
@@ -62,9 +62,7 @@ func (rc *ReadCache) Check(path string, contentHash string) (ReadCacheEntry, boo
 	if rc == nil {
 		return ReadCacheEntry{}, false
 	}
-	rc.mu.RLock()
-	defer rc.mu.RUnlock()
-	entry, exists := rc.entries[path]
+	entry, exists := rc.entries.Get(path)
 	if exists && entry.ContentHash == contentHash {
 		return entry, true
 	}
@@ -76,14 +74,12 @@ func (rc *ReadCache) Store(path, contentHash string, lines, bytes, iteration int
 	if rc == nil {
 		return
 	}
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-	rc.entries[path] = ReadCacheEntry{
+	rc.entries.Set(path, ReadCacheEntry{
 		ContentHash: contentHash,
 		Lines:       lines,
 		Bytes:       bytes,
 		Iteration:   iteration,
-	}
+	})
 }
 
 // Len returns the number of entries in the cache.
@@ -91,9 +87,7 @@ func (rc *ReadCache) Len() int {
 	if rc == nil {
 		return 0
 	}
-	rc.mu.RLock()
-	defer rc.mu.RUnlock()
-	return len(rc.entries)
+	return rc.entries.Len()
 }
 
 // --- Iteration Counter (for cache) ---
@@ -152,7 +146,7 @@ func (pe *PhaseEnforcer) ObserveTools(toolNames []string) string {
 		return ""
 	}
 	for _, name := range toolNames {
-		if name == "Edit" || name == "Write" {
+		if name == "Edit" || name == "MultiEdit" || name == "Write" {
 			pe.editSeen = true
 			return ""
 		}
@@ -213,7 +207,7 @@ func classifyToolCall(s *compactionStats, name, args string) {
 		if pat := extractJSONField(args, "pattern"); pat != "" {
 			s.patternsSearched[pat] = true
 		}
-	case "Edit", "Write":
+	case "Edit", "MultiEdit", "Write":
 		if path := extractJSONField(args, "path"); path != "" {
 			s.editsApplied[path]++
 		}
@@ -376,7 +370,8 @@ const ToolEfficiencyPrompt = `## Tool Efficiency
 
 When you need to perform multiple independent operations, invoke ALL relevant tools in a single response:
 - Reading multiple files: call Read for ALL of them in one response, not one at a time.
-- Making multiple edits: call Edit for ALL of them in one response.
+- Making multiple edits to ONE file: use MultiEdit to batch all changes in a single call.
+- Making edits across DIFFERENT files: call Edit or MultiEdit for ALL of them in one response.
 - Multiple searches: call Grep for ALL patterns in one response.
 
 Do NOT read files you have already read unless you need to verify edits you just made.

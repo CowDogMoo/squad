@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cowdogmoo/squad/csync"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/telemetry"
@@ -69,8 +70,7 @@ type Runner struct {
 	Prompt     string  // base prompt passed to each agent
 	MaxCost    float64 // total cost budget for the pipeline (0 = unlimited)
 	Findings   *tools.FindingsStore
-	spent      float64 // accumulated cost across all agents
-	spentMu    sync.Mutex
+	spent      *csync.Value[float64]
 }
 
 // Run executes the pipeline and returns a structured report.
@@ -280,10 +280,7 @@ func (r *Runner) runAgentsParallel(ctx context.Context, agents []string, stage S
 
 // addSpent records cost from a completed agent and returns the new total.
 func (r *Runner) addSpent(cost float64) float64 {
-	r.spentMu.Lock()
-	defer r.spentMu.Unlock()
-	r.spent += cost
-	return r.spent
+	return r.getSpent().Update(func(v float64) float64 { return v + cost })
 }
 
 // remainingBudget returns the remaining cost budget, or 0 if unlimited.
@@ -291,13 +288,19 @@ func (r *Runner) remainingBudget() float64 {
 	if r.MaxCost <= 0 {
 		return 0
 	}
-	r.spentMu.Lock()
-	defer r.spentMu.Unlock()
-	remaining := r.MaxCost - r.spent
+	remaining := r.MaxCost - r.getSpent().Get()
 	if remaining < 0 {
 		return 0
 	}
 	return remaining
+}
+
+// getSpent lazily initializes and returns the spent value.
+func (r *Runner) getSpent() *csync.Value[float64] {
+	if r.spent == nil {
+		r.spent = csync.NewValue(0.0)
+	}
+	return r.spent
 }
 
 // runAgent executes a single agent and returns its result.
@@ -322,7 +325,7 @@ func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, pr
 			result.Status = StatusFailed
 			result.Duration = time.Since(start).Round(time.Millisecond).String()
 			result.Output = "pipeline cost budget exceeded"
-			logging.InfoContext(ctx, "pipeline: skipping agent %q — budget exhausted ($%.4f spent of $%.4f)", agentName, r.spent, r.MaxCost)
+			logging.InfoContext(ctx, "pipeline: skipping agent %q — budget exhausted ($%.4f spent of $%.4f)", agentName, r.getSpent().Get(), r.MaxCost)
 			return result
 		}
 		logging.InfoContext(ctx, "pipeline: agent %q budget: $%.4f remaining of $%.4f total", agentName, remaining, r.MaxCost)

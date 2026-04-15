@@ -200,8 +200,8 @@ func TestBuildHandlers(t *testing.T) {
 		extra    []Handler
 		wantDefs int
 	}{
-		{"without TaskConfig", false, nil, 8},
-		{"with TaskConfig", true, nil, 9},
+		{"without TaskConfig", false, nil, 11},
+		{"with TaskConfig", true, nil, 12},
 		{"with ExtraTools", true, []Handler{
 			{
 				Def: llms.Tool{
@@ -215,7 +215,7 @@ func TestBuildHandlers(t *testing.T) {
 					return "ok", nil
 				},
 			},
-		}, 10},
+		}, 13},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1641,9 +1641,7 @@ func TestTaskResultToolWithParentMetrics(t *testing.T) {
 	}
 	close(result.Done)
 
-	registry.mu.Lock()
-	registry.tasks["bg-test"] = result
-	registry.mu.Unlock()
+	registry.tasks.Set("bg-test", result)
 
 	cfg := TaskConfig{
 		AgentsDir:     "agents",
@@ -1692,8 +1690,8 @@ func TestBuildHandlersWithRegistry(t *testing.T) {
 	if _, ok := handlers["TaskResult"]; !ok {
 		t.Fatalf("expected TaskResult handler when registry is set")
 	}
-	if len(defs) != 10 {
-		t.Fatalf("tool defs = %d, want 10 (8 base + Task + TaskResult)", len(defs))
+	if len(defs) != 13 {
+		t.Fatalf("tool defs = %d, want 13 (11 base + Task + TaskResult)", len(defs))
 	}
 }
 
@@ -1797,9 +1795,9 @@ func TestBuildHandlersWithFindings(t *testing.T) {
 	if _, ok := handlers["ReportFinding"]; !ok {
 		t.Fatalf("expected ReportFinding handler when Findings store is set")
 	}
-	// 8 base + Task + TaskResult + ReportFinding = 11
-	if len(defs) != 11 {
-		t.Fatalf("tool defs = %d, want 11", len(defs))
+	// 11 base + Task + TaskResult + ReportFinding = 14
+	if len(defs) != 14 {
+		t.Fatalf("tool defs = %d, want 14", len(defs))
 	}
 
 	// Verify the handler actually works and attributes to the agent

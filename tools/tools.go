@@ -58,8 +58,9 @@ type editDeadlineKeyType struct{}
 
 // mutatingTools are tools that legitimately chain in long sequences.
 var mutatingTools = map[string]bool{
-	"Edit":  true,
-	"Write": true,
+	"Edit":      true,
+	"MultiEdit": true,
+	"Write":     true,
 }
 
 var highRepeatTools = map[string]bool{
@@ -196,7 +197,7 @@ func (e *EditEnforcer) CheckNames(names []string) bool {
 		return false
 	}
 	for _, name := range names {
-		if name == "Edit" {
+		if name == "Edit" || name == "MultiEdit" {
 			e.editSeen = true
 			return false
 		}
@@ -217,6 +218,8 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	ctx = InitReadCache(ctx)
 	ctx = InitIterationCounter(ctx)
 	ctx = InitTokenCalibration(ctx)
+	ctx = InitFileTracker(ctx)
+	ctx = InitBgCommandRegistry(ctx)
 
 	handlers, toolDefs := BuildHandlers(workingDir, taskCfg, ex)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
@@ -230,7 +233,10 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	if done {
 		return lastContent, nil
 	}
-	if loopErr != nil && !errors.Is(loopErr, metrics.ErrBudgetExceeded) {
+	if loopErr != nil && !errors.Is(loopErr, metrics.ErrBudgetExceeded) &&
+		!errors.Is(loopErr, ErrIterationLimitReached) &&
+		!errors.Is(loopErr, ErrLoopDetected) &&
+		!errors.Is(loopErr, ErrEditDeadlineReached) {
 		span.RecordError(loopErr)
 		span.SetStatus(codes.Error, loopErr.Error())
 		return lastContent, loopErr
@@ -339,6 +345,7 @@ func budgetWarningMessage(pctInt int, remaining float64) string {
 func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter, editDeadline int, m *metrics.Metrics, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
 	var lastContent string
 	var repeat RepeatTracker
+	var loopDetector LoopDetector
 	editEnforcer := NewEditEnforcer(editDeadline)
 	phaseEnforcer := NewPhaseEnforcer(defaultPhaseNudgeIters)
 	budgetWarned := make([]bool, len(budgetWarningThresholds))
@@ -381,11 +388,18 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		}
 
 		if checkEditDeadline(ctx, editEnforcer, mergedToolCalls) {
-			break
+			return lastContent, messages, ErrEditDeadlineReached, false
 		}
 
 		messages = appendToolCallMessage(messages, mergedContent, mergedToolCalls, ctx)
 		messages = executeToolCalls(ctx, messages, mergedToolCalls, handlers)
+
+		// Feed tool results into loop detector.
+		loopDetector.Record(mergedToolCalls, extractToolResults(messages))
+		if loopDetector.Stuck() {
+			logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results, stopping")
+			return lastContent, messages, ErrLoopDetected, false
+		}
 
 		if m != nil && m.BudgetExceeded() {
 			logging.InfoContext(ctx, "budget exceeded ($%.4f >= $%.4f max), stopping tool loop", m.TotalCostWithChildren(), m.MaxCost)
@@ -397,7 +411,23 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		messages = injectBudgetWarnings(ctx, m, budgetWarned, messages)
 		messages = compactMessages(ctx, messages)
 	}
-	return lastContent, messages, nil, false
+	return lastContent, messages, ErrIterationLimitReached, false
+}
+
+// extractToolResults pulls tool call IDs and their result content from the
+// last message in the conversation (which should be the tool-result message).
+func extractToolResults(messages []llms.MessageContent) map[string]string {
+	results := make(map[string]string)
+	if len(messages) == 0 {
+		return results
+	}
+	last := messages[len(messages)-1]
+	for _, part := range last.Parts {
+		if tcr, ok := part.(llms.ToolCallResponse); ok {
+			results[tcr.ToolCallID] = tcr.Content
+		}
+	}
+	return results
 }
 
 func extractTokenUsage(gi map[string]any, m *metrics.Metrics, ctx ...context.Context) {
@@ -596,10 +626,12 @@ func appendToolCallMessage(messages []llms.MessageContent, textContent string, t
 // serialTools are tools that must not run concurrently because they
 // mutate shared state (filesystem, executor) in order-dependent ways.
 var serialTools = map[string]bool{
-	"Bash":  true,
-	"Edit":  true,
-	"Write": true,
-	"Task":  true,
+	"Bash":           true,
+	"BashBackground": true,
+	"Edit":           true,
+	"MultiEdit":      true,
+	"Write":          true,
+	"Task":           true,
 }
 
 func executeToolCalls(ctx context.Context, messages []llms.MessageContent, toolCalls []llms.ToolCall, handlers map[string]Handler) []llms.MessageContent {
@@ -708,10 +740,11 @@ func argString(args map[string]interface{}, keys ...string) string {
 
 // simpleArgKeys maps tool names to the single arg key that summarizes them.
 var simpleArgKeys = map[string]string{
-	"Read":  "path",
-	"Write": "path",
-	"Edit":  "path",
-	"Glob":  "pattern",
+	"Read":      "path",
+	"Write":     "path",
+	"Edit":      "path",
+	"MultiEdit": "path",
+	"Glob":      "pattern",
 }
 
 func toolArgsSummary(toolName, argsJSON string) string {
@@ -763,6 +796,9 @@ func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor)
 	add(Handler{Def: definitionGlob(), Call: globTool(workingDir)})
 	add(Handler{Def: definitionGrep(), Call: grepTool(workingDir)})
 	add(Handler{Def: definitionBash(), Call: bashTool(ex)})
+	add(Handler{Def: definitionBashBg(), Call: bashBackgroundTool(ex)})
+	add(Handler{Def: definitionBashOutput(), Call: bashOutputTool()})
+	add(Handler{Def: definitionMultiEdit(), Call: trackEdits(multiEditTool(workingDir))})
 	add(Handler{Def: definitionSystemInfo(), Call: systemInfoTool(ex)})
 	add(Handler{Def: definitionRepoMap(), Call: repoMapTool(workingDir)})
 
@@ -938,6 +974,11 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 			return "", err
 		}
 
+		// Record that this file was read (for edit safety checks).
+		if ft := GetFileTracker(ctx); ft != nil {
+			ft.RecordRead(path)
+		}
+
 		// If using offset/limit, skip cache and smart truncation — targeted read.
 		if payload.Offset > 0 || payload.Limit > 0 {
 			return sliceLines(data, payload.Offset, payload.Limit), nil
@@ -1064,7 +1105,7 @@ func editTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		New        string   `json:"new"`
 		ReplaceAll FlexBool `json:"replace_all"`
 	}
-	return func(_ context.Context, rawArgs []byte) (string, error) {
+	return func(ctx context.Context, rawArgs []byte) (string, error) {
 		var payload args
 		if err := json.Unmarshal(rawArgs, &payload); err != nil {
 			return "", fmt.Errorf("invalid args: %w", err)
@@ -1072,6 +1113,11 @@ func editTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		path, err := ResolvePath(workingDir, payload.Path)
 		if err != nil {
 			return "", err
+		}
+		if ft := GetFileTracker(ctx); ft != nil {
+			if err := ft.ValidateBeforeEdit(path); err != nil {
+				return "", err
+			}
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -1272,6 +1318,10 @@ func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (s
 		command := strings.TrimSpace(payload.Command)
 		if command == "" {
 			return "", fmt.Errorf("command is required")
+		}
+
+		if blocked, reason := IsBlockedCommand(command); blocked {
+			return "", fmt.Errorf("%s", reason)
 		}
 
 		// Add executor metadata to the current span so traces show
