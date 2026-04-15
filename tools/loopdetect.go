@@ -3,7 +3,6 @@ package tools
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"sort"
 
 	"github.com/tmc/langchaingo/llms"
@@ -42,11 +41,12 @@ func stepSignature(calls []llms.ToolCall, results map[string]string) string {
 		if tc.FunctionCall == nil {
 			continue
 		}
-		fmt.Fprintf(h, "%s\x00%s\x00%s\x00",
-			tc.FunctionCall.Name,
-			tc.FunctionCall.Arguments,
-			results[tc.ID],
-		)
+		h.Write([]byte(tc.FunctionCall.Name))
+		h.Write([]byte{0})
+		h.Write([]byte(tc.FunctionCall.Arguments))
+		h.Write([]byte{0})
+		h.Write([]byte(results[tc.ID]))
+		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

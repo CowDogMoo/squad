@@ -61,7 +61,10 @@ func TestResolveValue_MixedCommandAndEnv(t *testing.T) {
 }
 
 func TestResolveValue_UnsetVar(t *testing.T) {
-	os.Unsetenv("SQUAD_TEST_UNSET_VAR_XYZ")
+	t.Setenv("SQUAD_TEST_UNSET_VAR_XYZ", "")
+	if err := os.Unsetenv("SQUAD_TEST_UNSET_VAR_XYZ"); err != nil {
+		t.Fatalf("failed to unset env var: %v", err)
+	}
 	_, err := ResolveValue("$SQUAD_TEST_UNSET_VAR_XYZ")
 	if err == nil {
 		t.Fatal("expected error for unset variable")

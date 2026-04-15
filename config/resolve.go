@@ -45,9 +45,10 @@ func resolveCommands(s string) (string, error) {
 			start := i + 2
 			j := start
 			for j < len(s) && depth > 0 {
-				if s[j] == '(' {
+				switch s[j] {
+				case '(':
 					depth++
-				} else if s[j] == ')' {
+				case ')':
 					depth--
 				}
 				if depth > 0 {

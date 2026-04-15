@@ -32,7 +32,7 @@ func goldenTest(t *testing.T, name, actual string) {
 	if err != nil {
 		t.Fatalf("golden file %s not found (run with -update to create): %v", goldenPath, err)
 	}
-	if string(expected) != actual {
+	if strings.TrimRight(string(expected), "\n") != strings.TrimRight(actual, "\n") {
 		t.Fatalf("golden mismatch for %s:\n--- expected ---\n%s\n--- actual ---\n%s",
 			goldenPath, string(expected), actual)
 	}

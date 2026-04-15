@@ -222,7 +222,7 @@ func classifyToolCall(s *compactionStats, name, args string) {
 func writeCappedList(sb *strings.Builder, label string, items []string, cap int) {
 	sb.WriteString(label)
 	if len(items) > cap {
-		sb.WriteString(fmt.Sprintf("%s ... and %d more", strings.Join(items[:cap], ", "), len(items)-cap))
+		fmt.Fprintf(sb, "%s ... and %d more", strings.Join(items[:cap], ", "), len(items)-cap)
 	} else {
 		sb.WriteString(strings.Join(items, ", "))
 	}
