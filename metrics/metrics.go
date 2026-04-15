@@ -69,6 +69,22 @@ func (m *Metrics) BudgetExceeded() bool {
 	return maxCost > 0 && m.TotalCostWithChildren() >= maxCost
 }
 
+// BudgetUsedPct returns the fraction of the cost budget consumed (0.0–1.0).
+// Returns 0 when no budget is set.
+func (m *Metrics) BudgetUsedPct() float64 {
+	m.mu.Lock()
+	maxCost := m.MaxCost
+	m.mu.Unlock()
+	if maxCost <= 0 {
+		return 0
+	}
+	pct := m.TotalCostWithChildren() / maxCost
+	if pct > 1 {
+		return 1
+	}
+	return pct
+}
+
 // RemainingBudget returns the remaining cost budget in USD.
 func (m *Metrics) RemainingBudget() float64 {
 	m.mu.Lock()

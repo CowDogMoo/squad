@@ -887,3 +887,38 @@ func TestFetchPricingVariants(t *testing.T) {
 		})
 	}
 }
+
+func TestBudgetUsedPctNoMaxCost(t *testing.T) {
+	t.Parallel()
+	m := New("openai", "gpt-4o")
+	if pct := m.BudgetUsedPct(); pct != 0 {
+		t.Fatalf("BudgetUsedPct() = %v, want 0 when no MaxCost set", pct)
+	}
+}
+
+func TestBudgetUsedPctPartial(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping pricing test in short mode")
+	}
+	m := New("openai", "gpt-4o")
+	m.SetMaxCost(10.00)
+	// Add some tokens to create a partial cost.
+	m.AddTokens(100000, 10000)
+
+	pct := m.BudgetUsedPct()
+	if pct <= 0 || pct >= 1.0 {
+		t.Fatalf("BudgetUsedPct() = %v, want between 0 and 1", pct)
+	}
+}
+
+func TestBudgetUsedPctExceeded(t *testing.T) {
+	t.Parallel()
+	m := New("openai", "gpt-4o")
+	m.SetMaxCost(0.0001)
+	m.AddTokens(1_000_000, 1_000_000)
+
+	pct := m.BudgetUsedPct()
+	if pct != 1.0 {
+		t.Fatalf("BudgetUsedPct() = %v, want 1.0 when budget exceeded", pct)
+	}
+}

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -410,6 +412,146 @@ func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data
 // The task instructions are included in the system bundle. The CLI prompt becomes the user message.
 // If no CLI prompt is provided, a default user message is used.
 // The vars parameter allows passing custom template variables (e.g., COVERAGE_TARGET=85).
+// toolEfficiencyPrompt is injected into all agent system prompts to encourage
+// batching of tool calls and efficient file reading.
+const toolEfficiencyPrompt = `## Tool Efficiency
+
+When you need to perform multiple independent operations, invoke ALL relevant tools in a single response:
+- Reading multiple files: call Read for ALL of them in one response, not one at a time.
+- Making multiple edits: call Edit for ALL of them in one response.
+- Multiple searches: call Grep for ALL patterns in one response.
+
+Do NOT read files you have already read unless you need to verify edits you just made.
+Do NOT spend more than a few iterations exploring before making your first edit.
+Prefer using Read with offset/limit for large files instead of reading the entire file.
+`
+
+// compactRepoSummary generates a brief structural overview of the working directory.
+// This is injected into the system prompt so agents don't waste iterations
+// discovering the basic structure of the codebase.
+// repoSummarySkipDirs are directories excluded from the repo summary walk.
+var repoSummarySkipDirs = map[string]bool{
+	".venv": true, "venv": true, "__pycache__": true, ".tox": true,
+	"node_modules": true, ".git": true, ".mypy_cache": true,
+	".pytest_cache": true, ".ruff_cache": true, ".eggs": true,
+	"target": true, "build": true, "dist": true, "vendor": true,
+}
+
+type dirInfo struct {
+	files int
+	exts  map[string]int
+}
+
+// repoSummaryVisitor returns the WalkDirFunc used by compactRepoSummary.
+func repoSummaryVisitor(workingDir string, dirs map[string]*dirInfo, totalFiles *int) fs.WalkDirFunc {
+	return func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(workingDir, path)
+		if rel == "." {
+			rel = ""
+		}
+		if d.IsDir() {
+			return repoSummaryVisitDir(rel, d)
+		}
+		return repoSummaryVisitFile(rel, d, dirs, totalFiles)
+	}
+}
+
+func repoSummaryVisitDir(rel string, d fs.DirEntry) error {
+	name := d.Name()
+	if (strings.HasPrefix(name, ".") && name != ".") || repoSummarySkipDirs[name] {
+		return filepath.SkipDir
+	}
+	depth := 0
+	if rel != "" {
+		depth = strings.Count(rel, string(filepath.Separator)) + 1
+	}
+	if depth > 3 {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+func repoSummaryVisitFile(rel string, d fs.DirEntry, dirs map[string]*dirInfo, totalFiles *int) error {
+	if !d.Type().IsRegular() || strings.HasPrefix(d.Name(), ".") {
+		return nil
+	}
+	*totalFiles++
+	dir := filepath.Dir(rel)
+	if dir == "." {
+		dir = "."
+	}
+	if dirs[dir] == nil {
+		dirs[dir] = &dirInfo{exts: make(map[string]int)}
+	}
+	dirs[dir].files++
+	if ext := strings.ToLower(filepath.Ext(d.Name())); ext != "" {
+		dirs[dir].exts[ext]++
+	}
+	return nil
+}
+
+func compactRepoSummary(workingDir string) string {
+	dirs := make(map[string]*dirInfo)
+	totalFiles := 0
+
+	_ = filepath.WalkDir(workingDir, repoSummaryVisitor(workingDir, dirs, &totalFiles))
+
+	if totalFiles == 0 {
+		return ""
+	}
+
+	dirNames := make([]string, 0, len(dirs))
+	for d := range dirs {
+		dirNames = append(dirNames, d)
+	}
+	sort.Strings(dirNames)
+
+	var sb strings.Builder
+	sb.WriteString("## Repository Structure\n\n")
+	fmt.Fprintf(&sb, "Working directory: %s (%d files)\n\n", workingDir, totalFiles)
+	sb.WriteString("```\n")
+	for _, dir := range dirNames {
+		info := dirs[dir]
+		display := dir
+		if display == "." {
+			display = "./"
+		} else {
+			display += "/"
+		}
+		topExts := topNExts(info.exts, 3)
+		fmt.Fprintf(&sb, "%-40s %3d files  %s\n", display, info.files, topExts)
+	}
+	sb.WriteString("```\n")
+	sb.WriteString("\nUse RepoMap for detailed module/dependency analysis. Use Read with offset/limit for large files.\n")
+	return sb.String()
+}
+
+// topNExts returns the top N file extensions as a compact string.
+func topNExts(exts map[string]int, n int) string {
+	type extCount struct {
+		ext   string
+		count int
+	}
+	sorted := make([]extCount, 0, len(exts))
+	for e, c := range exts {
+		sorted = append(sorted, extCount{e, c})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].count > sorted[j].count
+	})
+	if len(sorted) > n {
+		sorted = sorted[:n]
+	}
+	parts := make([]string, len(sorted))
+	for i, ec := range sorted {
+		parts[i] = fmt.Sprintf("%s(%d)", ec.ext, ec.count)
+	}
+	return strings.Join(parts, " ")
+}
+
 // buildSystemMessage assembles the system prompt content from all bundle components.
 func buildSystemMessage(manifest *Manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent string, refs []string) bytes.Buffer {
 	var sys bytes.Buffer
@@ -448,6 +590,17 @@ func buildSystemMessage(manifest *Manifest, displayMode, workingDir, wrapperCont
 				sys.WriteString("\n")
 			}
 		}
+	}
+
+	// Inject tool efficiency instructions into all agents.
+	sys.WriteString("\n\n")
+	sys.WriteString(toolEfficiencyPrompt)
+
+	// Inject compact repo structure summary so agents don't waste
+	// iterations discovering the basic layout.
+	if repoSummary := compactRepoSummary(workingDir); repoSummary != "" {
+		sys.WriteString("\n")
+		sys.WriteString(repoSummary)
 	}
 
 	return sys

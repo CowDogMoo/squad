@@ -213,6 +213,11 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	)
 	defer span.End()
 
+	// Initialize efficiency features on context.
+	ctx = InitReadCache(ctx)
+	ctx = InitIterationCounter(ctx)
+	ctx = InitTokenCalibration(ctx)
+
 	handlers, toolDefs := BuildHandlers(workingDir, taskCfg, ex)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
@@ -263,11 +268,82 @@ func checkEditDeadline(ctx context.Context, enforcer *EditEnforcer, toolCalls []
 	return false
 }
 
+// budgetWarningThresholds defines the cost-budget percentages at which a
+// warning message is injected into the conversation so the agent can
+// prioritise wrapping up.
+var budgetWarningThresholds = []float64{0.25, 0.50, 0.75}
+
+// defaultPhaseNudgeIters is the number of read-only iterations before
+// injecting a progress-check message.
+const defaultPhaseNudgeIters = 5
+
+// extractToolNames collects tool names from tool calls.
+func extractToolNames(calls []llms.ToolCall) []string {
+	names := make([]string, 0, len(calls))
+	for _, tc := range calls {
+		if tc.FunctionCall != nil {
+			names = append(names, tc.FunctionCall.Name)
+		}
+	}
+	return names
+}
+
+// injectPhaseNudge checks the phase enforcer and appends a nudge message if needed.
+func injectPhaseNudge(ctx context.Context, pe *PhaseEnforcer, toolNames []string, messages []llms.MessageContent, iteration int) []llms.MessageContent {
+	nudge := pe.ObserveTools(toolNames)
+	if nudge == "" {
+		return messages
+	}
+	logging.InfoContext(ctx, "injecting phase nudge at iteration %d", iteration)
+	return append(messages, llms.MessageContent{
+		Role:  llms.ChatMessageTypeHuman,
+		Parts: []llms.ContentPart{llms.TextPart(nudge)},
+	})
+}
+
+// injectBudgetWarnings checks budget thresholds and appends warning messages.
+func injectBudgetWarnings(ctx context.Context, m *metrics.Metrics, warned []bool, messages []llms.MessageContent) []llms.MessageContent {
+	if m == nil || m.MaxCost <= 0 {
+		return messages
+	}
+	pct := m.BudgetUsedPct()
+	for idx, threshold := range budgetWarningThresholds {
+		if warned[idx] || pct < threshold {
+			continue
+		}
+		warned[idx] = true
+		pctInt := int(threshold * 100)
+		remaining := m.RemainingBudget()
+		msg := budgetWarningMessage(pctInt, remaining)
+		logging.InfoContext(ctx, "injecting budget warning at %d%% (remaining=$%.4f)", pctInt, remaining)
+		messages = append(messages, llms.MessageContent{
+			Role:  llms.ChatMessageTypeHuman,
+			Parts: []llms.ContentPart{llms.TextPart(msg)},
+		})
+	}
+	return messages
+}
+
+// budgetWarningMessage returns the warning text for a given budget percentage.
+func budgetWarningMessage(pctInt int, remaining float64) string {
+	if pctInt == 25 {
+		return fmt.Sprintf(ProgressCheckPrompt, remaining)
+	}
+	return fmt.Sprintf(
+		"[BUDGET WARNING] You have used %d%% of your cost budget ($%.2f remaining). "+
+			"Prioritise completing your current work and producing output. "+
+			"Do not start reading new files — finish what you have and wrap up.",
+		pctInt, remaining)
+}
+
 func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter, editDeadline int, m *metrics.Metrics, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
 	var lastContent string
 	var repeat RepeatTracker
 	editEnforcer := NewEditEnforcer(editDeadline)
+	phaseEnforcer := NewPhaseEnforcer(defaultPhaseNudgeIters)
+	budgetWarned := make([]bool, len(budgetWarningThresholds))
 	for i := 0; i < maxIter; i++ {
+		SetIteration(ctx, i)
 		logIterationStart(ctx, i, maxIter, m)
 		iterStart := time.Now()
 		response, err := retryGenerateContent(ctx, llm, messages, callOpts)
@@ -316,12 +392,15 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 			return lastContent, messages, metrics.ErrBudgetExceeded, false
 		}
 
+		toolNames := extractToolNames(mergedToolCalls)
+		messages = injectPhaseNudge(ctx, phaseEnforcer, toolNames, messages, i)
+		messages = injectBudgetWarnings(ctx, m, budgetWarned, messages)
 		messages = compactMessages(ctx, messages)
 	}
 	return lastContent, messages, nil, false
 }
 
-func extractTokenUsage(gi map[string]any, m *metrics.Metrics) {
+func extractTokenUsage(gi map[string]any, m *metrics.Metrics, ctx ...context.Context) {
 	if m == nil {
 		return
 	}
@@ -333,6 +412,15 @@ func extractTokenUsage(gi map[string]any, m *metrics.Metrics) {
 
 	if input > 0 || output > 0 {
 		m.AddTokens(input, output)
+	}
+
+	// Feed actual input token count into calibration if context is available.
+	if input > 0 && len(ctx) > 0 {
+		if tc := GetTokenCalibration(ctx[0]); tc != nil {
+			// We don't have the exact estimated count here, but we record
+			// it so the overall ratio can be calibrated from total counts.
+			tc.Record(int(input), int(input)) // self-calibrating baseline
+		}
 	}
 }
 
@@ -346,7 +434,7 @@ func mergeChoices(ctx context.Context, choices []*llms.ContentChoice, m *metrics
 		if gi := ch.GenerationInfo; gi != nil {
 			logging.DebugContext(ctx, "generation info: %v", gi)
 			if m != nil {
-				extractTokenUsage(gi, m)
+				extractTokenUsage(gi, m, ctx)
 			}
 		}
 		if ch.Content != "" {
@@ -410,7 +498,7 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 		if m != nil {
 			m.IncrementIterations()
 			if gi := response.Choices[0].GenerationInfo; gi != nil {
-				extractTokenUsage(gi, m)
+				extractTokenUsage(gi, m, ctx)
 			}
 		}
 		if response.Choices[0].Content != "" {
@@ -836,7 +924,7 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		Offset int    `json:"offset,omitempty"` // 1-based start line
 		Limit  int    `json:"limit,omitempty"`  // max lines
 	}
-	return func(_ context.Context, rawArgs []byte) (string, error) {
+	return func(ctx context.Context, rawArgs []byte) (string, error) {
 		var payload args
 		if err := json.Unmarshal(rawArgs, &payload); err != nil {
 			return "", fmt.Errorf("invalid args: %w", err)
@@ -850,14 +938,43 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 			return "", err
 		}
 
+		// If using offset/limit, skip cache and smart truncation — targeted read.
 		if payload.Offset > 0 || payload.Limit > 0 {
 			return sliceLines(data, payload.Offset, payload.Limit), nil
 		}
 
+		lineCount := strings.Count(string(data), "\n") + 1
+
+		// Check read cache for duplicate reads.
+		if rc := GetReadCache(ctx); rc != nil {
+			hash := HashContent(data)
+			if entry, hit := rc.Check(path, hash); hit {
+				logReadCacheHit(ctx, payload.Path, entry)
+				return fmt.Sprintf(
+					"[File already read in iteration %d — content unchanged. %d lines, %d bytes. "+
+						"Do NOT re-read this file. Use your earlier knowledge of its contents.]",
+					entry.Iteration, entry.Lines, entry.Bytes), nil
+			}
+			rc.Store(path, hash, lineCount, len(data), GetIteration(ctx))
+		}
+
+		// Smart truncation for large files.
 		if len(data) > maxReadBytes {
 			return truncateHeadTail(data), nil
 		}
-		return string(data), nil
+
+		classification := ClassifyFileSize(lineCount, len(data))
+		content := string(data)
+		switch classification.Action {
+		case "truncate":
+			headLines := largeFileLineThreshold * 3 / 4
+			tailLines := largeFileLineThreshold / 4
+			return classification.Warning + "\n" + TruncateToLines(content, headLines, tailLines), nil
+		case "warn":
+			return classification.Warning + "\n" + content, nil
+		default:
+			return content, nil
+		}
 	}
 }
 
@@ -1167,10 +1284,26 @@ func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (s
 
 		output, err := ex.Execute(ctx, command)
 		if err != nil {
-			return string(limitOutput(output)), fmt.Errorf("command failed: %w", err)
+			return TruncateToolOutputHeadTail(string(limitOutput(output)), maxToolResultBytes), fmt.Errorf("command failed: %w", err)
 		}
-		return string(limitOutput(output)), nil
+		return TruncateToolOutputHeadTail(string(limitOutput(output)), maxToolResultBytes), nil
 	}
+}
+
+// tokenCalibrationKeyType is the context key for TokenCalibration.
+type tokenCalibrationKeyType struct{}
+
+// InitTokenCalibration attaches a TokenCalibration to the context.
+func InitTokenCalibration(ctx context.Context) context.Context {
+	return context.WithValue(ctx, tokenCalibrationKeyType{}, NewTokenCalibration())
+}
+
+// GetTokenCalibration retrieves the TokenCalibration from context, or nil.
+func GetTokenCalibration(ctx context.Context) *TokenCalibration {
+	if tc, ok := ctx.Value(tokenCalibrationKeyType{}).(*TokenCalibration); ok {
+		return tc
+	}
+	return nil
 }
 
 func estimateTokens(messages []llms.MessageContent) int {
@@ -1188,8 +1321,17 @@ func estimateTokens(messages []llms.MessageContent) int {
 	return total
 }
 
+// estimateTokensCalibrated uses token calibration data if available.
+func estimateTokensCalibrated(ctx context.Context, messages []llms.MessageContent) int {
+	raw := estimateTokens(messages)
+	if tc := GetTokenCalibration(ctx); tc != nil && tc.Samples() >= 2 {
+		return tc.CalibratedEstimate(raw)
+	}
+	return raw
+}
+
 func compactMessages(ctx context.Context, messages []llms.MessageContent) []llms.MessageContent {
-	tokens := estimateTokens(messages)
+	tokens := estimateTokensCalibrated(ctx, messages)
 	if tokens < contextTokenThreshold {
 		return messages
 	}
@@ -1203,6 +1345,11 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent) []llms
 		protectedTail = len(messages) - protectedHead
 	}
 	compactEnd := len(messages) - protectedTail
+
+	// Build a structured summary of what happened before compaction,
+	// so the agent retains awareness of files read, patterns searched, etc.
+	middleMessages := messages[protectedHead:compactEnd]
+	summary := CompactionSummary(middleMessages)
 
 	compacted := make([]llms.MessageContent, len(messages))
 	copy(compacted, messages)
@@ -1224,6 +1371,21 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent) []llms
 			}
 		}
 		compacted[i].Parts = newParts
+	}
+
+	// Inject the session state summary as a system message right after the
+	// protected head, so the agent knows what it has already done.
+	if summary != "" {
+		summaryMsg := llms.MessageContent{
+			Role:  llms.ChatMessageTypeHuman,
+			Parts: []llms.ContentPart{llms.TextPart(summary)},
+		}
+		// Insert after protected head messages.
+		result := make([]llms.MessageContent, 0, len(compacted)+1)
+		result = append(result, compacted[:protectedHead]...)
+		result = append(result, summaryMsg)
+		result = append(result, compacted[protectedHead:]...)
+		compacted = result
 	}
 
 	after := estimateTokens(compacted)

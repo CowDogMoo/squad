@@ -2110,3 +2110,179 @@ func TestBuildHandlersNilTaskConfig(t *testing.T) {
 		}
 	}
 }
+
+// captureLLM records the messages passed to each GenerateContent call so
+// tests can inspect injected budget warning messages.
+type captureLLM struct {
+	responses []*llms.ContentResponse
+	calls     int
+	captured  [][]llms.MessageContent
+}
+
+func (c *captureLLM) GenerateContent(_ context.Context, msgs []llms.MessageContent, _ ...llms.CallOption) (*llms.ContentResponse, error) {
+	cp := make([]llms.MessageContent, len(msgs))
+	copy(cp, msgs)
+	c.captured = append(c.captured, cp)
+
+	if c.calls >= len(c.responses) {
+		return &llms.ContentResponse{
+			Choices: []*llms.ContentChoice{{Content: "done"}},
+		}, nil
+	}
+	resp := c.responses[c.calls]
+	c.calls++
+	return resp, nil
+}
+
+func (c *captureLLM) Call(context.Context, string, ...llms.CallOption) (string, error) {
+	return "", nil
+}
+
+func TestToolLoopBudgetWarnings(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Use ollama provider so cost is $0 per token — we control cost via
+	// pre-loaded tokens on an "openai" metrics instance instead.
+	// Each iteration the LLM returns a Read tool call; after tool execution
+	// the budget percentage is checked and warnings injected.
+	//
+	// We set MaxCost = $1.00 (openai gpt-4o pricing) and pre-load tokens
+	// so that after iteration 1 we're at ~55% and after iteration 2 we're
+	// at ~80%, triggering both the 50% and 75% warnings.
+
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(1.00)
+
+	llm := &captureLLM{responses: []*llms.ContentResponse{
+		// Iteration 1: tool call + token usage that pushes past 50%
+		{Choices: []*llms.ContentChoice{{
+			ToolCalls: []llms.ToolCall{{
+				ID:   "1",
+				Type: "function",
+				FunctionCall: &llms.FunctionCall{
+					Name:      "Read",
+					Arguments: `{"path":"a.txt"}`,
+				},
+			}},
+			GenerationInfo: map[string]any{
+				"PromptTokens":     int64(100000),
+				"CompletionTokens": int64(20000),
+			},
+		}}},
+		// Iteration 2: another tool call pushing past 75%
+		{Choices: []*llms.ContentChoice{{
+			ToolCalls: []llms.ToolCall{{
+				ID:   "2",
+				Type: "function",
+				FunctionCall: &llms.FunctionCall{
+					Name:      "Read",
+					Arguments: `{"path":"a.txt"}`,
+				},
+			}},
+			GenerationInfo: map[string]any{
+				"PromptTokens":     int64(100000),
+				"CompletionTokens": int64(20000),
+			},
+		}}},
+		// Iteration 3: final response with no tool calls
+		{Choices: []*llms.ContentChoice{{
+			Content: "final output",
+		}}},
+	}}
+
+	// Pre-load tokens so the first iteration's addition crosses 50%.
+	// gpt-4o pricing: $2.50/M input, $10/M output.
+	// Pre-load 100k input + 10k output = $0.25 + $0.10 = $0.35.
+	// After iter 1 adds 100k input + 20k output = $0.25 + $0.20 = $0.45
+	// Cumulative after iter 1: $0.80 = 80% — triggers BOTH 50% and 75%.
+	// After iter 2 adds another batch, cumulative exceeds $1.00 — budget exceeded.
+	m.AddTokens(100000, 10000)
+
+	handlers, _ := BuildHandlers(dir, nil, &executor.LocalExecutor{WorkingDir: dir})
+
+	_, _, loopErr, _ := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user"), handlers, 10, 0, m, nil)
+	// Budget may be exceeded after iter 2 — that's fine, we just care that
+	// warnings were injected before that happened.
+	if loopErr != nil && !errors.Is(loopErr, metrics.ErrBudgetExceeded) {
+		t.Fatalf("unexpected error: %v", loopErr)
+	}
+
+	// Inspect captured messages for budget warnings.
+	var warnings50, warnings75 int
+	for _, msgs := range llm.captured {
+		for _, msg := range msgs {
+			for _, part := range msg.Parts {
+				if tp, ok := part.(llms.TextContent); ok {
+					if strings.Contains(tp.Text, "[BUDGET WARNING]") && strings.Contains(tp.Text, "50%") {
+						warnings50++
+					}
+					if strings.Contains(tp.Text, "[BUDGET WARNING]") && strings.Contains(tp.Text, "75%") {
+						warnings75++
+					}
+				}
+			}
+		}
+	}
+
+	if warnings50 == 0 {
+		t.Error("expected 50% budget warning to be injected, but found none")
+	}
+	if warnings75 == 0 {
+		t.Error("expected 75% budget warning to be injected, but found none")
+	}
+}
+
+func TestToolLoopNoBudgetWarningsWithoutMaxCost(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// No MaxCost set — no warnings should be injected.
+	m := metrics.New("openai", "gpt-4o")
+
+	llm := &captureLLM{responses: []*llms.ContentResponse{
+		{Choices: []*llms.ContentChoice{{
+			ToolCalls: []llms.ToolCall{{
+				ID:   "1",
+				Type: "function",
+				FunctionCall: &llms.FunctionCall{
+					Name:      "Read",
+					Arguments: `{"path":"a.txt"}`,
+				},
+			}},
+			GenerationInfo: map[string]any{
+				"PromptTokens":     int64(500000),
+				"CompletionTokens": int64(500000),
+			},
+		}}},
+		{Choices: []*llms.ContentChoice{{Content: "done"}}},
+	}}
+
+	handlers, _ := BuildHandlers(dir, nil, &executor.LocalExecutor{WorkingDir: dir})
+
+	_, _, loopErr, done := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user"), handlers, 10, 0, m, nil)
+	if loopErr != nil {
+		t.Fatalf("unexpected error: %v", loopErr)
+	}
+	if !done {
+		t.Fatal("expected done=true")
+	}
+
+	for _, msgs := range llm.captured {
+		for _, msg := range msgs {
+			for _, part := range msg.Parts {
+				if tp, ok := part.(llms.TextContent); ok {
+					if strings.Contains(tp.Text, "[BUDGET WARNING]") {
+						t.Fatalf("no budget warning expected when MaxCost=0, but found: %s", tp.Text)
+					}
+				}
+			}
+		}
+	}
+}
