@@ -1163,6 +1163,23 @@ func TestBuildBundle_DisableTaskPropagated(t *testing.T) {
 	}
 }
 
+func TestBuildBundle_EditDeadlinePropagated(t *testing.T) {
+	t.Parallel()
+	manifest := "name: Demo\nversion: v1\nentrypoint: system.txt\nwrapper: wrapper.txt\nedit_deadline: 8\n"
+	dir, _ := setupTestAgent(t, "demo", map[string]string{
+		"agent.yaml":  manifest,
+		"system.txt":  "system",
+		"wrapper.txt": "wrapper",
+	})
+	bundle, err := BuildBundle(dir, "demo", "prompt", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	if bundle.EditDeadline != 8 {
+		t.Fatalf("expected Bundle.EditDeadline = 8, got %d", bundle.EditDeadline)
+	}
+}
+
 func TestResolvedModels_FromModelsList(t *testing.T) {
 	t.Parallel()
 	m := &Manifest{

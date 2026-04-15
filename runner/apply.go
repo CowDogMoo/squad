@@ -41,6 +41,10 @@ func validateActionableResponse(ctx context.Context, response string) error {
 	if tools.EditsApplied(ctx) {
 		return nil
 	}
+	if tools.EditDeadlineReached(ctx) {
+		logging.InfoContext(ctx, "edit deadline reached with no edits — treating as valid no-changes outcome")
+		return nil
+	}
 	if _, err := extractUnifiedDiff(response); err == nil {
 		return nil
 	}

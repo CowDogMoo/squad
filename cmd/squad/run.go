@@ -92,37 +92,38 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 
 	cfg := configFromContext(cmd)
 	return &runner.RunOptions{
-		Agent:             agent,
-		AgentsDir:         agentsDir,
-		WorkingDir:        workingDir,
-		APIKey:            v.GetString("provider.token"),
-		BaseURL:           v.GetString("provider.base_url"),
-		Org:               v.GetString("provider.organization"),
-		APIVersion:        v.GetString("provider.api_version"),
-		APIType:           v.GetString("provider.api_type"),
-		OpenAICompatMax:   v.GetBool("provider.openai_compat_max_tokens"),
-		Provider:          v.GetString("provider.default"),
-		Model:             v.GetString("model.default"),
-		Temperature:       v.GetFloat64("model.temperature"),
-		MaxTokens:         v.GetInt("model.max_tokens"),
-		System:            system,
-		Output:            output,
-		Print:             printOut,
-		BundleOut:         bundleOut,
-		PrintBundle:       printBundle,
-		DryRun:            dryRun,
-		RequireActionable: requireActionable,
-		Apply:             apply,
-		ApplyFallback:     applyFallback,
-		NumCtx:            v.GetInt("provider.num_ctx"),
-		MaxIterations:     maxIter,
-		MaxCost:           maxCost,
-		Mode:              mode,
-		Vars:              vars,
-		ConfigAvailable:   cfg != nil,
-		Config:            cfg,
-		MCPServers:        mcpServers,
-		Stream:            v.GetBool("run.stream"),
+		Agent:              agent,
+		AgentsDir:          agentsDir,
+		WorkingDir:         workingDir,
+		APIKey:             v.GetString("provider.token"),
+		BaseURL:            v.GetString("provider.base_url"),
+		Org:                v.GetString("provider.organization"),
+		APIVersion:         v.GetString("provider.api_version"),
+		APIType:            v.GetString("provider.api_type"),
+		OpenAICompatMax:    v.GetBool("provider.openai_compat_max_tokens"),
+		Provider:           v.GetString("provider.default"),
+		Model:              v.GetString("model.default"),
+		Temperature:        v.GetFloat64("model.temperature"),
+		MaxTokens:          v.GetInt("model.max_tokens"),
+		System:             system,
+		Output:             output,
+		Print:              printOut,
+		BundleOut:          bundleOut,
+		PrintBundle:        printBundle,
+		DryRun:             dryRun,
+		RequireActionable:  requireActionable,
+		Apply:              apply,
+		ApplyFallback:      applyFallback,
+		NumCtx:             v.GetInt("provider.num_ctx"),
+		MaxIterations:      maxIter,
+		MaxCost:            maxCost,
+		Mode:               mode,
+		Vars:               vars,
+		ConfigAvailable:    cfg != nil,
+		Config:             cfg,
+		MCPServers:         mcpServers,
+		Stream:             v.GetBool("run.stream"),
+		MaxConcurrentTasks: v.GetInt("run.max_concurrent_tasks"),
 	}
 }
 
@@ -187,6 +188,7 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 		{"run.max_iterations", "max-iterations"},
 		{"run.max_cost", "max-cost"},
 		{"run.stream", "stream"},
+		{"run.max_concurrent_tasks", "max-concurrent-tasks"},
 	} {
 		if err := bind(pair[0], pair[1]); err != nil {
 			return err
@@ -256,6 +258,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().StringArray("var", nil, "Template variable in KEY=VALUE format (can be repeated)")
 	cmd.Flags().StringArray("mcp-server", nil, "MCP server: stdio NAME:COMMAND[:ARG1,ARG2,...] or SSE NAME:sse:URL (can be repeated)")
 	cmd.Flags().Bool("stream", false, "Stream model output tokens to stderr as they arrive")
+	cmd.Flags().Int("max-concurrent-tasks", 0, "Max concurrent background child tasks (default: 4)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 

@@ -22,8 +22,8 @@ type taskDepthKey struct{}
 // MaxTaskDepth is the maximum nesting depth for Task tool invocations.
 const MaxTaskDepth = 3
 
-// MaxConcurrentTasks limits concurrent background tasks per session.
-const MaxConcurrentTasks = 4
+// DefaultConcurrentTasks is the default concurrent background task limit.
+const DefaultConcurrentTasks = 4
 
 // BackgroundTaskResult holds the result of a background task.
 type BackgroundTaskResult struct {
@@ -41,11 +41,15 @@ type BackgroundTaskRegistry struct {
 	semaphore chan struct{}
 }
 
-// NewBackgroundTaskRegistry creates a new registry with semaphore limiting.
-func NewBackgroundTaskRegistry() *BackgroundTaskRegistry {
+// NewBackgroundTaskRegistry creates a new registry with the given concurrency limit.
+// If concurrency is <= 0, DefaultConcurrentTasks is used.
+func NewBackgroundTaskRegistry(concurrency int) *BackgroundTaskRegistry {
+	if concurrency <= 0 {
+		concurrency = DefaultConcurrentTasks
+	}
 	return &BackgroundTaskRegistry{
 		tasks:     make(map[string]*BackgroundTaskResult),
-		semaphore: make(chan struct{}, MaxConcurrentTasks),
+		semaphore: make(chan struct{}, concurrency),
 	}
 }
 
@@ -177,6 +181,10 @@ type CallModelFunc func(ctx context.Context, agentsDir, agentName, prompt, worki
 // Returns 0 if no dedicated cap is configured (use remaining budget).
 type ChildMaxCostFunc func(agentName string) float64
 
+// ChildMaxIterFunc returns the iteration cap for the named child agent.
+// Returns 0 if no dedicated cap is configured (inherit parent's cap).
+type ChildMaxIterFunc func(agentName string) int
+
 type TaskConfig struct {
 	AgentsDir     string
 	WorkingDir    string
@@ -189,6 +197,7 @@ type TaskConfig struct {
 	AgentName     string           // current agent name (for finding attribution)
 	ExtraTools    []Handler        // additional tools injected by MCP servers or other providers
 	ChildMaxCost  ChildMaxCostFunc // per-child budget lookup (nil = use remaining budget)
+	ChildMaxIter  ChildMaxIterFunc // per-child iteration cap (nil = inherit parent's cap)
 }
 
 type taskArgs struct {

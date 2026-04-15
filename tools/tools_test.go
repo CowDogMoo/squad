@@ -200,8 +200,8 @@ func TestBuildHandlers(t *testing.T) {
 		extra    []Handler
 		wantDefs int
 	}{
-		{"without TaskConfig", false, nil, 7},
-		{"with TaskConfig", true, nil, 8},
+		{"without TaskConfig", false, nil, 8},
+		{"with TaskConfig", true, nil, 9},
 		{"with ExtraTools", true, []Handler{
 			{
 				Def: llms.Tool{
@@ -215,7 +215,7 @@ func TestBuildHandlers(t *testing.T) {
 					return "ok", nil
 				},
 			},
-		}, 9},
+		}, 10},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -823,6 +823,58 @@ func TestRepeatTrackerExceeded(t *testing.T) {
 	}
 }
 
+func TestEditEnforcer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil enforcer is no-op", func(t *testing.T) {
+		var e *EditEnforcer
+		if e.CheckNames([]string{"Read", "Glob"}) {
+			t.Fatal("nil enforcer should never stop")
+		}
+	})
+
+	t.Run("disabled when deadline is 0", func(t *testing.T) {
+		e := NewEditEnforcer(0)
+		if e != nil {
+			t.Fatal("deadline 0 should return nil")
+		}
+	})
+
+	t.Run("stops after deadline with no Edit", func(t *testing.T) {
+		e := NewEditEnforcer(3)
+		if e.CheckNames([]string{"Read"}) {
+			t.Fatal("should not stop after 1 iteration")
+		}
+		if e.CheckNames([]string{"Read", "Glob"}) {
+			t.Fatal("should not stop after 2 iterations")
+		}
+		if !e.CheckNames([]string{"Read"}) {
+			t.Fatal("should stop after 3 iterations with no Edit")
+		}
+	})
+
+	t.Run("does not stop if Edit is called", func(t *testing.T) {
+		e := NewEditEnforcer(2)
+		if e.CheckNames([]string{"Read"}) {
+			t.Fatal("should not stop after 1 iteration")
+		}
+		if e.CheckNames([]string{"Edit", "Read"}) {
+			t.Fatal("should not stop when Edit is present")
+		}
+		// After Edit is seen, further read-only iterations are fine
+		if e.CheckNames([]string{"Read"}) {
+			t.Fatal("should not stop after Edit was already seen")
+		}
+	})
+
+	t.Run("Edit on first iteration prevents enforcement", func(t *testing.T) {
+		e := NewEditEnforcer(1)
+		if e.CheckNames([]string{"Edit"}) {
+			t.Fatal("should not stop when Edit is called on first iteration")
+		}
+	})
+}
+
 func TestRunWithToolsLoop(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hello"), 0o644); err != nil {
@@ -847,7 +899,7 @@ func TestRunWithToolsLoop(t *testing.T) {
 		},
 	}}
 
-	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, nil, nil, &executor.LocalExecutor{WorkingDir: dir})
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, 0, nil, nil, &executor.LocalExecutor{WorkingDir: dir})
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
 	}
@@ -889,7 +941,7 @@ func TestRunWithToolsErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			td := t.TempDir()
-			_, err := RunWithTools(context.Background(), tt.llm, "", "user", td, 1, nil, nil, &executor.LocalExecutor{WorkingDir: td})
+			_, err := RunWithTools(context.Background(), tt.llm, "", "user", td, 1, 0, nil, nil, &executor.LocalExecutor{WorkingDir: td})
 			if err == nil {
 				t.Fatalf("expected error")
 			}
@@ -1405,7 +1457,7 @@ func TestRunWithToolsWithMetrics(t *testing.T) {
 	}}
 
 	m := metrics.New("openai", "gpt-4o")
-	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, nil, m, &executor.LocalExecutor{WorkingDir: dir})
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, 0, nil, m, &executor.LocalExecutor{WorkingDir: dir})
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
 	}
@@ -1464,7 +1516,7 @@ func TestToolLoopBudgetExceeded(t *testing.T) {
 	// Pre-load tokens so budget is exceeded after the first tool call
 	m.AddTokens(1_000_000, 1_000_000)
 
-	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 10, nil, m, &executor.LocalExecutor{WorkingDir: dir})
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 10, 0, nil, m, &executor.LocalExecutor{WorkingDir: dir})
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
@@ -1581,7 +1633,7 @@ func TestTaskResultToolWithParentMetrics(t *testing.T) {
 	childMetrics := metrics.New("openai", "gpt-4o")
 	childMetrics.AddTokens(200, 100)
 
-	registry := NewBackgroundTaskRegistry()
+	registry := NewBackgroundTaskRegistry(0)
 	result := &BackgroundTaskResult{
 		Output:  "bg output",
 		Metrics: childMetrics,
@@ -1628,7 +1680,7 @@ func TestBuildHandlersWithRegistry(t *testing.T) {
 	cfg := &TaskConfig{
 		AgentsDir:  "agents",
 		WorkingDir: dir,
-		Registry:   NewBackgroundTaskRegistry(),
+		Registry:   NewBackgroundTaskRegistry(0),
 		CallModel: func(
 			_ context.Context,
 			_, _, _, _, _ string,
@@ -1640,8 +1692,8 @@ func TestBuildHandlersWithRegistry(t *testing.T) {
 	if _, ok := handlers["TaskResult"]; !ok {
 		t.Fatalf("expected TaskResult handler when registry is set")
 	}
-	if len(defs) != 9 {
-		t.Fatalf("tool defs = %d, want 9 (7 base + Task + TaskResult)", len(defs))
+	if len(defs) != 10 {
+		t.Fatalf("tool defs = %d, want 10 (8 base + Task + TaskResult)", len(defs))
 	}
 }
 
@@ -1730,7 +1782,7 @@ func TestBuildHandlersWithFindings(t *testing.T) {
 	cfg := &TaskConfig{
 		AgentsDir:  "agents",
 		WorkingDir: dir,
-		Registry:   NewBackgroundTaskRegistry(),
+		Registry:   NewBackgroundTaskRegistry(0),
 		Findings:   store,
 		AgentName:  "test-agent",
 		CallModel: func(
@@ -1745,9 +1797,9 @@ func TestBuildHandlersWithFindings(t *testing.T) {
 	if _, ok := handlers["ReportFinding"]; !ok {
 		t.Fatalf("expected ReportFinding handler when Findings store is set")
 	}
-	// 7 base + Task + TaskResult + ReportFinding = 10
-	if len(defs) != 10 {
-		t.Fatalf("tool defs = %d, want 10", len(defs))
+	// 8 base + Task + TaskResult + ReportFinding = 11
+	if len(defs) != 11 {
+		t.Fatalf("tool defs = %d, want 11", len(defs))
 	}
 
 	// Verify the handler actually works and attributes to the agent
@@ -2013,7 +2065,7 @@ func TestBuildHandlersDisableTask(t *testing.T) {
 
 	taskCfg := &TaskConfig{
 		CallModel: nil,
-		Registry:  NewBackgroundTaskRegistry(),
+		Registry:  NewBackgroundTaskRegistry(0),
 	}
 	handlers, _ := BuildHandlers(workDir, taskCfg, ex)
 
@@ -2033,7 +2085,7 @@ func TestBuildHandlersWithTask(t *testing.T) {
 		CallModel: func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
 			return "", nil, nil
 		},
-		Registry: NewBackgroundTaskRegistry(),
+		Registry: NewBackgroundTaskRegistry(0),
 	}
 	handlers, _ := BuildHandlers(workDir, taskCfg, ex)
 

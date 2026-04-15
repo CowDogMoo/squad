@@ -82,7 +82,7 @@ func UseResponsesAPI(provider, model string, prefixes []string) bool {
 }
 
 // RunWithTools drives a tool-calling loop using the OpenAI Responses API.
-func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations int, reasoningPrefixes []string, taskCfg *tools.TaskConfig, m *metrics.Metrics, ex executor.Executor) (string, error) {
+func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations, editDeadline int, reasoningPrefixes []string, taskCfg *tools.TaskConfig, m *metrics.Metrics, ex executor.Executor) (string, error) {
 	ctx, span := telemetry.Tracer().Start(ctx, "responses.tool_loop",
 		trace.WithAttributes(
 			attribute.String("gen_ai.request.model", model),
@@ -125,7 +125,7 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 	logOutputItems(ctx, resp, "initial")
 	trackResponseMetrics(resp, m)
 
-	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc, maxIterations, m)
+	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc, maxIterations, editDeadline, m)
 	if err != nil {
 		return text, err
 	}
@@ -175,8 +175,9 @@ func newClient(apiKey, baseURL, organization string) openai.Client {
 	return openai.NewClient(clientOpts...)
 }
 
-func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config, maxIter int, m *metrics.Metrics) (*oairesponses.Response, string, error) {
+func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config, maxIter, editDeadline int, m *metrics.Metrics) (*oairesponses.Response, string, error) {
 	var repeat tools.RepeatTracker
+	editEnforcer := tools.NewEditEnforcer(editDeadline)
 	for i := 0; i < maxIter; i++ {
 		calls := ExtractFunctionCalls(resp)
 		if len(calls) == 0 {
@@ -191,6 +192,20 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 		logging.InfoContext(ctx, "responses API: iteration %d with %d tool call(s)", i+1, len(calls))
 		if checkRepeat(ctx, &repeat, calls) {
 			break
+		}
+
+		// Check edit deadline enforcement.
+		if editEnforcer != nil {
+			var toolNames []string
+			for _, c := range calls {
+				toolNames = append(toolNames, c.Name)
+			}
+			if editEnforcer.CheckNames(toolNames) {
+				logging.InfoContext(ctx, "responses API: edit deadline reached: %d iterations with no Edit calls, stopping", editEnforcer.Deadline)
+				tools.MarkEditDeadlineReached(ctx)
+				text := resp.OutputText()
+				return resp, text, nil
+			}
 		}
 
 		outputs := executeAndBuildOutputs(ctx, calls, handlers)

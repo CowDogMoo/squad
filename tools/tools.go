@@ -47,9 +47,14 @@ var defaultSkipDirs = map[string]bool{
 	".pytest_cache": true,
 	".ruff_cache":   true,
 	".eggs":         true,
+	"target":        true,
+	"build":         true,
+	"dist":          true,
+	"vendor":        true,
 }
 
 type editsKeyType struct{}
+type editDeadlineKeyType struct{}
 
 // mutatingTools are tools that legitimately chain in long sequences.
 var mutatingTools = map[string]bool{
@@ -108,6 +113,27 @@ func EditsApplied(ctx context.Context) bool {
 	return false
 }
 
+// InitEditDeadline sets up the edit deadline tracking on the context.
+func InitEditDeadline(ctx context.Context) context.Context {
+	b := false
+	return context.WithValue(ctx, editDeadlineKeyType{}, &b)
+}
+
+// MarkEditDeadlineReached records that the edit deadline was hit.
+func MarkEditDeadlineReached(ctx context.Context) {
+	if b, ok := ctx.Value(editDeadlineKeyType{}).(*bool); ok {
+		*b = true
+	}
+}
+
+// EditDeadlineReached returns true if the edit deadline stopped the loop.
+func EditDeadlineReached(ctx context.Context) bool {
+	if b, ok := ctx.Value(editDeadlineKeyType{}).(*bool); ok {
+		return *b
+	}
+	return false
+}
+
 type Handler struct {
 	Def  llms.Tool
 	Call func(ctx context.Context, rawArgs []byte) (string, error)
@@ -146,7 +172,40 @@ func (t *RepeatTracker) Exceeded() bool {
 	return t.Count >= limit
 }
 
-func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations int, taskCfg *TaskConfig, m *metrics.Metrics, ex executor.Executor, callOpts ...llms.CallOption) (string, error) {
+// EditEnforcer tracks whether an agent has called Edit within a deadline.
+// When the deadline is reached without any Edit calls, it signals the loop
+// to stop — preventing agents from endlessly reading without producing edits.
+type EditEnforcer struct {
+	Deadline      int
+	editSeen      bool
+	readOnlyIters int
+}
+
+// NewEditEnforcer creates an enforcer that triggers after deadline iterations
+// with no Edit call. Returns nil if deadline <= 0 (disabled).
+func NewEditEnforcer(deadline int) *EditEnforcer {
+	if deadline <= 0 {
+		return nil
+	}
+	return &EditEnforcer{Deadline: deadline}
+}
+
+// CheckNames inspects tool call names and returns true if the loop should stop.
+func (e *EditEnforcer) CheckNames(names []string) bool {
+	if e == nil || e.editSeen {
+		return false
+	}
+	for _, name := range names {
+		if name == "Edit" {
+			e.editSeen = true
+			return false
+		}
+	}
+	e.readOnlyIters++
+	return e.readOnlyIters >= e.Deadline
+}
+
+func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations, editDeadline int, taskCfg *TaskConfig, m *metrics.Metrics, ex executor.Executor, callOpts ...llms.CallOption) (string, error) {
 	ctx, span := telemetry.Tracer().Start(ctx, "tool.loop",
 		trace.WithAttributes(
 			attribute.Int("squad.tool_loop.max_iterations", maxIterations),
@@ -162,7 +221,7 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	}
 
 	messages := buildInitialMessages(systemPrompt, userPrompt)
-	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, maxIterations, m, callOpts)
+	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, maxIterations, editDeadline, m, callOpts)
 	if done {
 		return lastContent, nil
 	}
@@ -175,16 +234,41 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	return finishToolLoop(ctx, llm, messages, lastContent, maxIterations, m, callOpts)
 }
 
-func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter int, m *metrics.Metrics, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
+// logIterationStart logs the current iteration number with cost/token info if metrics are available.
+func logIterationStart(ctx context.Context, i, maxIter int, m *metrics.Metrics) {
+	if m != nil {
+		logging.InfoContext(ctx, "model iteration %d/%d (cost=$%.4f, tokens=%d/%d)",
+			i+1, maxIter, m.TotalCostWithChildren(), m.InputTokens(), m.OutputTokens())
+	} else {
+		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxIter)
+	}
+}
+
+// checkEditDeadline returns true if the edit deadline has been reached and the loop should stop.
+func checkEditDeadline(ctx context.Context, enforcer *EditEnforcer, toolCalls []llms.ToolCall) bool {
+	if enforcer == nil {
+		return false
+	}
+	var toolNames []string
+	for _, tc := range toolCalls {
+		if tc.FunctionCall != nil {
+			toolNames = append(toolNames, tc.FunctionCall.Name)
+		}
+	}
+	if enforcer.CheckNames(toolNames) {
+		logging.InfoContext(ctx, "edit deadline reached: %d iterations with no Edit calls, stopping tool loop", enforcer.Deadline)
+		MarkEditDeadlineReached(ctx)
+		return true
+	}
+	return false
+}
+
+func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter, editDeadline int, m *metrics.Metrics, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
 	var lastContent string
 	var repeat RepeatTracker
+	editEnforcer := NewEditEnforcer(editDeadline)
 	for i := 0; i < maxIter; i++ {
-		if m != nil {
-			logging.InfoContext(ctx, "model iteration %d/%d (cost=$%.4f, tokens=%d/%d)",
-				i+1, maxIter, m.TotalCostWithChildren(), m.InputTokens(), m.OutputTokens())
-		} else {
-			logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxIter)
-		}
+		logIterationStart(ctx, i, maxIter, m)
 		iterStart := time.Now()
 		response, err := retryGenerateContent(ctx, llm, messages, callOpts)
 		iterDuration := time.Since(iterStart)
@@ -209,8 +293,6 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 			logging.InfoContext(ctx, "model returned final response in %s (no tool calls)", iterDuration.Round(time.Millisecond))
 			return mergedContent, messages, nil, true
 		}
-		// Log the model's reasoning/text before tool calls so operators can
-		// follow the agent's chain of thought.
 		if mergedContent != "" {
 			logging.InfoContext(ctx, "model: %s", TruncateString(strings.ReplaceAll(mergedContent, "\n", " "), 200))
 		}
@@ -219,6 +301,10 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		repeat.Update(mergedToolCalls)
 		if repeat.Exceeded() {
 			logging.InfoContext(ctx, "model called %s %d times in a row, breaking tool loop", repeat.LastName, repeat.Count)
+			break
+		}
+
+		if checkEditDeadline(ctx, editEnforcer, mergedToolCalls) {
 			break
 		}
 
@@ -590,6 +676,7 @@ func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor)
 	add(Handler{Def: definitionGrep(), Call: grepTool(workingDir)})
 	add(Handler{Def: definitionBash(), Call: bashTool(ex)})
 	add(Handler{Def: definitionSystemInfo(), Call: systemInfoTool(ex)})
+	add(Handler{Def: definitionRepoMap(), Call: repoMapTool(workingDir)})
 
 	if taskCfg != nil {
 		// Only register Task/TaskResult when the agent is allowed to spawn children.

@@ -151,6 +151,19 @@ func TestValidateActionableResponse(t *testing.T) {
 	}
 }
 
+func TestValidateActionableResponse_EditDeadlineReached(t *testing.T) {
+	t.Parallel()
+	ctx := tools.InitEdits(context.Background())
+	ctx = tools.InitEditDeadline(ctx)
+	tools.MarkEditDeadlineReached(ctx)
+	// No edits applied, no "files touched" or "no changes" in response,
+	// but edit deadline was reached — should pass validation.
+	err := validateActionableResponse(ctx, "The codebase is clean, nothing to fix.")
+	if err != nil {
+		t.Fatalf("expected no error when edit deadline reached, got: %v", err)
+	}
+}
+
 func TestApplyResponseDiffNoChanges(t *testing.T) {
 	t.Parallel()
 	ctx := tools.InitEdits(context.Background())

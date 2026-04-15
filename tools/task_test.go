@@ -160,7 +160,7 @@ func TestTaskToolDepthLimit(t *testing.T) {
 
 func TestBackgroundTaskBasic(t *testing.T) {
 	dir := t.TempDir()
-	registry := NewBackgroundTaskRegistry()
+	registry := NewBackgroundTaskRegistry(0)
 	cfg := TaskConfig{
 		AgentsDir:  "agents",
 		WorkingDir: dir,
@@ -204,9 +204,9 @@ func TestBackgroundTaskBasic(t *testing.T) {
 
 func TestBackgroundTaskSemaphore(t *testing.T) {
 	dir := t.TempDir()
-	registry := NewBackgroundTaskRegistry()
+	registry := NewBackgroundTaskRegistry(0)
 
-	started := make(chan struct{}, MaxConcurrentTasks+1)
+	started := make(chan struct{}, DefaultConcurrentTasks+1)
 	block := make(chan struct{})
 
 	cfg := TaskConfig{
@@ -222,8 +222,8 @@ func TestBackgroundTaskSemaphore(t *testing.T) {
 
 	tool := taskTool(cfg)
 
-	// Spawn MaxConcurrentTasks + 1 tasks
-	for i := 0; i < MaxConcurrentTasks+1; i++ {
+	// Spawn DefaultConcurrentTasks + 1 tasks
+	for i := 0; i < DefaultConcurrentTasks+1; i++ {
 		payload, _ := json.Marshal(map[string]any{
 			"agent":      "child",
 			"prompt":     fmt.Sprintf("task %d", i),
@@ -235,12 +235,12 @@ func TestBackgroundTaskSemaphore(t *testing.T) {
 		}
 	}
 
-	// Wait for MaxConcurrentTasks to start
-	for i := 0; i < MaxConcurrentTasks; i++ {
+	// Wait for DefaultConcurrentTasks to start
+	for i := 0; i < DefaultConcurrentTasks; i++ {
 		select {
 		case <-started:
 		case <-time.After(time.Second):
-			t.Fatalf("expected %d tasks to start, only %d did", MaxConcurrentTasks, i)
+			t.Fatalf("expected %d tasks to start, only %d did", DefaultConcurrentTasks, i)
 		}
 	}
 
@@ -269,7 +269,7 @@ func TestBackgroundTaskSemaphore(t *testing.T) {
 
 func TestBackgroundTaskCancel(t *testing.T) {
 	dir := t.TempDir()
-	registry := NewBackgroundTaskRegistry()
+	registry := NewBackgroundTaskRegistry(0)
 
 	started := make(chan struct{})
 
@@ -319,7 +319,7 @@ func TestBackgroundTaskCancel(t *testing.T) {
 
 func TestBackgroundTaskPanic(t *testing.T) {
 	dir := t.TempDir()
-	registry := NewBackgroundTaskRegistry()
+	registry := NewBackgroundTaskRegistry(0)
 
 	cfg := TaskConfig{
 		AgentsDir:  "agents",
@@ -358,7 +358,7 @@ func TestBackgroundTaskPanic(t *testing.T) {
 
 func TestTaskResultInvalidID(t *testing.T) {
 	dir := t.TempDir()
-	registry := NewBackgroundTaskRegistry()
+	registry := NewBackgroundTaskRegistry(0)
 	cfg := TaskConfig{
 		AgentsDir:  "agents",
 		WorkingDir: dir,

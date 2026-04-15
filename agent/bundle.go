@@ -26,21 +26,23 @@ type ModelPreference struct {
 
 // Manifest represents the structure of an agent's manifest file.
 type Manifest struct {
-	Name        string             `yaml:"name"`
-	Version     string             `yaml:"version"`
-	Model       string             `yaml:"model,omitempty"`    // single model override (backwards compat)
-	Provider    string             `yaml:"provider,omitempty"` // single provider override (backwards compat)
-	Models      []ModelPreference  `yaml:"models,omitempty"`   // ranked model preferences (takes precedence over model/provider)
-	EntryPoint  string             `yaml:"entrypoint"`
-	Wrapper     string             `yaml:"wrapper"`
-	References  []string           `yaml:"references"`
-	Task        string             `yaml:"task,omitempty"`
-	Environment *executor.Config   `yaml:"environment,omitempty"`
-	DependsOn   []string           `yaml:"depends_on,omitempty"`
-	Output      *OutputConfig      `yaml:"output,omitempty"`
-	Budget      *BudgetConfig      `yaml:"budget,omitempty"`
-	MCPServers  []mcp.ServerConfig `yaml:"mcp_servers,omitempty"`
-	DisableTask bool               `yaml:"disable_task,omitempty"`
+	Name          string             `yaml:"name"`
+	Version       string             `yaml:"version"`
+	Model         string             `yaml:"model,omitempty"`    // single model override (backwards compat)
+	Provider      string             `yaml:"provider,omitempty"` // single provider override (backwards compat)
+	Models        []ModelPreference  `yaml:"models,omitempty"`   // ranked model preferences (takes precedence over model/provider)
+	EntryPoint    string             `yaml:"entrypoint"`
+	Wrapper       string             `yaml:"wrapper"`
+	References    []string           `yaml:"references"`
+	Task          string             `yaml:"task,omitempty"`
+	Environment   *executor.Config   `yaml:"environment,omitempty"`
+	DependsOn     []string           `yaml:"depends_on,omitempty"`
+	Output        *OutputConfig      `yaml:"output,omitempty"`
+	Budget        *BudgetConfig      `yaml:"budget,omitempty"`
+	MCPServers    []mcp.ServerConfig `yaml:"mcp_servers,omitempty"`
+	DisableTask   bool               `yaml:"disable_task,omitempty"`
+	MaxIterations int                `yaml:"max_iterations,omitempty"` // iteration cap for this agent (0 = use CLI default)
+	EditDeadline  int                `yaml:"edit_deadline,omitempty"`  // stop after N iterations with no Edit calls (0 = disabled)
 }
 
 // ResolvedModels returns the ordered list of model preferences.
@@ -82,8 +84,9 @@ type BudgetConfig struct {
 // ChildBudget represents a child agent with an optional dedicated cost cap.
 // Supports both plain string (just agent name) and object with max_cost.
 type ChildBudget struct {
-	Name    string  `yaml:"name"`
-	MaxCost float64 `yaml:"max_cost,omitempty"` // dedicated cost cap in USD (0 = use remaining budget)
+	Name          string  `yaml:"name"`
+	MaxCost       float64 `yaml:"max_cost,omitempty"`       // dedicated cost cap in USD (0 = use remaining budget)
+	MaxIterations int     `yaml:"max_iterations,omitempty"` // iteration cap for child (0 = inherit parent's cap)
 }
 
 // UnmarshalYAML allows ChildBudget to be specified as either a plain string
@@ -132,6 +135,20 @@ func (b *BudgetConfig) ChildMaxCost(agentName string) float64 {
 	return 0
 }
 
+// ChildMaxIterations returns the iteration cap for the named child agent.
+// Returns 0 if no cap is configured (inherit parent's cap).
+func (b *BudgetConfig) ChildMaxIterations(agentName string) int {
+	if b == nil {
+		return 0
+	}
+	for _, c := range b.Children {
+		if c.Name == agentName {
+			return c.MaxIterations
+		}
+	}
+	return 0
+}
+
 // OutputConfig specifies the structured output contract for an agent.
 // When format is "json", the agent's system prompt is augmented with
 // instructions to emit JSON matching the declared schema.
@@ -145,17 +162,19 @@ type OutputConfig struct {
 
 // Bundle contains the assembled system, user, and combined prompt content for an agent run.
 type Bundle struct {
-	System      string // wrapper + system prompt + references + task
-	User        string // user request (CLI prompt or default)
-	Combined    []byte // concatenated for --print-bundle/--bundle-out
-	WorkDir     string
-	Model       string             // primary model override (first from models list or single model field)
-	Provider    string             // primary provider override (first from models list or single provider field)
-	Models      []ModelPreference  // ranked model preferences from manifest
-	Budget      *BudgetConfig      // budget configuration from manifest
-	Environment *executor.Config   // execution environment from agent manifest
-	MCPServers  []mcp.ServerConfig // MCP server dependencies declared in agent.yaml
-	DisableTask bool               // when true, the Task tool is not registered for this agent
+	System        string // wrapper + system prompt + references + task
+	User          string // user request (CLI prompt or default)
+	Combined      []byte // concatenated for --print-bundle/--bundle-out
+	WorkDir       string
+	Model         string             // primary model override (first from models list or single model field)
+	Provider      string             // primary provider override (first from models list or single provider field)
+	Models        []ModelPreference  // ranked model preferences from manifest
+	Budget        *BudgetConfig      // budget configuration from manifest
+	Environment   *executor.Config   // execution environment from agent manifest
+	MCPServers    []mcp.ServerConfig // MCP server dependencies declared in agent.yaml
+	DisableTask   bool               // when true, the Task tool is not registered for this agent
+	MaxIterations int                // iteration cap from manifest (0 = use CLI default)
+	EditDeadline  int                // stop after N iterations with no Edit calls (0 = disabled)
 }
 
 // TemplateData holds the data passed to prompt templates.
@@ -490,16 +509,18 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 	}
 
 	return &Bundle{
-		System:      sys.String(),
-		User:        userMessage,
-		Combined:    combined.Bytes(),
-		WorkDir:     workingDir,
-		Model:       primaryModel,
-		Provider:    primaryProvider,
-		Models:      resolved,
-		Budget:      manifest.Budget,
-		Environment: manifest.Environment,
-		MCPServers:  resolvedMCP,
-		DisableTask: manifest.DisableTask,
+		System:        sys.String(),
+		User:          userMessage,
+		Combined:      combined.Bytes(),
+		WorkDir:       workingDir,
+		Model:         primaryModel,
+		Provider:      primaryProvider,
+		Models:        resolved,
+		Budget:        manifest.Budget,
+		Environment:   manifest.Environment,
+		MCPServers:    resolvedMCP,
+		DisableTask:   manifest.DisableTask,
+		MaxIterations: manifest.MaxIterations,
+		EditDeadline:  manifest.EditDeadline,
 	}, nil
 }

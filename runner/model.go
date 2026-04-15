@@ -164,7 +164,7 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 		taskCfg.ParentMetrics = m
 	}
 	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
-	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens, opts.MaxIterations, reasoningPrefixes(opts), taskCfg, m, ex)
+	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, temperature, maxTokens, opts.MaxIterations, bundle.EditDeadline, reasoningPrefixes(opts), taskCfg, m, ex)
 	m.Finish()
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
@@ -228,7 +228,7 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		taskCfg.ParentMetrics = m
 	}
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
-	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, opts.MaxIterations, taskCfg, m, ex, callOpts...)
+	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, opts.MaxIterations, bundle.EditDeadline, taskCfg, m, ex, callOpts...)
 	m.Finish()
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
@@ -375,6 +375,69 @@ func reasoningPrefixes(opts *RunOptions) []string {
 	return config.Defaults().Model.ReasoningPrefixes
 }
 
+// applyChildIterationCap sets the child agent's iteration cap based on
+// per-child budget config and manifest settings.
+func applyChildIterationCap(ctx context.Context, childOpts *RunOptions, cfg *tools.TaskConfig, childBundle *agent.Bundle, agentName string) {
+	if cfg.ChildMaxIter != nil {
+		if childIter := cfg.ChildMaxIter(agentName); childIter > 0 {
+			childOpts.MaxIterations = childIter
+			logging.InfoContext(ctx, "child agent %s iteration cap: %d (from parent budget)", agentName, childIter)
+		}
+	}
+	if childBundle.MaxIterations > 0 && (childOpts.MaxIterations <= 0 || childBundle.MaxIterations < childOpts.MaxIterations) {
+		childOpts.MaxIterations = childBundle.MaxIterations
+		logging.InfoContext(ctx, "child agent %s iteration cap: %d (from manifest)", agentName, childBundle.MaxIterations)
+	}
+}
+
+// applyChildModelOverrides applies model and provider overrides from the
+// child agent's manifest to the child options.
+func applyChildModelOverrides(ctx context.Context, childOpts *RunOptions, childBundle *agent.Bundle, agentName string) {
+	if childBundle.Model != "" {
+		childOpts.Model = childBundle.Model
+		logging.InfoContext(ctx, "child agent %s using manifest model override: %s", agentName, childBundle.Model)
+	}
+	if childBundle.Provider != "" {
+		childOpts.Provider = childBundle.Provider
+		logging.InfoContext(ctx, "child agent %s using manifest provider override: %s", agentName, childBundle.Provider)
+	}
+	if len(childBundle.Models) > 1 {
+		altModels := make([]string, 0, len(childBundle.Models)-1)
+		for _, m := range childBundle.Models[1:] {
+			altModels = append(altModels, m.Provider+"/"+m.Model)
+		}
+		logging.InfoContext(ctx, "child agent %s has %d alternate model(s): %v", agentName, len(altModels), altModels)
+	}
+}
+
+// applyChildBudget propagates budget constraints to the child agent,
+// using per-child dedicated caps when available.
+func applyChildBudget(ctx context.Context, childOpts *RunOptions, cfg *tools.TaskConfig, opts *RunOptions, agentName string) error {
+	if cfg.ParentMetrics == nil || opts.MaxCost <= 0 {
+		return nil
+	}
+	remaining := cfg.ParentMetrics.RemainingBudget()
+	if remaining <= 0 {
+		return metrics.ErrBudgetExceeded
+	}
+
+	var childBudget float64
+	if cfg.ChildMaxCost != nil {
+		childBudget = cfg.ChildMaxCost(agentName)
+	}
+	if childBudget > 0 {
+		if childBudget > remaining {
+			childBudget = remaining
+		}
+		childOpts.MaxCost = childBudget
+		logging.InfoContext(ctx, "child agent %s budget: $%.4f dedicated (pipeline remaining: $%.4f)", agentName, childBudget, remaining)
+	} else {
+		childOpts.MaxCost = remaining
+		logging.InfoContext(ctx, "child agent %s budget: $%.4f remaining of $%.4f total", agentName, remaining, opts.MaxCost)
+	}
+	return nil
+}
+
 // buildTaskConfig creates a TaskConfig for the Task tool from RunOptions.
 func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 	cfg := &tools.TaskConfig{
@@ -382,12 +445,11 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		WorkingDir:    opts.WorkingDir,
 		MaxIterations: opts.MaxIterations,
 		MaxCost:       opts.MaxCost,
-		Registry:      tools.NewBackgroundTaskRegistry(),
+		Registry:      tools.NewBackgroundTaskRegistry(opts.MaxConcurrentTasks),
 		Findings:      opts.Findings,
 		AgentName:     opts.AgentName,
 	}
 	cfg.CallModel = func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
-		// Child agents inherit parent's template variables
 		childBundle, err := agent.BuildBundle(agentsDir, agentName, prompt, workingDir, mode, opts.Vars)
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to build child agent bundle: %w", err)
@@ -401,48 +463,10 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		childOpts.System = ""
 		childOpts.AgentName = agentName
 
-		// Apply model/provider overrides from the child agent's manifest.
-		// Uses the primary (first) model from the ranked preferences list.
-		if childBundle.Model != "" {
-			childOpts.Model = childBundle.Model
-			logging.InfoContext(ctx, "child agent %s using manifest model override: %s", agentName, childBundle.Model)
-		}
-		if childBundle.Provider != "" {
-			childOpts.Provider = childBundle.Provider
-			logging.InfoContext(ctx, "child agent %s using manifest provider override: %s", agentName, childBundle.Provider)
-		}
-		if len(childBundle.Models) > 1 {
-			altModels := make([]string, 0, len(childBundle.Models)-1)
-			for _, m := range childBundle.Models[1:] {
-				altModels = append(altModels, m.Provider+"/"+m.Model)
-			}
-			logging.InfoContext(ctx, "child agent %s has %d alternate model(s): %v", agentName, len(altModels), altModels)
-		}
-
-		// Propagate budget to child agent. Per-child dedicated caps take
-		// precedence over the remaining-budget fallback.
-		if cfg.ParentMetrics != nil && opts.MaxCost > 0 {
-			remaining := cfg.ParentMetrics.RemainingBudget()
-			if remaining <= 0 {
-				return "", nil, metrics.ErrBudgetExceeded
-			}
-
-			// Check for a dedicated per-child budget cap.
-			var childBudget float64
-			if cfg.ChildMaxCost != nil {
-				childBudget = cfg.ChildMaxCost(agentName)
-			}
-			if childBudget > 0 {
-				// Use the dedicated cap, but don't exceed remaining budget.
-				if childBudget > remaining {
-					childBudget = remaining
-				}
-				childOpts.MaxCost = childBudget
-				logging.InfoContext(ctx, "child agent %s budget: $%.4f dedicated (pipeline remaining: $%.4f)", agentName, childBudget, remaining)
-			} else {
-				childOpts.MaxCost = remaining
-				logging.InfoContext(ctx, "child agent %s budget: $%.4f remaining of $%.4f total", agentName, remaining, opts.MaxCost)
-			}
+		applyChildIterationCap(ctx, &childOpts, cfg, childBundle, agentName)
+		applyChildModelOverrides(ctx, &childOpts, childBundle, agentName)
+		if err := applyChildBudget(ctx, &childOpts, cfg, opts, agentName); err != nil {
+			return "", nil, err
 		}
 
 		return InvokeModel(ctx, &childOpts, childBundle)
@@ -455,6 +479,7 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 func applyBundleBudget(cfg *tools.TaskConfig, bundle *agent.Bundle) {
 	if bundle.Budget != nil && len(bundle.Budget.Children) > 0 {
 		cfg.ChildMaxCost = bundle.Budget.ChildMaxCost
+		cfg.ChildMaxIter = bundle.Budget.ChildMaxIterations
 	}
 }
 

@@ -22,39 +22,40 @@ import (
 
 // RunOptions holds the resolved configuration for a single run invocation.
 type RunOptions struct {
-	Agent             string
-	AgentsDir         string
-	WorkingDir        string
-	APIKey            string
-	BaseURL           string
-	Org               string
-	APIVersion        string
-	APIType           string
-	OpenAICompatMax   bool
-	Provider          string
-	Model             string
-	Temperature       float64
-	MaxTokens         int
-	System            string
-	Output            string
-	Print             bool
-	BundleOut         string
-	PrintBundle       bool
-	DryRun            bool
-	RequireActionable bool
-	Apply             bool
-	ApplyFallback     bool
-	NumCtx            int
-	MaxIterations     int
-	MaxCost           float64
-	Mode              string
-	Vars              map[string]string // Template variables (e.g., COVERAGE_TARGET=85)
-	ConfigAvailable   bool
-	Config            *config.Config
-	Findings          *tools.FindingsStore // shared findings store (set by pipeline runner)
-	AgentName         string               // current agent name for finding attribution
-	MCPServers        []mcp.ServerConfig   // MCP servers from CLI --mcp-server flags
-	Stream            bool                 // stream model output tokens to stderr as they arrive
+	Agent              string
+	AgentsDir          string
+	WorkingDir         string
+	APIKey             string
+	BaseURL            string
+	Org                string
+	APIVersion         string
+	APIType            string
+	OpenAICompatMax    bool
+	Provider           string
+	Model              string
+	Temperature        float64
+	MaxTokens          int
+	System             string
+	Output             string
+	Print              bool
+	BundleOut          string
+	PrintBundle        bool
+	DryRun             bool
+	RequireActionable  bool
+	Apply              bool
+	ApplyFallback      bool
+	NumCtx             int
+	MaxIterations      int
+	MaxCost            float64
+	Mode               string
+	Vars               map[string]string // Template variables (e.g., COVERAGE_TARGET=85)
+	ConfigAvailable    bool
+	Config             *config.Config
+	Findings           *tools.FindingsStore // shared findings store (set by pipeline runner)
+	AgentName          string               // current agent name for finding attribution
+	MCPServers         []mcp.ServerConfig   // MCP servers from CLI --mcp-server flags
+	Stream             bool                 // stream model output tokens to stderr as they arrive
+	MaxConcurrentTasks int                  // max concurrent background child tasks (0 = default)
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.
@@ -80,6 +81,7 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	opts.WorkingDir = workingDir
 
 	ctx := tools.InitEdits(cmd.Context())
+	ctx = tools.InitEditDeadline(ctx)
 	cmd.SetContext(ctx)
 	tools.ResetEditsApplied(ctx)
 	response, m, err := InvokeModel(ctx, opts, bundle)
