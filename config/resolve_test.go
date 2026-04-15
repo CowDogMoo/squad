@@ -127,3 +127,57 @@ func TestResolveValue_NoSubstitution(t *testing.T) {
 		t.Fatalf("expected 'no dollars here', got %q", got)
 	}
 }
+
+func TestResolveValue_LoneDollar(t *testing.T) {
+	t.Parallel()
+	got, err := ResolveValue("price is $")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "price is $" {
+		t.Fatalf("expected 'price is $', got %q", got)
+	}
+}
+
+func TestResolveValue_DollarBeforeNonVarChar(t *testing.T) {
+	t.Parallel()
+	got, err := ResolveValue("cost $! each")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "cost $! each" {
+		t.Fatalf("expected 'cost $! each', got %q", got)
+	}
+}
+
+func TestLoadFromPath_TokenResolution(t *testing.T) {
+	t.Setenv("SQUAD_TEST_TOKEN_VAL", "resolved-token-123")
+	dir := t.TempDir()
+	cfgPath := dir + "/config.yaml"
+	if err := os.WriteFile(cfgPath, []byte("provider:\n  token: $SQUAD_TEST_TOKEN_VAL\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := LoadFromPath(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Provider.Token != "resolved-token-123" {
+		t.Fatalf("expected resolved token, got %q", cfg.Provider.Token)
+	}
+}
+
+func TestLoadFromPath_TokenResolutionError(t *testing.T) {
+	t.Setenv("SQUAD_TEST_DUMMY", "")
+	if err := os.Unsetenv("SQUAD_TEST_DUMMY"); err != nil {
+		t.Fatalf("unsetenv: %v", err)
+	}
+	dir := t.TempDir()
+	cfgPath := dir + "/config.yaml"
+	if err := os.WriteFile(cfgPath, []byte("provider:\n  token: $SQUAD_TEST_DUMMY\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := LoadFromPath(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for unresolvable token")
+	}
+}

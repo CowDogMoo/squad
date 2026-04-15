@@ -140,3 +140,133 @@ func TestBgCommandRegistryContext(t *testing.T) {
 		t.Fatal("expected nil from bare context")
 	}
 }
+
+func TestBashBackgroundTool_InvalidJSON(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ex := &executor.LocalExecutor{WorkingDir: dir}
+	ctx := InitBgCommandRegistry(context.Background())
+
+	bgTool := bashBackgroundTool(ex)
+	_, err := bgTool(ctx, []byte(`{invalid`))
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestBashBackgroundTool_EmptyCommand(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ex := &executor.LocalExecutor{WorkingDir: dir}
+	ctx := InitBgCommandRegistry(context.Background())
+
+	bgTool := bashBackgroundTool(ex)
+	args, _ := json.Marshal(map[string]string{"command": "   "})
+	_, err := bgTool(ctx, args)
+	if err == nil {
+		t.Fatal("expected error for empty command")
+	}
+}
+
+func TestBashOutputTool_InvalidJSON(t *testing.T) {
+	t.Parallel()
+	ctx := InitBgCommandRegistry(context.Background())
+	outTool := bashOutputTool()
+	_, err := outTool(ctx, []byte(`{bad`))
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestBashOutputTool_EmptyCommandID(t *testing.T) {
+	t.Parallel()
+	ctx := InitBgCommandRegistry(context.Background())
+	outTool := bashOutputTool()
+	args, _ := json.Marshal(map[string]string{"command_id": ""})
+	_, err := outTool(ctx, args)
+	if err == nil {
+		t.Fatal("expected error for empty command_id")
+	}
+}
+
+func TestBashOutputTool_NoRegistry(t *testing.T) {
+	t.Parallel()
+	outTool := bashOutputTool()
+	args, _ := json.Marshal(map[string]string{"command_id": "cmd-1"})
+	_, err := outTool(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected error when no registry in context")
+	}
+}
+
+func TestBashOutputTool_FailedCommand(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ex := &executor.LocalExecutor{WorkingDir: dir}
+	ctx := InitBgCommandRegistry(context.Background())
+	registry := GetBgCommandRegistry(ctx)
+
+	id := registry.Spawn(ctx, ex, "exit 1")
+	bg, _ := registry.Get(id)
+	<-bg.Done
+
+	outTool := bashOutputTool()
+	args, _ := json.Marshal(map[string]string{"command_id": id})
+	result, err := outTool(ctx, args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "failed") {
+		t.Fatalf("expected 'failed' in result, got: %s", result)
+	}
+}
+
+func TestBashOutputTool_StillRunning(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ex := &executor.LocalExecutor{WorkingDir: dir}
+	ctx := InitBgCommandRegistry(context.Background())
+	registry := GetBgCommandRegistry(ctx)
+
+	// Start a long-running command.
+	id := registry.Spawn(ctx, ex, "sleep 30")
+
+	outTool := bashOutputTool()
+	args, _ := json.Marshal(map[string]any{"command_id": id, "wait": false})
+	result, err := outTool(ctx, args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "running") {
+		t.Fatalf("expected 'running' in result, got: %s", result)
+	}
+}
+
+func TestBgCommand_IsDoneBeforeCompletion(t *testing.T) {
+	t.Parallel()
+	bg := &BgCommand{Done: make(chan struct{})}
+	if bg.IsDone() {
+		t.Fatal("expected IsDone=false before closing channel")
+	}
+	close(bg.Done)
+	if !bg.IsDone() {
+		t.Fatal("expected IsDone=true after closing channel")
+	}
+}
+
+func TestTrimCommand(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		input, want string
+	}{
+		{"  hello  ", "hello"},
+		{"\t\ntest\r\n", "test"},
+		{"", ""},
+		{"nospace", "nospace"},
+	}
+	for _, tt := range tests {
+		if got := trimCommand(tt.input); got != tt.want {
+			t.Errorf("trimCommand(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}

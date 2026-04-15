@@ -202,3 +202,47 @@ func TestMultiEdit_PathTraversal(t *testing.T) {
 		t.Fatal("expected error for path traversal")
 	}
 }
+
+func TestMultiEdit_InvalidJSON(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	tool := multiEditTool(dir)
+	_, err := tool(context.Background(), []byte(`{bad`))
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestMultiEdit_NonexistentFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	tool := multiEditTool(dir)
+	args := MultiEditArgs{
+		Path:  "nonexistent.go",
+		Edits: []MultiEditOperation{{Old: "x", New: "y"}},
+	}
+	raw, _ := json.Marshal(args)
+	_, err := tool(context.Background(), raw)
+	if err == nil {
+		t.Fatal("expected error for nonexistent file")
+	}
+}
+
+func TestMultiEdit_FileTrackerValidation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestFile(t, dir, "test.go", "hello world")
+
+	ctx := InitFileTracker(context.Background())
+	// Don't record a read — edit should fail validation.
+	tool := multiEditTool(dir)
+	args := MultiEditArgs{
+		Path:  "test.go",
+		Edits: []MultiEditOperation{{Old: "hello", New: "goodbye"}},
+	}
+	raw, _ := json.Marshal(args)
+	_, err := tool(ctx, raw)
+	if err == nil {
+		t.Fatal("expected error when file not read before edit")
+	}
+}

@@ -145,3 +145,18 @@ func TestMap_GetOrSet_Concurrent(t *testing.T) {
 		t.Fatalf("expected (42, true), got (%d, %v)", v, ok)
 	}
 }
+
+func TestMap_GetOrSet_ExistingKey(t *testing.T) {
+	t.Parallel()
+	m := NewMap[string, int]()
+	m.Set("preexisting", 99)
+
+	// GetOrSet should return existing value without calling init.
+	v := m.GetOrSet("preexisting", func() int {
+		t.Fatal("init should not be called for existing key")
+		return 0
+	})
+	if v != 99 {
+		t.Fatalf("expected 99, got %d", v)
+	}
+}

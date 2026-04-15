@@ -111,3 +111,35 @@ func TestLoopDetector_MultipleToolCalls(t *testing.T) {
 		t.Fatal("identical multi-tool steps should trigger loop detection")
 	}
 }
+
+func TestLoopDetector_NilFunctionCall(t *testing.T) {
+	t.Parallel()
+	ld := &LoopDetector{}
+	// Tool call with nil FunctionCall should be skipped gracefully.
+	calls := []llms.ToolCall{
+		{ID: "1", FunctionCall: nil},
+		makeToolCall("2", "Read", `{"path":"a.go"}`),
+	}
+	results := map[string]string{"2": "content"}
+	ld.Record(calls, results)
+	if ld.Stuck() {
+		t.Fatal("single step should not be stuck")
+	}
+}
+
+func TestStepSignature_Deterministic(t *testing.T) {
+	t.Parallel()
+	calls := []llms.ToolCall{
+		makeToolCall("2", "Read", `{"path":"b.go"}`),
+		makeToolCall("1", "Read", `{"path":"a.go"}`),
+	}
+	results := map[string]string{"1": "a", "2": "b"}
+	sig1 := stepSignature(calls, results)
+	sig2 := stepSignature(calls, results)
+	if sig1 != sig2 {
+		t.Fatal("signatures should be deterministic")
+	}
+	if sig1 == "" {
+		t.Fatal("signature should not be empty for valid calls")
+	}
+}

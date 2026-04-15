@@ -2284,3 +2284,92 @@ func TestToolLoopNoBudgetWarningsWithoutMaxCost(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractToolResults(t *testing.T) {
+	t.Parallel()
+	// Empty messages.
+	r := extractToolResults(nil)
+	if len(r) != 0 {
+		t.Fatal("expected empty map for nil messages")
+	}
+
+	// Messages with tool call responses.
+	messages := []llms.MessageContent{
+		{
+			Role: llms.ChatMessageTypeTool,
+			Parts: []llms.ContentPart{
+				llms.ToolCallResponse{ToolCallID: "1", Content: "output1"},
+				llms.ToolCallResponse{ToolCallID: "2", Content: "output2"},
+			},
+		},
+	}
+	r = extractToolResults(messages)
+	if len(r) != 2 || r["1"] != "output1" || r["2"] != "output2" {
+		t.Fatalf("unexpected results: %v", r)
+	}
+
+	// Non-tool-call-response parts are ignored.
+	messages = []llms.MessageContent{
+		{
+			Role: llms.ChatMessageTypeAI,
+			Parts: []llms.ContentPart{
+				llms.TextContent{Text: "hello"},
+			},
+		},
+	}
+	r = extractToolResults(messages)
+	if len(r) != 0 {
+		t.Fatal("expected empty map for non-tool messages")
+	}
+}
+
+func TestBashTool_BlockedCommand(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ex := &executor.LocalExecutor{WorkingDir: dir}
+	tool := bashTool(ex)
+	args, _ := json.Marshal(map[string]string{"command": "sudo rm -rf /"})
+	_, err := tool(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected error for blocked command")
+	}
+}
+
+func TestReadTool_FileTracker(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "test.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := InitFileTracker(context.Background())
+	ft := GetFileTracker(ctx)
+
+	tool := readTool(dir)
+	args, _ := json.Marshal(map[string]string{"path": "test.go"})
+	_, err := tool(ctx, args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the file was recorded as read.
+	if ft.LastReadTime(filepath.Join(dir, "test.go")).IsZero() {
+		t.Fatal("expected file to be recorded as read")
+	}
+}
+
+func TestEditTool_FileTrackerValidation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "test.go"), []byte("hello world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := InitFileTracker(context.Background())
+
+	// Try to edit without reading first — should fail.
+	tool := editTool(dir)
+	args, _ := json.Marshal(map[string]any{"path": "test.go", "old": "hello", "new": "goodbye"})
+	_, err := tool(ctx, args)
+	if err == nil {
+		t.Fatal("expected error when editing without reading first")
+	}
+}
