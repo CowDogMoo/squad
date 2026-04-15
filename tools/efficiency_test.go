@@ -364,3 +364,15 @@ func TestSortedKeys(t *testing.T) {
 		t.Fatalf("expected [a b c], got %v", keys)
 	}
 }
+
+func TestTokenCalibration_ZeroActual(t *testing.T) {
+	tc := NewTokenCalibration()
+	tc.Record(100, 0)  // actual <= 0, should be ignored
+	tc.Record(100, -5) // negative, should be ignored
+	if tc.Samples() != 0 {
+		t.Fatalf("expected 0 samples for zero/negative actual, got %d", tc.Samples())
+	}
+	if f := tc.CorrectionFactor(); f != 1.0 {
+		t.Fatalf("expected 1.0 with no valid samples, got %f", f)
+	}
+}

@@ -200,8 +200,8 @@ func TestBuildHandlers(t *testing.T) {
 		extra    []Handler
 		wantDefs int
 	}{
-		{"without TaskConfig", false, nil, 8},
-		{"with TaskConfig", true, nil, 9},
+		{"without TaskConfig", false, nil, 11},
+		{"with TaskConfig", true, nil, 12},
 		{"with ExtraTools", true, []Handler{
 			{
 				Def: llms.Tool{
@@ -215,7 +215,7 @@ func TestBuildHandlers(t *testing.T) {
 					return "ok", nil
 				},
 			},
-		}, 10},
+		}, 13},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1641,9 +1641,7 @@ func TestTaskResultToolWithParentMetrics(t *testing.T) {
 	}
 	close(result.Done)
 
-	registry.mu.Lock()
-	registry.tasks["bg-test"] = result
-	registry.mu.Unlock()
+	registry.tasks.Set("bg-test", result)
 
 	cfg := TaskConfig{
 		AgentsDir:     "agents",
@@ -1692,8 +1690,8 @@ func TestBuildHandlersWithRegistry(t *testing.T) {
 	if _, ok := handlers["TaskResult"]; !ok {
 		t.Fatalf("expected TaskResult handler when registry is set")
 	}
-	if len(defs) != 10 {
-		t.Fatalf("tool defs = %d, want 10 (8 base + Task + TaskResult)", len(defs))
+	if len(defs) != 13 {
+		t.Fatalf("tool defs = %d, want 13 (11 base + Task + TaskResult)", len(defs))
 	}
 }
 
@@ -1797,9 +1795,9 @@ func TestBuildHandlersWithFindings(t *testing.T) {
 	if _, ok := handlers["ReportFinding"]; !ok {
 		t.Fatalf("expected ReportFinding handler when Findings store is set")
 	}
-	// 8 base + Task + TaskResult + ReportFinding = 11
-	if len(defs) != 11 {
-		t.Fatalf("tool defs = %d, want 11", len(defs))
+	// 11 base + Task + TaskResult + ReportFinding = 14
+	if len(defs) != 14 {
+		t.Fatalf("tool defs = %d, want 14", len(defs))
 	}
 
 	// Verify the handler actually works and attributes to the agent
@@ -2284,5 +2282,94 @@ func TestToolLoopNoBudgetWarningsWithoutMaxCost(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestExtractToolResults(t *testing.T) {
+	t.Parallel()
+	// Empty messages.
+	r := extractToolResults(nil)
+	if len(r) != 0 {
+		t.Fatal("expected empty map for nil messages")
+	}
+
+	// Messages with tool call responses.
+	messages := []llms.MessageContent{
+		{
+			Role: llms.ChatMessageTypeTool,
+			Parts: []llms.ContentPart{
+				llms.ToolCallResponse{ToolCallID: "1", Content: "output1"},
+				llms.ToolCallResponse{ToolCallID: "2", Content: "output2"},
+			},
+		},
+	}
+	r = extractToolResults(messages)
+	if len(r) != 2 || r["1"] != "output1" || r["2"] != "output2" {
+		t.Fatalf("unexpected results: %v", r)
+	}
+
+	// Non-tool-call-response parts are ignored.
+	messages = []llms.MessageContent{
+		{
+			Role: llms.ChatMessageTypeAI,
+			Parts: []llms.ContentPart{
+				llms.TextContent{Text: "hello"},
+			},
+		},
+	}
+	r = extractToolResults(messages)
+	if len(r) != 0 {
+		t.Fatal("expected empty map for non-tool messages")
+	}
+}
+
+func TestBashTool_BlockedCommand(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ex := &executor.LocalExecutor{WorkingDir: dir}
+	tool := bashTool(ex)
+	args, _ := json.Marshal(map[string]string{"command": "sudo rm -rf /"})
+	_, err := tool(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected error for blocked command")
+	}
+}
+
+func TestReadTool_FileTracker(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "test.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := InitFileTracker(context.Background())
+	ft := GetFileTracker(ctx)
+
+	tool := readTool(dir)
+	args, _ := json.Marshal(map[string]string{"path": "test.go"})
+	_, err := tool(ctx, args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the file was recorded as read.
+	if ft.LastReadTime(filepath.Join(dir, "test.go")).IsZero() {
+		t.Fatal("expected file to be recorded as read")
+	}
+}
+
+func TestEditTool_FileTrackerValidation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "test.go"), []byte("hello world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := InitFileTracker(context.Background())
+
+	// Try to edit without reading first — should fail.
+	tool := editTool(dir)
+	args, _ := json.Marshal(map[string]any{"path": "test.go", "old": "hello", "new": "goodbye"})
+	_, err := tool(ctx, args)
+	if err == nil {
+		t.Fatal("expected error when editing without reading first")
 	}
 }

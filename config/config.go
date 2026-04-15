@@ -161,6 +161,15 @@ func loadConfigWithViper(setup func(*viper.Viper) error) (*Config, *viper.Viper,
 		return nil, nil, fmt.Errorf("config unmarshal failed: %w", err)
 	}
 
+	// Resolve dynamic values (env vars, command substitution) in the token field.
+	if cfg.Provider.Token != "" {
+		resolved, err := ResolveValue(cfg.Provider.Token)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolving provider.token: %w", err)
+		}
+		cfg.Provider.Token = resolved
+	}
+
 	return cfg, v, nil
 }
 
