@@ -607,7 +607,7 @@ func TestRunnerBudgetExhausted(t *testing.T) {
 
 	report, err := runner.Run(context.Background())
 	// The first agent runs and spends over budget, second should be skipped
-	cost := runner.remainingBudget()
+	cost := runner.RemainingBudget()
 	if report != nil && len(report.Stages) >= 2 {
 		secondAgent := report.Stages[1].Agents[0]
 		if secondAgent.Status == StatusPassed && cost == 0 {
@@ -620,8 +620,8 @@ func TestRunnerBudgetExhausted(t *testing.T) {
 func TestRunnerRemainingBudgetUnlimited(t *testing.T) {
 	t.Parallel()
 	runner := &Runner{MaxCost: 0}
-	if runner.remainingBudget() != 0 {
-		t.Fatalf("remainingBudget() = %v, want 0 for unlimited", runner.remainingBudget())
+	if runner.RemainingBudget() != 0 {
+		t.Fatalf("RemainingBudget() = %v, want 0 for unlimited", runner.RemainingBudget())
 	}
 }
 
@@ -809,7 +809,7 @@ func TestRunnerAddSpent(t *testing.T) {
 	wg.Wait()
 
 	// Should be 4.0 + 100*0.01 = 5.0 (with floating point tolerance).
-	remaining := runner.remainingBudget()
+	remaining := runner.RemainingBudget()
 	expectedRemaining := 10.0 - 5.0
 	if remaining < expectedRemaining-0.01 || remaining > expectedRemaining+0.01 {
 		t.Fatalf("remainingBudget() = %v, want ~%v", remaining, expectedRemaining)

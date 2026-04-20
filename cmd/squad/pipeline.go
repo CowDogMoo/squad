@@ -203,6 +203,18 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, cfg *config.Co
 		agentOpts.Findings = pipelineRunner.Findings
 		agentOpts.AgentName = agentName
 
+		// Apply effective budget cap propagated from the pipeline runner.
+		// This accounts for both remaining pipeline budget and per-stage caps.
+		if capStr, ok := mergedVars[pl.PipelineMaxCostVar]; ok {
+			var cap float64
+			if _, err := fmt.Sscanf(capStr, "%f", &cap); err == nil && cap > 0 {
+				agentOpts.MaxCost = cap
+			} else {
+				return "", nil, fmt.Errorf("pipeline budget exhausted")
+			}
+			delete(mergedVars, pl.PipelineMaxCostVar)
+		}
+
 		return runner.InvokeModel(ctx, &agentOpts, bundle)
 	}
 }

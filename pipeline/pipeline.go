@@ -31,6 +31,7 @@ type Stage struct {
 	Vars      map[string]string `yaml:"vars,omitempty"`      // stage-specific template vars
 	Condition string            `yaml:"condition,omitempty"` // skip condition (evaluated by orchestrator)
 	PreGates  []PreGate         `yaml:"pre_gates,omitempty"` // commands to run before agents, output injected into prompt
+	MaxCost   float64           `yaml:"max_cost,omitempty"`  // per-stage cost cap in USD (0 = use remaining pipeline budget)
 }
 
 // AgentList returns all agents in the stage (normalizing single vs parallel).

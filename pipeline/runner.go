@@ -28,6 +28,10 @@ const (
 	StatusFailed   StageStatus = "failed"
 	StatusReverted StageStatus = "reverted"
 	StatusSkipped  StageStatus = "skipped"
+
+	// PipelineMaxCostVar is a reserved stage var key used to propagate
+	// the effective per-agent cost cap from the pipeline runner.
+	PipelineMaxCostVar = "__pipeline_max_cost"
 )
 
 // StageResult records the outcome of a single stage execution.
@@ -283,8 +287,8 @@ func (r *Runner) addSpent(cost float64) float64 {
 	return r.getSpent().Update(func(v float64) float64 { return v + cost })
 }
 
-// remainingBudget returns the remaining cost budget, or 0 if unlimited.
-func (r *Runner) remainingBudget() float64 {
+// RemainingBudget returns the remaining cost budget, or 0 if unlimited.
+func (r *Runner) RemainingBudget() float64 {
 	if r.MaxCost <= 0 {
 		return 0
 	}
@@ -320,7 +324,7 @@ func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, pr
 	}
 
 	if r.MaxCost > 0 {
-		remaining := r.remainingBudget()
+		remaining := r.RemainingBudget()
 		if remaining <= 0 {
 			result.Status = StatusFailed
 			result.Duration = time.Since(start).Round(time.Millisecond).String()
@@ -338,6 +342,28 @@ func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, pr
 
 	mode := stage.Mode
 	vars := stage.Vars
+
+	// Inject effective budget cap for the agent via reserved var.
+	// This is min(remaining pipeline budget, stage max_cost).
+	if r.MaxCost > 0 || stage.MaxCost > 0 {
+		effectiveCap := r.RemainingBudget()
+		if stage.MaxCost > 0 && (effectiveCap <= 0 || stage.MaxCost < effectiveCap) {
+			effectiveCap = stage.MaxCost
+		}
+		if effectiveCap > 0 {
+			if vars == nil {
+				vars = make(map[string]string)
+			} else {
+				// Copy to avoid mutating stage vars.
+				merged := make(map[string]string, len(vars)+1)
+				for k, v := range vars {
+					merged[k] = v
+				}
+				vars = merged
+			}
+			vars[PipelineMaxCostVar] = fmt.Sprintf("%.4f", effectiveCap)
+		}
+	}
 
 	logging.InfoContext(ctx, "pipeline: running agent %q in stage %q", agentName, stage.Name)
 	output, m, err := r.RunAgent(ctx, agentName, prompt, r.WorkingDir, mode, vars)
