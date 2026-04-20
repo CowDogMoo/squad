@@ -55,6 +55,7 @@ var defaultSkipDirs = map[string]bool{
 
 type editsKeyType struct{}
 type editDeadlineKeyType struct{}
+type editEnforcerKeyType struct{}
 
 // mutatingTools are tools that legitimately chain in long sequences.
 var mutatingTools = map[string]bool{
@@ -189,6 +190,31 @@ func NewEditEnforcer(deadline int) *EditEnforcer {
 		return nil
 	}
 	return &EditEnforcer{Deadline: deadline}
+}
+
+// ShouldBlockReads returns true when the agent has spent at least one
+// full iteration reading without making any edits.  CheckNames is called
+// before tool execution, so readOnlyIters is already incremented for the
+// current iteration.  Using >= 2 means: iteration 1 reads are allowed,
+// iteration 2+ reads are blocked, forcing the model to switch to Edit/Write.
+func (e *EditEnforcer) ShouldBlockReads() bool {
+	if e == nil || e.editSeen {
+		return false
+	}
+	return e.readOnlyIters >= 2
+}
+
+// SetEditEnforcer stores the enforcer on the context so tool handlers can query it.
+func SetEditEnforcer(ctx context.Context, e *EditEnforcer) context.Context {
+	return context.WithValue(ctx, editEnforcerKeyType{}, e)
+}
+
+// GetEditEnforcer retrieves the enforcer from the context.
+func GetEditEnforcer(ctx context.Context) *EditEnforcer {
+	if e, ok := ctx.Value(editEnforcerKeyType{}).(*EditEnforcer); ok {
+		return e
+	}
+	return nil
 }
 
 // CheckNames inspects tool call names and returns true if the loop should stop.
@@ -347,6 +373,9 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 	var repeat RepeatTracker
 	var loopDetector LoopDetector
 	editEnforcer := NewEditEnforcer(editDeadline)
+	if editEnforcer != nil {
+		ctx = SetEditEnforcer(ctx, editEnforcer)
+	}
 	phaseEnforcer := NewPhaseEnforcer(defaultPhaseNudgeIters)
 	budgetWarned := make([]bool, len(budgetWarningThresholds))
 	for i := 0; i < maxIter; i++ {
@@ -954,6 +983,22 @@ func definitionBash() llms.Tool {
 	}
 }
 
+// applyFileClassification applies smart truncation and warnings based on file
+// size classification. The prefix is prepended to the result (e.g. cache note).
+func applyFileClassification(content string, lineCount, dataLen int, prefix string) string {
+	classification := ClassifyFileSize(lineCount, dataLen)
+	switch classification.Action {
+	case "truncate":
+		headLines := largeFileLineThreshold * 3 / 4
+		tailLines := largeFileLineThreshold / 4
+		return prefix + classification.Warning + "\n" + TruncateToLines(content, headLines, tailLines)
+	case "warn":
+		return prefix + classification.Warning + "\n" + content
+	default:
+		return prefix + content
+	}
+}
+
 func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (string, error) {
 	type args struct {
 		Path   string `json:"path"`
@@ -965,6 +1010,21 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		if err := json.Unmarshal(rawArgs, &payload); err != nil {
 			return "", fmt.Errorf("invalid args: %w", err)
 		}
+
+		// Block reads when the edit deadline is approaching and no edits
+		// have been made.  This forces the model to switch to Edit/Write.
+		if e := GetEditEnforcer(ctx); e != nil && e.ShouldBlockReads() {
+			logging.InfoContext(ctx, "blocking Read call — edit deadline approaching, no edits made yet")
+			return "READ BLOCKED — You have already read files. The Read tool is disabled until you call Edit or Write.\n\n" +
+				"DO THIS NOW: Call the Edit tool to add tests to one of the files you already read.\n\n" +
+				"Example Edit call:\n" +
+				"  file_path: src/some_module.rs\n" +
+				"  old_string: (the last 2-3 lines of the file you read)\n" +
+				"  new_string: (those same lines PLUS a #[cfg(test)] mod tests block with a real test)\n\n" +
+				"You have the file contents from your previous Read calls. Use them to construct the Edit now. " +
+				"Do NOT call Read, Glob, or Grep — only Edit, Write, or Bash (for cargo test).", nil
+		}
+
 		path, err := ResolvePath(workingDir, payload.Path)
 		if err != nil {
 			return "", err
@@ -987,14 +1047,17 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		lineCount := strings.Count(string(data), "\n") + 1
 
 		// Check read cache for duplicate reads.
+		// On cache hit we still return the full content (so the model can
+		// work with it) but prepend a note. Withholding content caused
+		// models to loop re-reading the same file and wasting iterations.
 		if rc := GetReadCache(ctx); rc != nil {
 			hash := HashContent(data)
 			if entry, hit := rc.Check(path, hash); hit {
 				logReadCacheHit(ctx, payload.Path, entry)
-				return fmt.Sprintf(
-					"[File already read in iteration %d — content unchanged. %d lines, %d bytes. "+
-						"Do NOT re-read this file. Use your earlier knowledge of its contents.]",
-					entry.Iteration, entry.Lines, entry.Bytes), nil
+				prefix := fmt.Sprintf(
+					"[CACHED — identical to iteration %d. Avoid re-reading this file.]\n",
+					entry.Iteration)
+				return applyFileClassification(string(data), lineCount, len(data), prefix), nil
 			}
 			rc.Store(path, hash, lineCount, len(data), GetIteration(ctx))
 		}
@@ -1004,18 +1067,7 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 			return truncateHeadTail(data), nil
 		}
 
-		classification := ClassifyFileSize(lineCount, len(data))
-		content := string(data)
-		switch classification.Action {
-		case "truncate":
-			headLines := largeFileLineThreshold * 3 / 4
-			tailLines := largeFileLineThreshold / 4
-			return classification.Warning + "\n" + TruncateToLines(content, headLines, tailLines), nil
-		case "warn":
-			return classification.Warning + "\n" + content, nil
-		default:
-			return content, nil
-		}
+		return applyFileClassification(string(data), lineCount, len(data), ""), nil
 	}
 }
 
@@ -1146,7 +1198,13 @@ func globTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 	type args struct {
 		Pattern string `json:"pattern"`
 	}
-	return func(_ context.Context, rawArgs []byte) (string, error) {
+	return func(ctx context.Context, rawArgs []byte) (string, error) {
+		// Block glob when the edit deadline is approaching and no edits have been made.
+		if e := GetEditEnforcer(ctx); e != nil && e.ShouldBlockReads() {
+			logging.InfoContext(ctx, "blocking Glob call — edit deadline approaching, no edits made yet")
+			return "GLOB BLOCKED — Call Edit to write tests instead. Do NOT call Read, Glob, or Grep.", nil
+		}
+
 		var payload args
 		if err := json.Unmarshal(rawArgs, &payload); err != nil {
 			return "", fmt.Errorf("invalid args: %w", err)
@@ -1203,7 +1261,13 @@ func grepTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
 	}
-	return func(_ context.Context, rawArgs []byte) (string, error) {
+	return func(ctx context.Context, rawArgs []byte) (string, error) {
+		// Block grep when the edit deadline is approaching and no edits have been made.
+		if e := GetEditEnforcer(ctx); e != nil && e.ShouldBlockReads() {
+			logging.InfoContext(ctx, "blocking Grep call — edit deadline approaching, no edits made yet")
+			return "GREP BLOCKED — Call Edit to write tests instead. Do NOT call Read, Glob, or Grep.", nil
+		}
+
 		var payload args
 		if err := json.Unmarshal(rawArgs, &payload); err != nil {
 			return "", fmt.Errorf("invalid args: %w", err)

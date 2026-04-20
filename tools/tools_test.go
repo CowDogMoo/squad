@@ -2373,3 +2373,167 @@ func TestEditTool_FileTrackerValidation(t *testing.T) {
 		t.Fatal("expected error when editing without reading first")
 	}
 }
+
+func TestShouldBlockReads(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil enforcer never blocks", func(t *testing.T) {
+		var e *EditEnforcer
+		if e.ShouldBlockReads() {
+			t.Fatal("nil enforcer should not block")
+		}
+	})
+
+	t.Run("does not block before deadline", func(t *testing.T) {
+		e := NewEditEnforcer(5)
+		// Simulate one read-only iteration
+		e.CheckNames([]string{"Read"})
+		if e.ShouldBlockReads() {
+			t.Fatal("should not block after first read-only iteration")
+		}
+	})
+
+	t.Run("blocks after multiple read-only iterations", func(t *testing.T) {
+		e := NewEditEnforcer(5)
+		e.CheckNames([]string{"Read"})
+		e.CheckNames([]string{"Glob"})
+		// readOnlyIters is now 2, so ShouldBlockReads should be true
+		if !e.ShouldBlockReads() {
+			t.Fatal("should block after 2 read-only iterations with no edits")
+		}
+	})
+
+	t.Run("does not block after edit seen", func(t *testing.T) {
+		e := NewEditEnforcer(5)
+		e.CheckNames([]string{"Read"})
+		e.CheckNames([]string{"Read"})
+		e.CheckNames([]string{"Edit"})
+		if e.ShouldBlockReads() {
+			t.Fatal("should not block after Edit was seen")
+		}
+	})
+}
+
+func TestEditEnforcerContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	if e := GetEditEnforcer(ctx); e != nil {
+		t.Fatal("expected nil before setting")
+	}
+
+	enforcer := NewEditEnforcer(3)
+	ctx = SetEditEnforcer(ctx, enforcer)
+	got := GetEditEnforcer(ctx)
+	if got != enforcer {
+		t.Fatal("expected same enforcer back from context")
+	}
+}
+
+func TestReadToolBlockedByEditEnforcer(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	e := NewEditEnforcer(5)
+	e.CheckNames([]string{"Read"})
+	e.CheckNames([]string{"Read"}) // readOnlyIters = 2 → ShouldBlockReads
+	ctx := SetEditEnforcer(context.Background(), e)
+
+	read := readTool(dir)
+	out, err := read(ctx, []byte(`{"path":"f.txt"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "READ BLOCKED") {
+		t.Fatalf("expected READ BLOCKED, got: %s", out)
+	}
+}
+
+func TestGlobToolBlockedByEditEnforcer(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	e := NewEditEnforcer(5)
+	e.CheckNames([]string{"Read"})
+	e.CheckNames([]string{"Glob"})
+	ctx := SetEditEnforcer(context.Background(), e)
+
+	glob := globTool(dir)
+	out, err := glob(ctx, []byte(`{"pattern":"*.txt"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "GLOB BLOCKED") {
+		t.Fatalf("expected GLOB BLOCKED, got: %s", out)
+	}
+}
+
+func TestGrepToolBlockedByEditEnforcer(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("findme"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	e := NewEditEnforcer(5)
+	e.CheckNames([]string{"Read"})
+	e.CheckNames([]string{"Grep"})
+	ctx := SetEditEnforcer(context.Background(), e)
+
+	grep := grepTool(dir)
+	out, err := grep(ctx, []byte(`{"pattern":"findme","path":"."}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "GREP BLOCKED") {
+		t.Fatalf("expected GREP BLOCKED, got: %s", out)
+	}
+}
+
+func TestReadToolCacheHitReturnsContent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	content := "line1\nline2\nline3\n"
+	if err := os.WriteFile(filepath.Join(dir, "cached.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := InitReadCache(context.Background())
+	ctx = InitIterationCounter(ctx)
+	read := readTool(dir)
+
+	// Iteration 1: first read populates cache.
+	SetIteration(ctx, 1)
+	fresh, err := read(ctx, []byte(`{"path":"cached.txt"}`))
+	if err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	if !strings.Contains(fresh, "line1") {
+		t.Fatalf("first read should contain file content, got: %s", fresh)
+	}
+	if strings.Contains(fresh, "CACHED") {
+		t.Fatalf("first read should not be a cache hit, got: %s", fresh)
+	}
+
+	// Iteration 3: same file, unchanged — cache hit returns content with prefix.
+	SetIteration(ctx, 3)
+	cached, err := read(ctx, []byte(`{"path":"cached.txt"}`))
+	if err != nil {
+		t.Fatalf("cached read: %v", err)
+	}
+	if !strings.Contains(cached, "CACHED") {
+		t.Fatalf("cache hit should have CACHED prefix, got: %s", cached)
+	}
+	if !strings.Contains(cached, "iteration 1") {
+		t.Fatalf("cache hit should reference original iteration, got: %s", cached)
+	}
+	if !strings.Contains(cached, "line1") || !strings.Contains(cached, "line3") {
+		t.Fatalf("cache hit should still return full file content, got: %s", cached)
+	}
+}
