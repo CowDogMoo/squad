@@ -24,12 +24,19 @@ type ReadCacheEntry struct {
 	Lines       int    // number of lines
 	Bytes       int    // file size
 	Iteration   int    // iteration when first read
+	Summary     string // brief content summary (top-level declarations) for compaction
 }
+
+// cacheHitStreakThreshold is the number of consecutive cache-hit Read calls
+// (without any edit or new-file read) before the circuit breaker fires.
+const cacheHitStreakThreshold = 3
 
 // ReadCache tracks files already read in the current session to avoid
 // wasting tokens on redundant re-reads. Thread-safe.
 type ReadCache struct {
-	entries *csync.Map[string, ReadCacheEntry]
+	entries     *csync.Map[string, ReadCacheEntry]
+	mu          sync.Mutex
+	cacheStreak int // consecutive cache-hit Read calls without edit or new read
 }
 
 // NewReadCache creates an empty read cache.
@@ -69,8 +76,9 @@ func (rc *ReadCache) Check(path string, contentHash string) (ReadCacheEntry, boo
 	return ReadCacheEntry{}, false
 }
 
-// Store records a file read in the cache.
-func (rc *ReadCache) Store(path, contentHash string, lines, bytes, iteration int) {
+// Store records a file read in the cache and resets the cache-hit streak
+// (reading a new/changed file is progress, not a loop).
+func (rc *ReadCache) Store(path, contentHash string, lines, bytes, iteration int, summary string) {
 	if rc == nil {
 		return
 	}
@@ -79,7 +87,50 @@ func (rc *ReadCache) Store(path, contentHash string, lines, bytes, iteration int
 		Lines:       lines,
 		Bytes:       bytes,
 		Iteration:   iteration,
+		Summary:     summary,
 	})
+	rc.mu.Lock()
+	rc.cacheStreak = 0
+	rc.mu.Unlock()
+}
+
+// IncrementStreak bumps the consecutive cache-hit counter and returns the new value.
+func (rc *ReadCache) IncrementStreak() int {
+	if rc == nil {
+		return 0
+	}
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.cacheStreak++
+	return rc.cacheStreak
+}
+
+// ResetStreak zeroes the consecutive cache-hit counter (call after a successful edit).
+func (rc *ReadCache) ResetStreak() {
+	if rc == nil {
+		return
+	}
+	rc.mu.Lock()
+	rc.cacheStreak = 0
+	rc.mu.Unlock()
+}
+
+// Summaries returns a map of path → human-readable summary for all cached files.
+// Used by CompactionSummary to preserve file context after compaction.
+func (rc *ReadCache) Summaries() map[string]string {
+	if rc == nil {
+		return nil
+	}
+	result := make(map[string]string)
+	rc.entries.Range(func(path string, entry ReadCacheEntry) bool {
+		if entry.Summary != "" {
+			result[path] = fmt.Sprintf("%d lines; %s", entry.Lines, entry.Summary)
+		} else {
+			result[path] = fmt.Sprintf("%d lines", entry.Lines)
+		}
+		return true
+	})
+	return result
 }
 
 // Len returns the number of entries in the cache.
@@ -313,7 +364,9 @@ func writeCappedList(sb *strings.Builder, label string, items []string, cap int)
 
 // CompactionSummary extracts structured information from messages before
 // they are compacted, preserving the agent's "mental map" of what it has done.
-func CompactionSummary(messages []llms.MessageContent) string {
+// When rc is non-nil, per-file summaries (line count + declarations) are
+// included so the model can write edits without re-reading files.
+func CompactionSummary(messages []llms.MessageContent, rc *ReadCache) string {
 	s := collectCompactionStats(messages)
 
 	if len(s.filesRead) == 0 && len(s.editsApplied) == 0 {
@@ -324,7 +377,25 @@ func CompactionSummary(messages []llms.MessageContent) string {
 	sb.WriteString("[SESSION STATE after context compaction]\n")
 
 	if len(s.filesRead) > 0 {
-		writeCappedList(&sb, "Files read: ", sortedKeys(s.filesRead), 30)
+		summaries := rc.Summaries()
+		if len(summaries) > 0 {
+			sb.WriteString("Files previously read (do NOT re-read — use these summaries to write edits):\n")
+			keys := sortedKeys(s.filesRead)
+			cap := 30
+			for i, path := range keys {
+				if i >= cap {
+					fmt.Fprintf(&sb, "  ... and %d more files\n", len(keys)-cap)
+					break
+				}
+				if summary, ok := summaries[path]; ok {
+					fmt.Fprintf(&sb, "  %s — %s\n", path, summary)
+				} else {
+					fmt.Fprintf(&sb, "  %s\n", path)
+				}
+			}
+		} else {
+			writeCappedList(&sb, "Files read: ", sortedKeys(s.filesRead), 30)
+		}
 	}
 	if len(s.patternsSearched) > 0 {
 		writeCappedList(&sb, "Patterns searched: ", sortedKeys(s.patternsSearched), 15)
@@ -345,7 +416,7 @@ func CompactionSummary(messages []llms.MessageContent) string {
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("Do NOT re-read files listed above unless you need to verify your edits.\n")
+	sb.WriteString("Do NOT re-read files listed above — write edits from the summaries and your notes.\n")
 	return sb.String()
 }
 
@@ -520,6 +591,68 @@ func (tc *TokenCalibration) Samples() int {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	return tc.samples
+}
+
+// --- File Summary ---
+
+// GenerateFileSummary produces a brief summary of a file's top-level
+// declarations (func, type, class, def, fn). The summary is stored in the
+// read cache and included in compaction summaries so the model can write
+// edits without re-reading the file.
+func GenerateFileSummary(content string) string {
+	lines := strings.Split(content, "\n")
+	var decls []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		var name string
+		switch {
+		case strings.HasPrefix(trimmed, "func "):
+			name = extractDeclIdent(trimmed, "func ")
+		case strings.HasPrefix(trimmed, "def "):
+			name = extractDeclIdent(trimmed, "def ")
+		case strings.HasPrefix(trimmed, "class "):
+			name = extractDeclIdent(trimmed, "class ")
+		case strings.HasPrefix(trimmed, "type "):
+			name = extractDeclIdent(trimmed, "type ")
+		case strings.HasPrefix(trimmed, "pub fn "):
+			name = extractDeclIdent(trimmed, "pub fn ")
+		case strings.HasPrefix(trimmed, "fn "):
+			name = extractDeclIdent(trimmed, "fn ")
+		}
+		if name != "" {
+			decls = append(decls, name)
+		}
+		if len(decls) >= 15 {
+			break
+		}
+	}
+	if len(decls) == 0 {
+		return ""
+	}
+	result := "declares: " + strings.Join(decls, ", ")
+	return TruncateString(result, 200)
+}
+
+// extractDeclIdent extracts the first identifier after a declaration keyword.
+// Handles Go method receivers: "func (t *Type) Name(" → "Name".
+func extractDeclIdent(line, prefix string) string {
+	rest := line[len(prefix):]
+	// Skip Go method receiver: "(anything) "
+	if strings.HasPrefix(rest, "(") {
+		end := strings.IndexByte(rest, ')')
+		if end >= 0 && end+1 < len(rest) {
+			rest = strings.TrimSpace(rest[end+1:])
+		}
+	}
+	var name strings.Builder
+	for _, c := range rest {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
+			name.WriteRune(c)
+		} else {
+			break
+		}
+	}
+	return name.String()
 }
 
 // --- Logging helper ---
