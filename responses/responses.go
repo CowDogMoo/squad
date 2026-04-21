@@ -4,6 +4,7 @@ package responses
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -177,7 +178,7 @@ func newClient(apiKey, baseURL, organization string) openai.Client {
 
 func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config, maxIter, editDeadline int, m *metrics.Metrics) (*oairesponses.Response, string, error) {
 	var repeat tools.RepeatTracker
-	editEnforcer := tools.NewEditEnforcer(editDeadline)
+	editEnforcer := tools.NewEditEnforcer(editDeadline, maxIter)
 	for i := 0; i < maxIter; i++ {
 		calls := ExtractFunctionCalls(resp)
 		if len(calls) == 0 {
@@ -425,21 +426,30 @@ func logAPIError(ctx context.Context, err error, label string) {
 	if err == nil {
 		return
 	}
-	lower := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(lower, "429") || strings.Contains(lower, "rate limit"):
-		logging.InfoContext(ctx, "responses API %s: rate limited — SDK will auto-retry", label)
-	case strings.Contains(lower, "500") || strings.Contains(lower, "internal server error"):
-		logging.InfoContext(ctx, "responses API %s: server error (500) — SDK will auto-retry", label)
-	case strings.Contains(lower, "503") || strings.Contains(lower, "service unavailable") || strings.Contains(lower, "overloaded"):
-		logging.InfoContext(ctx, "responses API %s: service unavailable (503) — SDK will auto-retry", label)
-	case strings.Contains(lower, "401") || strings.Contains(lower, "authentication"):
-		logging.InfoContext(ctx, "responses API %s: authentication failure — check API key", label)
-	case strings.Contains(lower, "context canceled"):
-		logging.InfoContext(ctx, "responses API %s: context canceled", label)
-	default:
-		logging.InfoContext(ctx, "responses API %s: %v", label, err)
+
+	var apiErr *oairesponses.Error
+	if errors.As(err, &apiErr) {
+		switch apiErr.StatusCode {
+		case 429:
+			logging.InfoContext(ctx, "responses API %s: rate limited — SDK will auto-retry", label)
+		case 500:
+			logging.InfoContext(ctx, "responses API %s: server error (500) — SDK will auto-retry", label)
+		case 503:
+			logging.InfoContext(ctx, "responses API %s: service unavailable (503) — SDK will auto-retry", label)
+		case 401:
+			logging.InfoContext(ctx, "responses API %s: authentication failure — check API key", label)
+		default:
+			logging.InfoContext(ctx, "responses API %s: HTTP %d — %s", label, apiErr.StatusCode, apiErr.Message)
+		}
+		return
 	}
+
+	if ctx.Err() != nil {
+		logging.InfoContext(ctx, "responses API %s: context canceled", label)
+		return
+	}
+
+	logging.InfoContext(ctx, "responses API %s: %v", label, err)
 }
 
 func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers map[string]tools.Handler) []oairesponses.ResponseInputItemUnionParam {

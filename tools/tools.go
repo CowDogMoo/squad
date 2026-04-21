@@ -64,6 +64,11 @@ var mutatingTools = map[string]bool{
 	"Write":     true,
 }
 
+// maxReadToolRepeat caps consecutive identical Read/Glob/Grep calls.
+// Models sometimes re-read the same file despite cache hints; a hard cap
+// forces them to move on.
+const maxReadToolRepeat = 5
+
 var highRepeatTools = map[string]bool{
 	"Read": true,
 	"Glob": true,
@@ -166,7 +171,7 @@ func (t *RepeatTracker) Update(calls []llms.ToolCall) {
 func (t *RepeatTracker) Exceeded() bool {
 	limit := maxSameToolRepeat
 	if highRepeatTools[t.LastName] {
-		limit = MaxToolIterations
+		limit = maxReadToolRepeat
 	}
 	if mutatingTools[t.LastName] {
 		limit = maxMutatingToolRepeat
@@ -185,23 +190,44 @@ type EditEnforcer struct {
 
 // NewEditEnforcer creates an enforcer that triggers after deadline iterations
 // with no Edit call. Returns nil if deadline <= 0 (disabled).
-func NewEditEnforcer(deadline int) *EditEnforcer {
+// When maxIterations is provided (first optional arg), the effective deadline
+// is scaled up to at least 30% of maxIterations so that agents with large
+// iteration budgets aren't killed before they finish reading.
+func NewEditEnforcer(deadline int, maxIterations ...int) *EditEnforcer {
 	if deadline <= 0 {
 		return nil
 	}
-	return &EditEnforcer{Deadline: deadline}
+	effective := deadline
+	if len(maxIterations) > 0 && maxIterations[0] > 0 {
+		floor := maxIterations[0] * 3 / 10 // 30% of max iterations
+		if floor > effective {
+			effective = floor
+		}
+	}
+	return &EditEnforcer{Deadline: effective}
 }
 
-// ShouldBlockReads returns true when the agent has spent at least one
-// full iteration reading without making any edits.  CheckNames is called
-// before tool execution, so readOnlyIters is already incremented for the
-// current iteration.  Using >= 2 means: iteration 1 reads are allowed,
-// iteration 2+ reads are blocked, forcing the model to switch to Edit/Write.
+// PreEdit reports whether the agent has not yet made any edits.
+// It is nil-safe: a nil enforcer is treated as pre-edit.
+func (e *EditEnforcer) PreEdit() bool {
+	return e == nil || !e.editSeen
+}
+
+// ShouldBlockReads returns true when the agent is close to its edit
+// deadline and has made no edits.  Reads are blocked starting 2
+// iterations before the deadline, giving the model a final chance to
+// switch to Edit/Write.  This avoids blocking reads too early — review
+// agents need many iterations to read files before editing.
 func (e *EditEnforcer) ShouldBlockReads() bool {
 	if e == nil || e.editSeen {
 		return false
 	}
-	return e.readOnlyIters >= 2
+	// Block reads only in the final 2 iterations before the deadline.
+	threshold := e.Deadline - 2
+	if threshold < 2 {
+		threshold = 2
+	}
+	return e.readOnlyIters >= threshold
 }
 
 // SetEditEnforcer stores the enforcer on the context so tool handlers can query it.
@@ -223,7 +249,7 @@ func (e *EditEnforcer) CheckNames(names []string) bool {
 		return false
 	}
 	for _, name := range names {
-		if name == "Edit" || name == "MultiEdit" {
+		if name == "Edit" || name == "MultiEdit" || name == "Write" {
 			e.editSeen = true
 			return false
 		}
@@ -307,7 +333,7 @@ var budgetWarningThresholds = []float64{0.25, 0.50, 0.75}
 
 // defaultPhaseNudgeIters is the number of read-only iterations before
 // injecting a progress-check message.
-const defaultPhaseNudgeIters = 5
+const defaultPhaseNudgeIters = 3
 
 // extractToolNames collects tool names from tool calls.
 func extractToolNames(calls []llms.ToolCall) []string {
@@ -372,11 +398,14 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 	var lastContent string
 	var repeat RepeatTracker
 	var loopDetector LoopDetector
-	editEnforcer := NewEditEnforcer(editDeadline)
+	editEnforcer := NewEditEnforcer(editDeadline, maxIter)
 	if editEnforcer != nil {
 		ctx = SetEditEnforcer(ctx, editEnforcer)
 	}
 	phaseEnforcer := NewPhaseEnforcer(defaultPhaseNudgeIters)
+	if phaseEnforcer != nil {
+		ctx = SetPhaseEnforcer(ctx, phaseEnforcer)
+	}
 	budgetWarned := make([]bool, len(budgetWarningThresholds))
 	for i := 0; i < maxIter; i++ {
 		SetIteration(ctx, i)
@@ -388,7 +417,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 			logging.InfoContext(ctx, "model call failed in %s: %v", iterDuration.Round(time.Millisecond), err)
 			return lastContent, messages, fmt.Errorf("GenerateContent failed: %w", err), false
 		}
-		if response == nil || len(response.Choices) == 0 {
+		if isEmptyResponse(response) {
 			logging.InfoContext(ctx, "model returned empty response in %s", iterDuration.Round(time.Millisecond))
 			return lastContent, messages, fmt.Errorf("model returned empty response"), false
 		}
@@ -441,6 +470,11 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		messages = compactMessages(ctx, messages)
 	}
 	return lastContent, messages, ErrIterationLimitReached, false
+}
+
+// isEmptyResponse reports whether the model returned no usable content.
+func isEmptyResponse(resp *llms.ContentResponse) bool {
+	return resp == nil || len(resp.Choices) == 0
 }
 
 // extractToolResults pulls tool call IDs and their result content from the
@@ -1011,18 +1045,13 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 			return "", fmt.Errorf("invalid args: %w", err)
 		}
 
-		// Block reads when the edit deadline is approaching and no edits
-		// have been made.  This forces the model to switch to Edit/Write.
+		// Hard-block reads only when the edit deadline is approaching.
 		if e := GetEditEnforcer(ctx); e != nil && e.ShouldBlockReads() {
 			logging.InfoContext(ctx, "blocking Read call — edit deadline approaching, no edits made yet")
 			return "READ BLOCKED — You have already read files. The Read tool is disabled until you call Edit or Write.\n\n" +
-				"DO THIS NOW: Call the Edit tool to add tests to one of the files you already read.\n\n" +
-				"Example Edit call:\n" +
-				"  file_path: src/some_module.rs\n" +
-				"  old_string: (the last 2-3 lines of the file you read)\n" +
-				"  new_string: (those same lines PLUS a #[cfg(test)] mod tests block with a real test)\n\n" +
-				"You have the file contents from your previous Read calls. Use them to construct the Edit now. " +
-				"Do NOT call Read, Glob, or Grep — only Edit, Write, or Bash (for cargo test).", nil
+				"You are approaching the edit deadline with no edits made. Use the file contents from your " +
+				"previous Read calls to construct Edit calls now. Do NOT call Read, Glob, or Grep until you " +
+				"have made at least one Edit or Write call.", nil
 		}
 
 		path, err := ResolvePath(workingDir, payload.Path)
@@ -1047,17 +1076,37 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		lineCount := strings.Count(string(data), "\n") + 1
 
 		// Check read cache for duplicate reads.
-		// On cache hit we still return the full content (so the model can
-		// work with it) but prepend a note. Withholding content caused
-		// models to loop re-reading the same file and wasting iterations.
+		// Before any edits: return full content with a warning so the model
+		// still has data to work from (compaction may have removed the original).
+		// After first edit: return a short stub to prevent wasteful re-reads.
 		if rc := GetReadCache(ctx); rc != nil {
 			hash := HashContent(data)
 			if entry, hit := rc.Check(path, hash); hit {
 				logReadCacheHit(ctx, payload.Path, entry)
-				prefix := fmt.Sprintf(
-					"[CACHED — identical to iteration %d. Avoid re-reading this file.]\n",
-					entry.Iteration)
-				return applyFileClassification(string(data), lineCount, len(data), prefix), nil
+				preEdit := GetEditEnforcer(ctx).PreEdit()
+				if preEdit {
+					// Return full content with warning — model needs it to write edits.
+					// Escalate warning based on how many phase nudges have been ignored.
+					var prefix string
+					if pe := GetPhaseEnforcer(ctx); pe != nil && pe.NudgesSent() >= 2 {
+						prefix = fmt.Sprintf(
+							"[WARNING — REPEATED RE-READ #%d. You already read this file at iteration %d. "+
+								"Your next tool call MUST be Edit or Write, not Read. "+
+								"Here is the content — use it to write tests NOW.]\n",
+							pe.NudgesSent(), entry.Iteration)
+					} else {
+						prefix = fmt.Sprintf(
+							"[CACHED — you already read this file at iteration %d. "+
+								"STOP re-reading and start writing Edit calls NOW.]\n",
+							entry.Iteration)
+					}
+					return applyFileClassification(string(data), lineCount, len(data), prefix), nil
+				}
+				return fmt.Sprintf(
+					"[CACHED — file unchanged since iteration %d (%d lines, %d bytes). "+
+						"You already read this file. Use the contents from your earlier read "+
+						"to write Edit calls NOW. Do NOT re-read this file.]",
+					entry.Iteration, entry.Lines, entry.Bytes), nil
 			}
 			rc.Store(path, hash, lineCount, len(data), GetIteration(ctx))
 		}
@@ -1202,7 +1251,7 @@ func globTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		// Block glob when the edit deadline is approaching and no edits have been made.
 		if e := GetEditEnforcer(ctx); e != nil && e.ShouldBlockReads() {
 			logging.InfoContext(ctx, "blocking Glob call — edit deadline approaching, no edits made yet")
-			return "GLOB BLOCKED — Call Edit to write tests instead. Do NOT call Read, Glob, or Grep.", nil
+			return "GLOB BLOCKED — Edit deadline approaching with no edits. Call Edit or Write first.", nil
 		}
 
 		var payload args
@@ -1265,7 +1314,7 @@ func grepTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		// Block grep when the edit deadline is approaching and no edits have been made.
 		if e := GetEditEnforcer(ctx); e != nil && e.ShouldBlockReads() {
 			logging.InfoContext(ctx, "blocking Grep call — edit deadline approaching, no edits made yet")
-			return "GREP BLOCKED — Call Edit to write tests instead. Do NOT call Read, Glob, or Grep.", nil
+			return "GREP BLOCKED — Edit deadline approaching with no edits. Call Edit or Write first.", nil
 		}
 
 		var payload args

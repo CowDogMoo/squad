@@ -128,12 +128,39 @@ func TestPhaseEnforcer(t *testing.T) {
 		t.Fatal("expected nudge after 3 read-only iterations")
 	}
 	if !strings.Contains(msg, "PROGRESS CHECK") {
-		t.Fatalf("unexpected nudge message: %s", msg)
+		t.Fatalf("expected first nudge to be PROGRESS CHECK, got: %s", msg)
 	}
 
-	// Nudge only sent once
-	if msg := pe.ObserveTools([]string{"Read"}); msg != "" {
-		t.Fatal("nudge should only be sent once")
+	// After first nudge, ShouldBlockReads is still false (only 1 nudge)
+	if pe.ShouldBlockReads() {
+		t.Fatal("should not block reads after first nudge")
+	}
+
+	// Second nudge fires 3 iterations later (escalating)
+	pe.ObserveTools([]string{"Read"})
+	pe.ObserveTools([]string{"Read"})
+	msg = pe.ObserveTools([]string{"Read"}) // iteration 6
+	if msg == "" {
+		t.Fatal("expected second nudge at iteration 6")
+	}
+	if !strings.Contains(msg, "URGENT") {
+		t.Fatalf("expected second nudge to be URGENT, got: %s", msg)
+	}
+
+	// After second nudge, ShouldBlockReads is true
+	if !pe.ShouldBlockReads() {
+		t.Fatal("should block reads after 2 ignored nudges")
+	}
+
+	// Third nudge fires 3 more iterations later (final warning)
+	pe.ObserveTools([]string{"Read"})
+	pe.ObserveTools([]string{"Read"})
+	msg = pe.ObserveTools([]string{"Read"}) // iteration 9
+	if msg == "" {
+		t.Fatal("expected third nudge at iteration 9")
+	}
+	if !strings.Contains(msg, "FINAL WARNING") {
+		t.Fatalf("expected third nudge to be FINAL WARNING, got: %s", msg)
 	}
 }
 

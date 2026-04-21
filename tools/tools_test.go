@@ -809,8 +809,8 @@ func TestRepeatTrackerExceeded(t *testing.T) {
 		{"normal tool below limit", "Other", maxSameToolRepeat - 1, false},
 		{"mutating tool at limit", "Edit", maxMutatingToolRepeat, true},
 		{"mutating tool below limit", "Edit", maxMutatingToolRepeat - 1, false},
-		{"high repeat tool at limit", "Read", MaxToolIterations, true},
-		{"high repeat tool below limit", "Read", MaxToolIterations - 1, false},
+		{"high repeat tool at limit", "Read", maxReadToolRepeat, true},
+		{"high repeat tool below limit", "Read", maxReadToolRepeat - 1, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2156,7 +2156,7 @@ func TestToolLoopBudgetWarnings(t *testing.T) {
 	m.SetMaxCost(1.00)
 
 	llm := &captureLLM{responses: []*llms.ContentResponse{
-		// Iteration 1: tool call + token usage that pushes past 50%
+		// Tool call + token usage that pushes past 50%
 		{Choices: []*llms.ContentChoice{{
 			ToolCalls: []llms.ToolCall{{
 				ID:   "1",
@@ -2171,7 +2171,7 @@ func TestToolLoopBudgetWarnings(t *testing.T) {
 				"CompletionTokens": int64(20000),
 			},
 		}}},
-		// Iteration 2: another tool call pushing past 75%
+		// Another tool call pushing past 75%
 		{Choices: []*llms.ContentChoice{{
 			ToolCalls: []llms.ToolCall{{
 				ID:   "2",
@@ -2186,7 +2186,7 @@ func TestToolLoopBudgetWarnings(t *testing.T) {
 				"CompletionTokens": int64(20000),
 			},
 		}}},
-		// Iteration 3: final response with no tool calls
+		// Final response with no tool calls
 		{Choices: []*llms.ContentChoice{{
 			Content: "final output",
 		}}},
@@ -2393,13 +2393,17 @@ func TestShouldBlockReads(t *testing.T) {
 		}
 	})
 
-	t.Run("blocks after multiple read-only iterations", func(t *testing.T) {
+	t.Run("blocks near deadline", func(t *testing.T) {
 		e := NewEditEnforcer(5)
+		// threshold = 5-2 = 3, so need 3 read-only iterations to trigger
 		e.CheckNames([]string{"Read"})
 		e.CheckNames([]string{"Glob"})
-		// readOnlyIters is now 2, so ShouldBlockReads should be true
+		if e.ShouldBlockReads() {
+			t.Fatal("should not block at 2 iterations when deadline is 5")
+		}
+		e.CheckNames([]string{"Read"})
 		if !e.ShouldBlockReads() {
-			t.Fatal("should block after 2 read-only iterations with no edits")
+			t.Fatal("should block at 3 read-only iterations (deadline-2) with no edits")
 		}
 	})
 
@@ -2410,6 +2414,36 @@ func TestShouldBlockReads(t *testing.T) {
 		e.CheckNames([]string{"Edit"})
 		if e.ShouldBlockReads() {
 			t.Fatal("should not block after Edit was seen")
+		}
+	})
+
+	t.Run("scales deadline with maxIterations", func(t *testing.T) {
+		// edit_deadline=5 with maxIterations=50 → effective = max(5, 15) = 15
+		e := NewEditEnforcer(5, 50)
+		if e.Deadline != 15 {
+			t.Fatalf("expected scaled deadline 15, got %d", e.Deadline)
+		}
+		// threshold = 15-2 = 13; should not block at iteration 5
+		for i := 0; i < 5; i++ {
+			e.CheckNames([]string{"Read"})
+		}
+		if e.ShouldBlockReads() {
+			t.Fatal("should not block at 5 read-only iterations when effective deadline is 15")
+		}
+	})
+
+	t.Run("does not scale down deadline", func(t *testing.T) {
+		// edit_deadline=10 with maxIterations=10 → 30% of 10 = 3, so keep 10
+		e := NewEditEnforcer(10, 10)
+		if e.Deadline != 10 {
+			t.Fatalf("expected deadline 10 (not scaled down), got %d", e.Deadline)
+		}
+	})
+
+	t.Run("no maxIterations preserves deadline", func(t *testing.T) {
+		e := NewEditEnforcer(5)
+		if e.Deadline != 5 {
+			t.Fatalf("expected deadline 5 without maxIterations, got %d", e.Deadline)
 		}
 	})
 }
@@ -2438,8 +2472,10 @@ func TestReadToolBlockedByEditEnforcer(t *testing.T) {
 	}
 
 	e := NewEditEnforcer(5)
+	// threshold = 5-2 = 3; need 3 read-only iterations to trigger blocking
 	e.CheckNames([]string{"Read"})
-	e.CheckNames([]string{"Read"}) // readOnlyIters = 2 → ShouldBlockReads
+	e.CheckNames([]string{"Read"})
+	e.CheckNames([]string{"Read"})
 	ctx := SetEditEnforcer(context.Background(), e)
 
 	read := readTool(dir)
@@ -2460,8 +2496,10 @@ func TestGlobToolBlockedByEditEnforcer(t *testing.T) {
 	}
 
 	e := NewEditEnforcer(5)
+	// threshold = 5-2 = 3; need 3 read-only iterations
 	e.CheckNames([]string{"Read"})
 	e.CheckNames([]string{"Glob"})
+	e.CheckNames([]string{"Read"})
 	ctx := SetEditEnforcer(context.Background(), e)
 
 	glob := globTool(dir)
@@ -2482,8 +2520,10 @@ func TestGrepToolBlockedByEditEnforcer(t *testing.T) {
 	}
 
 	e := NewEditEnforcer(5)
+	// threshold = 5-2 = 3; need 3 read-only iterations
 	e.CheckNames([]string{"Read"})
 	e.CheckNames([]string{"Grep"})
+	e.CheckNames([]string{"Read"})
 	ctx := SetEditEnforcer(context.Background(), e)
 
 	grep := grepTool(dir)
@@ -2508,7 +2548,7 @@ func TestReadToolCacheHitReturnsContent(t *testing.T) {
 	ctx = InitIterationCounter(ctx)
 	read := readTool(dir)
 
-	// Iteration 1: first read populates cache.
+	// First read populates cache.
 	SetIteration(ctx, 1)
 	fresh, err := read(ctx, []byte(`{"path":"cached.txt"}`))
 	if err != nil {
@@ -2521,19 +2561,37 @@ func TestReadToolCacheHitReturnsContent(t *testing.T) {
 		t.Fatalf("first read should not be a cache hit, got: %s", fresh)
 	}
 
-	// Iteration 3: same file, unchanged — cache hit returns content with prefix.
+	// Pre-edit cache hit: returns full content with CACHED warning
+	// (no EditEnforcer on context → preEdit=true → content returned).
 	SetIteration(ctx, 3)
 	cached, err := read(ctx, []byte(`{"path":"cached.txt"}`))
 	if err != nil {
 		t.Fatalf("cached read: %v", err)
 	}
 	if !strings.Contains(cached, "CACHED") {
-		t.Fatalf("cache hit should have CACHED prefix, got: %s", cached)
+		t.Fatalf("cache hit should have CACHED marker, got: %s", cached)
 	}
 	if !strings.Contains(cached, "iteration 1") {
 		t.Fatalf("cache hit should reference original iteration, got: %s", cached)
 	}
+	// Pre-edit: content is returned so model can write edits.
 	if !strings.Contains(cached, "line1") || !strings.Contains(cached, "line3") {
-		t.Fatalf("cache hit should still return full file content, got: %s", cached)
+		t.Fatalf("pre-edit cache hit should return full content, got: %s", cached)
+	}
+
+	// Post-edit cache hit: returns stub (no content).
+	e := NewEditEnforcer(10)
+	e.CheckNames([]string{"Edit"}) // mark edit seen
+	ctx = SetEditEnforcer(ctx, e)
+	SetIteration(ctx, 5)
+	stub, err := read(ctx, []byte(`{"path":"cached.txt"}`))
+	if err != nil {
+		t.Fatalf("post-edit cached read: %v", err)
+	}
+	if !strings.Contains(stub, "CACHED") {
+		t.Fatalf("post-edit cache hit should have CACHED marker, got: %s", stub)
+	}
+	if strings.Contains(stub, "line1") || strings.Contains(stub, "line3") {
+		t.Fatalf("post-edit cache hit should return stub without content, got: %s", stub)
 	}
 }

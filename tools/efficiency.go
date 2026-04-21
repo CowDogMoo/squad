@@ -117,16 +117,51 @@ func GetIteration(ctx context.Context) int {
 
 // --- Phase Enforcer ---
 
+// phaseEnforcerKeyType is the context key for the PhaseEnforcer.
+type phaseEnforcerKeyType struct{}
+
+// SetPhaseEnforcer stores the enforcer on the context so tool handlers can query it.
+func SetPhaseEnforcer(ctx context.Context, pe *PhaseEnforcer) context.Context {
+	return context.WithValue(ctx, phaseEnforcerKeyType{}, pe)
+}
+
+// GetPhaseEnforcer retrieves the enforcer from the context.
+func GetPhaseEnforcer(ctx context.Context) *PhaseEnforcer {
+	if pe, ok := ctx.Value(phaseEnforcerKeyType{}).(*PhaseEnforcer); ok {
+		return pe
+	}
+	return nil
+}
+
 // PhaseEnforcer tracks whether an agent is making progress (editing files)
-// and injects nudge messages when the agent spends too long exploring.
+// and injects escalating nudge messages when the agent spends too long exploring.
+// After multiple ignored nudges, ShouldBlockReads returns true to force the
+// model to stop reading and start editing.
 type PhaseEnforcer struct {
 	// NudgeAfter is the number of consecutive read-only iterations before
-	// injecting a nudge message telling the agent to start editing.
+	// injecting the first nudge message telling the agent to start editing.
 	NudgeAfter int
 
 	readOnlyIters int
-	nudgeSent     bool
+	nudgeCount    int // how many nudges have been sent
 	editSeen      bool
+}
+
+// NudgesSent returns how many nudges have been sent.
+func (pe *PhaseEnforcer) NudgesSent() int {
+	if pe == nil {
+		return 0
+	}
+	return pe.nudgeCount
+}
+
+// ShouldBlockReads returns true when 2+ nudges have been sent and ignored,
+// indicating the model is stuck in a read loop and reads should be blocked.
+func (pe *PhaseEnforcer) ShouldBlockReads() bool {
+	if pe == nil || pe.editSeen {
+		return false
+	}
+	return pe.nudgeCount >= 2
 }
 
 // NewPhaseEnforcer creates a PhaseEnforcer that nudges after n read-only
@@ -140,9 +175,10 @@ func NewPhaseEnforcer(nudgeAfter int) *PhaseEnforcer {
 
 // ObserveTools inspects the tool calls for the current iteration and returns
 // a nudge message if the agent should be prompted to start editing.
-// Returns empty string if no nudge is needed.
+// Nudges escalate: first is a gentle check, subsequent ones are increasingly
+// forceful. Returns empty string if no nudge is needed.
 func (pe *PhaseEnforcer) ObserveTools(toolNames []string) string {
-	if pe == nil || pe.editSeen || pe.nudgeSent {
+	if pe == nil || pe.editSeen {
 		return ""
 	}
 	for _, name := range toolNames {
@@ -152,16 +188,40 @@ func (pe *PhaseEnforcer) ObserveTools(toolNames []string) string {
 		}
 	}
 	pe.readOnlyIters++
-	if pe.readOnlyIters >= pe.NudgeAfter {
-		pe.nudgeSent = true
+
+	// First nudge fires at NudgeAfter. Subsequent nudges fire every
+	// NudgeAfter iterations thereafter, with escalating urgency.
+	if pe.readOnlyIters >= pe.NudgeAfter && (pe.readOnlyIters-pe.NudgeAfter)%pe.NudgeAfter == 0 {
+		pe.nudgeCount++
+		return pe.nudgeMessage()
+	}
+	return ""
+}
+
+// nudgeMessage returns an escalating nudge based on how many have been sent.
+func (pe *PhaseEnforcer) nudgeMessage() string {
+	switch pe.nudgeCount {
+	case 1:
 		return fmt.Sprintf(
 			"[PROGRESS CHECK] You have spent %d iterations reading/analyzing without making any edits. "+
 				"You should have enough context by now. Start making changes NOW. "+
 				"Do not read more files unless absolutely necessary for your next edit. "+
 				"Batch multiple Edit calls in a single response.",
 			pe.readOnlyIters)
+	case 2:
+		return fmt.Sprintf(
+			"[URGENT — STOP READING] You have spent %d iterations without a single Edit call. "+
+				"Your Read calls are returning cached results — you already have the file contents. "+
+				"Call Edit or Write in your NEXT response. If you call Read again instead of Edit, "+
+				"you are wasting your iteration budget.",
+			pe.readOnlyIters)
+	default:
+		return fmt.Sprintf(
+			"[FINAL WARNING] %d iterations with ZERO edits. You are in a read loop. "+
+				"STOP calling Read/Glob/Grep. Call Edit NOW with the file contents you already have. "+
+				"Your next tool call MUST be Edit or Write — anything else is budget waste.",
+			pe.readOnlyIters)
 	}
-	return ""
 }
 
 // --- Compaction Summary ---
