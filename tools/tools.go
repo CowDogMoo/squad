@@ -190,21 +190,13 @@ type EditEnforcer struct {
 
 // NewEditEnforcer creates an enforcer that triggers after deadline iterations
 // with no Edit call. Returns nil if deadline <= 0 (disabled).
-// When maxIterations is provided (first optional arg), the effective deadline
-// is scaled up to at least 30% of maxIterations so that agents with large
-// iteration budgets aren't killed before they finish reading.
-func NewEditEnforcer(deadline int, maxIterations ...int) *EditEnforcer {
+// The configured deadline is respected as-is — it is never scaled up
+// automatically so that callers retain precise control.
+func NewEditEnforcer(deadline int) *EditEnforcer {
 	if deadline <= 0 {
 		return nil
 	}
-	effective := deadline
-	if len(maxIterations) > 0 && maxIterations[0] > 0 {
-		floor := maxIterations[0] * 3 / 10 // 30% of max iterations
-		if floor > effective {
-			effective = floor
-		}
-	}
-	return &EditEnforcer{Deadline: effective}
+	return &EditEnforcer{Deadline: deadline}
 }
 
 // PreEdit reports whether the agent has not yet made any edits.
@@ -244,18 +236,49 @@ func GetEditEnforcer(ctx context.Context) *EditEnforcer {
 }
 
 // CheckNames inspects tool call names and returns true if the loop should stop.
+// It does NOT set editSeen — call ConfirmEdit after verifying the edit succeeded.
 func (e *EditEnforcer) CheckNames(names []string) bool {
 	if e == nil || e.editSeen {
 		return false
 	}
 	for _, name := range names {
 		if name == "Edit" || name == "MultiEdit" || name == "Write" {
-			e.editSeen = true
 			return false
 		}
 	}
 	e.readOnlyIters++
 	return e.readOnlyIters >= e.Deadline
+}
+
+// isEditTool reports whether a tool name is an edit/write tool.
+func isEditTool(name string) bool {
+	return name == "Edit" || name == "MultiEdit" || name == "Write"
+}
+
+// ConfirmEdit marks the enforcer as having seen a successful edit.
+// Call this after tool execution, only for edit tools whose results
+// indicate success (no error). A failed Edit should not disarm enforcement.
+func (e *EditEnforcer) ConfirmEdit(toolCalls []llms.ToolCall, results map[string]string) {
+	if e == nil || e.editSeen {
+		return
+	}
+	for _, tc := range toolCalls {
+		if tc.FunctionCall == nil || !isEditTool(tc.FunctionCall.Name) {
+			continue
+		}
+		result, ok := results[tc.ID]
+		if !ok {
+			continue
+		}
+		// A result starting with "error:" or containing "text not found"
+		// indicates a failed edit — don't count it.
+		if strings.HasPrefix(result, "error:") ||
+			strings.Contains(result, "text not found") {
+			continue
+		}
+		e.editSeen = true
+		return
+	}
 }
 
 func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations, editDeadline int, taskCfg *TaskConfig, m *metrics.Metrics, ex executor.Executor, callOpts ...llms.CallOption) (string, error) {
@@ -398,7 +421,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 	var lastContent string
 	var repeat RepeatTracker
 	var loopDetector LoopDetector
-	editEnforcer := NewEditEnforcer(editDeadline, maxIter)
+	editEnforcer := NewEditEnforcer(editDeadline)
 	if editEnforcer != nil {
 		ctx = SetEditEnforcer(ctx, editEnforcer)
 	}
@@ -452,8 +475,14 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		messages = appendToolCallMessage(messages, mergedContent, mergedToolCalls, ctx)
 		messages = executeToolCalls(ctx, messages, mergedToolCalls, handlers)
 
+		// Confirm edits only after execution succeeds — a failed Edit
+		// (e.g. "text not found") must not disarm enforcement.
+		toolResults := extractToolResults(messages)
+		editEnforcer.ConfirmEdit(mergedToolCalls, toolResults)
+		phaseEnforcer.ConfirmEdit(mergedToolCalls, toolResults)
+
 		// Feed tool results into loop detector.
-		loopDetector.Record(mergedToolCalls, extractToolResults(messages))
+		loopDetector.Record(mergedToolCalls, toolResults)
 		if loopDetector.Stuck() {
 			logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results, stopping")
 			return lastContent, messages, ErrLoopDetected, false

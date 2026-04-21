@@ -178,7 +178,7 @@ func newClient(apiKey, baseURL, organization string) openai.Client {
 
 func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config, maxIter, editDeadline int, m *metrics.Metrics) (*oairesponses.Response, string, error) {
 	var repeat tools.RepeatTracker
-	editEnforcer := tools.NewEditEnforcer(editDeadline, maxIter)
+	editEnforcer := tools.NewEditEnforcer(editDeadline)
 	for i := 0; i < maxIter; i++ {
 		calls := ExtractFunctionCalls(resp)
 		if len(calls) == 0 {

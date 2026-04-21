@@ -853,7 +853,7 @@ func TestEditEnforcer(t *testing.T) {
 		}
 	})
 
-	t.Run("does not stop if Edit is called", func(t *testing.T) {
+	t.Run("does not stop if Edit succeeds", func(t *testing.T) {
 		e := NewEditEnforcer(2)
 		if e.CheckNames([]string{"Read"}) {
 			t.Fatal("should not stop after 1 iteration")
@@ -861,9 +861,30 @@ func TestEditEnforcer(t *testing.T) {
 		if e.CheckNames([]string{"Edit", "Read"}) {
 			t.Fatal("should not stop when Edit is present")
 		}
-		// After Edit is seen, further read-only iterations are fine
+		// Confirm the edit succeeded
+		e.ConfirmEdit([]llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Edit"}}}, map[string]string{"1": "ok"})
+		// After Edit confirmed, further read-only iterations are fine
 		if e.CheckNames([]string{"Read"}) {
-			t.Fatal("should not stop after Edit was already seen")
+			t.Fatal("should not stop after Edit was confirmed")
+		}
+	})
+
+	t.Run("failed Edit does not disarm enforcement", func(t *testing.T) {
+		e := NewEditEnforcer(3)
+		if e.CheckNames([]string{"Edit"}) {
+			t.Fatal("should not stop when Edit is present")
+		}
+		// Edit failed — "text not found"
+		e.ConfirmEdit([]llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Edit"}}}, map[string]string{"1": "text not found in foo.go"})
+		// Enforcement should still be active
+		if e.CheckNames([]string{"Read"}) {
+			t.Fatal("should not stop after 1 read-only iteration")
+		}
+		if e.CheckNames([]string{"Read"}) {
+			t.Fatal("should not stop after 2 read-only iterations")
+		}
+		if !e.CheckNames([]string{"Read"}) {
+			t.Fatal("should stop after 3 read-only iterations with failed Edit")
 		}
 	})
 
@@ -871,6 +892,11 @@ func TestEditEnforcer(t *testing.T) {
 		e := NewEditEnforcer(1)
 		if e.CheckNames([]string{"Edit"}) {
 			t.Fatal("should not stop when Edit is called on first iteration")
+		}
+		e.ConfirmEdit([]llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Edit"}}}, map[string]string{"1": "ok"})
+		// Should be disarmed now
+		if e.CheckNames([]string{"Read"}) {
+			t.Fatal("should not stop after confirmed Edit")
 		}
 	})
 }
@@ -2407,43 +2433,21 @@ func TestShouldBlockReads(t *testing.T) {
 		}
 	})
 
-	t.Run("does not block after edit seen", func(t *testing.T) {
+	t.Run("does not block after confirmed edit", func(t *testing.T) {
 		e := NewEditEnforcer(5)
 		e.CheckNames([]string{"Read"})
 		e.CheckNames([]string{"Read"})
 		e.CheckNames([]string{"Edit"})
+		e.ConfirmEdit([]llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Edit"}}}, map[string]string{"1": "ok"})
 		if e.ShouldBlockReads() {
-			t.Fatal("should not block after Edit was seen")
+			t.Fatal("should not block after confirmed Edit")
 		}
 	})
 
-	t.Run("scales deadline with maxIterations", func(t *testing.T) {
-		// edit_deadline=5 with maxIterations=50 → effective = max(5, 15) = 15
-		e := NewEditEnforcer(5, 50)
-		if e.Deadline != 15 {
-			t.Fatalf("expected scaled deadline 15, got %d", e.Deadline)
-		}
-		// threshold = 15-2 = 13; should not block at iteration 5
-		for i := 0; i < 5; i++ {
-			e.CheckNames([]string{"Read"})
-		}
-		if e.ShouldBlockReads() {
-			t.Fatal("should not block at 5 read-only iterations when effective deadline is 15")
-		}
-	})
-
-	t.Run("does not scale down deadline", func(t *testing.T) {
-		// edit_deadline=10 with maxIterations=10 → 30% of 10 = 3, so keep 10
-		e := NewEditEnforcer(10, 10)
-		if e.Deadline != 10 {
-			t.Fatalf("expected deadline 10 (not scaled down), got %d", e.Deadline)
-		}
-	})
-
-	t.Run("no maxIterations preserves deadline", func(t *testing.T) {
+	t.Run("respects configured deadline exactly", func(t *testing.T) {
 		e := NewEditEnforcer(5)
 		if e.Deadline != 5 {
-			t.Fatalf("expected deadline 5 without maxIterations, got %d", e.Deadline)
+			t.Fatalf("expected deadline 5, got %d", e.Deadline)
 		}
 	})
 }
@@ -2581,7 +2585,7 @@ func TestReadToolCacheHitReturnsContent(t *testing.T) {
 
 	// Post-edit cache hit: returns stub (no content).
 	e := NewEditEnforcer(10)
-	e.CheckNames([]string{"Edit"}) // mark edit seen
+	e.ConfirmEdit([]llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Edit"}}}, map[string]string{"1": "ok"})
 	ctx = SetEditEnforcer(ctx, e)
 	SetIteration(ctx, 5)
 	stub, err := read(ctx, []byte(`{"path":"cached.txt"}`))

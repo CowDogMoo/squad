@@ -167,13 +167,30 @@ func TestPhaseEnforcer(t *testing.T) {
 func TestPhaseEnforcerEditStopsNudge(t *testing.T) {
 	pe := NewPhaseEnforcer(3)
 	pe.ObserveTools([]string{"Read"})
-	pe.ObserveTools([]string{"Edit"}) // should mark edit seen
+	pe.ObserveTools([]string{"Edit"}) // Edit attempted but not yet confirmed
+	// Confirm the edit succeeded
+	pe.ConfirmEdit([]llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Edit"}}}, map[string]string{"1": "ok"})
 
 	// No nudge even after many more read-only iterations
 	for i := 0; i < 10; i++ {
 		if msg := pe.ObserveTools([]string{"Read"}); msg != "" {
-			t.Fatal("no nudge expected after edit was seen")
+			t.Fatal("no nudge expected after edit was confirmed")
 		}
+	}
+}
+
+func TestPhaseEnforcerFailedEditDoesNotDisarm(t *testing.T) {
+	pe := NewPhaseEnforcer(3)
+	pe.ObserveTools([]string{"Edit"})
+	// Edit failed
+	pe.ConfirmEdit([]llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Edit"}}}, map[string]string{"1": "text not found in foo.go"})
+
+	// Should still nudge since edit failed
+	pe.ObserveTools([]string{"Read"})
+	pe.ObserveTools([]string{"Read"})
+	msg := pe.ObserveTools([]string{"Read"})
+	if msg == "" {
+		t.Fatal("expected nudge after failed Edit + 3 read-only iterations")
 	}
 }
 

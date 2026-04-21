@@ -177,13 +177,13 @@ func NewPhaseEnforcer(nudgeAfter int) *PhaseEnforcer {
 // a nudge message if the agent should be prompted to start editing.
 // Nudges escalate: first is a gentle check, subsequent ones are increasingly
 // forceful. Returns empty string if no nudge is needed.
+// Note: this does NOT set editSeen — call ConfirmEdit after verifying success.
 func (pe *PhaseEnforcer) ObserveTools(toolNames []string) string {
 	if pe == nil || pe.editSeen {
 		return ""
 	}
 	for _, name := range toolNames {
-		if name == "Edit" || name == "MultiEdit" || name == "Write" {
-			pe.editSeen = true
+		if isEditTool(name) {
 			return ""
 		}
 	}
@@ -196,6 +196,28 @@ func (pe *PhaseEnforcer) ObserveTools(toolNames []string) string {
 		return pe.nudgeMessage()
 	}
 	return ""
+}
+
+// ConfirmEdit marks the phase enforcer as having seen a successful edit.
+func (pe *PhaseEnforcer) ConfirmEdit(toolCalls []llms.ToolCall, results map[string]string) {
+	if pe == nil || pe.editSeen {
+		return
+	}
+	for _, tc := range toolCalls {
+		if tc.FunctionCall == nil || !isEditTool(tc.FunctionCall.Name) {
+			continue
+		}
+		result, ok := results[tc.ID]
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(result, "error:") ||
+			strings.Contains(result, "text not found") {
+			continue
+		}
+		pe.editSeen = true
+		return
+	}
 }
 
 // nudgeMessage returns an escalating nudge based on how many have been sent.
