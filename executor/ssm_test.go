@@ -371,7 +371,7 @@ func TestSSMExecutor_Execute_InvocationNotExistThenSuccess(t *testing.T) {
 		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
 			callCount++
 			if callCount == 1 {
-				return nil, fmt.Errorf("InvocationDoesNotExist: command not delivered yet")
+				return nil, &ssmtypes.InvocationDoesNotExist{Message: aws.String("command not delivered yet")}
 			}
 			return &ssm.GetCommandInvocationOutput{
 				Status:                ssmtypes.CommandInvocationStatusSuccess,

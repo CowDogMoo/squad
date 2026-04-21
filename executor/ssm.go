@@ -2,9 +2,9 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -153,7 +153,8 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 		invocation, err = e.client.GetCommandInvocation(ctx, pollInput)
 		if err != nil {
 			// InvocationDoesNotExist means the command hasn't been delivered yet.
-			if strings.Contains(err.Error(), "InvocationDoesNotExist") {
+			var invDNE *ssmtypes.InvocationDoesNotExist
+			if errors.As(err, &invDNE) {
 				continue
 			}
 			return nil, fmt.Errorf("ssm GetCommandInvocation failed: %w", err)
