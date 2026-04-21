@@ -100,6 +100,13 @@ func (m *Metrics) RemainingBudget() float64 {
 	return remaining
 }
 
+// MaxCostValue returns the configured maximum cost budget.
+func (m *Metrics) MaxCostValue() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.MaxCost
+}
+
 // AddTokens adds input and output token counts to the run totals.
 func (m *Metrics) AddTokens(input, output int64) {
 	m.mu.Lock()

@@ -580,7 +580,8 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		toolNames := extractToolNames(mergedToolCalls)
 		messages = injectPhaseNudge(ctx, phaseEnforcer, toolNames, messages, i)
 		messages = injectBudgetWarnings(ctx, m, budgetWarned, messages)
-		messages = compactMessages(ctx, messages)
+		messages = rollingCompact(ctx, messages, i)
+		messages = compactMessages(ctx, messages, m)
 	}
 	return lastContent, messages, ErrIterationLimitReached, false
 }
@@ -1618,9 +1619,126 @@ func estimateTokensCalibrated(ctx context.Context, messages []llms.MessageConten
 	return raw
 }
 
-func compactMessages(ctx context.Context, messages []llms.MessageContent) []llms.MessageContent {
+const (
+	// rollingCompactInterval is the number of iterations between rolling
+	// compaction passes.
+	rollingCompactInterval = 15
+
+	// rollingCompactMinTokens is the minimum token count before rolling
+	// compaction will activate.
+	rollingCompactMinTokens = 25_000
+)
+
+// rollingCompact performs a lighter compaction pass that only compresses
+// old tool results without removing any messages. This smooths context
+// reduction over time, avoiding the single-cliff compaction event.
+func rollingCompact(ctx context.Context, messages []llms.MessageContent, iteration int) []llms.MessageContent {
+	if iteration == 0 || iteration%rollingCompactInterval != 0 {
+		return messages
+	}
+
+	tokens := estimateTokens(messages)
+	if tokens < rollingCompactMinTokens {
+		return messages
+	}
+
+	protectedHead := 2
+	if protectedHead > len(messages) {
+		return messages
+	}
+	tail := keepRecentMessages
+	if tail > len(messages)-protectedHead {
+		tail = len(messages) - protectedHead
+	}
+	compactEnd := len(messages) - tail
+
+	editedFiles := CollectEditedFiles(messages)
+
+	compacted := make([]llms.MessageContent, len(messages))
+	copy(compacted, messages)
+
+	compressedCount := 0
+	for i := protectedHead; i < compactEnd; i++ {
+		if compacted[i].Role != llms.ChatMessageTypeTool {
+			continue
+		}
+		var prevMsg *llms.MessageContent
+		if i > 0 {
+			prevMsg = &compacted[i-1]
+		}
+		compressed := compactToolParts(compacted[i].Parts, prevMsg, editedFiles)
+		compressedCount += compressed.count
+		compacted[i].Parts = compressed.parts
+	}
+
+	if compressedCount > 0 {
+		after := estimateTokens(compacted)
+		logging.InfoContext(ctx, "rolling compaction at iteration %d: compressed %d tool results (~%d -> ~%d tokens)", iteration, compressedCount, tokens, after)
+	}
+
+	return compacted
+}
+
+type compactResult struct {
+	parts []llms.ContentPart
+	count int
+}
+
+// compactToolParts compresses large tool-call responses, preserving edit
+// results and results related to edited files.
+func compactToolParts(parts []llms.ContentPart, prevMsg *llms.MessageContent, editedFiles map[string]bool) compactResult {
+	newParts := make([]llms.ContentPart, len(parts))
+	count := 0
+	for j, part := range parts {
+		resp, ok := part.(llms.ToolCallResponse)
+		if !ok || len(resp.Content) <= 500 {
+			newParts[j] = part
+			continue
+		}
+		if resp.Name == "Edit" || resp.Name == "Write" || resp.Name == "MultiEdit" {
+			newParts[j] = part
+			continue
+		}
+		if prevMsg != nil && isToolResultForEditedFile(*prevMsg, resp.ToolCallID, editedFiles) {
+			newParts[j] = part
+			continue
+		}
+		preview := resp.Content
+		if len(preview) > 200 {
+			preview = preview[:200]
+		}
+		resp.Content = fmt.Sprintf("[rolling-compacted — was %d bytes] %s...", len(resp.Content), preview)
+		newParts[j] = resp
+		count++
+	}
+	return compactResult{parts: newParts, count: count}
+}
+
+// isToolResultForEditedFile checks whether a tool call ID in the preceding AI
+// message corresponds to a Read/Grep of an edited file.
+func isToolResultForEditedFile(aiMsg llms.MessageContent, toolCallID string, editedFiles map[string]bool) bool {
+	if aiMsg.Role != llms.ChatMessageTypeAI {
+		return false
+	}
+	for _, part := range aiMsg.Parts {
+		tc, ok := part.(llms.ToolCall)
+		if !ok || tc.FunctionCall == nil || tc.ID != toolCallID {
+			continue
+		}
+		path := extractJSONField(tc.FunctionCall.Arguments, "path")
+		return editedFiles[path]
+	}
+	return false
+}
+
+func compactMessages(ctx context.Context, messages []llms.MessageContent, m *metrics.Metrics) []llms.MessageContent {
 	tokens := estimateTokensCalibrated(ctx, messages)
-	if tokens < contextTokenThreshold {
+	var bq BudgetQuerier
+	if m != nil {
+		bq = m
+	}
+	threshold := AdaptiveCompactionThreshold(bq)
+	if tokens < threshold {
 		return messages
 	}
 
@@ -1639,10 +1757,27 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent) []llms
 	middleMessages := messages[protectedHead:compactEnd]
 	summary := CompactionSummary(middleMessages, GetReadCache(ctx))
 
+	// Semantic scoring: identify which middle messages are most relevant
+	// to the current task and preserve them fully during compaction.
+	editedFiles := CollectEditedFiles(messages[:compactEnd])
+	recentFiles := ExtractRecentFiles(messages[compactEnd:])
+	scores := ScoreMessages(middleMessages, editedFiles, recentFiles)
+	keepSet := make(map[int]bool)
+	const semanticKeepThreshold = 30
+	for _, s := range scores {
+		if s.Score >= semanticKeepThreshold {
+			keepSet[s.Index] = true
+		}
+	}
+
 	compacted := make([]llms.MessageContent, len(messages))
 	copy(compacted, messages)
 
 	for i := protectedHead; i < compactEnd; i++ {
+		relIdx := i - protectedHead
+		if keepSet[relIdx] {
+			continue // preserve high-relevance messages fully
+		}
 		if compacted[i].Role != llms.ChatMessageTypeTool {
 			continue
 		}
@@ -1677,7 +1812,7 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent) []llms
 	}
 
 	after := estimateTokens(compacted)
-	logging.InfoContext(ctx, "compacted context: ~%d tokens -> ~%d tokens", tokens, after)
+	logging.InfoContext(ctx, "compacted context: ~%d tokens -> ~%d tokens (threshold=%d)", tokens, after, threshold)
 	return compacted
 }
 

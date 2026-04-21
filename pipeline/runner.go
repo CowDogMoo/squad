@@ -74,7 +74,9 @@ type Runner struct {
 	Prompt     string  // base prompt passed to each agent
 	MaxCost    float64 // total cost budget for the pipeline (0 = unlimited)
 	Findings   *tools.FindingsStore
+	Summarize  SummarizeFunc // optional LLM summarization for stage handoffs
 	spent      *csync.Value[float64]
+	sumCache   *summaryCache
 }
 
 // Run executes the pipeline and returns a structured report.
@@ -233,15 +235,46 @@ func (r *Runner) runStage(ctx context.Context, stage Stage, completed map[string
 		return result
 	}
 
-	agents := stage.AgentList()
-	logging.InfoContext(ctx, "pipeline: running stage %q with %d agent(s)", stage.Name, len(agents))
-
-	promptContext := r.buildPromptContext(stage, completed)
+	promptContext := r.buildPromptContext(ctx, stage, completed)
 
 	// Prepend pre-gate output to the prompt context so agents get static analysis results.
 	if preGateOutput != "" {
 		promptContext = preGateOutput + "\n" + promptContext
 	}
+
+	// Handle partitioned stages: expand files into groups and run one
+	// agent instance per partition in parallel.
+	if stage.Partition != nil {
+		partitions, partErr := ExpandPartition(r.WorkingDir, stage.Partition)
+		if partErr != nil {
+			result.Status = StatusFailed
+			result.Error = fmt.Sprintf("partition expansion failed: %v", partErr)
+			result.Duration = time.Since(start).Round(time.Millisecond).String()
+			return result
+		}
+		if len(partitions) == 0 {
+			logging.InfoContext(ctx, "pipeline: stage %q partition matched no files, skipping", stage.Name)
+			result.Status = StatusSkipped
+			result.Error = "partition matched no files"
+			result.Duration = time.Since(start).Round(time.Millisecond).String()
+			return result
+		}
+		logging.InfoContext(ctx, "pipeline: stage %q partitioned into %d groups (%d total files)",
+			stage.Name, len(partitions), countFiles(partitions))
+		result.Agents = r.runPartitions(ctx, stage, partitions, promptContext)
+		for _, ar := range result.Agents {
+			if ar.Status == StatusFailed {
+				result.Status = StatusFailed
+				result.Error = fmt.Sprintf("agent %q failed", ar.Agent)
+				break
+			}
+		}
+		result.Duration = time.Since(start).Round(time.Millisecond).String()
+		return result
+	}
+
+	agents := stage.AgentList()
+	logging.InfoContext(ctx, "pipeline: running stage %q with %d agent(s)", stage.Name, len(agents))
 
 	if len(agents) == 1 {
 		ar := r.runAgent(ctx, agents[0], stage, promptContext)
@@ -280,6 +313,36 @@ func (r *Runner) runAgentsParallel(ctx context.Context, agents []string, stage S
 
 	wg.Wait()
 	return results
+}
+
+// runPartitions spawns one agent instance per file partition in parallel.
+func (r *Runner) runPartitions(ctx context.Context, stage Stage, partitions [][]string, promptContext string) []AgentResult {
+	results := make([]AgentResult, len(partitions))
+	var wg sync.WaitGroup
+
+	for i, files := range partitions {
+		wg.Add(1)
+		go func(idx int, fileList []string) {
+			defer wg.Done()
+			partPrompt := FormatPartitionPrompt(fileList, idx+1, len(partitions))
+			fullContext := partPrompt + "\n\n" + promptContext
+			results[idx] = r.runAgent(ctx, stage.Agent, stage, fullContext)
+			// Tag the agent result with the partition index for clarity.
+			results[idx].Agent = fmt.Sprintf("%s[%d/%d]", stage.Agent, idx+1, len(partitions))
+		}(i, files)
+	}
+
+	wg.Wait()
+	return results
+}
+
+// countFiles returns the total number of files across all partitions.
+func countFiles(partitions [][]string) int {
+	total := 0
+	for _, p := range partitions {
+		total += len(p)
+	}
+	return total
 }
 
 // addSpent records cost from a completed agent and returns the new total.
@@ -393,7 +456,9 @@ func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, pr
 // buildPromptContext creates context from prior stage results to pass to the next agent.
 // When a shared FindingsStore is available, structured findings are included instead of
 // raw output, providing compressed handoffs that reduce downstream token waste.
-func (r *Runner) buildPromptContext(stage Stage, completed map[string]*StageResult) string {
+// When summarization is configured on a dependency stage, LLM-powered summarization
+// replaces the hard truncation fallback.
+func (r *Runner) buildPromptContext(ctx context.Context, stage Stage, completed map[string]*StageResult) string {
 	if len(stage.DependsOn) == 0 {
 		return ""
 	}
@@ -414,24 +479,61 @@ func (r *Runner) buildPromptContext(stage Stage, completed map[string]*StageResu
 		}
 	}
 
+	// Build a stage lookup so we can check summarization config on deps.
+	stageMap := make(map[string]Stage, len(r.Pipeline.Stages))
+	for _, s := range r.Pipeline.Stages {
+		stageMap[s.Name] = s
+	}
+
 	for _, dep := range stage.DependsOn {
 		sr, ok := completed[dep]
 		if !ok {
 			continue
 		}
+		depStage := stageMap[dep]
+
 		fmt.Fprintf(&sb, "### Stage: %s (status: %s)\n\n", sr.Name, sr.Status)
 		for _, ar := range sr.Agents {
 			fmt.Fprintf(&sb, "**Agent %s** (status: %s):\n", ar.Agent, ar.Status)
-			// Include a summary of the output (truncated for context efficiency).
-			summary := ar.Output
-			if len(summary) > 4096 {
-				summary = summary[:4096] + "\n...(truncated)"
-			}
+			summary := r.summarizeAgentOutput(ctx, depStage, sr.Name, ar)
 			sb.WriteString(summary)
 			sb.WriteString("\n\n")
 		}
 	}
 	return sb.String()
+}
+
+// summarizeAgentOutput returns a compressed version of an agent's output.
+// It checks the summary cache first, then tries LLM summarization if
+// configured, and falls back to truncation.
+func (r *Runner) summarizeAgentOutput(ctx context.Context, depStage Stage, stageName string, ar AgentResult) string {
+	output := ar.Output
+	cacheKey := stageName + "/" + ar.Agent
+
+	// Check cache first.
+	if r.sumCache != nil {
+		if cached, ok := r.sumCache.get(cacheKey); ok {
+			return cached
+		}
+	}
+
+	var result string
+	switch {
+	case ShouldSummarize(depStage, len(output)):
+		result = SummarizeOutput(ctx, r.Summarize, depStage, output)
+	case len(output) > 4096:
+		result = output[:4096] + "\n...(truncated)"
+	default:
+		result = output
+	}
+
+	// Cache the result.
+	if r.sumCache == nil {
+		r.sumCache = newSummaryCache()
+	}
+	r.sumCache.set(cacheKey, result)
+
+	return result
 }
 
 // hasUncommittedChanges checks whether the working directory has any
