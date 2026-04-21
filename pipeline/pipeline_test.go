@@ -686,10 +686,10 @@ func TestBuildPromptContextTruncation(t *testing.T) {
 	}
 
 	runner := &Runner{
-		Pipeline: &Pipeline{Name: "test", Version: "v1"},
+		Pipeline: &Pipeline{Name: "test", Version: "v1", Stages: []Stage{{Name: "review", Agent: "go-review"}}},
 	}
 
-	ctx := runner.buildPromptContext(stage, completed)
+	ctx := runner.buildPromptContext(context.Background(), stage, completed)
 
 	// The output should be truncated: 4096 chars + "...(truncated)" marker.
 	if !strings.Contains(ctx, "...(truncated)") {
@@ -1025,7 +1025,7 @@ func TestBuildPromptContextWithFindings(t *testing.T) {
 		Findings: store,
 	}
 
-	ctx := runner.buildPromptContext(stage, completed)
+	ctx := runner.buildPromptContext(context.Background(), stage, completed)
 
 	if !strings.Contains(ctx, "Structured Findings") {
 		t.Fatalf("expected structured findings section in context")

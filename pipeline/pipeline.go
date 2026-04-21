@@ -23,15 +23,27 @@ type Pipeline struct {
 // Stage is a unit of work in a pipeline. A stage runs one agent or
 // multiple agents in parallel, and may depend on prior stages.
 type Stage struct {
-	Name      string            `yaml:"name"`
-	Agent     string            `yaml:"agent,omitempty"`  // single agent
-	Agents    []string          `yaml:"agents,omitempty"` // parallel agents
-	DependsOn []string          `yaml:"depends_on,omitempty"`
-	Mode      string            `yaml:"mode,omitempty"`      // edit | readonly
-	Vars      map[string]string `yaml:"vars,omitempty"`      // stage-specific template vars
-	Condition string            `yaml:"condition,omitempty"` // skip condition (evaluated by orchestrator)
-	PreGates  []PreGate         `yaml:"pre_gates,omitempty"` // commands to run before agents, output injected into prompt
-	MaxCost   float64           `yaml:"max_cost,omitempty"`  // per-stage cost cap in USD (0 = use remaining pipeline budget)
+	Name            string            `yaml:"name"`
+	Agent           string            `yaml:"agent,omitempty"`  // single agent
+	Agents          []string          `yaml:"agents,omitempty"` // parallel agents
+	DependsOn       []string          `yaml:"depends_on,omitempty"`
+	Mode            string            `yaml:"mode,omitempty"`             // edit | readonly
+	Vars            map[string]string `yaml:"vars,omitempty"`             // stage-specific template vars
+	Condition       string            `yaml:"condition,omitempty"`        // skip condition (evaluated by orchestrator)
+	PreGates        []PreGate         `yaml:"pre_gates,omitempty"`        // commands to run before agents, output injected into prompt
+	MaxCost         float64           `yaml:"max_cost,omitempty"`         // per-stage cost cap in USD (0 = use remaining pipeline budget)
+	Partition       *Partition        `yaml:"partition,omitempty"`        // automatic work partitioning
+	Summarize       string            `yaml:"summarize,omitempty"`        // auto | always | never — controls stage output summarization
+	SummarizePrompt string            `yaml:"summarize_prompt,omitempty"` // custom summarization instruction
+}
+
+// Partition configures automatic work splitting for a stage.
+// When set, the runner globs the working directory and spawns
+// one agent instance per partition of matching files.
+type Partition struct {
+	By              string `yaml:"by"`                // "files" (only supported value)
+	Glob            string `yaml:"glob"`              // glob pattern to match files
+	MaxPerPartition int    `yaml:"max_per_partition"` // files per agent instance (default: 25)
 }
 
 // AgentList returns all agents in the stage (normalizing single vs parallel).
@@ -122,6 +134,22 @@ func (p *Pipeline) validateStages() (map[string]bool, error) {
 		}
 		if s.Agent != "" && len(s.Agents) > 0 {
 			return nil, fmt.Errorf("stage %q: cannot specify both agent and agents", s.Name)
+		}
+		// Validate partition config.
+		if s.Partition != nil {
+			if s.Agent == "" {
+				return nil, fmt.Errorf("stage %q: partition requires a single agent (not agents)", s.Name)
+			}
+			if s.Partition.By != "files" {
+				return nil, fmt.Errorf("stage %q: partition.by must be \"files\", got %q", s.Name, s.Partition.By)
+			}
+			if s.Partition.Glob == "" {
+				return nil, fmt.Errorf("stage %q: partition.glob is required", s.Name)
+			}
+		}
+		// Validate summarize config.
+		if s.Summarize != "" && s.Summarize != "auto" && s.Summarize != "always" && s.Summarize != "never" {
+			return nil, fmt.Errorf("stage %q: summarize must be auto, always, or never, got %q", s.Name, s.Summarize)
 		}
 	}
 	return stageNames, nil

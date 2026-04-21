@@ -409,6 +409,192 @@ func TestSortedKeys(t *testing.T) {
 	}
 }
 
+// --- Adaptive Compaction Threshold Tests ---
+
+type mockBudget struct {
+	pct     float64
+	maxCost float64
+}
+
+func (m *mockBudget) BudgetUsedPct() float64 { return m.pct }
+func (m *mockBudget) MaxCostValue() float64  { return m.maxCost }
+
+func TestAdaptiveCompactionThresholdNilMetrics(t *testing.T) {
+	t.Parallel()
+	if got := AdaptiveCompactionThreshold(nil); got != contextTokenThreshold {
+		t.Fatalf("nil metrics: got %d, want %d", got, contextTokenThreshold)
+	}
+}
+
+func TestAdaptiveCompactionThresholdUnlimited(t *testing.T) {
+	t.Parallel()
+	m := &mockBudget{pct: 0, maxCost: 0}
+	if got := AdaptiveCompactionThreshold(m); got != contextTokenThreshold {
+		t.Fatalf("unlimited: got %d, want %d", got, contextTokenThreshold)
+	}
+}
+
+func TestAdaptiveCompactionThresholdLow(t *testing.T) {
+	t.Parallel()
+	m := &mockBudget{pct: 0.20, maxCost: 5.0}
+	if got := AdaptiveCompactionThreshold(m); got != contextTokenThreshold {
+		t.Fatalf("20%% used: got %d, want %d", got, contextTokenThreshold)
+	}
+}
+
+func TestAdaptiveCompactionThresholdMid(t *testing.T) {
+	t.Parallel()
+	m := &mockBudget{pct: 0.55, maxCost: 5.0}
+	if got := AdaptiveCompactionThreshold(m); got != 40_000 {
+		t.Fatalf("55%% used: got %d, want 40000", got)
+	}
+}
+
+func TestAdaptiveCompactionThresholdHigh(t *testing.T) {
+	t.Parallel()
+	m := &mockBudget{pct: 0.80, maxCost: 5.0}
+	if got := AdaptiveCompactionThreshold(m); got != 30_000 {
+		t.Fatalf("80%% used: got %d, want 30000", got)
+	}
+}
+
+// --- Semantic Message Scoring Tests ---
+
+func TestScoreMessageEditTool(t *testing.T) {
+	t.Parallel()
+	msg := llms.MessageContent{
+		Role: llms.ChatMessageTypeAI,
+		Parts: []llms.ContentPart{
+			llms.ToolCall{FunctionCall: &llms.FunctionCall{Name: "Edit", Arguments: `{"path":"foo.go"}`}},
+		},
+	}
+	scores := ScoreMessages([]llms.MessageContent{msg}, map[string]bool{"foo.go": true}, nil)
+	// Edit tool (80) + edited file (60) = 140
+	if scores[0].Score < 100 {
+		t.Fatalf("edit tool on edited file should score high, got %d", scores[0].Score)
+	}
+}
+
+func TestScoreMessageEditedFile(t *testing.T) {
+	t.Parallel()
+	// A Read call on a file that was previously edited should score high
+	// due to the "edited file" bonus (60).
+	msg := llms.MessageContent{
+		Role: llms.ChatMessageTypeAI,
+		Parts: []llms.ContentPart{
+			llms.ToolCall{FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{"path":"edited.go"}`}},
+		},
+	}
+	editedFiles := map[string]bool{"edited.go": true}
+	scores := ScoreMessages([]llms.MessageContent{msg}, editedFiles, nil)
+	// Read (no edit tool bonus) + edited file (60) = 60+
+	if scores[0].Score < 50 {
+		t.Fatalf("read of edited file should score high, got %d", scores[0].Score)
+	}
+}
+
+func TestScoreMessageRecentFile(t *testing.T) {
+	t.Parallel()
+	msg := llms.MessageContent{
+		Role: llms.ChatMessageTypeAI,
+		Parts: []llms.ContentPart{
+			llms.ToolCall{FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{"path":"bar.go"}`}},
+		},
+	}
+	scores := ScoreMessages([]llms.MessageContent{msg}, nil, map[string]bool{"bar.go": true})
+	// recent file (40) + path exists (10 from else branch — actually 40 wins)
+	if scores[0].Score < 30 {
+		t.Fatalf("read of recent file should score medium-high, got %d", scores[0].Score)
+	}
+}
+
+func TestScoreMessageUnrelatedGrep(t *testing.T) {
+	t.Parallel()
+	msg := llms.MessageContent{
+		Role: llms.ChatMessageTypeAI,
+		Parts: []llms.ContentPart{
+			llms.ToolCall{FunctionCall: &llms.FunctionCall{Name: "Grep", Arguments: `{"pattern":"TODO","path":"src/"}`}},
+		},
+	}
+	scores := ScoreMessages([]llms.MessageContent{msg}, nil, nil)
+	if scores[0].Score > 20 {
+		t.Fatalf("unrelated grep should score low, got %d", scores[0].Score)
+	}
+}
+
+func TestScoreMessageEditResult(t *testing.T) {
+	t.Parallel()
+	msg := llms.MessageContent{
+		Role: llms.ChatMessageTypeTool,
+		Parts: []llms.ContentPart{
+			llms.ToolCallResponse{Content: "updated foo.go (1 replacement)"},
+		},
+	}
+	scores := ScoreMessages([]llms.MessageContent{msg}, nil, nil)
+	if scores[0].Score < 40 {
+		t.Fatalf("edit result should score medium-high, got %d", scores[0].Score)
+	}
+}
+
+func TestExtractRecentFiles(t *testing.T) {
+	t.Parallel()
+	msgs := []llms.MessageContent{
+		{
+			Role: llms.ChatMessageTypeAI,
+			Parts: []llms.ContentPart{
+				llms.ToolCall{FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{"path":"a.go"}`}},
+			},
+		},
+		{
+			Role: llms.ChatMessageTypeAI,
+			Parts: []llms.ContentPart{
+				llms.ToolCall{FunctionCall: &llms.FunctionCall{Name: "Edit", Arguments: `{"path":"b.go"}`}},
+			},
+		},
+	}
+	files := ExtractRecentFiles(msgs)
+	if !files["a.go"] || !files["b.go"] {
+		t.Fatalf("expected a.go and b.go, got %v", files)
+	}
+	if files["c.go"] {
+		t.Fatal("unexpected file c.go")
+	}
+}
+
+func TestCollectEditedFiles(t *testing.T) {
+	t.Parallel()
+	msgs := []llms.MessageContent{
+		{
+			Role: llms.ChatMessageTypeAI,
+			Parts: []llms.ContentPart{
+				llms.ToolCall{FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{"path":"a.go"}`}},
+			},
+		},
+		{
+			Role: llms.ChatMessageTypeAI,
+			Parts: []llms.ContentPart{
+				llms.ToolCall{FunctionCall: &llms.FunctionCall{Name: "Edit", Arguments: `{"path":"b.go"}`}},
+			},
+		},
+		{
+			Role: llms.ChatMessageTypeAI,
+			Parts: []llms.ContentPart{
+				llms.ToolCall{FunctionCall: &llms.FunctionCall{Name: "Write", Arguments: `{"path":"c.go"}`}},
+			},
+		},
+	}
+	edited := CollectEditedFiles(msgs)
+	if edited["a.go"] {
+		t.Fatal("Read should not count as edit")
+	}
+	if !edited["b.go"] {
+		t.Fatal("Edit should be tracked")
+	}
+	if !edited["c.go"] {
+		t.Fatal("Write should be tracked")
+	}
+}
+
 func TestTokenCalibration_ZeroActual(t *testing.T) {
 	tc := NewTokenCalibration()
 	tc.Record(100, 0)  // actual <= 0, should be ignored

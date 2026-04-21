@@ -522,6 +522,122 @@ func (tc *TokenCalibration) Samples() int {
 	return tc.samples
 }
 
+// --- Adaptive Compaction ---
+
+// BudgetQuerier is satisfied by *metrics.Metrics and allows testing
+// without importing the full metrics package.
+type BudgetQuerier interface {
+	BudgetUsedPct() float64
+	MaxCostValue() float64
+}
+
+// AdaptiveCompactionThreshold returns a context token threshold that
+// tightens as the cost budget is consumed. This ensures agents operating
+// near their budget limit don't waste tokens on stale context.
+func AdaptiveCompactionThreshold(m BudgetQuerier) int {
+	if m == nil {
+		return contextTokenThreshold // 50K default
+	}
+	if m.MaxCostValue() <= 0 {
+		return contextTokenThreshold
+	}
+	pct := m.BudgetUsedPct()
+	switch {
+	case pct >= 0.75:
+		return 30_000 // aggressive — agent should be finishing
+	case pct >= 0.50:
+		return 40_000 // moderate — agent should be wrapping up
+	default:
+		return contextTokenThreshold // 50K — normal operation
+	}
+}
+
+// --- Semantic Message Scoring ---
+
+// MessageRelevance pairs a message index with its relevance score.
+type MessageRelevance struct {
+	Index int
+	Score int
+}
+
+// ScoreMessages assigns relevance scores to compactable messages based on
+// which files have been edited and which files are referenced in recent context.
+func ScoreMessages(
+	middle []llms.MessageContent,
+	editedFiles map[string]bool,
+	recentFiles map[string]bool,
+) []MessageRelevance {
+	scores := make([]MessageRelevance, len(middle))
+	for i, msg := range middle {
+		scores[i] = MessageRelevance{Index: i, Score: scoreMessage(msg, editedFiles, recentFiles)}
+	}
+	return scores
+}
+
+func scoreMessage(msg llms.MessageContent, editedFiles, recentFiles map[string]bool) int {
+	score := 0
+	for _, part := range msg.Parts {
+		switch p := part.(type) {
+		case llms.ToolCall:
+			if p.FunctionCall == nil {
+				continue
+			}
+			path := extractJSONField(p.FunctionCall.Arguments, "path")
+			if isEditTool(p.FunctionCall.Name) {
+				score += 80
+			}
+			switch {
+			case editedFiles[path]:
+				score += 60
+			case recentFiles[path]:
+				score += 40
+			case path != "":
+				score += 10
+			}
+		case llms.ToolCallResponse:
+			if strings.HasPrefix(p.Content, "updated ") || strings.HasPrefix(p.Content, "wrote ") {
+				score += 50
+			}
+		}
+	}
+	return score
+}
+
+// ExtractRecentFiles scans messages for file paths mentioned in tool calls.
+func ExtractRecentFiles(msgs []llms.MessageContent) map[string]bool {
+	files := make(map[string]bool)
+	for _, msg := range msgs {
+		for _, part := range msg.Parts {
+			if tc, ok := part.(llms.ToolCall); ok && tc.FunctionCall != nil {
+				if path := extractJSONField(tc.FunctionCall.Arguments, "path"); path != "" {
+					files[path] = true
+				}
+			}
+		}
+	}
+	return files
+}
+
+// CollectEditedFiles scans messages for successful Edit/Write tool calls
+// and returns a set of edited file paths.
+func CollectEditedFiles(messages []llms.MessageContent) map[string]bool {
+	edited := make(map[string]bool)
+	for _, msg := range messages {
+		for _, part := range msg.Parts {
+			tc, ok := part.(llms.ToolCall)
+			if !ok || tc.FunctionCall == nil {
+				continue
+			}
+			if isEditTool(tc.FunctionCall.Name) {
+				if path := extractJSONField(tc.FunctionCall.Arguments, "path"); path != "" {
+					edited[path] = true
+				}
+			}
+		}
+	}
+	return edited
+}
+
 // --- Logging helper ---
 
 func logReadCacheHit(ctx context.Context, path string, entry ReadCacheEntry) {
