@@ -205,17 +205,17 @@ func (e *EditEnforcer) PreEdit() bool {
 	return e == nil || !e.editSeen
 }
 
-// ShouldBlockReads returns true when the agent is close to its edit
-// deadline and has made no edits.  Reads are blocked starting 2
-// iterations before the deadline, giving the model a final chance to
-// switch to Edit/Write.  This avoids blocking reads too early — review
-// agents need many iterations to read files before editing.
+// ShouldBlockReads returns true when the agent has used at least half
+// its edit deadline budget without making any edits.  Blocking at the
+// midpoint gives the model enough remaining iterations to actually
+// produce edits, rather than waiting until 2 iterations before the
+// deadline when the agent has already switched to Bash workarounds.
 func (e *EditEnforcer) ShouldBlockReads() bool {
 	if e == nil || e.editSeen {
 		return false
 	}
-	// Block reads only in the final 2 iterations before the deadline.
-	threshold := e.Deadline - 2
+	// Block reads once half the deadline budget is consumed.
+	threshold := e.Deadline / 2
 	if threshold < 2 {
 		threshold = 2
 	}
@@ -1561,6 +1561,17 @@ func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (s
 
 		if blocked, reason := IsBlockedCommand(command); blocked {
 			return "", fmt.Errorf("%s", reason)
+		}
+
+		// Block read-like Bash commands (cat, head, tail, grep, etc.)
+		// when the edit enforcer says reads should be blocked.
+		// Without this, agents bypass Read/Glob/Grep blocking by
+		// shelling out to cat/head/tail.
+		if IsSafeCommand(command) && shouldBlockReadTools(ctx) {
+			logging.InfoContext(ctx, "blocking Bash read-like command — too many read-only iterations, no edits made")
+			return "BASH READ BLOCKED — Read-like Bash commands are disabled until you call Edit or Write.\n\n" +
+				"You have spent too many iterations reading without making edits. " +
+				"Use the file contents from your previous reads to construct Edit calls NOW.", nil
 		}
 
 		// Add executor metadata to the current span so traces show

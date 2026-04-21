@@ -156,11 +156,14 @@ func TestValidateActionableResponse_EditDeadlineReached(t *testing.T) {
 	ctx := tools.InitEdits(context.Background())
 	ctx = tools.InitEditDeadline(ctx)
 	tools.MarkEditDeadlineReached(ctx)
-	// No edits applied, no "files touched" or "no changes" in response,
-	// but edit deadline was reached — should pass validation.
+	// No edits applied, edit deadline reached — should return an error
+	// so the run is marked as a failure, not silent success.
 	err := validateActionableResponse(ctx, "The codebase is clean, nothing to fix.")
-	if err != nil {
-		t.Fatalf("expected no error when edit deadline reached, got: %v", err)
+	if err == nil {
+		t.Fatal("expected error when edit deadline reached with no edits")
+	}
+	if !strings.Contains(err.Error(), "edit deadline reached") {
+		t.Fatalf("expected edit deadline error, got: %v", err)
 	}
 }
 

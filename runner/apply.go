@@ -42,8 +42,7 @@ func validateActionableResponse(ctx context.Context, response string) error {
 		return nil
 	}
 	if tools.EditDeadlineReached(ctx) {
-		logging.InfoContext(ctx, "edit deadline reached with no edits — treating as valid no-changes outcome")
-		return nil
+		return fmt.Errorf("edit deadline reached: agent exhausted its read budget without producing any edits")
 	}
 	if _, err := extractUnifiedDiff(response); err == nil {
 		return nil

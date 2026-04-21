@@ -2419,17 +2419,17 @@ func TestShouldBlockReads(t *testing.T) {
 		}
 	})
 
-	t.Run("blocks near deadline", func(t *testing.T) {
-		e := NewEditEnforcer(5)
-		// threshold = 5-2 = 3, so need 3 read-only iterations to trigger
+	t.Run("blocks at midpoint", func(t *testing.T) {
+		e := NewEditEnforcer(6)
+		// threshold = 6/2 = 3, so need 3 read-only iterations to trigger
 		e.CheckNames([]string{"Read"})
 		e.CheckNames([]string{"Glob"})
 		if e.ShouldBlockReads() {
-			t.Fatal("should not block at 2 iterations when deadline is 5")
+			t.Fatal("should not block at 2 iterations when deadline is 6")
 		}
 		e.CheckNames([]string{"Read"})
 		if !e.ShouldBlockReads() {
-			t.Fatal("should block at 3 read-only iterations (deadline-2) with no edits")
+			t.Fatal("should block at 3 read-only iterations (deadline/2) with no edits")
 		}
 	})
 
