@@ -2540,7 +2540,7 @@ func TestGrepToolBlockedByEditEnforcer(t *testing.T) {
 	}
 }
 
-func TestReadToolCacheHitReturnsContent(t *testing.T) {
+func TestReadToolCacheHitReturnsNoContent(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	content := "line1\nline2\nline3\n"
@@ -2552,7 +2552,7 @@ func TestReadToolCacheHitReturnsContent(t *testing.T) {
 	ctx = InitIterationCounter(ctx)
 	read := readTool(dir)
 
-	// First read populates cache.
+	// First read populates cache — returns full content.
 	SetIteration(ctx, 1)
 	fresh, err := read(ctx, []byte(`{"path":"cached.txt"}`))
 	if err != nil {
@@ -2561,29 +2561,29 @@ func TestReadToolCacheHitReturnsContent(t *testing.T) {
 	if !strings.Contains(fresh, "line1") {
 		t.Fatalf("first read should contain file content, got: %s", fresh)
 	}
-	if strings.Contains(fresh, "CACHED") {
+	if strings.Contains(fresh, "CACHE HIT") {
 		t.Fatalf("first read should not be a cache hit, got: %s", fresh)
 	}
 
-	// Pre-edit cache hit: returns full content with CACHED warning
-	// (no EditEnforcer on context → preEdit=true → content returned).
+	// Cache hit: returns metadata stub only — NO file content.
+	// This breaks the compaction→re-read→compaction feedback loop.
 	SetIteration(ctx, 3)
 	cached, err := read(ctx, []byte(`{"path":"cached.txt"}`))
 	if err != nil {
 		t.Fatalf("cached read: %v", err)
 	}
-	if !strings.Contains(cached, "CACHED") {
-		t.Fatalf("cache hit should have CACHED marker, got: %s", cached)
+	if !strings.Contains(cached, "CACHE HIT") {
+		t.Fatalf("cache hit should have CACHE HIT marker, got: %s", cached)
 	}
 	if !strings.Contains(cached, "iteration 1") {
 		t.Fatalf("cache hit should reference original iteration, got: %s", cached)
 	}
-	// Pre-edit: content is returned so model can write edits.
-	if !strings.Contains(cached, "line1") || !strings.Contains(cached, "line3") {
-		t.Fatalf("pre-edit cache hit should return full content, got: %s", cached)
+	// Content must NOT be returned — this is the key fix.
+	if strings.Contains(cached, "line1") || strings.Contains(cached, "line3") {
+		t.Fatalf("cache hit should NOT return file content, got: %s", cached)
 	}
 
-	// Post-edit cache hit: returns stub (no content).
+	// Post-edit cache hit: also returns stub (no content).
 	e := NewEditEnforcer(10)
 	e.ConfirmEdit([]llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Edit"}}}, map[string]string{"1": "ok"})
 	ctx = SetEditEnforcer(ctx, e)
@@ -2592,8 +2592,8 @@ func TestReadToolCacheHitReturnsContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post-edit cached read: %v", err)
 	}
-	if !strings.Contains(stub, "CACHED") {
-		t.Fatalf("post-edit cache hit should have CACHED marker, got: %s", stub)
+	if !strings.Contains(stub, "CACHE HIT") {
+		t.Fatalf("post-edit cache hit should have CACHE HIT marker, got: %s", stub)
 	}
 	if strings.Contains(stub, "line1") || strings.Contains(stub, "line3") {
 		t.Fatalf("post-edit cache hit should return stub without content, got: %s", stub)

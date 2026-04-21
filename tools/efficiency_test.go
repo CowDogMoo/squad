@@ -16,7 +16,7 @@ func TestReadCache(t *testing.T) {
 	}
 
 	// Store and check
-	rc.Store("/foo/bar.go", "abc123", 100, 2048, 1)
+	rc.Store("/foo/bar.go", "abc123", 100, 2048, 1, "")
 	if rc.Len() != 1 {
 		t.Fatalf("expected 1 entry, got %d", rc.Len())
 	}
@@ -48,7 +48,7 @@ func TestReadCacheNil(t *testing.T) {
 	if hit {
 		t.Fatal("nil cache should never hit")
 	}
-	rc.Store("/foo", "hash", 10, 100, 1) // should not panic
+	rc.Store("/foo", "hash", 10, 100, 1, "") // should not panic
 	if rc.Len() != 0 {
 		t.Fatal("nil cache len should be 0")
 	}
@@ -67,7 +67,7 @@ func TestReadCacheContext(t *testing.T) {
 	if rc == nil {
 		t.Fatal("expected non-nil cache after init")
 	}
-	rc.Store("/test", "hash1", 50, 500, 0)
+	rc.Store("/test", "hash1", 50, 500, 0, "")
 	if rc.Len() != 1 {
 		t.Fatal("expected 1 entry")
 	}
@@ -253,7 +253,7 @@ func TestCompactionSummary(t *testing.T) {
 		},
 	}
 
-	summary := CompactionSummary(messages)
+	summary := CompactionSummary(messages, nil)
 	if summary == "" {
 		t.Fatal("expected non-empty summary")
 	}
@@ -284,7 +284,7 @@ func TestCompactionSummaryEmpty(t *testing.T) {
 			Parts: []llms.ContentPart{llms.TextContent{Text: "hello"}},
 		},
 	}
-	if summary := CompactionSummary(messages); summary != "" {
+	if summary := CompactionSummary(messages, nil); summary != "" {
 		t.Fatalf("expected empty summary for no tool calls, got: %s", summary)
 	}
 }
@@ -604,5 +604,201 @@ func TestTokenCalibration_ZeroActual(t *testing.T) {
 	}
 	if f := tc.CorrectionFactor(); f != 1.0 {
 		t.Fatalf("expected 1.0 with no valid samples, got %f", f)
+	}
+}
+
+func TestReadCacheStreak(t *testing.T) {
+	rc := NewReadCache()
+
+	// Streak starts at 0
+	if s := rc.IncrementStreak(); s != 1 {
+		t.Fatalf("expected streak 1, got %d", s)
+	}
+	if s := rc.IncrementStreak(); s != 2 {
+		t.Fatalf("expected streak 2, got %d", s)
+	}
+	if s := rc.IncrementStreak(); s != 3 {
+		t.Fatalf("expected streak 3, got %d", s)
+	}
+
+	// Store resets streak (new file read)
+	rc.Store("/new.go", "hash", 10, 100, 0, "")
+	if s := rc.IncrementStreak(); s != 1 {
+		t.Fatalf("expected streak reset to 1 after Store, got %d", s)
+	}
+
+	// Explicit reset
+	rc.IncrementStreak()
+	rc.IncrementStreak()
+	rc.ResetStreak()
+	if s := rc.IncrementStreak(); s != 1 {
+		t.Fatalf("expected streak 1 after ResetStreak, got %d", s)
+	}
+}
+
+func TestReadCacheStreakNil(t *testing.T) {
+	var rc *ReadCache
+	if s := rc.IncrementStreak(); s != 0 {
+		t.Fatalf("nil cache IncrementStreak should return 0, got %d", s)
+	}
+	rc.ResetStreak() // should not panic
+}
+
+func TestReadCacheSummaries(t *testing.T) {
+	rc := NewReadCache()
+	rc.Store("/a.go", "h1", 100, 2000, 1, "declares: main, handleError")
+	rc.Store("/b.go", "h2", 50, 1000, 2, "")
+	rc.Store("/c.py", "h3", 30, 600, 3, "declares: Pipeline, run")
+
+	summaries := rc.Summaries()
+	if len(summaries) != 3 {
+		t.Fatalf("expected 3 summaries, got %d", len(summaries))
+	}
+	if !strings.Contains(summaries["/a.go"], "declares: main") {
+		t.Fatalf("expected summary to include declarations, got: %s", summaries["/a.go"])
+	}
+	if !strings.Contains(summaries["/a.go"], "100 lines") {
+		t.Fatalf("expected summary to include line count, got: %s", summaries["/a.go"])
+	}
+	if strings.Contains(summaries["/b.go"], "declares") {
+		t.Fatalf("expected no declarations for /b.go, got: %s", summaries["/b.go"])
+	}
+}
+
+func TestReadCacheSummariesNil(t *testing.T) {
+	var rc *ReadCache
+	if s := rc.Summaries(); s != nil {
+		t.Fatalf("nil cache Summaries should return nil, got %v", s)
+	}
+}
+
+func TestGenerateFileSummary(t *testing.T) {
+	// Go file with funcs and types
+	goContent := `package main
+
+import "fmt"
+
+type Config struct {
+	Name string
+}
+
+func main() {
+	fmt.Println("hello")
+}
+
+func (c *Config) String() string {
+	return c.Name
+}
+
+func handleError(err error) {
+	panic(err)
+}
+`
+	summary := GenerateFileSummary(goContent)
+	if !strings.Contains(summary, "Config") {
+		t.Fatalf("expected Config in summary, got: %s", summary)
+	}
+	if !strings.Contains(summary, "main") {
+		t.Fatalf("expected main in summary, got: %s", summary)
+	}
+	if !strings.Contains(summary, "String") {
+		t.Fatalf("expected String (method) in summary, got: %s", summary)
+	}
+	if !strings.Contains(summary, "handleError") {
+		t.Fatalf("expected handleError in summary, got: %s", summary)
+	}
+
+	// Python file
+	pyContent := `class Pipeline:
+    def run(self):
+        pass
+
+    def process(self, data):
+        pass
+
+def validate(config):
+    return True
+`
+	summary = GenerateFileSummary(pyContent)
+	if !strings.Contains(summary, "Pipeline") {
+		t.Fatalf("expected Pipeline in summary, got: %s", summary)
+	}
+	if !strings.Contains(summary, "run") {
+		t.Fatalf("expected run in summary, got: %s", summary)
+	}
+	if !strings.Contains(summary, "validate") {
+		t.Fatalf("expected validate in summary, got: %s", summary)
+	}
+
+	// Rust file
+	rsContent := `pub fn extract_hashes(data: &[u8]) -> Vec<Hash> {
+    todo!()
+}
+
+fn parse_ticket(bytes: &[u8]) -> Ticket {
+    todo!()
+}
+`
+	summary = GenerateFileSummary(rsContent)
+	if !strings.Contains(summary, "extract_hashes") {
+		t.Fatalf("expected extract_hashes in summary, got: %s", summary)
+	}
+	if !strings.Contains(summary, "parse_ticket") {
+		t.Fatalf("expected parse_ticket in summary, got: %s", summary)
+	}
+
+	// Empty file
+	if s := GenerateFileSummary(""); s != "" {
+		t.Fatalf("expected empty summary for empty file, got: %s", s)
+	}
+
+	// File with no declarations
+	if s := GenerateFileSummary("just some text\nanother line\n"); s != "" {
+		t.Fatalf("expected empty summary for text-only file, got: %s", s)
+	}
+}
+
+func TestCompactionSummaryWithCache(t *testing.T) {
+	rc := NewReadCache()
+	rc.Store("/src/main.go", "h1", 100, 2000, 1, "declares: main, handleError")
+	rc.Store("/src/config.go", "h2", 50, 1000, 2, "declares: Config, Load")
+
+	messages := []llms.MessageContent{
+		{
+			Role: llms.ChatMessageTypeAI,
+			Parts: []llms.ContentPart{
+				llms.ToolCall{
+					FunctionCall: &llms.FunctionCall{
+						Name:      "Read",
+						Arguments: `{"path": "/src/main.go"}`,
+					},
+				},
+			},
+		},
+		{
+			Role: llms.ChatMessageTypeAI,
+			Parts: []llms.ContentPart{
+				llms.ToolCall{
+					FunctionCall: &llms.FunctionCall{
+						Name:      "Read",
+						Arguments: `{"path": "/src/config.go"}`,
+					},
+				},
+			},
+		},
+	}
+
+	summary := CompactionSummary(messages, rc)
+	if !strings.Contains(summary, "previously read") {
+		t.Fatalf("expected 'previously read' header with cache, got: %s", summary)
+	}
+	if !strings.Contains(summary, "declares: main") {
+		t.Fatalf("expected file summary in compaction, got: %s", summary)
+	}
+	if !strings.Contains(summary, "declares: Config") {
+		t.Fatalf("expected config summary in compaction, got: %s", summary)
+	}
+	if !strings.Contains(summary, "do NOT re-read") {
+		t.Fatalf("expected re-read warning, got: %s", summary)
 	}
 }
