@@ -187,7 +187,11 @@ func (e *DockerExecutor) Execute(ctx context.Context, command string) ([]byte, e
 	}
 
 	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, attachResp.Reader)
+	if _, err := io.Copy(&buf, attachResp.Reader); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, fmt.Errorf("docker exec read output failed: %w", err)
+	}
 
 	inspect, err := e.client.ContainerExecInspect(ctx, execResp.ID)
 	if err != nil {

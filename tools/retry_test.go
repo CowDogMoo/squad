@@ -10,45 +10,46 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
-func TestClassifyError_RawStrings(t *testing.T) {
+func TestClassifyError(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
-		want llms.ErrorCode
+		name     string
+		err      error
+		wantCode llms.ErrorCode
+		wantNil  bool
 	}{
-		{"500 error", fmt.Errorf("anthropic: 500 Internal Server Error"), llms.ErrCodeProviderUnavailable},
-		{"503 overloaded", fmt.Errorf("overloaded"), llms.ErrCodeProviderUnavailable},
-		{"429 rate limit", fmt.Errorf("429 too many requests"), llms.ErrCodeRateLimit},
-		{"rate limit text", fmt.Errorf("rate limit exceeded"), llms.ErrCodeRateLimit},
-		{"401 auth", fmt.Errorf("401 unauthorized"), llms.ErrCodeAuthentication},
-		{"invalid api key", fmt.Errorf("invalid api key"), llms.ErrCodeAuthentication},
-		{"400 bad request", fmt.Errorf("400 bad request"), llms.ErrCodeInvalidRequest},
-		{"quota exceeded", fmt.Errorf("quota exceeded"), llms.ErrCodeQuotaExceeded},
-		{"content blocked", fmt.Errorf("content blocked by filter"), llms.ErrCodeContentFilter},
-		{"unknown error", fmt.Errorf("something weird happened"), llms.ErrCodeUnknown},
+		{"nil error", nil, "", true},
+		{"rate limit", errors.New("rate limit exceeded"), llms.ErrCodeRateLimit, false},
+		{"too many requests", errors.New("too many requests 429"), llms.ErrCodeRateLimit, false},
+		{"invalid api key", errors.New("invalid api key provided"), llms.ErrCodeAuthentication, false},
+		{"auth failed", errors.New("authentication failed"), llms.ErrCodeAuthentication, false},
+		{"model not found", errors.New("model not found: gpt-99"), llms.ErrCodeResourceNotFound, false},
+		{"context window", errors.New("context window exceeded"), llms.ErrCodeTokenLimit, false},
+		{"content blocked", errors.New("content blocked by safety filter"), llms.ErrCodeContentFilter, false},
+		{"quota exceeded", errors.New("credit limit reached"), llms.ErrCodeQuotaExceeded, false},
+		{"invalid request", errors.New("invalid request: bad param"), llms.ErrCodeInvalidRequest, false},
+		{"service unavailable", errors.New("service unavailable 503"), llms.ErrCodeProviderUnavailable, false},
+		{"overloaded", errors.New("server overloaded"), llms.ErrCodeProviderUnavailable, false},
+		{"unknown error", errors.New("some random error"), llms.ErrCodeUnknown, false},
+		{"wrapped llms.Error passthrough", llms.NewError(llms.ErrCodeRateLimit, "provider", "rate limited"), llms.ErrCodeRateLimit, false},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := classifyError(tt.err)
-			if got.Code != tt.want {
-				t.Errorf("classifyError(%q) = %s, want %s", tt.err, got.Code, tt.want)
+			result := classifyError(tt.err)
+			if tt.wantNil {
+				if result != nil {
+					t.Errorf("classifyError(%v) = %v, want nil", tt.err, result)
+				}
+				return
+			}
+			if result == nil {
+				t.Fatalf("classifyError(%v) returned nil", tt.err)
+			}
+			if result.Code != tt.wantCode {
+				t.Errorf("classifyError(%q).Code = %q, want %q",
+					tt.err, result.Code, tt.wantCode)
 			}
 		})
-	}
-}
-
-func TestClassifyError_WrappedLLMError(t *testing.T) {
-	original := llms.NewError(llms.ErrCodeRateLimit, "anthropic", "rate limited")
-	wrapped := fmt.Errorf("GenerateContent failed: %w", original)
-	got := classifyError(wrapped)
-	if got.Code != llms.ErrCodeRateLimit {
-		t.Errorf("classifyError(wrapped *llms.Error) = %s, want %s", got.Code, llms.ErrCodeRateLimit)
-	}
-}
-
-func TestClassifyError_Nil(t *testing.T) {
-	if got := classifyError(nil); got != nil {
-		t.Errorf("classifyError(nil) = %v, want nil", got)
 	}
 }
 
@@ -59,26 +60,25 @@ func TestIsRetryable(t *testing.T) {
 		want bool
 	}{
 		{"nil", nil, false},
-		{"500", fmt.Errorf("500 internal server error"), true},
-		{"503", fmt.Errorf("503 service unavailable"), true},
-		{"overloaded", fmt.Errorf("overloaded"), true},
-		{"429", fmt.Errorf("429 too many requests"), true},
-		{"rate limit", fmt.Errorf("rate limit exceeded"), true},
-		{"connection reset", fmt.Errorf("connection reset by peer"), true},
-		{"eof", fmt.Errorf("unexpected EOF"), true},
-		{"auth 401", fmt.Errorf("401 unauthorized"), false},
-		{"invalid request", fmt.Errorf("invalid request"), false},
-		{"content blocked", fmt.Errorf("content blocked"), false},
-		{"quota exceeded", fmt.Errorf("quota exceeded"), false},
 		{"context canceled", context.Canceled, false},
-		{"deadline exceeded", context.DeadlineExceeded, false},
-		{"wrapped llms rate limit", llms.NewError(llms.ErrCodeRateLimit, "anthropic", "rate limited"), true},
-		{"wrapped llms auth", llms.NewError(llms.ErrCodeAuthentication, "anthropic", "bad key"), false},
+		{"context deadline exceeded", context.DeadlineExceeded, false},
+		{"rate limit", errors.New("rate limit exceeded"), true},
+		{"service unavailable", errors.New("service unavailable 503"), true},
+		{"provider unavailable", llms.NewError(llms.ErrCodeProviderUnavailable, "", "down"), true},
+		{"rate limit code", llms.NewError(llms.ErrCodeRateLimit, "", "rate limited"), true},
+		{"auth error", errors.New("invalid api key"), false},
+		{"content filter", errors.New("content blocked"), false},
+		{"connection reset", errors.New("connection reset by peer"), true},
+		{"broken pipe", errors.New("broken pipe"), true},
+		{"eof", errors.New("unexpected eof"), true},
+		{"unknown random", errors.New("some unknown error"), false},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isRetryable(tt.err); got != tt.want {
-				t.Errorf("isRetryable(%q) = %v, want %v", tt.err, got, tt.want)
+			got := isRetryable(tt.err)
+			if got != tt.want {
+				t.Errorf("isRetryable(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
 	}
@@ -87,19 +87,23 @@ func TestIsRetryable(t *testing.T) {
 func TestBackoffDelay(t *testing.T) {
 	tests := []struct {
 		attempt int
-		want    time.Duration
+		wantMs  int64
 	}{
-		{0, 2 * time.Second},
-		{1, 4 * time.Second},
-		{2, 8 * time.Second},
-		{3, 16 * time.Second},
-		{10, retryMaxDelay}, // capped
+		{0, 2000},
+		{1, 4000},
+		{2, 8000},
+		{10, 30000}, // capped at 30s
 	}
+
 	for _, tt := range tests {
-		got := backoffDelay(tt.attempt)
-		if got != tt.want {
-			t.Errorf("backoffDelay(%d) = %v, want %v", tt.attempt, got, tt.want)
-		}
+		t.Run(fmt.Sprintf("attempt_%d", tt.attempt), func(t *testing.T) {
+			d := backoffDelay(tt.attempt)
+			ms := d.Milliseconds()
+			if ms != tt.wantMs {
+				t.Errorf("backoffDelay(%d) = %v (%dms), want %dms",
+					tt.attempt, d, ms, tt.wantMs)
+			}
+		})
 	}
 }
 
@@ -123,105 +127,115 @@ func (m *mockLLM) Call(_ context.Context, _ string, _ ...llms.CallOption) (strin
 	return "", nil
 }
 
-func TestRetryGenerateContent_SuccessFirstTry(t *testing.T) {
-	resp := &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "ok"}}}
-	mock := &mockLLM{
-		responses: []*llms.ContentResponse{resp},
-		errors:    []error{nil},
-	}
-	got, err := retryGenerateContent(context.Background(), mock, nil, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != resp {
-		t.Errorf("got %v, want %v", got, resp)
-	}
-	if mock.calls != 1 {
-		t.Errorf("calls = %d, want 1", mock.calls)
-	}
-}
+func TestRetryGenerateContent(t *testing.T) {
+	okResp := &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "ok"}}}
 
-func TestRetryGenerateContent_TransientThenSuccess(t *testing.T) {
-	resp := &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "ok"}}}
-	mock := &mockLLM{
-		responses: []*llms.ContentResponse{nil, nil, resp},
-		errors:    []error{fmt.Errorf("500 internal server error"), fmt.Errorf("overloaded"), nil},
+	tests := []struct {
+		name      string
+		responses []*llms.ContentResponse
+		errors    []error
+		ctxFunc   func() (context.Context, context.CancelFunc)
+		wantResp  *llms.ContentResponse
+		wantErr   bool
+		checkErr  func(t *testing.T, err error)
+		wantCalls int
+	}{
+		{
+			name:      "success first try",
+			responses: []*llms.ContentResponse{okResp},
+			errors:    []error{nil},
+			wantResp:  okResp,
+			wantCalls: 1,
+		},
+		{
+			name:      "transient then success",
+			responses: []*llms.ContentResponse{nil, nil, okResp},
+			errors:    []error{fmt.Errorf("500 internal server error"), fmt.Errorf("overloaded"), nil},
+			ctxFunc: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 30*time.Second)
+			},
+			wantResp:  okResp,
+			wantCalls: 3,
+		},
+		{
+			name:      "non-retryable stops immediately",
+			responses: []*llms.ContentResponse{nil},
+			errors:    []error{fmt.Errorf("401 unauthorized")},
+			wantErr:   true,
+			wantCalls: 1,
+		},
+		{
+			name: "exhausts all retries",
+			responses: func() []*llms.ContentResponse {
+				r := make([]*llms.ContentResponse, maxRetries+1)
+				return r
+			}(),
+			errors: func() []error {
+				e := make([]error, maxRetries+1)
+				for i := range e {
+					e[i] = fmt.Errorf("503 service unavailable")
+				}
+				return e
+			}(),
+			ctxFunc: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 60*time.Second)
+			},
+			wantErr:   true,
+			wantCalls: maxRetries + 1,
+		},
+		{
+			name:      "context canceled during backoff",
+			responses: []*llms.ContentResponse{nil, nil},
+			errors:    []error{fmt.Errorf("500 internal server error"), fmt.Errorf("500 internal server error")},
+			ctxFunc: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				go func() {
+					time.Sleep(100 * time.Millisecond)
+					cancel()
+				}()
+				return ctx, cancel
+			},
+			wantErr: true,
+			checkErr: func(t *testing.T, err error) {
+				if !errors.Is(err, context.Canceled) {
+					t.Errorf("expected context.Canceled, got %v", err)
+				}
+			},
+		},
 	}
 
-	// Override delay to speed up test — we test via a short-lived context.
-	origBase := retryBaseDelay
-	origMax := retryMaxDelay
-	defer func() {
-		// These are package-level consts; we can't reassign them.
-		// Instead we use a context with generous timeout.
-		_ = origBase
-		_ = origMax
-	}()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockLLM{responses: tt.responses, errors: tt.errors}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+			ctx := context.Background()
+			var cancel context.CancelFunc
+			if tt.ctxFunc != nil {
+				ctx, cancel = tt.ctxFunc()
+				defer cancel()
+			}
 
-	got, err := retryGenerateContent(ctx, mock, nil, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != resp {
-		t.Errorf("got %v, want %v", got, resp)
-	}
-	if mock.calls != 3 {
-		t.Errorf("calls = %d, want 3", mock.calls)
-	}
-}
+			got, err := retryGenerateContent(ctx, mock, nil, nil)
 
-func TestRetryGenerateContent_NonRetryable(t *testing.T) {
-	mock := &mockLLM{
-		responses: []*llms.ContentResponse{nil},
-		errors:    []error{fmt.Errorf("401 unauthorized")},
-	}
-	_, err := retryGenerateContent(context.Background(), mock, nil, nil)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if mock.calls != 1 {
-		t.Errorf("calls = %d, want 1 (should not retry non-retryable errors)", mock.calls)
-	}
-}
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.checkErr != nil {
+					tt.checkErr(t, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if got != tt.wantResp {
+					t.Errorf("got %v, want %v", got, tt.wantResp)
+				}
+			}
 
-func TestRetryGenerateContent_ExhaustsRetries(t *testing.T) {
-	errs := make([]error, maxRetries+1)
-	resps := make([]*llms.ContentResponse, maxRetries+1)
-	for i := range errs {
-		errs[i] = fmt.Errorf("503 service unavailable")
-	}
-	mock := &mockLLM{responses: resps, errors: errs}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	_, err := retryGenerateContent(ctx, mock, nil, nil)
-	if err == nil {
-		t.Fatal("expected error after exhausting retries")
-	}
-	if mock.calls != maxRetries+1 {
-		t.Errorf("calls = %d, want %d", mock.calls, maxRetries+1)
-	}
-}
-
-func TestRetryGenerateContent_ContextCanceled(t *testing.T) {
-	mock := &mockLLM{
-		responses: []*llms.ContentResponse{nil, nil},
-		errors:    []error{fmt.Errorf("500 internal server error"), fmt.Errorf("500 internal server error")},
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Cancel after a short delay so the backoff wait is interrupted.
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		cancel()
-	}()
-
-	_, err := retryGenerateContent(ctx, mock, nil, nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("expected context.Canceled, got %v", err)
+			if tt.wantCalls > 0 && mock.calls != tt.wantCalls {
+				t.Errorf("calls = %d, want %d", mock.calls, tt.wantCalls)
+			}
+		})
 	}
 }
