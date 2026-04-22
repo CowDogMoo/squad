@@ -901,6 +901,110 @@ func TestEditEnforcer(t *testing.T) {
 	})
 }
 
+func TestGraceStateEditFailureReenablesReads(t *testing.T) {
+	t.Parallel()
+
+	t.Run("failed Edit during grace unblocks reads", func(t *testing.T) {
+		t.Parallel()
+		gs := &graceState{reached: true, remaining: 2}
+		ctx := context.Background()
+
+		// Grace period is active — reads should be blocked.
+		if !gs.readsBlockedByGrace() {
+			t.Fatal("reads should be blocked during grace period")
+		}
+
+		// Simulate a failed Edit.
+		failedCalls := []llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Edit"}}}
+		failedResults := map[string]string{"1": "error: text not found in foo.go"}
+		gs.checkEditFailure(ctx, failedCalls, failedResults)
+
+		// After failed Edit, reads should be temporarily unblocked.
+		if gs.readsBlockedByGrace() {
+			t.Fatal("reads should be unblocked after Edit failure during grace")
+		}
+	})
+
+	t.Run("successful Edit during grace does not set editFailedInGrace", func(t *testing.T) {
+		t.Parallel()
+		gs := &graceState{reached: true, remaining: 2}
+		ctx := context.Background()
+
+		successCalls := []llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Edit"}}}
+		successResults := map[string]string{"1": "updated foo.go (1 replacement)"}
+		gs.checkEditFailure(ctx, successCalls, successResults)
+
+		// Reads should still be blocked — the edit succeeded.
+		if !gs.readsBlockedByGrace() {
+			t.Fatal("reads should remain blocked after successful Edit")
+		}
+	})
+
+	t.Run("non-Edit tool during grace does not set editFailedInGrace", func(t *testing.T) {
+		t.Parallel()
+		gs := &graceState{reached: true, remaining: 2}
+		ctx := context.Background()
+
+		readCalls := []llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Read"}}}
+		readResults := map[string]string{"1": "file content here"}
+		gs.checkEditFailure(ctx, readCalls, readResults)
+
+		if !gs.readsBlockedByGrace() {
+			t.Fatal("reads should remain blocked when no Edit was attempted")
+		}
+	})
+
+	t.Run("editFailedInGrace resets on next checkEditFailure", func(t *testing.T) {
+		t.Parallel()
+		gs := &graceState{reached: true, remaining: 2, editFailedInGrace: true}
+		ctx := context.Background()
+
+		// Next iteration has a Read (no Edit) — editFailedInGrace should reset.
+		readCalls := []llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Read"}}}
+		readResults := map[string]string{"1": "content"}
+		gs.checkEditFailure(ctx, readCalls, readResults)
+
+		// editFailedInGrace was reset, so reads should be blocked again.
+		if !gs.readsBlockedByGrace() {
+			t.Fatal("editFailedInGrace should reset on next iteration without Edit failure")
+		}
+	})
+}
+
+func TestShouldBlockReadToolsGraceOverride(t *testing.T) {
+	t.Parallel()
+
+	// Set up context with an EditEnforcer that wants to block reads.
+	e := NewEditEnforcer(4)
+	for i := 0; i < 4; i++ {
+		e.CheckNames([]string{"Read"})
+	}
+	if !e.ShouldBlockReads() {
+		t.Fatal("EditEnforcer should want to block reads")
+	}
+
+	ctx := context.Background()
+	ctx = SetEditEnforcer(ctx, e)
+
+	// Without grace state, reads are blocked.
+	if !shouldBlockReadTools(ctx) {
+		t.Fatal("reads should be blocked without grace override")
+	}
+
+	// With grace state where editFailedInGrace is true, reads are unblocked.
+	gs := &graceState{reached: true, remaining: 1, editFailedInGrace: true}
+	ctx = setGraceState(ctx, gs)
+	if shouldBlockReadTools(ctx) {
+		t.Fatal("reads should be unblocked when grace editFailedInGrace is true")
+	}
+
+	// Clear the flag — reads blocked again.
+	gs.editFailedInGrace = false
+	if !shouldBlockReadTools(ctx) {
+		t.Fatal("reads should be blocked again after editFailedInGrace cleared")
+	}
+}
+
 func TestRunWithToolsLoop(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hello"), 0o644); err != nil {

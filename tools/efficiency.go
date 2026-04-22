@@ -13,18 +13,15 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
-// --- Read Cache ---
-
-// readCacheKeyType is the context key for the ReadCache.
 type readCacheKeyType struct{}
 
-// ReadCacheEntry stores metadata about a previously read file.
 type ReadCacheEntry struct {
-	ContentHash string // SHA-256 of file content
-	Lines       int    // number of lines
-	Bytes       int    // file size
-	Iteration   int    // iteration when first read
-	Summary     string // brief content summary (top-level declarations) for compaction
+	ContentHash     string // SHA-256 of file content
+	Lines           int    // number of lines
+	Bytes           int    // file size
+	Iteration       int    // iteration when first read
+	Summary         string // brief content summary (top-level declarations) for compaction
+	CompactionEpoch int    // compaction epoch when this entry was last served
 }
 
 // cacheHitStreakThreshold is the number of consecutive cache-hit Read calls
@@ -32,24 +29,22 @@ type ReadCacheEntry struct {
 const cacheHitStreakThreshold = 3
 
 // ReadCache tracks files already read in the current session to avoid
-// wasting tokens on redundant re-reads. Thread-safe.
+// wasting tokens on redundant re-reads.
 type ReadCache struct {
-	entries     *csync.Map[string, ReadCacheEntry]
-	mu          sync.Mutex
-	cacheStreak int // consecutive cache-hit Read calls without edit or new read
+	entries         *csync.Map[string, ReadCacheEntry]
+	mu              sync.Mutex
+	cacheStreak     int // consecutive cache-hit Read calls without edit or new read
+	compactionEpoch int // incremented each time context compaction occurs
 }
 
-// NewReadCache creates an empty read cache.
 func NewReadCache() *ReadCache {
 	return &ReadCache{entries: csync.NewMap[string, ReadCacheEntry]()}
 }
 
-// InitReadCache attaches a ReadCache to the context.
 func InitReadCache(ctx context.Context) context.Context {
 	return context.WithValue(ctx, readCacheKeyType{}, NewReadCache())
 }
 
-// GetReadCache retrieves the ReadCache from context, or nil if not set.
 func GetReadCache(ctx context.Context) *ReadCache {
 	if rc, ok := ctx.Value(readCacheKeyType{}).(*ReadCache); ok {
 		return rc
@@ -57,10 +52,30 @@ func GetReadCache(ctx context.Context) *ReadCache {
 	return nil
 }
 
-// HashContent returns a hex-encoded SHA-256 hash of the data.
 func HashContent(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
+}
+
+// BumpCompactionEpoch increments the compaction epoch. Call this after
+// context compaction so that subsequent cache hits know the content has
+// been evicted from the conversation and should be served again.
+func (rc *ReadCache) BumpCompactionEpoch() {
+	if rc == nil {
+		return
+	}
+	rc.mu.Lock()
+	rc.compactionEpoch++
+	rc.mu.Unlock()
+}
+
+func (rc *ReadCache) CompactionEpoch() int {
+	if rc == nil {
+		return 0
+	}
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return rc.compactionEpoch
 }
 
 // Check returns the cached entry if the file content is unchanged.
@@ -76,25 +91,38 @@ func (rc *ReadCache) Check(path string, contentHash string) (ReadCacheEntry, boo
 	return ReadCacheEntry{}, false
 }
 
+// IsStaleAfterCompaction reports whether the entry was stored before the
+// most recent compaction, meaning its content has been evicted from the
+// conversation and should be served again on the next read.
+func (rc *ReadCache) IsStaleAfterCompaction(entry ReadCacheEntry) bool {
+	if rc == nil {
+		return false
+	}
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return entry.CompactionEpoch < rc.compactionEpoch
+}
+
 // Store records a file read in the cache and resets the cache-hit streak
 // (reading a new/changed file is progress, not a loop).
 func (rc *ReadCache) Store(path, contentHash string, lines, bytes, iteration int, summary string) {
 	if rc == nil {
 		return
 	}
-	rc.entries.Set(path, ReadCacheEntry{
-		ContentHash: contentHash,
-		Lines:       lines,
-		Bytes:       bytes,
-		Iteration:   iteration,
-		Summary:     summary,
-	})
 	rc.mu.Lock()
+	epoch := rc.compactionEpoch
 	rc.cacheStreak = 0
 	rc.mu.Unlock()
+	rc.entries.Set(path, ReadCacheEntry{
+		ContentHash:     contentHash,
+		Lines:           lines,
+		Bytes:           bytes,
+		Iteration:       iteration,
+		Summary:         summary,
+		CompactionEpoch: epoch,
+	})
 }
 
-// IncrementStreak bumps the consecutive cache-hit counter and returns the new value.
 func (rc *ReadCache) IncrementStreak() int {
 	if rc == nil {
 		return 0
@@ -105,7 +133,6 @@ func (rc *ReadCache) IncrementStreak() int {
 	return rc.cacheStreak
 }
 
-// ResetStreak zeroes the consecutive cache-hit counter (call after a successful edit).
 func (rc *ReadCache) ResetStreak() {
 	if rc == nil {
 		return
@@ -133,7 +160,6 @@ func (rc *ReadCache) Summaries() map[string]string {
 	return result
 }
 
-// Len returns the number of entries in the cache.
 func (rc *ReadCache) Len() int {
 	if rc == nil {
 		return 0
@@ -141,24 +167,19 @@ func (rc *ReadCache) Len() int {
 	return rc.entries.Len()
 }
 
-// --- Iteration Counter (for cache) ---
-
 type iterationKeyType struct{}
 
-// InitIterationCounter stores a mutable iteration counter in context.
 func InitIterationCounter(ctx context.Context) context.Context {
 	counter := 0
 	return context.WithValue(ctx, iterationKeyType{}, &counter)
 }
 
-// SetIteration updates the iteration counter.
 func SetIteration(ctx context.Context, i int) {
 	if p, ok := ctx.Value(iterationKeyType{}).(*int); ok {
 		*p = i
 	}
 }
 
-// GetIteration reads the current iteration from context.
 func GetIteration(ctx context.Context) int {
 	if p, ok := ctx.Value(iterationKeyType{}).(*int); ok {
 		return *p
@@ -166,17 +187,12 @@ func GetIteration(ctx context.Context) int {
 	return 0
 }
 
-// --- Phase Enforcer ---
-
-// phaseEnforcerKeyType is the context key for the PhaseEnforcer.
 type phaseEnforcerKeyType struct{}
 
-// SetPhaseEnforcer stores the enforcer on the context so tool handlers can query it.
 func SetPhaseEnforcer(ctx context.Context, pe *PhaseEnforcer) context.Context {
 	return context.WithValue(ctx, phaseEnforcerKeyType{}, pe)
 }
 
-// GetPhaseEnforcer retrieves the enforcer from the context.
 func GetPhaseEnforcer(ctx context.Context) *PhaseEnforcer {
 	if pe, ok := ctx.Value(phaseEnforcerKeyType{}).(*PhaseEnforcer); ok {
 		return pe
@@ -198,7 +214,6 @@ type PhaseEnforcer struct {
 	editSeen      bool
 }
 
-// NudgesSent returns how many nudges have been sent.
 func (pe *PhaseEnforcer) NudgesSent() int {
 	if pe == nil {
 		return 0
@@ -297,9 +312,6 @@ func (pe *PhaseEnforcer) nudgeMessage() string {
 	}
 }
 
-// --- Compaction Summary ---
-
-// compactionStats collects tool-call statistics from messages.
 type compactionStats struct {
 	filesRead        map[string]bool
 	patternsSearched map[string]bool
@@ -307,7 +319,6 @@ type compactionStats struct {
 	commandsRun      []string
 }
 
-// collectCompactionStats scans messages for tool calls and categorises them.
 func collectCompactionStats(messages []llms.MessageContent) compactionStats {
 	s := compactionStats{
 		filesRead:        make(map[string]bool),
@@ -329,7 +340,6 @@ func collectCompactionStats(messages []llms.MessageContent) compactionStats {
 	return s
 }
 
-// classifyToolCall records a single tool call into the stats.
 func classifyToolCall(s *compactionStats, name, args string) {
 	switch name {
 	case "Read":

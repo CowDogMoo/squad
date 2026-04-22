@@ -758,6 +758,62 @@ fn parse_ticket(bytes: &[u8]) -> Ticket {
 	}
 }
 
+func TestReadCacheCompactionEpoch(t *testing.T) {
+	rc := NewReadCache()
+
+	// Store a file at epoch 0.
+	rc.Store("/foo.go", "hash1", 100, 2000, 1, "declares: main")
+	entry, hit := rc.Check("/foo.go", "hash1")
+	if !hit {
+		t.Fatal("expected cache hit")
+	}
+
+	// Before compaction, entry should NOT be stale.
+	if rc.IsStaleAfterCompaction(entry) {
+		t.Fatal("entry should not be stale before compaction")
+	}
+
+	// Bump compaction epoch to simulate context compaction.
+	rc.BumpCompactionEpoch()
+	if rc.CompactionEpoch() != 1 {
+		t.Fatalf("expected epoch 1, got %d", rc.CompactionEpoch())
+	}
+
+	// Same entry should now be stale.
+	if !rc.IsStaleAfterCompaction(entry) {
+		t.Fatal("entry should be stale after compaction")
+	}
+
+	// Re-store the file (simulating re-read after compaction).
+	rc.Store("/foo.go", "hash1", 100, 2000, 5, "declares: main")
+	entry2, hit := rc.Check("/foo.go", "hash1")
+	if !hit {
+		t.Fatal("expected cache hit after re-store")
+	}
+
+	// After re-store at current epoch, entry should NOT be stale.
+	if rc.IsStaleAfterCompaction(entry2) {
+		t.Fatal("re-stored entry should not be stale")
+	}
+
+	// Another compaction makes it stale again.
+	rc.BumpCompactionEpoch()
+	if !rc.IsStaleAfterCompaction(entry2) {
+		t.Fatal("entry should be stale after second compaction")
+	}
+}
+
+func TestReadCacheCompactionEpochNil(t *testing.T) {
+	var rc *ReadCache
+	rc.BumpCompactionEpoch() // should not panic
+	if rc.CompactionEpoch() != 0 {
+		t.Fatal("nil cache epoch should be 0")
+	}
+	if rc.IsStaleAfterCompaction(ReadCacheEntry{}) {
+		t.Fatal("nil cache should never report stale")
+	}
+}
+
 func TestCompactionSummaryWithCache(t *testing.T) {
 	rc := NewReadCache()
 	rc.Store("/src/main.go", "h1", 100, 2000, 1, "declares: main, handleError")

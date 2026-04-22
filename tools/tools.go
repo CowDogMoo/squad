@@ -56,6 +56,7 @@ var defaultSkipDirs = map[string]bool{
 type editsKeyType struct{}
 type editDeadlineKeyType struct{}
 type editEnforcerKeyType struct{}
+type graceStateKeyType struct{}
 
 // mutatingTools are tools that legitimately chain in long sequences.
 var mutatingTools = map[string]bool{
@@ -336,8 +337,9 @@ const editDeadlineGracePeriod = 3
 
 // graceState tracks the edit-deadline grace period within the tool loop.
 type graceState struct {
-	reached   bool
-	remaining int
+	reached           bool
+	remaining         int
+	editFailedInGrace bool // true when an Edit was attempted but failed during grace
 }
 
 // handleEditDeadline processes an edit-deadline hit. It returns (stop, messages)
@@ -374,11 +376,62 @@ func (gs *graceState) tryReenableReads(ctx context.Context, enforcer *EditEnforc
 	}
 }
 
+// checkEditFailure inspects tool results for failed Edit calls during the
+// grace period. When an Edit fails (e.g. "text not found"), the agent
+// genuinely needs to re-read the file — so we temporarily unblock reads
+// for one iteration to allow recovery.
+func (gs *graceState) checkEditFailure(ctx context.Context, toolCalls []llms.ToolCall, results map[string]string) {
+	if !gs.reached {
+		return
+	}
+	gs.editFailedInGrace = false
+	for _, tc := range toolCalls {
+		if tc.FunctionCall == nil || !isEditTool(tc.FunctionCall.Name) {
+			continue
+		}
+		result, ok := results[tc.ID]
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(result, "error:") || strings.Contains(result, "text not found") {
+			gs.editFailedInGrace = true
+			logging.InfoContext(ctx, "edit failed during grace period — reads temporarily re-enabled for recovery")
+			return
+		}
+	}
+}
+
+// readsBlockedByGrace reports whether the grace period is blocking reads.
+// Returns false if an Edit just failed, allowing one recovery read.
+func (gs *graceState) readsBlockedByGrace() bool {
+	return gs.reached && !gs.editFailedInGrace
+}
+
+// setGraceState stores the grace state on the context so tool handlers can query it.
+func setGraceState(ctx context.Context, gs *graceState) context.Context {
+	return context.WithValue(ctx, graceStateKeyType{}, gs)
+}
+
+// getGraceState retrieves the grace state from the context.
+func getGraceState(ctx context.Context) *graceState {
+	if gs, ok := ctx.Value(graceStateKeyType{}).(*graceState); ok {
+		return gs
+	}
+	return nil
+}
+
 // shouldBlockReadTools returns true when Read/Glob/Grep should be blocked
 // because the agent has spent too many iterations reading without editing.
 // Checks both EditEnforcer (hard deadline) and PhaseEnforcer (nudge-based).
 // Either enforcer can independently trigger blocking.
+// However, if an Edit just failed during the grace period, reads are
+// temporarily unblocked so the agent can re-read and retry its edit.
 func shouldBlockReadTools(ctx context.Context) bool {
+	// Grace-period edit failure overrides all blocking — the agent
+	// genuinely needs to re-read to construct a valid Edit.
+	if gs := getGraceState(ctx); gs != nil && gs.editFailedInGrace {
+		return false
+	}
 	e := GetEditEnforcer(ctx)
 	if e != nil && e.ShouldBlockReads() {
 		return true
@@ -507,6 +560,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 	}
 	budgetWarned := make([]bool, len(budgetWarningThresholds))
 	var grace graceState
+	ctx = setGraceState(ctx, &grace)
 	for i := 0; i < maxIter; i++ {
 		SetIteration(ctx, i)
 		logIterationStart(ctx, i, maxIter, m)
@@ -560,6 +614,10 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		phaseEnforcer.ConfirmEdit(mergedToolCalls, toolResults)
 		resetCacheStreakOnEdit(ctx, mergedToolCalls, toolResults)
 
+		// Check for Edit failures during grace period — if an Edit
+		// failed with "text not found", temporarily re-enable reads
+		// so the agent can re-read and retry.
+		grace.checkEditFailure(ctx, mergedToolCalls, toolResults)
 		grace.tryReenableReads(ctx, editEnforcer)
 
 		// Feed tool results into loop detector.
@@ -1200,38 +1258,48 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 
 		lineCount := strings.Count(string(data), "\n") + 1
 
-		// Check read cache for duplicate reads.
-		// NEVER return file content on cache hit — this breaks the
-		// compaction→re-read→compaction feedback loop. Return only metadata
-		// so the model is forced to work from its notes.
+		// Check read cache for duplicate reads. On a normal cache hit,
+		// return only metadata to avoid token waste. However, if context
+		// compaction has occurred since the entry was stored, the file
+		// content has been evicted from the conversation — serve the full
+		// content again so the agent can construct valid Edit calls.
 		if rc := GetReadCache(ctx); rc != nil {
 			hash := HashContent(data)
 			if entry, hit := rc.Check(path, hash); hit {
-				streak := rc.IncrementStreak()
-				logReadCacheHit(ctx, payload.Path, entry)
+				// If compaction evicted this content, re-serve it.
+				if rc.IsStaleAfterCompaction(entry) {
+					logging.InfoContext(ctx, "  → Read %s [cache hit but content compacted — re-serving full content]", payload.Path)
+					summary := GenerateFileSummary(string(data))
+					rc.Store(path, hash, lineCount, len(data), GetIteration(ctx), summary)
+					// Fall through to normal content delivery below.
+				} else {
+					streak := rc.IncrementStreak()
+					logReadCacheHit(ctx, payload.Path, entry)
 
-				// Circuit breaker: after too many consecutive cache hits, hard block.
-				if streak >= cacheHitStreakThreshold {
+					// Circuit breaker: after too many consecutive cache hits, hard block.
+					if streak >= cacheHitStreakThreshold {
+						return fmt.Sprintf(
+							"[READ LOOP DETECTED — %d consecutive re-reads of cached files. "+
+								"Read is disabled until you make an Edit or Write call. "+
+								"File '%s' unchanged since iteration %d (%d lines). "+
+								"Use your notes to write Edit calls NOW.]",
+							streak, payload.Path, entry.Iteration, entry.Lines), nil
+					}
+
+					// Normal cache hit: return metadata stub only — no content.
+					summaryHint := ""
+					if entry.Summary != "" {
+						summaryHint = " Content summary: " + entry.Summary + "."
+					}
 					return fmt.Sprintf(
-						"[READ LOOP DETECTED — %d consecutive re-reads of cached files. "+
-							"Read is disabled until you make an Edit or Write call. "+
-							"File '%s' unchanged since iteration %d (%d lines). "+
-							"Use your notes to write Edit calls NOW.]",
-						streak, payload.Path, entry.Iteration, entry.Lines), nil
+						"[CACHE HIT — file '%s' unchanged since iteration %d (%d lines, %d bytes).%s "+
+							"Content was already provided. Write edits from your notes — do NOT re-read.]",
+						payload.Path, entry.Iteration, entry.Lines, entry.Bytes, summaryHint), nil
 				}
-
-				// Normal cache hit: return metadata stub only — no content.
-				summaryHint := ""
-				if entry.Summary != "" {
-					summaryHint = " Content summary: " + entry.Summary + "."
-				}
-				return fmt.Sprintf(
-					"[CACHE HIT — file '%s' unchanged since iteration %d (%d lines, %d bytes).%s "+
-						"Content was already provided. Write edits from your notes — do NOT re-read.]",
-					payload.Path, entry.Iteration, entry.Lines, entry.Bytes, summaryHint), nil
+			} else {
+				summary := GenerateFileSummary(string(data))
+				rc.Store(path, hash, lineCount, len(data), GetIteration(ctx), summary)
 			}
-			summary := GenerateFileSummary(string(data))
-			rc.Store(path, hash, lineCount, len(data), GetIteration(ctx), summary)
 		}
 
 		// Smart truncation for large files.
@@ -1817,6 +1885,12 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent, m *met
 		result = append(result, summaryMsg)
 		result = append(result, compacted[protectedHead:]...)
 		compacted = result
+	}
+
+	// Bump the read cache compaction epoch so that subsequent cache hits
+	// know the file content has been evicted and should be re-served.
+	if rc := GetReadCache(ctx); rc != nil {
+		rc.BumpCompactionEpoch()
 	}
 
 	after := estimateTokens(compacted)
