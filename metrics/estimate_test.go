@@ -63,8 +63,8 @@ wrapper: agent.md
 budget:
   estimated_iterations: 10
   children:
-    - go-review
-    - go-tests
+    - name: go-review
+    - name: go-tests
 `)
 	writeAgentManifest(t, dir, "go-review", `
 name: go-review
@@ -118,7 +118,7 @@ wrapper: agent.md
 budget:
   estimated_iterations: 10
   children:
-    - missing-agent
+    - name: missing-agent
 `)
 
 	root, err := EstimateCost(dir, "orchestrator", "openai", "gpt-4o")
@@ -142,7 +142,7 @@ func TestEstimateCostDepthLimit(t *testing.T) {
 		name := agentNameForDepth(i)
 		child := ""
 		if i < 6 {
-			child = "    - " + agentNameForDepth(i+1)
+			child = "    - name: " + agentNameForDepth(i+1)
 		}
 		manifest := "name: " + name + "\nversion: '1.0'\nentrypoint: system.md\nwrapper: agent.md\n"
 		if child != "" {

@@ -949,8 +949,9 @@ func TestBuildBundle_ModelProviderOverride(t *testing.T) {
 version: v1
 entrypoint: system.txt
 wrapper: wrapper.txt
-model: claude-haiku-4-5
-provider: anthropic
+models:
+  - model: claude-haiku-4-5
+    provider: anthropic
 `
 	dir, _ := setupTestAgent(t, "demo", map[string]string{
 		"agent.yaml":  manifest,
@@ -995,15 +996,15 @@ wrapper: wrapper.txt
 	}
 }
 
-func TestChildBudget_UnmarshalYAML_PlainString(t *testing.T) {
+func TestChildBudget_NamesOnly(t *testing.T) {
 	t.Parallel()
 
 	var config BudgetConfig
 	yaml := `
 estimated_iterations: 10
 children:
-  - go-review
-  - go-tests
+  - name: go-review
+  - name: go-tests
 `
 	if err := yamlPkg.Unmarshal([]byte(yaml), &config); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
@@ -1045,13 +1046,13 @@ children:
 	}
 }
 
-func TestChildBudget_UnmarshalYAML_Mixed(t *testing.T) {
+func TestChildBudget_StructuredFormat(t *testing.T) {
 	t.Parallel()
 
 	var config BudgetConfig
 	yaml := `
 children:
-  - go-review
+  - name: go-review
   - name: go-tests
     max_cost: 5.00
 `
@@ -1177,68 +1178,6 @@ func TestBuildBundle_EditDeadlinePropagated(t *testing.T) {
 	}
 	if bundle.EditDeadline != 8 {
 		t.Fatalf("expected Bundle.EditDeadline = 8, got %d", bundle.EditDeadline)
-	}
-}
-
-func TestResolvedModels_FromModelsList(t *testing.T) {
-	t.Parallel()
-	m := &Manifest{
-		Models: []ModelPreference{
-			{Model: "gemini-2.5-flash", Provider: "google"},
-			{Model: "gpt-4.1-mini", Provider: "openai"},
-		},
-	}
-	resolved := m.ResolvedModels()
-	if len(resolved) != 2 {
-		t.Fatalf("len = %d, want 2", len(resolved))
-	}
-	if resolved[0].Model != "gemini-2.5-flash" || resolved[0].Provider != "google" {
-		t.Fatalf("resolved[0] = %+v", resolved[0])
-	}
-	if resolved[1].Model != "gpt-4.1-mini" || resolved[1].Provider != "openai" {
-		t.Fatalf("resolved[1] = %+v", resolved[1])
-	}
-}
-
-func TestResolvedModels_FallbackToSingleModelField(t *testing.T) {
-	t.Parallel()
-	m := &Manifest{
-		Model:    "claude-sonnet-4-6",
-		Provider: "anthropic",
-	}
-	resolved := m.ResolvedModels()
-	if len(resolved) != 1 {
-		t.Fatalf("len = %d, want 1", len(resolved))
-	}
-	if resolved[0].Model != "claude-sonnet-4-6" || resolved[0].Provider != "anthropic" {
-		t.Fatalf("resolved[0] = %+v", resolved[0])
-	}
-}
-
-func TestResolvedModels_ModelsListTakesPrecedence(t *testing.T) {
-	t.Parallel()
-	m := &Manifest{
-		Model:    "old-model",
-		Provider: "old-provider",
-		Models: []ModelPreference{
-			{Model: "new-model", Provider: "new-provider"},
-		},
-	}
-	resolved := m.ResolvedModels()
-	if len(resolved) != 1 {
-		t.Fatalf("len = %d, want 1", len(resolved))
-	}
-	if resolved[0].Model != "new-model" {
-		t.Fatalf("Model = %q, want new-model", resolved[0].Model)
-	}
-}
-
-func TestResolvedModels_Empty(t *testing.T) {
-	t.Parallel()
-	m := &Manifest{}
-	resolved := m.ResolvedModels()
-	if resolved != nil {
-		t.Fatalf("resolved = %v, want nil", resolved)
 	}
 }
 

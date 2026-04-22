@@ -43,8 +43,7 @@ var configCmd = &cobra.Command{
 
 Configuration locations (searched in order):
 1. $XDG_CONFIG_HOME/squad/config.yaml (typically ~/.config/squad/config.yaml)
-2. ~/.squad/config.yaml (legacy, for backward compatibility)
-3. ./config.yaml (current directory)
+2. ./config.yaml (current directory)
 
 Configuration precedence (highest to lowest):
 1. CLI flags
@@ -143,15 +142,6 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 		}
 		logging.WarnContext(ctx, "Overwriting existing config file at %s", configPath)
 		logging.WarnContext(ctx, "This will reset all custom settings to defaults!")
-	}
-
-	if home, err := os.UserHomeDir(); err == nil {
-		legacyPath := filepath.Join(home, ".squad", "config.yaml")
-		if _, err := os.Stat(legacyPath); err == nil {
-			logging.WarnContext(ctx, "Legacy config found at %s", legacyPath)
-			logging.InfoContext(ctx, "Creating config at %s", configPath)
-			logging.InfoContext(ctx, "Consider migrating: mv \"%s\" \"%s\"", legacyPath, configPath)
-		}
 	}
 
 	cfg := configFromContext(cmd)

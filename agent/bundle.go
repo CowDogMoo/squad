@@ -30,9 +30,7 @@ type ModelPreference struct {
 type Manifest struct {
 	Name          string             `yaml:"name"`
 	Version       string             `yaml:"version"`
-	Model         string             `yaml:"model,omitempty"`    // single model override (backwards compat)
-	Provider      string             `yaml:"provider,omitempty"` // single provider override (backwards compat)
-	Models        []ModelPreference  `yaml:"models,omitempty"`   // ranked model preferences (takes precedence over model/provider)
+	Models        []ModelPreference  `yaml:"models,omitempty"` // ranked model preferences
 	EntryPoint    string             `yaml:"entrypoint"`
 	Wrapper       string             `yaml:"wrapper"`
 	References    []string           `yaml:"references"`
@@ -45,19 +43,6 @@ type Manifest struct {
 	DisableTask   bool               `yaml:"disable_task,omitempty"`
 	MaxIterations int                `yaml:"max_iterations,omitempty"` // iteration cap for this agent (0 = use CLI default)
 	EditDeadline  int                `yaml:"edit_deadline,omitempty"`  // stop after N iterations with no Edit calls (0 = disabled)
-}
-
-// ResolvedModels returns the ordered list of model preferences.
-// If the models list is set, it takes precedence. Otherwise, the
-// single model/provider fields are used as a one-element list.
-func (m *Manifest) ResolvedModels() []ModelPreference {
-	if len(m.Models) > 0 {
-		return m.Models
-	}
-	if m.Model != "" {
-		return []ModelPreference{{Model: m.Model, Provider: m.Provider}}
-	}
-	return nil
 }
 
 // BudgetConfig provides static hints for cost estimation.
@@ -84,34 +69,13 @@ type BudgetConfig struct {
 }
 
 // ChildBudget represents a child agent with an optional dedicated cost cap.
-// Supports both plain string (just agent name) and object with max_cost.
 type ChildBudget struct {
 	Name          string  `yaml:"name"`
 	MaxCost       float64 `yaml:"max_cost,omitempty"`       // dedicated cost cap in USD (0 = use remaining budget)
 	MaxIterations int     `yaml:"max_iterations,omitempty"` // iteration cap for child (0 = inherit parent's cap)
 }
 
-// UnmarshalYAML allows ChildBudget to be specified as either a plain string
-// or as an object with name and max_cost fields.
-func (c *ChildBudget) UnmarshalYAML(unmarshal func(any) error) error {
-	// Try plain string first (backwards compatible).
-	var name string
-	if err := unmarshal(&name); err == nil {
-		c.Name = name
-		return nil
-	}
-
-	// Try structured object.
-	type childBudgetAlias ChildBudget
-	var obj childBudgetAlias
-	if err := unmarshal(&obj); err != nil {
-		return err
-	}
-	*c = ChildBudget(obj)
-	return nil
-}
-
-// ChildNames returns the list of child agent names for backwards compatibility.
+// ChildNames returns the list of child agent names.
 func (b *BudgetConfig) ChildNames() []string {
 	if b == nil {
 		return nil
@@ -654,11 +618,10 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		return nil, err
 	}
 
-	resolved := manifest.ResolvedModels()
 	var primaryModel, primaryProvider string
-	if len(resolved) > 0 {
-		primaryModel = resolved[0].Model
-		primaryProvider = resolved[0].Provider
+	if len(manifest.Models) > 0 {
+		primaryModel = manifest.Models[0].Model
+		primaryProvider = manifest.Models[0].Provider
 	}
 
 	return &Bundle{
@@ -668,7 +631,7 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		WorkDir:       workingDir,
 		Model:         primaryModel,
 		Provider:      primaryProvider,
-		Models:        resolved,
+		Models:        manifest.Models,
 		Budget:        manifest.Budget,
 		Environment:   manifest.Environment,
 		MCPServers:    resolvedMCP,
