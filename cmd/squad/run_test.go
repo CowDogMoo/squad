@@ -33,6 +33,7 @@ import (
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
+	"github.com/cowdogmoo/squad/runner"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
@@ -829,6 +830,192 @@ func TestParseMCPServers(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateComposedFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		flag    string
+		value   string
+		wantErr bool
+	}{
+		{"system", "system", "override", true},
+		{"print-bundle", "print-bundle", "true", true},
+		{"bundle-out", "bundle-out", "/tmp/b", true},
+		{"apply", "apply", "true", true},
+		{"apply-fallback", "apply-fallback", "true", true},
+		{"require-actionable", "require-actionable", "true", true},
+		{"stream", "stream", "true", true},
+		{"max-cost allowed", "max-cost", "5.00", false},
+		{"json allowed", "json", "true", false},
+		{"out allowed", "out", "/tmp/report.md", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRunCmd()
+			if err := cmd.Flags().Set(tt.flag, tt.value); err != nil {
+				t.Fatalf("Set %s: %v", tt.flag, err)
+			}
+			err := validateComposedFlags(cmd)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateComposedFlags() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && err != nil {
+				if !strings.Contains(err.Error(), "not applicable to composed agents") {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestComposedDryRun(t *testing.T) {
+	manifest := &agent.Manifest{
+		Name:    "test-composed",
+		Version: "1.0",
+		Stages: []agent.ComposedStage{
+			{Name: "analyze", Agents: []string{"scanner-a", "scanner-b"}},
+			{Name: "fix", Agent: "fixer", DependsOn: []string{"analyze"}, Mode: "edit"},
+		},
+		Gates: []agent.ComposedGate{
+			{After: "fix", Command: "go test ./...", OnFailure: "stop"},
+		},
+	}
+
+	p, err := runner.ManifestToPipeline(manifest)
+	if err != nil {
+		t.Fatalf("ManifestToPipeline: %v", err)
+	}
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := composedDryRun(cmd, manifest, p); err != nil {
+		t.Fatalf("composedDryRun: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "test-composed") {
+		t.Error("expected agent name in output")
+	}
+	if !strings.Contains(output, "2 stages") {
+		t.Error("expected stage count in output")
+	}
+	if !strings.Contains(output, "scanner-a, scanner-b") {
+		t.Error("expected parallel agents in output")
+	}
+	if !strings.Contains(output, "fixer") {
+		t.Error("expected fix agent in output")
+	}
+	if !strings.Contains(output, "depends_on: analyze") {
+		t.Error("expected dependency info in output")
+	}
+	if !strings.Contains(output, "go test ./...") {
+		t.Error("expected gate command in output")
+	}
+}
+
+func TestRunComposedAgent_DryRun(t *testing.T) {
+	manifest := `
+name: test-composed
+version: "1.0"
+description: Test composed agent
+
+stages:
+  - name: analyze
+    agents:
+      - scanner-a
+      - scanner-b
+  - name: fix
+    agent: fixer
+    depends_on: [analyze]
+    mode: edit
+
+gates:
+  - after: fix
+    command: "go test ./..."
+    on_failure: stop
+`
+	agentsDir := setupTestAgent(t, "test-composed", manifest, nil)
+
+	v := viper.New()
+	v.Set("run.agent", "test-composed")
+	v.Set("run.agents_dir", agentsDir)
+	v.Set("run.dry_run", true)
+
+	cmd := newRunCmd()
+	ctx := withViper(context.Background(), v)
+	ctx = withConfig(ctx, config.Defaults())
+	cmd.SetContext(ctx)
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	if err := cmd.Flags().Set("agent", "test-composed"); err != nil {
+		t.Fatalf("Set agent: %v", err)
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatalf("Set agents-dir: %v", err)
+	}
+	if err := cmd.Flags().Set("dry-run", "true"); err != nil {
+		t.Fatalf("Set dry-run: %v", err)
+	}
+
+	// Execute RunE directly.
+	err := cmd.RunE(cmd, nil)
+	if err != nil {
+		t.Fatalf("RunE: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "test-composed") {
+		t.Errorf("expected agent name in output, got: %s", output)
+	}
+	if !strings.Contains(output, "2 stages") {
+		t.Errorf("expected stage count in output, got: %s", output)
+	}
+}
+
+func TestRunComposedAgent_RejectsIncompatibleFlags(t *testing.T) {
+	manifest := `
+name: test-composed
+version: "1.0"
+
+stages:
+  - name: s1
+    agent: a1
+`
+	agentsDir := setupTestAgent(t, "test-composed", manifest, nil)
+
+	v := viper.New()
+	v.Set("run.agent", "test-composed")
+	v.Set("run.agents_dir", agentsDir)
+	v.Set("run.dry_run", true)
+
+	cmd := newRunCmd()
+	ctx := withViper(context.Background(), v)
+	ctx = withConfig(ctx, config.Defaults())
+	cmd.SetContext(ctx)
+
+	if err := cmd.Flags().Set("agent", "test-composed"); err != nil {
+		t.Fatalf("Set agent: %v", err)
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatalf("Set agents-dir: %v", err)
+	}
+	if err := cmd.Flags().Set("system", "override"); err != nil {
+		t.Fatalf("Set system: %v", err)
+	}
+
+	err := cmd.RunE(cmd, nil)
+	if err == nil {
+		t.Fatal("expected error for --system with composed agent")
+	}
+	if !strings.Contains(err.Error(), "not applicable to composed agents") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

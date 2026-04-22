@@ -27,14 +27,25 @@ type ModelPreference struct {
 }
 
 // Manifest represents the structure of an agent's manifest file.
+// A manifest is either a leaf agent (has entrypoint/wrapper) or a composed
+// agent (has stages). These are mutually exclusive; Validate() enforces this.
 type Manifest struct {
-	Name          string             `yaml:"name"`
-	Version       string             `yaml:"version"`
-	Models        []ModelPreference  `yaml:"models,omitempty"` // ranked model preferences
-	EntryPoint    string             `yaml:"entrypoint"`
-	Wrapper       string             `yaml:"wrapper"`
-	References    []string           `yaml:"references"`
-	Task          string             `yaml:"task,omitempty"`
+	Name        string `yaml:"name"`
+	Version     string `yaml:"version"`
+	Description string `yaml:"description,omitempty"`
+
+	// Leaf agent fields.
+	Models     []ModelPreference `yaml:"models,omitempty"` // ranked model preferences
+	EntryPoint string            `yaml:"entrypoint,omitempty"`
+	Wrapper    string            `yaml:"wrapper,omitempty"`
+	References []string          `yaml:"references,omitempty"`
+	Task       string            `yaml:"task,omitempty"`
+
+	// Composed agent fields.
+	Stages []ComposedStage `yaml:"stages,omitempty"`
+	Gates  []ComposedGate  `yaml:"gates,omitempty"`
+
+	// Shared fields.
 	Environment   *executor.Config   `yaml:"environment,omitempty"`
 	DependsOn     []string           `yaml:"depends_on,omitempty"`
 	Output        *OutputConfig      `yaml:"output,omitempty"`
@@ -262,6 +273,8 @@ func loadTask(agentPath, taskFile string) (string, error) {
 }
 
 // LoadManifest reads and parses the agent manifest from the given agent directory.
+// It validates the manifest structure, ensuring composed and leaf fields are
+// mutually exclusive.
 func LoadManifest(agentPath string) (*Manifest, error) {
 	manifestPath := filepath.Join(agentPath, "agent.yaml")
 	manifestData, err := os.ReadFile(manifestPath)
@@ -271,6 +284,9 @@ func LoadManifest(agentPath string) (*Manifest, error) {
 	var manifest Manifest
 	if err := yaml.Unmarshal(manifestData, &manifest); err != nil {
 		return nil, fmt.Errorf("failed to parse agent manifest: %w", err)
+	}
+	if err := manifest.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid agent manifest: %w", err)
 	}
 	return &manifest, nil
 }
@@ -461,7 +477,10 @@ func compactRepoSummary(workingDir string) string {
 	dirs := make(map[string]*dirInfo)
 	totalFiles := 0
 
-	_ = filepath.WalkDir(workingDir, repoSummaryVisitor(workingDir, dirs, &totalFiles))
+	if err := filepath.WalkDir(workingDir, repoSummaryVisitor(workingDir, dirs, &totalFiles)); err != nil {
+		logging.Warn("failed to walk working directory for repo summary: %v", err)
+		return ""
+	}
 
 	if totalFiles == 0 {
 		return ""

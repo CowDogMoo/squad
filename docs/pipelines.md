@@ -1,26 +1,30 @@
-# Pipelines
+# Composed Agents (Pipelines)
 
-Declarative multi-agent pipelines run multiple agents across stages with
-dependency ordering, parallel execution, regression gates, and structured
-output.
+Composed agents run multiple sub-agents across stages with dependency
+ordering, parallel execution, regression gates, and structured output.
+A composed agent declares its pipeline topology in `agent.yaml` — users
+run it with `squad run` like any other agent.
 
-## Running Pipelines
+## Running Composed Agents
 
 ```bash
-# Run a pipeline
-squad pipeline run security-audit.yaml "Assess the target system"
+# Run a composed agent
+squad run --agent security-audit "Assess the target system"
 
 # Run with cost limit and output file
-squad pipeline run recon.yaml --max-cost 5.00 --out report.md
+squad run --agent security-audit --max-cost 5.00 --out report.md
 
-# Validate without running
-squad pipeline run recon.yaml --dry-run
+# Validate without running (shows stages and gates)
+squad run --agent security-audit --dry-run
 
 # Force JSON output
-squad pipeline run recon.yaml --json
+squad run --agent security-audit --json
 ```
 
-## Pipeline YAML Format
+## Composed Agent Manifest
+
+A composed agent's `agent.yaml` uses `stages` instead of `entrypoint`.
+Squad detects this automatically.
 
 ```yaml
 name: security-audit
@@ -53,10 +57,6 @@ gates:
   - after: testing
     command: "go test ./..."
     on_failure: stop
-
-# Output format for the pipeline report
-output:
-  format: json  # json | markdown (default: markdown)
 ```
 
 ## Features
@@ -68,9 +68,14 @@ output:
   the pipeline
 - **Cost budgeting**: `--max-cost` limits total spend across all agents
 - **Structured output**: JSON or Markdown reports with per-stage results
+- **Unified entry point**: `squad run --agent <name>` works for both leaf
+  and composed agents
 
-## Scaffold a Pipeline
+## Leaf vs Composed Manifests
 
-```bash
-squad init pipeline my-pipeline
-```
+| | Leaf Agent | Composed Agent |
+|---|---|---|
+| Has `entrypoint` | Yes | No |
+| Has `stages` | No | Yes |
+| Has `models` | Yes | No (sub-agents declare their own) |
+| Run with | `squad run --agent` | `squad run --agent` |

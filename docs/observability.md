@@ -42,8 +42,8 @@ exhausted.
 # Single agent with $2 budget
 squad run --agent go-review --max-cost 2.00
 
-# Pipeline with $10 total budget
-squad pipeline run audit.yaml --max-cost 10.00
+# Composed agent with $10 total budget
+squad run --agent security-audit --max-cost 10.00
 ```
 
 Agents can declare cost estimation hints in `agent.yaml`:
