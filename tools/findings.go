@@ -83,7 +83,6 @@ func (s *FindingsStore) FormatMarkdown() string {
 	var sb strings.Builder
 	sb.WriteString("## Findings\n\n")
 
-	// Summary table.
 	counts := map[string]int{}
 	for _, f := range findings {
 		counts[strings.ToLower(f.Severity)]++
@@ -96,7 +95,6 @@ func (s *FindingsStore) FormatMarkdown() string {
 	}
 	sb.WriteString("\n")
 
-	// Detail sections.
 	for i, f := range findings {
 		fmt.Fprintf(&sb, "### %d. [%s] %s\n\n", i+1, strings.ToUpper(f.Severity), f.Title)
 		if f.Category != "" {

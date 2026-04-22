@@ -361,51 +361,20 @@ func TestOutputReport(t *testing.T) {
 func TestResolveAgentsDirForPipeline(t *testing.T) {
 	t.Parallel()
 
-	t.Run("local agents dir", func(t *testing.T) {
+	t.Run("nil config returns error", func(t *testing.T) {
 		t.Parallel()
-		tmp := t.TempDir()
-		agentsDir := filepath.Join(tmp, "agents")
-		if err := os.Mkdir(agentsDir, 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		// Change to the temp dir so ./agents exists.
-		orig, _ := os.Getwd()
-		if err := os.Chdir(tmp); err != nil {
-			t.Fatalf("chdir: %v", err)
-		}
-		t.Cleanup(func() { _ = os.Chdir(orig) })
-
-		dir, err := resolveAgentsDirForPipeline(nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !strings.HasSuffix(dir, "agents") {
-			t.Fatalf("expected path ending in agents, got %q", dir)
+		_, err := resolveAgentsDirForPipeline(nil)
+		if err == nil {
+			t.Fatal("expected error with nil config, got nil")
 		}
 	})
 
-	t.Run("falls back to xdg config dir", func(t *testing.T) {
+	t.Run("empty config returns error", func(t *testing.T) {
 		t.Parallel()
-		tmp := t.TempDir()
-		// Create a subdirectory that won't have ./agents.
-		workDir := filepath.Join(tmp, "work")
-		if err := os.Mkdir(workDir, 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		orig, _ := os.Getwd()
-		if err := os.Chdir(workDir); err != nil {
-			t.Fatalf("chdir: %v", err)
-		}
-		t.Cleanup(func() { _ = os.Chdir(orig) })
-
-		// Even without a local agents dir, the function should return
-		// a path (from XDG config dirs or a fallback).
-		dir, err := resolveAgentsDirForPipeline(nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if dir == "" {
-			t.Fatal("expected non-empty dir")
+		cfg := &config.Config{}
+		_, err := resolveAgentsDirForPipeline(cfg)
+		if err == nil {
+			t.Fatal("expected error with empty config, got nil")
 		}
 	})
 }

@@ -1353,12 +1353,10 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 
 		lineCount := strings.Count(string(data), "\n") + 1
 
-		// Check read cache for duplicate reads.
 		if cached, ok := checkReadCache(ctx, path, payload.Path, data, lineCount); ok {
 			return cached, nil
 		}
 
-		// Smart truncation for large files.
 		if len(data) > maxReadBytes {
 			return truncateHeadTail(data), nil
 		}
@@ -1370,7 +1368,6 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 func sliceLines(data []byte, offset, limit int) string {
 	lines := strings.SplitAfter(string(data), "\n")
 	totalLines := len(lines)
-	// Trim trailing empty element from SplitAfter
 	if totalLines > 0 && lines[totalLines-1] == "" {
 		lines = lines[:totalLines-1]
 		totalLines = len(lines)
@@ -1402,7 +1399,6 @@ func truncateHeadTail(data []byte) string {
 	head := string(data[:headSize])
 	tail := string(data[len(data)-tailSize:])
 
-	// Find clean line boundaries
 	headEnd := strings.LastIndex(head, "\n")
 	if headEnd < 0 {
 		headEnd = len(head)
@@ -1678,10 +1674,6 @@ func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (s
 			return "", fmt.Errorf("%s", reason)
 		}
 
-		// Block read-like Bash commands (cat, head, tail, grep, etc.)
-		// when the edit enforcer says reads should be blocked.
-		// Without this, agents bypass Read/Glob/Grep blocking by
-		// shelling out to cat/head/tail.
 		if (IsSafeCommand(command) || ContainsReadCommand(command)) && shouldBlockReadTools(ctx) {
 			logging.InfoContext(ctx, "blocking Bash read-like command — too many read-only iterations, no edits made")
 			return "BASH READ BLOCKED — Read-like Bash commands are disabled until you call Edit or Write.\n\n" +
@@ -1689,8 +1681,6 @@ func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (s
 				"Use the file contents from your previous reads to construct Edit calls NOW.", nil
 		}
 
-		// Add executor metadata to the current span so traces show
-		// what command ran and which executor backend handled it.
 		span := trace.SpanFromContext(ctx)
 		span.SetAttributes(
 			attribute.String("squad.executor.type", ex.Type()),
@@ -1878,13 +1868,9 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent, m *met
 	}
 	compactEnd := len(messages) - protectedTail
 
-	// Build a structured summary of what happened before compaction,
-	// so the agent retains awareness of files read, patterns searched, etc.
 	middleMessages := messages[protectedHead:compactEnd]
 	summary := CompactionSummary(middleMessages, GetReadCache(ctx))
 
-	// Semantic scoring: identify which middle messages are most relevant
-	// to the current task and preserve them fully during compaction.
 	editedFiles := CollectEditedFiles(messages[:compactEnd])
 	recentFiles := ExtractRecentFiles(messages[compactEnd:])
 	scores := ScoreMessages(middleMessages, editedFiles, recentFiles)
@@ -1922,14 +1908,11 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent, m *met
 		compacted[i].Parts = newParts
 	}
 
-	// Inject the session state summary as a system message right after the
-	// protected head, so the agent knows what it has already done.
 	if summary != "" {
 		summaryMsg := llms.MessageContent{
 			Role:  llms.ChatMessageTypeHuman,
 			Parts: []llms.ContentPart{llms.TextPart(summary)},
 		}
-		// Insert after protected head messages.
 		result := make([]llms.MessageContent, 0, len(compacted)+1)
 		result = append(result, compacted[:protectedHead]...)
 		result = append(result, summaryMsg)
@@ -1937,8 +1920,6 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent, m *met
 		compacted = result
 	}
 
-	// Bump the read cache compaction epoch so that subsequent cache hits
-	// know the file content has been evicted and should be re-served.
 	if rc := GetReadCache(ctx); rc != nil {
 		rc.BumpCompactionEpoch()
 	}
@@ -1959,7 +1940,6 @@ func TruncateToolOutputHeadTail(output string, maxBytes int) string {
 	head := output[:headSize]
 	tail := output[len(output)-tailSize:]
 
-	// Snap to line boundaries
 	headEnd := strings.LastIndex(head, "\n")
 	if headEnd < 0 {
 		headEnd = len(head)

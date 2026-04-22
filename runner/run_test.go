@@ -132,77 +132,6 @@ func TestWriteResponse(t *testing.T) {
 	}
 }
 
-func TestResolveAgentsDir(t *testing.T) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	tmp := t.TempDir()
-	defer func() { _ = os.Chdir(cwd) }()
-
-	if err := os.Chdir(tmp); err != nil {
-		t.Fatalf("Chdir: %v", err)
-	}
-
-	t.Run("explicit path", func(t *testing.T) {
-		explicit := filepath.Join(tmp, "explicit")
-		explicitAbs, _ := filepath.Abs(explicit)
-		resolved, err := resolveAgentsDir(explicit)
-		if err != nil {
-			t.Fatalf("resolveAgentsDir() error = %v", err)
-		}
-		if resolved != explicitAbs {
-			t.Fatalf("resolved = %q, want %q", resolved, explicitAbs)
-		}
-	})
-
-	t.Run("local agents dir", func(t *testing.T) {
-		agentsDir := filepath.Join(tmp, "agents")
-		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
-		t.Cleanup(func() { _ = os.RemoveAll(agentsDir) })
-		agentsAbs, _ := filepath.Abs(agentsDir)
-		resolved, err := resolveAgentsDir("")
-		if err != nil {
-			t.Fatalf("resolveAgentsDir() error = %v", err)
-		}
-		resolvedEval, err := filepath.EvalSymlinks(resolved)
-		if err != nil {
-			resolvedEval = resolved
-		}
-		agentsEval, err := filepath.EvalSymlinks(agentsAbs)
-		if err != nil {
-			agentsEval = agentsAbs
-		}
-		if resolvedEval != agentsEval {
-			t.Fatalf("resolved = %q, want %q", resolvedEval, agentsEval)
-		}
-	})
-
-	t.Run("home config fallback", func(t *testing.T) {
-		t.Setenv("HOME", tmp)
-		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
-		resolved, err := resolveAgentsDir("")
-		if err != nil {
-			t.Fatalf("resolveAgentsDir() error = %v", err)
-		}
-		expected := filepath.Join(tmp, ".config", "squad", "agents")
-		expectedAbs, _ := filepath.Abs(expected)
-		resolvedEval, err := filepath.EvalSymlinks(resolved)
-		if err != nil {
-			resolvedEval = resolved
-		}
-		expectedEval, err := filepath.EvalSymlinks(expectedAbs)
-		if err != nil {
-			expectedEval = expectedAbs
-		}
-		if resolvedEval != expectedEval {
-			t.Fatalf("resolved = %q, want %q", resolvedEval, expectedEval)
-		}
-	})
-}
-
 func TestHandleResponse(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -526,54 +455,20 @@ func TestFindAgentDir(t *testing.T) {
 		}
 	})
 
-	t.Run("nil config falls back to legacy", func(t *testing.T) {
+	t.Run("nil config returns error", func(t *testing.T) {
 		t.Parallel()
-		// Save/restore cwd
-		cwd, _ := os.Getwd()
-		tmp := t.TempDir()
-		agentsDir := filepath.Join(tmp, "agents")
-		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
-		defer func() { _ = os.Chdir(cwd) }()
-		if err := os.Chdir(tmp); err != nil {
-			t.Fatalf("Chdir: %v", err)
-		}
-
-		got, err := findAgentDir("myagent", "", nil)
-		if err != nil {
-			t.Fatalf("findAgentDir() error = %v", err)
-		}
-		// Should resolve to <tmp>/agents/myagent via legacy resolution
-		gotEval, _ := filepath.EvalSymlinks(got)
-		wantEval, _ := filepath.EvalSymlinks(filepath.Join(agentsDir, "myagent"))
-		if gotEval != wantEval {
-			t.Fatalf("findAgentDir() = %q, want %q", gotEval, wantEval)
+		_, err := findAgentDir("myagent", "", nil)
+		if err == nil {
+			t.Fatal("findAgentDir() expected error with nil config, got nil")
 		}
 	})
 
-	t.Run("config with no sources falls back to legacy", func(t *testing.T) {
+	t.Run("config with no sources returns error", func(t *testing.T) {
 		t.Parallel()
-		cwd, _ := os.Getwd()
-		tmp := t.TempDir()
-		agentsDir := filepath.Join(tmp, "agents")
-		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
-		defer func() { _ = os.Chdir(cwd) }()
-		if err := os.Chdir(tmp); err != nil {
-			t.Fatalf("Chdir: %v", err)
-		}
-
 		cfg := &config.Config{}
-		got, err := findAgentDir("myagent", "", cfg)
-		if err != nil {
-			t.Fatalf("findAgentDir() error = %v", err)
-		}
-		gotEval, _ := filepath.EvalSymlinks(got)
-		wantEval, _ := filepath.EvalSymlinks(filepath.Join(agentsDir, "myagent"))
-		if gotEval != wantEval {
-			t.Fatalf("findAgentDir() = %q, want %q", gotEval, wantEval)
+		_, err := findAgentDir("myagent", "", cfg)
+		if err == nil {
+			t.Fatal("findAgentDir() expected error with empty config, got nil")
 		}
 	})
 }

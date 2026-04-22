@@ -322,30 +322,27 @@ func mergeVars(base, override map[string]string) map[string]string {
 	return merged
 }
 
-// resolveAgentsDirForPipeline finds the agents directory using the same logic as the run command.
+// resolveAgentsDirForPipeline resolves the agents directory from config sources.
 func resolveAgentsDirForPipeline(cfg *config.Config) (string, error) {
-	if stat, err := os.Stat("agents"); err == nil && stat.IsDir() {
-		return filepath.Abs("agents")
+	if cfg == nil {
+		return "", fmt.Errorf("no config provided and no explicit agents directory specified")
 	}
-
-	// Use XDG config directories.
-	for _, configDir := range config.GetConfigDirs() {
-		agentsDir := filepath.Join(configDir, "agents")
-		if stat, err := os.Stat(agentsDir); err == nil && stat.IsDir() {
-			return agentsDir, nil
-		}
+	manager, err := source.NewManager(cfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to create agent source manager: %w", err)
 	}
-
-	dirs := config.GetConfigDirs()
-	if len(dirs) > 0 {
-		return filepath.Join(dirs[0], "agents"), nil
+	paths, err := manager.GetSearchPaths()
+	if err != nil {
+		return "", fmt.Errorf("failed to get agent search paths: %w", err)
 	}
-	return "", fmt.Errorf("failed to resolve agents dir")
+	if len(paths) == 0 {
+		return "", fmt.Errorf("no agent source directories configured")
+	}
+	return paths[0], nil
 }
 
 // findAgentDirForPipeline locates an agent's parent directory.
 func findAgentDirForPipeline(agentName, defaultDir string, cfg *config.Config) (string, error) {
-	// Try source manager first.
 	if cfg != nil {
 		manager, err := source.NewManager(cfg)
 		if err == nil {
@@ -355,7 +352,5 @@ func findAgentDirForPipeline(agentName, defaultDir string, cfg *config.Config) (
 			}
 		}
 	}
-
-	// Fall back to default directory.
 	return defaultDir, nil
 }

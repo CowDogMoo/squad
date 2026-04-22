@@ -241,34 +241,8 @@ func resolveWorkingDir(dir string) (string, error) {
 	return filepath.Abs(dir)
 }
 
-func resolveAgentsDir(explicit string) (string, error) {
-	if explicit != "" {
-		return filepath.Abs(explicit)
-	}
-
-	if stat, err := os.Stat("agents"); err == nil && stat.IsDir() {
-		return filepath.Abs("agents")
-	}
-
-	// Use XDG config directories
-	for _, configDir := range config.GetConfigDirs() {
-		agentsDir := filepath.Join(configDir, "agents")
-		if stat, err := os.Stat(agentsDir); err == nil && stat.IsDir() {
-			return agentsDir, nil
-		}
-	}
-
-	dirs := config.GetConfigDirs()
-	if len(dirs) > 0 {
-		return filepath.Join(dirs[0], "agents"), nil
-	}
-	return "", fmt.Errorf("failed to resolve agents dir: no config directories available")
-}
-
 // findAgentDir locates an agent by name using the source manager.
-// Falls back to the legacy single-directory resolution if config is unavailable.
 func findAgentDir(agentName, explicitDir string, cfg *config.Config) (string, error) {
-	// If explicit directory is provided, use it directly
 	if explicitDir != "" {
 		absDir, err := filepath.Abs(explicitDir)
 		if err != nil {
@@ -277,26 +251,18 @@ func findAgentDir(agentName, explicitDir string, cfg *config.Config) (string, er
 		return filepath.Join(absDir, agentName), nil
 	}
 
-	// Use agent source manager if config is available
-	if cfg != nil {
-		manager, err := source.NewManager(cfg)
-		if err != nil {
-			// Fall through to legacy resolution
-			logging.Warn("failed to create agent source manager: %v", err)
-		} else {
-			agentDir, err := manager.FindAgent(agentName)
-			if err == nil {
-				return agentDir, nil
-			}
-			// Log but don't fail - try legacy resolution
-			logging.Debug("agent not found via source manager: %v", err)
-		}
+	if cfg == nil {
+		return "", fmt.Errorf("no config provided and no explicit agents directory specified")
 	}
 
-	// Legacy resolution: ./agents or ~/.config/squad/agents
-	agentsDir, err := resolveAgentsDir("")
+	manager, err := source.NewManager(cfg)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create agent source manager: %w", err)
 	}
-	return filepath.Join(agentsDir, agentName), nil
+
+	agentDir, err := manager.FindAgent(agentName)
+	if err != nil {
+		return "", fmt.Errorf("agent %q not found: %w", agentName, err)
+	}
+	return agentDir, nil
 }
