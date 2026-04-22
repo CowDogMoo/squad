@@ -1266,6 +1266,73 @@ stages:
 	}
 }
 
+func TestRunComposedAgent_StdinAndDefaultWorkDir(t *testing.T) {
+	t.Parallel()
+
+	// Create a composed agent with a real sub-agent so the non-dry-run path
+	// proceeds through stdin reading and default workingDir resolution.
+	baseDir := t.TempDir()
+
+	subDir := filepath.Join(baseDir, "agents", "leaf")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "agent.yaml"),
+		[]byte("name: leaf\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "system.md"), []byte("sys"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "agent.md"), []byte("wrap"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	composedDir := filepath.Join(baseDir, "agents", "stdin-composed")
+	if err := os.MkdirAll(composedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	composedManifest := "name: stdin-composed\nversion: \"1.0\"\nstages:\n  - name: s1\n    agent: leaf\n"
+	if err := os.WriteFile(filepath.Join(composedDir, "agent.yaml"), []byte(composedManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(baseDir, "agents")
+
+	v := viper.New()
+	v.Set("run.agent", "stdin-composed")
+	v.Set("run.agents_dir", agentsDir)
+
+	cmd := newRunCmd()
+	ctx := withViper(context.Background(), v)
+	ctx = withConfig(ctx, config.Defaults())
+	cmd.SetContext(ctx)
+
+	// Piped stdin with NO args — exercises lines 356-362 (stdin reading path).
+	cmd.SetIn(bytes.NewBufferString("piped prompt"))
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	if err := cmd.Flags().Set("agent", "stdin-composed"); err != nil {
+		t.Fatalf("Set agent: %v", err)
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatalf("Set agents-dir: %v", err)
+	}
+	// Deliberately NOT setting --working-dir to exercise os.Getwd default (lines 365-366).
+
+	err := cmd.RunE(cmd, nil)
+	if err == nil {
+		t.Fatal("expected error from model invocation")
+	}
+	// Should NOT fail at setup level.
+	if strings.Contains(err.Error(), "config not available") {
+		t.Fatalf("setup failed: %v", err)
+	}
+}
+
 func TestInitConfigMissingConfigFlag(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
