@@ -78,6 +78,17 @@ func (rc *ReadCache) CompactionEpoch() int {
 	return rc.compactionEpoch
 }
 
+// Has reports whether a path exists in the cache (regardless of hash).
+// Used to distinguish "new file read" from "re-read" when deciding
+// whether to block reads.
+func (rc *ReadCache) Has(path string) bool {
+	if rc == nil {
+		return false
+	}
+	_, exists := rc.entries.Get(path)
+	return exists
+}
+
 // Check returns the cached entry if the file content is unchanged.
 // Returns (entry, true) if cached with same hash, (zero, false) otherwise.
 func (rc *ReadCache) Check(path string, contentHash string) (ReadCacheEntry, bool) {
@@ -219,6 +230,17 @@ func (pe *PhaseEnforcer) NudgesSent() int {
 		return 0
 	}
 	return pe.nudgeCount
+}
+
+// ResetReadProgress resets the read-only iteration counter and nudge
+// count. Call this when the agent made discovery progress (read new
+// files) so the enforcer stops treating it as stuck in a loop.
+func (pe *PhaseEnforcer) ResetReadProgress() {
+	if pe == nil || pe.editSeen {
+		return
+	}
+	pe.readOnlyIters = 0
+	pe.nudgeCount = 0
 }
 
 // ShouldBlockReads returns true when 2+ nudges have been sent and ignored,

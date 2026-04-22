@@ -256,6 +256,16 @@ func isEditTool(name string) bool {
 	return name == "Edit" || name == "MultiEdit" || name == "Write"
 }
 
+// ResetReadProgress resets the read-only iteration counter. Call this
+// when the agent made discovery progress (read new files) so it isn't
+// penalised for legitimate exploration of a large codebase.
+func (e *EditEnforcer) ResetReadProgress() {
+	if e == nil || e.editSeen {
+		return
+	}
+	e.readOnlyIters = 0
+}
+
 // ConfirmEdit marks the enforcer as having seen a successful edit.
 // Call this after tool execution, only for edit tools whose results
 // indicate success (no error). A failed Edit should not disarm enforcement.
@@ -546,10 +556,8 @@ func budgetWarningMessage(pctInt int, remaining float64) string {
 		pctInt, remaining)
 }
 
-func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter, editDeadline int, m *metrics.Metrics, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
-	var lastContent string
-	var repeat RepeatTracker
-	var loopDetector LoopDetector
+// initToolLoopEnforcers creates and attaches edit/phase enforcers to the context.
+func initToolLoopEnforcers(ctx context.Context, editDeadline int) (context.Context, *EditEnforcer, *PhaseEnforcer) {
 	editEnforcer := NewEditEnforcer(editDeadline)
 	if editEnforcer != nil {
 		ctx = SetEditEnforcer(ctx, editEnforcer)
@@ -558,6 +566,44 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 	if phaseEnforcer != nil {
 		ctx = SetPhaseEnforcer(ctx, phaseEnforcer)
 	}
+	return ctx, editEnforcer, phaseEnforcer
+}
+
+// postExecutionResult holds the outcome of post-execution tracking.
+type postExecutionResult struct {
+	newFilesRead bool
+	stuck        bool
+}
+
+// trackPostExecution handles edit confirmation, grace period checks, cache tracking,
+// and loop detection after tool calls have been executed.
+func trackPostExecution(ctx context.Context, messages []llms.MessageContent, mergedToolCalls []llms.ToolCall, editEnforcer *EditEnforcer, phaseEnforcer *PhaseEnforcer, loopDetector *LoopDetector, grace *graceState, cacheSizeBefore int) postExecutionResult {
+	toolResults := extractToolResults(messages)
+	editEnforcer.ConfirmEdit(mergedToolCalls, toolResults)
+	phaseEnforcer.ConfirmEdit(mergedToolCalls, toolResults)
+	resetCacheStreakOnEdit(ctx, mergedToolCalls, toolResults)
+
+	grace.checkEditFailure(ctx, mergedToolCalls, toolResults)
+	grace.tryReenableReads(ctx, editEnforcer)
+
+	newFilesRead := false
+	if rc := GetReadCache(ctx); rc != nil {
+		newFilesRead = rc.Len() > cacheSizeBefore
+	}
+	if newFilesRead {
+		editEnforcer.ResetReadProgress()
+		phaseEnforcer.ResetReadProgress()
+	}
+
+	loopDetector.Record(mergedToolCalls, toolResults)
+	return postExecutionResult{newFilesRead: newFilesRead, stuck: loopDetector.Stuck()}
+}
+
+func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter, editDeadline int, m *metrics.Metrics, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
+	var lastContent string
+	var repeat RepeatTracker
+	var loopDetector LoopDetector
+	ctx, editEnforcer, phaseEnforcer := initToolLoopEnforcers(ctx, editDeadline)
 	budgetWarned := make([]bool, len(budgetWarningThresholds))
 	var grace graceState
 	ctx = setGraceState(ctx, &grace)
@@ -605,24 +651,17 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		}
 
 		messages = appendToolCallMessage(messages, mergedContent, mergedToolCalls, ctx)
+
+		// Snapshot cache size before execution to detect new file reads.
+		cacheSizeBefore := 0
+		if rc := GetReadCache(ctx); rc != nil {
+			cacheSizeBefore = rc.Len()
+		}
+
 		messages = executeToolCalls(ctx, messages, mergedToolCalls, handlers)
 
-		// Confirm edits only after execution succeeds — a failed Edit
-		// (e.g. "text not found") must not disarm enforcement.
-		toolResults := extractToolResults(messages)
-		editEnforcer.ConfirmEdit(mergedToolCalls, toolResults)
-		phaseEnforcer.ConfirmEdit(mergedToolCalls, toolResults)
-		resetCacheStreakOnEdit(ctx, mergedToolCalls, toolResults)
-
-		// Check for Edit failures during grace period — if an Edit
-		// failed with "text not found", temporarily re-enable reads
-		// so the agent can re-read and retry.
-		grace.checkEditFailure(ctx, mergedToolCalls, toolResults)
-		grace.tryReenableReads(ctx, editEnforcer)
-
-		// Feed tool results into loop detector.
-		loopDetector.Record(mergedToolCalls, toolResults)
-		if loopDetector.Stuck() {
+		postResult := trackPostExecution(ctx, messages, mergedToolCalls, editEnforcer, phaseEnforcer, &loopDetector, &grace, cacheSizeBefore)
+		if postResult.stuck {
 			logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results, stopping")
 			return lastContent, messages, ErrLoopDetected, false
 		}
@@ -633,7 +672,11 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		}
 
 		toolNames := extractToolNames(mergedToolCalls)
-		messages = injectPhaseNudge(ctx, phaseEnforcer, toolNames, messages, i)
+		// Skip phase nudge when the agent read new files — that's
+		// discovery progress, not a read loop.
+		if !postResult.newFilesRead {
+			messages = injectPhaseNudge(ctx, phaseEnforcer, toolNames, messages, i)
+		}
 		messages = injectBudgetWarnings(ctx, m, budgetWarned, messages)
 		messages = rollingCompact(ctx, messages, i)
 		messages = compactMessages(ctx, messages, m)
@@ -1216,6 +1259,52 @@ func applyFileClassification(content string, lineCount, dataLen int, prefix stri
 	}
 }
 
+// checkReadCache checks whether the file content is already cached and returns
+// a cached response if so. Returns ("", false) when the caller should proceed
+// with normal content delivery (cache miss or stale-after-compaction re-serve).
+func checkReadCache(ctx context.Context, resolvedPath, displayPath string, data []byte, lineCount int) (string, bool) {
+	rc := GetReadCache(ctx)
+	if rc == nil {
+		return "", false
+	}
+	hash := HashContent(data)
+	entry, hit := rc.Check(resolvedPath, hash)
+	if !hit {
+		summary := GenerateFileSummary(string(data))
+		rc.Store(resolvedPath, hash, lineCount, len(data), GetIteration(ctx), summary)
+		return "", false
+	}
+	// If compaction evicted this content, re-serve it.
+	if rc.IsStaleAfterCompaction(entry) {
+		logging.InfoContext(ctx, "  → Read %s [cache hit but content compacted — re-serving full content]", displayPath)
+		summary := GenerateFileSummary(string(data))
+		rc.Store(resolvedPath, hash, lineCount, len(data), GetIteration(ctx), summary)
+		return "", false
+	}
+	streak := rc.IncrementStreak()
+	logReadCacheHit(ctx, displayPath, entry)
+
+	// Circuit breaker: after too many consecutive cache hits, hard block.
+	if streak >= cacheHitStreakThreshold {
+		return fmt.Sprintf(
+			"[READ LOOP DETECTED — %d consecutive re-reads of cached files. "+
+				"Read is disabled until you make an Edit or Write call. "+
+				"File '%s' unchanged since iteration %d (%d lines). "+
+				"Use your notes to write Edit calls NOW.]",
+			streak, displayPath, entry.Iteration, entry.Lines), true
+	}
+
+	// Normal cache hit: return metadata stub only — no content.
+	summaryHint := ""
+	if entry.Summary != "" {
+		summaryHint = " Content summary: " + entry.Summary + "."
+	}
+	return fmt.Sprintf(
+		"[CACHE HIT — file '%s' unchanged since iteration %d (%d lines, %d bytes).%s "+
+			"Content was already provided. Write edits from your notes — do NOT re-read.]",
+		displayPath, entry.Iteration, entry.Lines, entry.Bytes, summaryHint), true
+}
+
 func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (string, error) {
 	type args struct {
 		Path   string `json:"path"`
@@ -1228,18 +1317,24 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 			return "", fmt.Errorf("invalid args: %w", err)
 		}
 
-		// Block reads when edit enforcement or phase nudges indicate the model
-		// is stuck in a read loop and should be editing instead.
-		if shouldBlockReadTools(ctx) {
-			logging.InfoContext(ctx, "blocking Read call — too many read-only iterations, no edits made")
-			return "READ BLOCKED — The Read tool is disabled until you call Edit or Write.\n\n" +
-				"You have spent too many iterations reading without making edits. " +
-				"Use the file contents and summaries from your previous reads to construct Edit calls NOW.", nil
-		}
-
 		path, err := ResolvePath(workingDir, payload.Path)
 		if err != nil {
 			return "", err
+		}
+
+		// Block reads when edit enforcement or phase nudges indicate the model
+		// is stuck in a read loop and should be editing instead.
+		// However, allow reads of files the agent has NEVER read before —
+		// reading a new file is discovery progress, not a loop.
+		if shouldBlockReadTools(ctx) {
+			rc := GetReadCache(ctx)
+			if rc == nil || rc.Has(path) {
+				logging.InfoContext(ctx, "blocking Read call — too many read-only iterations, no edits made")
+				return "READ BLOCKED — The Read tool is disabled until you call Edit or Write.\n\n" +
+					"You have spent too many iterations reading without making edits. " +
+					"Use the file contents and summaries from your previous reads to construct Edit calls NOW.", nil
+			}
+			logging.InfoContext(ctx, "allowing Read of new file %s despite read blocking", payload.Path)
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -1258,48 +1353,9 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 
 		lineCount := strings.Count(string(data), "\n") + 1
 
-		// Check read cache for duplicate reads. On a normal cache hit,
-		// return only metadata to avoid token waste. However, if context
-		// compaction has occurred since the entry was stored, the file
-		// content has been evicted from the conversation — serve the full
-		// content again so the agent can construct valid Edit calls.
-		if rc := GetReadCache(ctx); rc != nil {
-			hash := HashContent(data)
-			if entry, hit := rc.Check(path, hash); hit {
-				// If compaction evicted this content, re-serve it.
-				if rc.IsStaleAfterCompaction(entry) {
-					logging.InfoContext(ctx, "  → Read %s [cache hit but content compacted — re-serving full content]", payload.Path)
-					summary := GenerateFileSummary(string(data))
-					rc.Store(path, hash, lineCount, len(data), GetIteration(ctx), summary)
-					// Fall through to normal content delivery below.
-				} else {
-					streak := rc.IncrementStreak()
-					logReadCacheHit(ctx, payload.Path, entry)
-
-					// Circuit breaker: after too many consecutive cache hits, hard block.
-					if streak >= cacheHitStreakThreshold {
-						return fmt.Sprintf(
-							"[READ LOOP DETECTED — %d consecutive re-reads of cached files. "+
-								"Read is disabled until you make an Edit or Write call. "+
-								"File '%s' unchanged since iteration %d (%d lines). "+
-								"Use your notes to write Edit calls NOW.]",
-							streak, payload.Path, entry.Iteration, entry.Lines), nil
-					}
-
-					// Normal cache hit: return metadata stub only — no content.
-					summaryHint := ""
-					if entry.Summary != "" {
-						summaryHint = " Content summary: " + entry.Summary + "."
-					}
-					return fmt.Sprintf(
-						"[CACHE HIT — file '%s' unchanged since iteration %d (%d lines, %d bytes).%s "+
-							"Content was already provided. Write edits from your notes — do NOT re-read.]",
-						payload.Path, entry.Iteration, entry.Lines, entry.Bytes, summaryHint), nil
-				}
-			} else {
-				summary := GenerateFileSummary(string(data))
-				rc.Store(path, hash, lineCount, len(data), GetIteration(ctx), summary)
-			}
+		// Check read cache for duplicate reads.
+		if cached, ok := checkReadCache(ctx, path, payload.Path, data, lineCount); ok {
+			return cached, nil
 		}
 
 		// Smart truncation for large files.
@@ -1439,11 +1495,8 @@ func globTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		Pattern string `json:"pattern"`
 	}
 	return func(ctx context.Context, rawArgs []byte) (string, error) {
-		// Block glob when the model is stuck reading without editing.
-		if shouldBlockReadTools(ctx) {
-			logging.InfoContext(ctx, "blocking Glob call — too many read-only iterations, no edits made")
-			return "GLOB BLOCKED — too many read-only iterations. Call Edit or Write first.", nil
-		}
+		// Glob is a discovery tool — never blocked by the phase/edit enforcers.
+		// The repeat tracker already caps identical Glob calls.
 
 		var payload args
 		if err := json.Unmarshal(rawArgs, &payload); err != nil {
@@ -1502,11 +1555,8 @@ func grepTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		Path    string `json:"path"`
 	}
 	return func(ctx context.Context, rawArgs []byte) (string, error) {
-		// Block grep when the model is stuck reading without editing.
-		if shouldBlockReadTools(ctx) {
-			logging.InfoContext(ctx, "blocking Grep call — too many read-only iterations, no edits made")
-			return "GREP BLOCKED — too many read-only iterations. Call Edit or Write first.", nil
-		}
+		// Grep is a discovery tool — never blocked by the phase/edit enforcers.
+		// The repeat tracker already caps identical Grep calls.
 
 		var payload args
 		if err := json.Unmarshal(rawArgs, &payload); err != nil {

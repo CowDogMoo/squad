@@ -1005,6 +1005,88 @@ func TestShouldBlockReadToolsGraceOverride(t *testing.T) {
 	}
 }
 
+func TestEditEnforcerResetReadProgress(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reset clears read-only counter and unblocks", func(t *testing.T) {
+		t.Parallel()
+		e := NewEditEnforcer(6)
+		// Simulate 3 read-only iterations → at threshold (deadline/2=3).
+		e.CheckNames([]string{"Read"})
+		e.CheckNames([]string{"Read"})
+		e.CheckNames([]string{"Read"})
+		if !e.ShouldBlockReads() {
+			t.Fatal("should block at threshold")
+		}
+		// Reset zeroes the counter.
+		e.ResetReadProgress()
+		if e.ShouldBlockReads() {
+			t.Fatal("should not block after reset")
+		}
+		// After reset, needs another full half-deadline to re-block.
+		e.CheckNames([]string{"Read"})
+		e.CheckNames([]string{"Read"})
+		if e.ShouldBlockReads() {
+			t.Fatal("should not block before reaching threshold again")
+		}
+		e.CheckNames([]string{"Read"}) // 3rd → at threshold again
+		if !e.ShouldBlockReads() {
+			t.Fatal("should block again after reaching threshold post-reset")
+		}
+	})
+
+	t.Run("reset on fresh enforcer is safe", func(t *testing.T) {
+		t.Parallel()
+		e := NewEditEnforcer(6)
+		e.ResetReadProgress()
+		if e.ShouldBlockReads() {
+			t.Fatal("should not block with zero iterations")
+		}
+	})
+
+	t.Run("reset is no-op after edit confirmed", func(t *testing.T) {
+		t.Parallel()
+		e := NewEditEnforcer(4)
+		e.CheckNames([]string{"Read"})
+		e.CheckNames([]string{"Read"})
+		e.ConfirmEdit([]llms.ToolCall{{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Edit"}}}, map[string]string{"1": "ok"})
+		e.ResetReadProgress()
+		if e.ShouldBlockReads() {
+			t.Fatal("should not block after confirmed edit")
+		}
+	})
+
+	t.Run("nil enforcer reset is safe", func(t *testing.T) {
+		t.Parallel()
+		var e *EditEnforcer
+		e.ResetReadProgress() // should not panic
+	})
+}
+
+func TestReadCacheHas(t *testing.T) {
+	t.Parallel()
+	rc := NewReadCache()
+
+	if rc.Has("/foo.go") {
+		t.Fatal("empty cache should not have any path")
+	}
+
+	rc.Store("/foo.go", "hash1", 100, 2000, 1, "")
+	if !rc.Has("/foo.go") {
+		t.Fatal("cache should have stored path")
+	}
+
+	if rc.Has("/bar.go") {
+		t.Fatal("cache should not have unstored path")
+	}
+
+	// Nil cache.
+	var nilRC *ReadCache
+	if nilRC.Has("/foo.go") {
+		t.Fatal("nil cache should not have any path")
+	}
+}
+
 func TestRunWithToolsLoop(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hello"), 0o644); err != nil {
@@ -2621,7 +2703,7 @@ func TestReadToolBlockedByEditEnforcer(t *testing.T) {
 	}
 }
 
-func TestGlobToolBlockedByEditEnforcer(t *testing.T) {
+func TestGlobToolNotBlockedByEditEnforcer(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("content"), 0o644); err != nil {
@@ -2629,23 +2711,27 @@ func TestGlobToolBlockedByEditEnforcer(t *testing.T) {
 	}
 
 	e := NewEditEnforcer(5)
-	// threshold = 5-2 = 3; need 3 read-only iterations
+	// Push past blocking threshold.
 	e.CheckNames([]string{"Read"})
 	e.CheckNames([]string{"Glob"})
 	e.CheckNames([]string{"Read"})
 	ctx := SetEditEnforcer(context.Background(), e)
 
+	// Glob is a discovery tool — should never be blocked.
 	glob := globTool(dir)
 	out, err := glob(ctx, []byte(`{"pattern":"*.txt"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(out, "GLOB BLOCKED") {
-		t.Fatalf("expected GLOB BLOCKED, got: %s", out)
+	if strings.Contains(out, "BLOCKED") {
+		t.Fatalf("Glob should not be blocked, got: %s", out)
+	}
+	if !strings.Contains(out, "f.txt") {
+		t.Fatalf("expected f.txt in output, got: %s", out)
 	}
 }
 
-func TestGrepToolBlockedByEditEnforcer(t *testing.T) {
+func TestGrepToolNotBlockedByEditEnforcer(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("findme"), 0o644); err != nil {
@@ -2653,19 +2739,23 @@ func TestGrepToolBlockedByEditEnforcer(t *testing.T) {
 	}
 
 	e := NewEditEnforcer(5)
-	// threshold = 5-2 = 3; need 3 read-only iterations
+	// Push past blocking threshold.
 	e.CheckNames([]string{"Read"})
 	e.CheckNames([]string{"Grep"})
 	e.CheckNames([]string{"Read"})
 	ctx := SetEditEnforcer(context.Background(), e)
 
+	// Grep is a discovery tool — should never be blocked.
 	grep := grepTool(dir)
 	out, err := grep(ctx, []byte(`{"pattern":"findme","path":"."}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(out, "GREP BLOCKED") {
-		t.Fatalf("expected GREP BLOCKED, got: %s", out)
+	if strings.Contains(out, "BLOCKED") {
+		t.Fatalf("Grep should not be blocked, got: %s", out)
+	}
+	if !strings.Contains(out, "findme") {
+		t.Fatalf("expected findme in output, got: %s", out)
 	}
 }
 

@@ -194,6 +194,50 @@ func TestPhaseEnforcerFailedEditDoesNotDisarm(t *testing.T) {
 	}
 }
 
+func TestPhaseEnforcerResetReadProgress(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reset unblocks reads after 2 nudges", func(t *testing.T) {
+		t.Parallel()
+		pe := NewPhaseEnforcer(3)
+		// Drive to 2 nudges (6 read-only iterations) → ShouldBlockReads.
+		for i := 0; i < 6; i++ {
+			pe.ObserveTools([]string{"Read"})
+		}
+		if !pe.ShouldBlockReads() {
+			t.Fatal("should block after 2 nudges")
+		}
+
+		// Reset clears both counters — agent is making discovery progress.
+		pe.ResetReadProgress()
+		if pe.ShouldBlockReads() {
+			t.Fatal("should not block after reset")
+		}
+		// After reset, needs another full cycle of nudges to re-block.
+		pe.ObserveTools([]string{"Read"})
+		pe.ObserveTools([]string{"Read"})
+		pe.ObserveTools([]string{"Read"}) // first nudge
+		if pe.ShouldBlockReads() {
+			t.Fatal("should not block after only 1 nudge post-reset")
+		}
+	})
+
+	t.Run("reset on fresh enforcer is safe", func(t *testing.T) {
+		t.Parallel()
+		pe := NewPhaseEnforcer(3)
+		pe.ResetReadProgress() // readOnlyIters already 0
+		if pe.ShouldBlockReads() {
+			t.Fatal("should not block with zero iterations")
+		}
+	})
+
+	t.Run("nil enforcer reset is safe", func(t *testing.T) {
+		t.Parallel()
+		var pe *PhaseEnforcer
+		pe.ResetReadProgress() // should not panic
+	})
+}
+
 func TestPhaseEnforcerDisabled(t *testing.T) {
 	pe := NewPhaseEnforcer(0)
 	if pe != nil {
