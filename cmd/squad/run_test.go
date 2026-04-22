@@ -879,7 +879,8 @@ func TestComposedDryRun(t *testing.T) {
 			{Name: "fix", Agent: "fixer", DependsOn: []string{"analyze"}, Mode: "edit"},
 		},
 		Gates: []agent.ComposedGate{
-			{After: "fix", Command: "go test ./...", OnFailure: "stop"},
+			{After: "analyze", Command: "go vet ./..."},
+			{After: "fix", Command: "go test ./...", OnFailure: "revert"},
 		},
 	}
 
@@ -912,8 +913,68 @@ func TestComposedDryRun(t *testing.T) {
 	if !strings.Contains(output, "depends_on: analyze") {
 		t.Error("expected dependency info in output")
 	}
-	if !strings.Contains(output, "go test ./...") {
-		t.Error("expected gate command in output")
+	if !strings.Contains(output, "go vet ./...") {
+		t.Error("expected first gate command in output")
+	}
+	if !strings.Contains(output, "on_failure=stop") {
+		t.Error("expected default on_failure=stop for gate without OnFailure")
+	}
+	if !strings.Contains(output, "on_failure=revert") {
+		t.Error("expected on_failure=revert for second gate")
+	}
+}
+
+func TestComposedDryRun_NoGates(t *testing.T) {
+	manifest := &agent.Manifest{
+		Name:    "no-gates",
+		Version: "1.0",
+		Stages:  []agent.ComposedStage{{Name: "s1", Agent: "a1"}},
+	}
+
+	p, err := runner.ManifestToPipeline(manifest)
+	if err != nil {
+		t.Fatalf("ManifestToPipeline: %v", err)
+	}
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := composedDryRun(cmd, manifest, p); err != nil {
+		t.Fatalf("composedDryRun: %v", err)
+	}
+
+	if strings.Contains(buf.String(), "Gates:") {
+		t.Error("should not print Gates section when there are none")
+	}
+}
+
+func TestComposedDryRun_ExplicitMode(t *testing.T) {
+	// Stage with explicit mode set (not default "edit").
+	manifest := &agent.Manifest{
+		Name:    "mode-test",
+		Version: "1.0",
+		Stages: []agent.ComposedStage{
+			{Name: "s1", Agent: "a1", Mode: "readonly"},
+		},
+	}
+
+	p, err := runner.ManifestToPipeline(manifest)
+	if err != nil {
+		t.Fatalf("ManifestToPipeline: %v", err)
+	}
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := composedDryRun(cmd, manifest, p); err != nil {
+		t.Fatalf("composedDryRun: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "mode=readonly") {
+		t.Error("expected mode=readonly in output")
 	}
 }
 

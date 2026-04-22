@@ -289,6 +289,23 @@ func TestResolveAgentsDirFromConfig(t *testing.T) {
 			t.Fatal("expected error with empty config, got nil")
 		}
 	})
+
+	t.Run("config with local path returns path", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := t.TempDir()
+		cfg := &config.Config{
+			Agents: config.AgentsConfig{
+				LocalPaths: []string{agentsDir},
+			},
+		}
+		result, err := resolveAgentsDirFromConfig(cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == "" {
+			t.Fatal("expected non-empty path")
+		}
+	})
 }
 
 func TestFindAgentDirForComposed(t *testing.T) {
