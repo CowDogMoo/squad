@@ -347,6 +347,62 @@ func TestValidate_ComposedPartitionRequiresSingleAgent(t *testing.T) {
 	}
 }
 
+func TestValidate_ComposedPartitionInvalidBy(t *testing.T) {
+	m := &Manifest{
+		Name: "bad",
+		Stages: []ComposedStage{
+			{
+				Name:      "s1",
+				Agent:     "a1",
+				Partition: &ComposedPartition{By: "lines", Glob: "*.go"},
+			},
+		},
+	}
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid partition.by")
+	}
+	if !strings.Contains(err.Error(), "partition.by must be") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_ComposedPartitionMissingGlob(t *testing.T) {
+	m := &Manifest{
+		Name: "bad",
+		Stages: []ComposedStage{
+			{
+				Name:      "s1",
+				Agent:     "a1",
+				Partition: &ComposedPartition{By: "files"},
+			},
+		},
+	}
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("expected error for missing partition.glob")
+	}
+	if !strings.Contains(err.Error(), "partition.glob is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_ComposedStageNameRequired(t *testing.T) {
+	m := &Manifest{
+		Name: "bad",
+		Stages: []ComposedStage{
+			{Agent: "a1"},
+		},
+	}
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("expected error for stage without name")
+	}
+	if !strings.Contains(err.Error(), "name is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidate_LeafValid(t *testing.T) {
 	m := &Manifest{
 		Name:       "leaf",
