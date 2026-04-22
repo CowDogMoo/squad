@@ -377,13 +377,10 @@ func (gs *graceState) tryReenableReads(ctx context.Context, enforcer *EditEnforc
 // shouldBlockReadTools returns true when Read/Glob/Grep should be blocked
 // because the agent has spent too many iterations reading without editing.
 // Checks both EditEnforcer (hard deadline) and PhaseEnforcer (nudge-based).
-// Returns false for readonly agents (no EditEnforcer).
+// Either enforcer can independently trigger blocking.
 func shouldBlockReadTools(ctx context.Context) bool {
 	e := GetEditEnforcer(ctx)
-	if e == nil {
-		return false // no edit enforcement = readonly agent
-	}
-	if e.ShouldBlockReads() {
+	if e != nil && e.ShouldBlockReads() {
 		return true
 	}
 	pe := GetPhaseEnforcer(ctx)

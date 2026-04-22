@@ -2452,6 +2452,31 @@ func TestShouldBlockReads(t *testing.T) {
 	})
 }
 
+func TestShouldBlockReadToolsPhaseEnforcerOnly(t *testing.T) {
+	t.Parallel()
+
+	// When no EditEnforcer is set but PhaseEnforcer has sent 2+ nudges,
+	// shouldBlockReadTools must still return true.
+	ctx := context.Background()
+	pe := NewPhaseEnforcer(2) // nudge after 2 read-only iters
+	ctx = SetPhaseEnforcer(ctx, pe)
+	// No EditEnforcer on context — simulates edit_deadline: 0
+
+	// 2 read-only iterations → first nudge (nudgeCount=1)
+	pe.ObserveTools([]string{"Read"})
+	pe.ObserveTools([]string{"Read"})
+	if shouldBlockReadTools(ctx) {
+		t.Fatal("should not block after first nudge")
+	}
+
+	// 2 more → second nudge (nudgeCount=2) → should block
+	pe.ObserveTools([]string{"Read"})
+	pe.ObserveTools([]string{"Read"})
+	if !shouldBlockReadTools(ctx) {
+		t.Fatal("PhaseEnforcer should block reads independently when no EditEnforcer is set")
+	}
+}
+
 func TestEditEnforcerContext(t *testing.T) {
 	t.Parallel()
 
