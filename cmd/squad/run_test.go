@@ -1019,6 +1019,128 @@ stages:
 	}
 }
 
+func TestRunComposedAgent_ExecutionPath(t *testing.T) {
+	t.Parallel()
+
+	// Create a composed agent whose sub-agent exists on disk.
+	// Execution will fail at model invocation but exercises the full
+	// setup path: config, prompt, workingDir, vars, runner construction.
+	baseDir := t.TempDir()
+
+	// Create the sub-agent.
+	subDir := filepath.Join(baseDir, "agents", "leaf-agent")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "agent.yaml"),
+		[]byte("name: leaf-agent\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "system.md"), []byte("sys"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "agent.md"), []byte("wrap"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create the composed agent.
+	composedDir := filepath.Join(baseDir, "agents", "composed-exec")
+	if err := os.MkdirAll(composedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	composedManifest := `
+name: composed-exec
+version: "1.0"
+
+stages:
+  - name: s1
+    agent: leaf-agent
+`
+	if err := os.WriteFile(filepath.Join(composedDir, "agent.yaml"), []byte(composedManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(baseDir, "agents")
+
+	v := viper.New()
+	v.Set("run.agent", "composed-exec")
+	v.Set("run.agents_dir", agentsDir)
+
+	cmd := newRunCmd()
+	ctx := withViper(context.Background(), v)
+	ctx = withConfig(ctx, config.Defaults())
+	cmd.SetContext(ctx)
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	if err := cmd.Flags().Set("agent", "composed-exec"); err != nil {
+		t.Fatalf("Set agent: %v", err)
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatalf("Set agents-dir: %v", err)
+	}
+	if err := cmd.Flags().Set("working-dir", t.TempDir()); err != nil {
+		t.Fatalf("Set working-dir: %v", err)
+	}
+
+	// Run will fail at model invocation (no real provider) — that's expected.
+	// We're testing the setup path, not the model call.
+	err := cmd.RunE(cmd, []string{"test prompt"})
+	if err == nil {
+		t.Fatal("expected error from model invocation")
+	}
+	// Should NOT fail at config/setup level.
+	if strings.Contains(err.Error(), "config not available") {
+		t.Fatalf("setup failed unexpectedly: %v", err)
+	}
+}
+
+func TestRunComposedAgent_StdinPrompt(t *testing.T) {
+	t.Parallel()
+	manifest := `
+name: test-stdin
+version: "1.0"
+
+stages:
+  - name: s1
+    agent: a1
+`
+	agentsDir := setupTestAgent(t, "test-stdin", manifest, nil)
+
+	v := viper.New()
+	v.Set("run.agent", "test-stdin")
+	v.Set("run.agents_dir", agentsDir)
+
+	cmd := newRunCmd()
+	ctx := withViper(context.Background(), v)
+	ctx = withConfig(ctx, config.Defaults())
+	cmd.SetContext(ctx)
+
+	// Provide piped input via a buffer.
+	cmd.SetIn(bytes.NewBufferString("piped prompt content"))
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := cmd.Flags().Set("agent", "test-stdin"); err != nil {
+		t.Fatalf("Set agent: %v", err)
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatalf("Set agents-dir: %v", err)
+	}
+	if err := cmd.Flags().Set("dry-run", "true"); err != nil {
+		t.Fatalf("Set dry-run: %v", err)
+	}
+
+	// dry-run with stdin — exercises the prompt reading path.
+	err := cmd.RunE(cmd, nil)
+	if err != nil {
+		t.Fatalf("RunE: %v", err)
+	}
+}
+
 func TestInitConfigMissingConfigFlag(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
@@ -1029,5 +1151,210 @@ func TestInitConfigMissingConfigFlag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to read config flag") {
 		t.Fatalf("error = %q, want config flag error", err.Error())
+	}
+}
+
+func TestParseVars(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   []string
+		wantNil bool
+		wantLen int
+		wantKey string
+		wantVal string
+	}{
+		{"nil", nil, true, 0, "", ""},
+		{"empty", []string{}, true, 0, "", ""},
+		{"single", []string{"FOO=bar"}, false, 1, "FOO", "bar"},
+		{"multiple", []string{"A=1", "B=2"}, false, 2, "A", "1"},
+		{"value with equals", []string{"CMD=echo a=b"}, false, 1, "CMD", "echo a=b"},
+		{"no equals skipped", []string{"INVALID"}, false, 0, "", ""},
+		{"empty key skipped", []string{"=value"}, false, 0, "", ""},
+		{"mixed valid and invalid", []string{"GOOD=val", "BAD"}, false, 1, "GOOD", "val"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := parseVars(tt.input)
+			if tt.wantNil {
+				if result != nil {
+					t.Fatalf("expected nil, got %v", result)
+				}
+				return
+			}
+			if len(result) != tt.wantLen {
+				t.Fatalf("len = %d, want %d", len(result), tt.wantLen)
+			}
+			if tt.wantKey != "" {
+				if result[tt.wantKey] != tt.wantVal {
+					t.Fatalf("result[%q] = %q, want %q", tt.wantKey, result[tt.wantKey], tt.wantVal)
+				}
+			}
+		})
+	}
+}
+
+func TestRunComposedAgent_NoConfig(t *testing.T) {
+	t.Parallel()
+	manifest := `
+name: test-composed
+version: "1.0"
+
+stages:
+  - name: s1
+    agent: a1
+`
+	agentsDir := setupTestAgent(t, "test-composed", manifest, nil)
+
+	v := viper.New()
+	v.Set("run.agent", "test-composed")
+	v.Set("run.agents_dir", agentsDir)
+
+	cmd := newRunCmd()
+	ctx := withViper(context.Background(), v)
+	// Do NOT set config — this should trigger "config not available" error.
+	cmd.SetContext(ctx)
+
+	if err := cmd.Flags().Set("agent", "test-composed"); err != nil {
+		t.Fatalf("Set agent: %v", err)
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatalf("Set agents-dir: %v", err)
+	}
+
+	err := cmd.RunE(cmd, nil)
+	if err == nil {
+		t.Fatal("expected error for missing config")
+	}
+	if !strings.Contains(err.Error(), "config not available") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunComposedAgent_WithPromptArgs(t *testing.T) {
+	t.Parallel()
+	manifest := `
+name: test-composed
+version: "1.0"
+
+stages:
+  - name: s1
+    agent: a1
+`
+	agentsDir := setupTestAgent(t, "test-composed", manifest, nil)
+
+	v := viper.New()
+	v.Set("run.agent", "test-composed")
+	v.Set("run.agents_dir", agentsDir)
+
+	cmd := newRunCmd()
+	ctx := withViper(context.Background(), v)
+	ctx = withConfig(ctx, config.Defaults())
+	cmd.SetContext(ctx)
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := cmd.Flags().Set("agent", "test-composed"); err != nil {
+		t.Fatalf("Set agent: %v", err)
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatalf("Set agents-dir: %v", err)
+	}
+	if err := cmd.Flags().Set("dry-run", "true"); err != nil {
+		t.Fatalf("Set dry-run: %v", err)
+	}
+
+	// Pass args (prompt) through to the composed agent dry-run.
+	err := cmd.RunE(cmd, []string{"audit", "this", "repo"})
+	if err != nil {
+		t.Fatalf("RunE: %v", err)
+	}
+	if !strings.Contains(buf.String(), "test-composed") {
+		t.Error("expected agent name in output")
+	}
+}
+
+func TestRunComposedAgent_WithWorkingDir(t *testing.T) {
+	t.Parallel()
+	manifest := `
+name: test-composed
+version: "1.0"
+
+stages:
+  - name: s1
+    agent: a1
+`
+	agentsDir := setupTestAgent(t, "test-composed", manifest, nil)
+
+	v := viper.New()
+	v.Set("run.agent", "test-composed")
+	v.Set("run.agents_dir", agentsDir)
+
+	cmd := newRunCmd()
+	ctx := withViper(context.Background(), v)
+	ctx = withConfig(ctx, config.Defaults())
+	cmd.SetContext(ctx)
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := cmd.Flags().Set("agent", "test-composed"); err != nil {
+		t.Fatalf("Set agent: %v", err)
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatalf("Set agents-dir: %v", err)
+	}
+	if err := cmd.Flags().Set("working-dir", t.TempDir()); err != nil {
+		t.Fatalf("Set working-dir: %v", err)
+	}
+	if err := cmd.Flags().Set("dry-run", "true"); err != nil {
+		t.Fatalf("Set dry-run: %v", err)
+	}
+
+	err := cmd.RunE(cmd, nil)
+	if err != nil {
+		t.Fatalf("RunE: %v", err)
+	}
+}
+
+func TestRunComposedAgent_WithVars(t *testing.T) {
+	t.Parallel()
+	manifest := `
+name: test-composed
+version: "1.0"
+
+stages:
+  - name: s1
+    agent: a1
+`
+	agentsDir := setupTestAgent(t, "test-composed", manifest, nil)
+
+	v := viper.New()
+	v.Set("run.agent", "test-composed")
+	v.Set("run.agents_dir", agentsDir)
+
+	cmd := newRunCmd()
+	ctx := withViper(context.Background(), v)
+	ctx = withConfig(ctx, config.Defaults())
+	cmd.SetContext(ctx)
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := cmd.Flags().Set("agent", "test-composed"); err != nil {
+		t.Fatalf("Set agent: %v", err)
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatalf("Set agents-dir: %v", err)
+	}
+	if err := cmd.Flags().Set("dry-run", "true"); err != nil {
+		t.Fatalf("Set dry-run: %v", err)
+	}
+
+	err := cmd.RunE(cmd, nil)
+	if err != nil {
+		t.Fatalf("RunE: %v", err)
 	}
 }

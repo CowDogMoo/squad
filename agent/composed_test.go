@@ -133,7 +133,7 @@ func TestValidate_ComposedNoAgents(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for stage with no agents")
 	}
-	if !strings.Contains(err.Error(), "must specify agent or agents") {
+	if !strings.Contains(err.Error(), "must specify agent, agents, or inline entrypoint") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -151,6 +151,80 @@ func TestValidate_ComposedBothAgentAndAgents(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cannot specify both") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_ComposedInlineValid(t *testing.T) {
+	m := &Manifest{
+		Name: "inline-ok",
+		Stages: []ComposedStage{
+			{Name: "s1", EntryPoint: "system.md", Wrapper: "agent.md"},
+		},
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_ComposedInlineMissingWrapper(t *testing.T) {
+	m := &Manifest{
+		Name: "inline-bad",
+		Stages: []ComposedStage{
+			{Name: "s1", EntryPoint: "system.md"},
+		},
+	}
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("expected error for inline without wrapper")
+	}
+	if !strings.Contains(err.Error(), "requires wrapper") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_ComposedInlineWithExternalAgent(t *testing.T) {
+	m := &Manifest{
+		Name: "conflict",
+		Stages: []ComposedStage{
+			{Name: "s1", Agent: "a1", EntryPoint: "system.md", Wrapper: "agent.md"},
+		},
+	}
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("expected error for inline with external agent")
+	}
+	if !strings.Contains(err.Error(), "cannot specify both agent/agents and inline entrypoint") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_ComposedInvalidSummarize(t *testing.T) {
+	m := &Manifest{
+		Name: "bad-summarize",
+		Stages: []ComposedStage{
+			{Name: "s1", Agent: "a1", Summarize: "invalid"},
+		},
+	}
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid summarize value")
+	}
+	if !strings.Contains(err.Error(), "summarize must be auto, always, or never") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_ComposedValidSummarize(t *testing.T) {
+	for _, val := range []string{"auto", "always", "never", ""} {
+		m := &Manifest{
+			Name: "ok",
+			Stages: []ComposedStage{
+				{Name: "s1", Agent: "a1", Summarize: val},
+			},
+		}
+		if err := m.Validate(); err != nil {
+			t.Fatalf("summarize=%q: unexpected error: %v", val, err)
+		}
 	}
 }
 
@@ -426,5 +500,32 @@ func TestComposedStage_AgentList(t *testing.T) {
 	multi := ComposedStage{Agents: []string{"a1", "a2", "a3"}}
 	if got := multi.AgentList(); len(got) != 3 {
 		t.Fatalf("multi agent: expected 3, got %d", len(got))
+	}
+
+	// Inline stage uses the stage name as the agent name.
+	inline := ComposedStage{Name: "my-inline", EntryPoint: "system.md"}
+	if got := inline.AgentList(); len(got) != 1 || got[0] != "my-inline" {
+		t.Fatalf("inline agent: expected [my-inline], got %v", got)
+	}
+}
+
+func TestComposedStage_IsInline(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		stage ComposedStage
+		want  bool
+	}{
+		{"not inline", ComposedStage{Agent: "a1"}, false},
+		{"inline with entrypoint", ComposedStage{Name: "s1", EntryPoint: "system.md"}, true},
+		{"empty entrypoint", ComposedStage{Name: "s1"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.stage.IsInline(); got != tt.want {
+				t.Fatalf("IsInline() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

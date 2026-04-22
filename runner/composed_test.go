@@ -220,3 +220,72 @@ func TestManifestToPipeline_TopologicalOrder(t *testing.T) {
 		t.Fatalf("tier 2: expected 'c', got %q", tiers[2][0].Name)
 	}
 }
+
+func TestManifestToPipeline_InlineConfig(t *testing.T) {
+	t.Parallel()
+
+	m := &agent.Manifest{
+		Name:    "inline-test",
+		Version: "v1",
+		Stages: []agent.ComposedStage{
+			{
+				Name:       "inlined",
+				EntryPoint: "system.md",
+				Wrapper:    "agent.md",
+				Task:       "review",
+				References: []string{"ref1.md"},
+				Models: []agent.ModelPreference{
+					{Model: "gpt-4", Provider: "openai"},
+				},
+			},
+		},
+	}
+
+	p, err := ManifestToPipeline(m)
+	if err != nil {
+		t.Fatalf("ManifestToPipeline: %v", err)
+	}
+
+	if len(p.Stages) != 1 {
+		t.Fatalf("expected 1 stage, got %d", len(p.Stages))
+	}
+	s := p.Stages[0]
+	if s.InlineConfig == nil {
+		t.Fatal("expected InlineConfig to be set")
+	}
+	if s.InlineConfig.EntryPoint != "system.md" {
+		t.Fatalf("expected entrypoint system.md, got %q", s.InlineConfig.EntryPoint)
+	}
+	if s.InlineConfig.Wrapper != "agent.md" {
+		t.Fatalf("expected wrapper agent.md, got %q", s.InlineConfig.Wrapper)
+	}
+	if s.InlineConfig.Task != "review" {
+		t.Fatalf("expected task review, got %q", s.InlineConfig.Task)
+	}
+	if len(s.InlineConfig.References) != 1 || s.InlineConfig.References[0] != "ref1.md" {
+		t.Fatalf("expected references [ref1.md], got %v", s.InlineConfig.References)
+	}
+	if len(s.InlineConfig.Models) != 1 || s.InlineConfig.Models[0].Model != "gpt-4" {
+		t.Fatalf("expected model gpt-4, got %v", s.InlineConfig.Models)
+	}
+}
+
+func TestManifestToPipeline_ValidationFailure(t *testing.T) {
+	t.Parallel()
+
+	m := &agent.Manifest{
+		Name:    "bad-pipeline",
+		Version: "v1",
+		Stages: []agent.ComposedStage{
+			{Name: "s1", Agent: "a1", DependsOn: []string{"nonexistent"}},
+		},
+	}
+
+	_, err := ManifestToPipeline(m)
+	if err == nil {
+		t.Fatal("expected validation error for unknown dependency")
+	}
+	if !strings.Contains(err.Error(), "pipeline validation failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

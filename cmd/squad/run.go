@@ -383,13 +383,23 @@ func runComposedAgent(cmd *cobra.Command, args []string, opts *runner.RunOptions
 	logging.InfoContext(cmd.Context(), "composed agent: starting %q with %d stages (max_cost=$%.2f)",
 		manifest.Name, len(p.Stages), opts.MaxCost)
 
-	pipelineRunner := &pl.Runner{
-		Pipeline:   p,
-		WorkingDir: workingDir,
-		Prompt:     prompt,
-		MaxCost:    opts.MaxCost,
+	// Collect inline agent configs from stages.
+	inlineAgents := make(map[string]*pl.InlineConfig)
+	for _, stage := range p.Stages {
+		if stage.InlineConfig != nil {
+			inlineAgents[stage.Name] = stage.InlineConfig
+		}
 	}
-	pipelineRunner.RunAgent = buildRunAgentFunc(pipelineOpts, agentsDir, cfg, vars, pipelineRunner)
+
+	pipelineRunner := &pl.Runner{
+		Pipeline:     p,
+		WorkingDir:   workingDir,
+		Prompt:       prompt,
+		MaxCost:      opts.MaxCost,
+		InlineAgents: inlineAgents,
+		ComposedDir:  agentDir,
+	}
+	pipelineRunner.RunAgent = buildRunAgentFunc(pipelineOpts, agentsDir, agentDir, cfg, vars, pipelineRunner)
 
 	report, runErr := pipelineRunner.Run(cmd.Context())
 

@@ -46,6 +46,25 @@ func ManifestToPipeline(m *agent.Manifest) (*pl.Pipeline, error) {
 			SummarizePrompt: s.SummarizePrompt,
 		}
 
+		// Carry inline agent config through to the pipeline stage.
+		// Use the stage name as the agent identifier so the pipeline
+		// validator sees a valid agent reference.
+		if s.IsInline() {
+			ps.Agent = s.Name
+			ps.InlineConfig = &pl.InlineConfig{
+				EntryPoint: s.EntryPoint,
+				Wrapper:    s.Wrapper,
+				Task:       s.Task,
+				References: s.References,
+			}
+			for _, model := range s.Models {
+				ps.InlineConfig.Models = append(ps.InlineConfig.Models, pl.ModelPreference{
+					Model:    model.Model,
+					Provider: model.Provider,
+				})
+			}
+		}
+
 		for _, pg := range s.PreGates {
 			ps.PreGates = append(ps.PreGates, pl.PreGate{
 				Command: pg.Command,

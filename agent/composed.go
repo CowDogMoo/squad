@@ -5,6 +5,9 @@ import "fmt"
 // ComposedStage defines a unit of work in a composed agent.
 // It mirrors pipeline.Stage but lives in the agent package to avoid
 // circular imports between agent and pipeline.
+//
+// A stage can either reference external agents (agent/agents fields) or define
+// an inline agent (entrypoint/wrapper/models fields). These are mutually exclusive.
 type ComposedStage struct {
 	Name            string             `yaml:"name"`
 	Agent           string             `yaml:"agent,omitempty"`
@@ -18,10 +21,27 @@ type ComposedStage struct {
 	Partition       *ComposedPartition `yaml:"partition,omitempty"`
 	Summarize       string             `yaml:"summarize,omitempty"`
 	SummarizePrompt string             `yaml:"summarize_prompt,omitempty"`
+
+	// Inline agent fields — define the agent directly in the stage.
+	// When set, agent/agents must be empty.
+	EntryPoint string            `yaml:"entrypoint,omitempty"`
+	Wrapper    string            `yaml:"wrapper,omitempty"`
+	Task       string            `yaml:"task,omitempty"`
+	Models     []ModelPreference `yaml:"models,omitempty"`
+	References []string          `yaml:"references,omitempty"`
+}
+
+// IsInline returns true if the stage defines an inline agent.
+func (s ComposedStage) IsInline() bool {
+	return s.EntryPoint != ""
 }
 
 // AgentList returns all agents in the stage (normalizing single vs parallel).
+// For inline stages, the stage name is used as the agent name.
 func (s ComposedStage) AgentList() []string {
+	if s.IsInline() {
+		return []string{s.Name}
+	}
 	if s.Agent != "" {
 		return []string{s.Agent}
 	}
@@ -104,28 +124,52 @@ func (m *Manifest) validateComposedStages() (map[string]bool, error) {
 		}
 		stageNames[s.Name] = true
 
-		if len(s.AgentList()) == 0 {
-			return nil, fmt.Errorf("composed agent %q: stage %q: must specify agent or agents", m.Name, s.Name)
+		if err := m.validateStageAgents(s); err != nil {
+			return nil, err
 		}
-		if s.Agent != "" && len(s.Agents) > 0 {
-			return nil, fmt.Errorf("composed agent %q: stage %q: cannot specify both agent and agents", m.Name, s.Name)
-		}
-		if s.Partition != nil {
-			if s.Agent == "" {
-				return nil, fmt.Errorf("composed agent %q: stage %q: partition requires a single agent", m.Name, s.Name)
-			}
-			if s.Partition.By != "files" {
-				return nil, fmt.Errorf("composed agent %q: stage %q: partition.by must be \"files\"", m.Name, s.Name)
-			}
-			if s.Partition.Glob == "" {
-				return nil, fmt.Errorf("composed agent %q: stage %q: partition.glob is required", m.Name, s.Name)
-			}
+		if err := m.validateStagePartition(s); err != nil {
+			return nil, err
 		}
 		if s.Summarize != "" && s.Summarize != "auto" && s.Summarize != "always" && s.Summarize != "never" {
 			return nil, fmt.Errorf("composed agent %q: stage %q: summarize must be auto, always, or never", m.Name, s.Name)
 		}
 	}
 	return stageNames, nil
+}
+
+func (m *Manifest) validateStageAgents(s ComposedStage) error {
+	hasExternal := s.Agent != "" || len(s.Agents) > 0
+	hasInline := s.IsInline()
+
+	if !hasExternal && !hasInline {
+		return fmt.Errorf("composed agent %q: stage %q: must specify agent, agents, or inline entrypoint", m.Name, s.Name)
+	}
+	if hasExternal && hasInline {
+		return fmt.Errorf("composed agent %q: stage %q: cannot specify both agent/agents and inline entrypoint", m.Name, s.Name)
+	}
+	if s.Agent != "" && len(s.Agents) > 0 {
+		return fmt.Errorf("composed agent %q: stage %q: cannot specify both agent and agents", m.Name, s.Name)
+	}
+	if hasInline && s.Wrapper == "" {
+		return fmt.Errorf("composed agent %q: stage %q: inline agent requires wrapper", m.Name, s.Name)
+	}
+	return nil
+}
+
+func (m *Manifest) validateStagePartition(s ComposedStage) error {
+	if s.Partition == nil {
+		return nil
+	}
+	if s.Agent == "" {
+		return fmt.Errorf("composed agent %q: stage %q: partition requires a single agent", m.Name, s.Name)
+	}
+	if s.Partition.By != "files" {
+		return fmt.Errorf("composed agent %q: stage %q: partition.by must be \"files\"", m.Name, s.Name)
+	}
+	if s.Partition.Glob == "" {
+		return fmt.Errorf("composed agent %q: stage %q: partition.glob is required", m.Name, s.Name)
+	}
+	return nil
 }
 
 func (m *Manifest) validateComposedDeps(stageNames map[string]bool) error {

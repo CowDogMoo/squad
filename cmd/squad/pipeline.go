@@ -41,23 +41,47 @@ import (
 // buildRunAgentFunc creates the callback used by the pipeline runner to execute
 // individual agents. It handles agent resolution, bundle building, budget
 // propagation, and model invocation.
-func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, cfg *config.Config, vars map[string]string, pipelineRunner *pl.Runner) func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
+func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentDir string, cfg *config.Config, vars map[string]string, pipelineRunner *pl.Runner) func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
 	return func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
 		mergedVars := mergeVars(vars, stageVars)
 
-		resolvedAgentsDir, agentErr := findAgentDirForComposed(agentName, agentsDir, cfg)
-		if agentErr != nil {
-			return "", nil, agentErr
-		}
+		var bundle *agent.Bundle
 
-		bundle, agentErr := agent.BuildBundle(resolvedAgentsDir, agentName, agentPrompt, wd, mode, mergedVars)
-		if agentErr != nil {
-			return "", nil, fmt.Errorf("failed to build agent %s: %w", agentName, agentErr)
+		// Check if this is an inline agent defined in the composed manifest.
+		if inlineCfg, ok := pipelineRunner.InlineAgents[agentName]; ok && inlineCfg != nil {
+			inlineAgent := &agent.InlineAgentConfig{
+				Name:       agentName,
+				EntryPoint: inlineCfg.EntryPoint,
+				Wrapper:    inlineCfg.Wrapper,
+				Task:       inlineCfg.Task,
+				References: inlineCfg.References,
+			}
+			for _, m := range inlineCfg.Models {
+				inlineAgent.Models = append(inlineAgent.Models, agent.ModelPreference{
+					Model:    m.Model,
+					Provider: m.Provider,
+				})
+			}
+			var buildErr error
+			bundle, buildErr = agent.BuildBundleInline(pipelineRunner.ComposedDir, inlineAgent, agentPrompt, wd, mode, mergedVars)
+			if buildErr != nil {
+				return "", nil, fmt.Errorf("failed to build inline agent %s: %w", agentName, buildErr)
+			}
+		} else {
+			resolvedAgentsDir, agentErr := findAgentDirForComposed(agentName, agentsDir, composedAgentDir, cfg)
+			if agentErr != nil {
+				return "", nil, agentErr
+			}
+
+			var buildErr error
+			bundle, buildErr = agent.BuildBundle(resolvedAgentsDir, agentName, agentPrompt, wd, mode, mergedVars)
+			if buildErr != nil {
+				return "", nil, fmt.Errorf("failed to build agent %s: %w", agentName, buildErr)
+			}
 		}
 
 		agentOpts := *opts
 		agentOpts.Agent = agentName
-		agentOpts.AgentsDir = resolvedAgentsDir
 		agentOpts.WorkingDir = wd
 		agentOpts.Mode = mode
 		agentOpts.Vars = mergedVars
@@ -209,7 +233,18 @@ func resolveAgentsDirFromConfig(cfg *config.Config) (string, error) {
 }
 
 // findAgentDirForComposed locates an agent's parent directory for composed agent execution.
-func findAgentDirForComposed(agentName, defaultDir string, cfg *config.Config) (string, error) {
+// It checks for nested sub-agents inside composedDir/agents/ first, then falls back to
+// global search paths and the default directory.
+func findAgentDirForComposed(agentName, defaultDir, composedDir string, cfg *config.Config) (string, error) {
+	// Check for nested sub-agents inside the composed agent's directory.
+	if composedDir != "" {
+		nestedDir := filepath.Join(composedDir, "agents")
+		manifestPath := filepath.Join(nestedDir, agentName, "agent.yaml")
+		if _, err := os.Stat(manifestPath); err == nil {
+			return nestedDir, nil
+		}
+	}
+
 	if cfg != nil {
 		manager, err := source.NewManager(cfg)
 		if err == nil {

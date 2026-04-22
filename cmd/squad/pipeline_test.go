@@ -10,6 +10,7 @@ import (
 
 	"github.com/cowdogmoo/squad/config"
 	pl "github.com/cowdogmoo/squad/pipeline"
+	"github.com/cowdogmoo/squad/runner"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -296,7 +297,7 @@ func TestFindAgentDirForComposed(t *testing.T) {
 	t.Run("nil config returns default dir", func(t *testing.T) {
 		t.Parallel()
 		defaultDir := "/some/default/agents"
-		dir, err := findAgentDirForComposed("my-agent", defaultDir, nil)
+		dir, err := findAgentDirForComposed("my-agent", defaultDir, "", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -309,12 +310,46 @@ func TestFindAgentDirForComposed(t *testing.T) {
 		t.Parallel()
 		defaultDir := "/fallback/agents"
 		cfg := &config.Config{}
-		dir, err := findAgentDirForComposed("nonexistent-agent", defaultDir, cfg)
+		dir, err := findAgentDirForComposed("nonexistent-agent", defaultDir, "", cfg)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if dir != defaultDir {
 			t.Fatalf("expected %q, got %q", defaultDir, dir)
+		}
+	})
+
+	t.Run("nested sub-agent found inside composed dir", func(t *testing.T) {
+		t.Parallel()
+		composedDir := t.TempDir()
+		subAgentDir := filepath.Join(composedDir, "agents", "my-sub-agent")
+		if err := os.MkdirAll(subAgentDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(subAgentDir, "agent.yaml"), []byte("name: my-sub-agent\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		dir, err := findAgentDirForComposed("my-sub-agent", "/fallback", composedDir, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := filepath.Join(composedDir, "agents")
+		if dir != expected {
+			t.Fatalf("expected %q, got %q", expected, dir)
+		}
+	})
+
+	t.Run("nested dir checked before global fallback", func(t *testing.T) {
+		t.Parallel()
+		composedDir := t.TempDir()
+		// No sub-agent exists — should fall back to default
+		dir, err := findAgentDirForComposed("missing-agent", "/fallback", composedDir, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if dir != "/fallback" {
+			t.Fatalf("expected /fallback, got %q", dir)
 		}
 	})
 }
@@ -347,6 +382,160 @@ func TestFlagOrViperWithMockViper(t *testing.T) {
 			t.Fatalf("expected viper value 'openai', got %q", val)
 		}
 	})
+}
+
+func TestBuildRunAgentFunc_ResolvesAgent(t *testing.T) {
+	t.Parallel()
+
+	// Create a real agent on disk that buildRunAgentFunc can resolve.
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, "test-leaf")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifestYAML := "name: test-leaf\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifestYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("system prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("agent wrapper"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &runner.RunOptions{
+		Provider: "test",
+		Model:    "test-model",
+	}
+	pRunner := &pl.Runner{
+		InlineAgents: make(map[string]*pl.InlineConfig),
+	}
+
+	fn := buildRunAgentFunc(opts, agentsDir, "", &config.Config{}, nil, pRunner)
+
+	// The callback should resolve the agent and build its bundle. It will fail
+	// at InvokeModel (no real provider), but that confirms the agent resolution
+	// and bundle building paths are exercised.
+	_, _, err := fn(context.Background(), "test-leaf", "review this", t.TempDir(), "edit", nil)
+	if err == nil {
+		t.Fatal("expected error from InvokeModel (no real provider)")
+	}
+	// The error should come from the model invocation, not agent resolution.
+	if strings.Contains(err.Error(), "failed to build agent") {
+		t.Fatalf("agent resolution failed: %v", err)
+	}
+}
+
+func TestBuildRunAgentFunc_BudgetPropagation(t *testing.T) {
+	t.Parallel()
+
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, "budgeted")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"),
+		[]byte("name: budgeted\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("sys"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrap"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &runner.RunOptions{MaxCost: 10.0}
+	pRunner := &pl.Runner{InlineAgents: make(map[string]*pl.InlineConfig)}
+
+	fn := buildRunAgentFunc(opts, agentsDir, "", &config.Config{}, nil, pRunner)
+
+	// Inject pipeline budget var.
+	stageVars := map[string]string{pl.PipelineMaxCostVar: "3.50"}
+	_, _, err := fn(context.Background(), "budgeted", "prompt", t.TempDir(), "edit", stageVars)
+	// Will fail at InvokeModel but confirms budget parsing path runs.
+	if err == nil {
+		t.Fatal("expected error from InvokeModel")
+	}
+}
+
+func TestBuildRunAgentFunc_ExhaustedBudget(t *testing.T) {
+	t.Parallel()
+
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, "cheapo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"),
+		[]byte("name: cheapo\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("sys"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrap"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &runner.RunOptions{}
+	pRunner := &pl.Runner{InlineAgents: make(map[string]*pl.InlineConfig)}
+
+	fn := buildRunAgentFunc(opts, agentsDir, "", &config.Config{}, nil, pRunner)
+
+	// Budget var with invalid (non-positive) value triggers exhaustion error.
+	stageVars := map[string]string{pl.PipelineMaxCostVar: "0.00"}
+	_, _, err := fn(context.Background(), "cheapo", "prompt", t.TempDir(), "edit", stageVars)
+	if err == nil {
+		t.Fatal("expected error for exhausted budget")
+	}
+	if !strings.Contains(err.Error(), "budget exhausted") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildRunAgentFunc_AgentNotFound(t *testing.T) {
+	t.Parallel()
+
+	agentsDir := t.TempDir()
+	opts := &runner.RunOptions{}
+	pRunner := &pl.Runner{InlineAgents: make(map[string]*pl.InlineConfig)}
+
+	fn := buildRunAgentFunc(opts, agentsDir, "", nil, nil, pRunner)
+
+	_, _, err := fn(context.Background(), "nonexistent", "prompt", t.TempDir(), "edit", nil)
+	if err == nil {
+		t.Fatal("expected error for missing agent")
+	}
+	if !strings.Contains(err.Error(), "failed to build agent") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestOutputReport_FormatError(t *testing.T) {
+	t.Parallel()
+
+	cmd := newRunCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+
+	// Pipeline with nil Output causes FormatReport to use markdown.
+	p := &pl.Pipeline{Name: "test", Version: "v1"}
+	pRunner := &pl.Runner{Pipeline: p}
+
+	// Report with nil internals — FormatReport will still produce output.
+	report := &pl.Report{
+		Pipeline: "test",
+		Version:  "v1",
+		Status:   pl.StatusPassed,
+		Duration: "1s",
+	}
+
+	outputReport(cmd, p, pRunner, report)
+	if out.Len() == 0 {
+		t.Fatal("expected output")
+	}
 }
 
 // mockViper implements the interface { GetString(string) string } for testing.
