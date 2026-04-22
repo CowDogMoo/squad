@@ -1567,7 +1567,7 @@ func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (s
 		// when the edit enforcer says reads should be blocked.
 		// Without this, agents bypass Read/Glob/Grep blocking by
 		// shelling out to cat/head/tail.
-		if IsSafeCommand(command) && shouldBlockReadTools(ctx) {
+		if (IsSafeCommand(command) || ContainsReadCommand(command)) && shouldBlockReadTools(ctx) {
 			logging.InfoContext(ctx, "blocking Bash read-like command — too many read-only iterations, no edits made")
 			return "BASH READ BLOCKED — Read-like Bash commands are disabled until you call Edit or Write.\n\n" +
 				"You have spent too many iterations reading without making edits. " +

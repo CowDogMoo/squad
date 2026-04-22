@@ -117,6 +117,18 @@ var blockedCommands = []string{
 	"pacman -S",
 }
 
+// readLikeBinaries are command names that read file content. Used by
+// ContainsReadCommand to detect read-like operations inside compound
+// shell expressions (pipes, &&-chains, cd && cat, etc.).
+var readLikeBinaries = []string{
+	"cat", "head", "tail", "less", "more", "bat",
+	"grep", "rg", "ag", "ack",
+	"sed", "awk",
+	"find", "fd",
+	"strings", "xxd", "hexdump", "od",
+	"wc",
+}
+
 // IsSafeCommand returns true if the command is known to be read-only.
 func IsSafeCommand(cmd string) bool {
 	trimmed := strings.TrimSpace(cmd)
@@ -130,6 +142,36 @@ func IsSafeCommand(cmd string) bool {
 		trimmed == "whoami" || trimmed == "date" || trimmed == "id" ||
 		trimmed == "uname" || trimmed == "hostname" || trimmed == "printenv" {
 		return true
+	}
+	return false
+}
+
+// ContainsReadCommand checks whether a compound shell command contains any
+// read-like operations. It splits on shell operators (&&, ||, ;, |) and
+// checks each segment for known read binaries. This catches bypass patterns
+// like "cd /path && cat file" that IsSafeCommand misses because the overall
+// command doesn't start with "cat ".
+func ContainsReadCommand(cmd string) bool {
+	// Normalise separators so we can split once.
+	norm := strings.NewReplacer("&&", ";", "||", ";", "|", ";").Replace(cmd)
+	for _, segment := range strings.Split(norm, ";") {
+		seg := strings.TrimSpace(segment)
+		// Strip a leading cd … that changes directory before the real command.
+		if strings.HasPrefix(seg, "cd ") {
+			continue // cd itself isn't a read — the next segment is
+		}
+		// Check if the segment starts with a known read binary.
+		for _, bin := range readLikeBinaries {
+			if seg == bin || strings.HasPrefix(seg, bin+" ") || strings.HasPrefix(seg, bin+"\t") {
+				return true
+			}
+		}
+		// Also check the existing safeCommands list (covers "stat ", "file ", etc.).
+		for _, prefix := range safeCommands {
+			if strings.HasPrefix(seg, prefix) {
+				return true
+			}
+		}
 	}
 	return false
 }
