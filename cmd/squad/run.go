@@ -70,11 +70,9 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 	applyFallback := v.GetBool("run.apply_fallback")
 	mode := v.GetString("run.mode")
 
-	// Parse --var flags into a map
 	varStrings, _ := cmd.Flags().GetStringArray("var")
 	vars := parseVars(varStrings)
 
-	// Parse --mcp-server flags into MCP server configs
 	mcpStrings, _ := cmd.Flags().GetStringArray("mcp-server")
 	mcpServers := parseMCPServers(mcpStrings)
 
@@ -170,7 +168,6 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 	if err := bind("provider.num_ctx", "num-ctx"); err != nil {
 		return err
 	}
-	// run-scoped flags
 	for _, pair := range [][2]string{
 		{"run.agent", "agent"},
 		{"run.agents_dir", "agents-dir"},

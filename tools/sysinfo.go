@@ -45,7 +45,6 @@ func systemInfoTool(ex executor.Executor) func(ctx context.Context, rawArgs []by
 
 		info := &SystemInfo{}
 
-		// Collect each piece of info, tolerating failures.
 		info.Hostname = execTrim(ctx, ex, "hostname")
 		info.OS = execTrim(ctx, ex, "cat /etc/os-release 2>/dev/null | head -5 || sw_vers 2>/dev/null || echo unknown")
 		info.Kernel = execTrim(ctx, ex, "uname -sr 2>/dev/null || echo unknown")
@@ -55,7 +54,6 @@ func systemInfoTool(ex executor.Executor) func(ctx context.Context, rawArgs []by
 		info.Disk = execTrim(ctx, ex, "df -h / 2>/dev/null || echo unknown")
 		info.Users = execTrim(ctx, ex, "whoami 2>/dev/null || echo unknown")
 
-		// Network interfaces (brief).
 		ifOutput := execTrim(ctx, ex, "ip -br addr 2>/dev/null || ifconfig 2>/dev/null | grep -E '^[a-z]|inet ' || echo unknown")
 		if ifOutput != "" && ifOutput != "unknown" {
 			for line := range strings.SplitSeq(ifOutput, "\n") {
@@ -66,7 +64,6 @@ func systemInfoTool(ex executor.Executor) func(ctx context.Context, rawArgs []by
 			}
 		}
 
-		// Docker containers (if Docker is available).
 		containerOutput := execTrim(ctx, ex, "docker ps --format '{{.Names}} ({{.Image}}) {{.Status}}' 2>/dev/null || echo none")
 		if containerOutput != "" && containerOutput != "none" {
 			for line := range strings.SplitSeq(containerOutput, "\n") {
