@@ -1141,6 +1141,70 @@ stages:
 	}
 }
 
+func TestRunComposedAgent_WithInlineStage(t *testing.T) {
+	t.Parallel()
+
+	// Create a composed agent with an inline stage that has prompt files.
+	baseDir := t.TempDir()
+	composedDir := filepath.Join(baseDir, "agents", "inline-composed")
+	if err := os.MkdirAll(composedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(composedDir, "system.md"), []byte("inline sys"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(composedDir, "agent.md"), []byte("inline wrap"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	composedManifest := `
+name: inline-composed
+version: "1.0"
+
+stages:
+  - name: review
+    entrypoint: system.md
+    wrapper: agent.md
+`
+	if err := os.WriteFile(filepath.Join(composedDir, "agent.yaml"), []byte(composedManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(baseDir, "agents")
+	v := viper.New()
+	v.Set("run.agent", "inline-composed")
+	v.Set("run.agents_dir", agentsDir)
+
+	cmd := newRunCmd()
+	ctx := withViper(context.Background(), v)
+	ctx = withConfig(ctx, config.Defaults())
+	cmd.SetContext(ctx)
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	if err := cmd.Flags().Set("agent", "inline-composed"); err != nil {
+		t.Fatalf("Set agent: %v", err)
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatalf("Set agents-dir: %v", err)
+	}
+	if err := cmd.Flags().Set("working-dir", t.TempDir()); err != nil {
+		t.Fatalf("Set working-dir: %v", err)
+	}
+
+	// Execution will fail at model invocation but exercises inline agent
+	// collection in runComposedAgent (lines 387-392).
+	err := cmd.RunE(cmd, []string{"audit"})
+	if err == nil {
+		t.Fatal("expected error from model invocation")
+	}
+	if strings.Contains(err.Error(), "config not available") {
+		t.Fatalf("setup failed: %v", err)
+	}
+}
+
 func TestInitConfigMissingConfigFlag(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())

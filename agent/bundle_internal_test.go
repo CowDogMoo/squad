@@ -454,6 +454,32 @@ func TestBuildBundleInline_WithVars(t *testing.T) {
 	}
 }
 
+func TestBuildBundleInline_ReferenceFallbackToBaseDir(t *testing.T) {
+	t.Parallel()
+	// Put prompts in a stage subdir but references only in baseDir.
+	// This exercises the reference fallback path (lines 715-720).
+	baseDir := setupInlineDir(t, map[string]string{
+		"stages/fallback-stage/system.md": "stage system",
+		"stages/fallback-stage/agent.md":  "stage wrapper",
+		"shared-ref.md":                   "shared reference content",
+	})
+
+	cfg := &InlineAgentConfig{
+		Name:       "fallback-stage",
+		EntryPoint: "system.md",
+		Wrapper:    "agent.md",
+		References: []string{"shared-ref.md"},
+	}
+
+	bundle, err := BuildBundleInline(baseDir, cfg, "go", "/tmp", "edit", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(bundle.System, "shared reference content") {
+		t.Error("expected shared reference content from baseDir fallback")
+	}
+}
+
 func TestBuildBundleInline_MissingEntrypoint(t *testing.T) {
 	t.Parallel()
 	baseDir := t.TempDir()

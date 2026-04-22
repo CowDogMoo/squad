@@ -513,6 +513,72 @@ func TestBuildRunAgentFunc_AgentNotFound(t *testing.T) {
 	}
 }
 
+func TestBuildRunAgentFunc_InlineAgent(t *testing.T) {
+	t.Parallel()
+
+	// Create a composed agent directory with inline prompt files.
+	composedDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(composedDir, "system.md"), []byte("inline system"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(composedDir, "agent.md"), []byte("inline wrapper"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &runner.RunOptions{Provider: "test", Model: "test-model"}
+	pRunner := &pl.Runner{
+		ComposedDir: composedDir,
+		InlineAgents: map[string]*pl.InlineConfig{
+			"my-inline": {
+				EntryPoint: "system.md",
+				Wrapper:    "agent.md",
+				Models: []pl.ModelPreference{
+					{Model: "gpt-4", Provider: "openai"},
+				},
+			},
+		},
+	}
+
+	fn := buildRunAgentFunc(opts, t.TempDir(), composedDir, &config.Config{}, nil, pRunner)
+
+	// The inline path resolves successfully and fails at model invocation.
+	_, _, err := fn(context.Background(), "my-inline", "test prompt", t.TempDir(), "edit", nil)
+	if err == nil {
+		t.Fatal("expected error from InvokeModel (no real provider)")
+	}
+	// Should NOT fail at inline build.
+	if strings.Contains(err.Error(), "failed to build inline agent") {
+		t.Fatalf("inline agent build failed: %v", err)
+	}
+}
+
+func TestBuildRunAgentFunc_InlineBuildError(t *testing.T) {
+	t.Parallel()
+
+	// composedDir has no prompt files — BuildBundleInline will fail.
+	composedDir := t.TempDir()
+	opts := &runner.RunOptions{}
+	pRunner := &pl.Runner{
+		ComposedDir: composedDir,
+		InlineAgents: map[string]*pl.InlineConfig{
+			"bad-inline": {
+				EntryPoint: "missing.md",
+				Wrapper:    "also-missing.md",
+			},
+		},
+	}
+
+	fn := buildRunAgentFunc(opts, t.TempDir(), composedDir, nil, nil, pRunner)
+
+	_, _, err := fn(context.Background(), "bad-inline", "test", t.TempDir(), "edit", nil)
+	if err == nil {
+		t.Fatal("expected error for missing inline prompts")
+	}
+	if !strings.Contains(err.Error(), "failed to build inline agent") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestOutputReport_FormatError(t *testing.T) {
 	t.Parallel()
 
