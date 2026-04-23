@@ -88,6 +88,14 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 		agentOpts.Findings = pipelineRunner.Findings
 		agentOpts.AgentName = agentName
 
+		// Apply manifest model/provider when not explicitly set via CLI flags.
+		if agentOpts.Model == "" && bundle.Model != "" {
+			agentOpts.Model = bundle.Model
+		}
+		if agentOpts.Provider == "" && bundle.Provider != "" {
+			agentOpts.Provider = bundle.Provider
+		}
+
 		// Apply effective budget cap propagated from the pipeline runner.
 		// This accounts for both remaining pipeline budget and per-stage caps.
 		if capStr, ok := mergedVars[pl.PipelineMaxCostVar]; ok {

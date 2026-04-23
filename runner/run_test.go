@@ -275,6 +275,64 @@ func TestPrepareBundle(t *testing.T) {
 	}
 }
 
+func TestPrepareBundleManifestModelProvider(t *testing.T) {
+	t.Parallel()
+
+	t.Run("manifest model and provider applied when opts empty", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := writeTestAgentWithModels(t, "model-agent", "manifest-model", "manifest-provider")
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		opts := &RunOptions{
+			Agent:       "model-agent",
+			AgentsDir:   agentsDir,
+			DryRun:      true,
+			PrintBundle: true,
+			BundleOut:   filepath.Join(t.TempDir(), "bundle.txt"),
+		}
+		_, err := prepareBundle(cmd, opts, "prompt", t.TempDir())
+		if err != nil {
+			t.Fatalf("prepareBundle() error = %v", err)
+		}
+		if opts.Model != "manifest-model" {
+			t.Fatalf("expected Model=%q, got %q", "manifest-model", opts.Model)
+		}
+		if opts.Provider != "manifest-provider" {
+			t.Fatalf("expected Provider=%q, got %q", "manifest-provider", opts.Provider)
+		}
+	})
+
+	t.Run("CLI flags take precedence over manifest", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := writeTestAgentWithModels(t, "cli-agent", "manifest-model", "manifest-provider")
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		opts := &RunOptions{
+			Agent:       "cli-agent",
+			AgentsDir:   agentsDir,
+			Model:       "cli-model",
+			Provider:    "cli-provider",
+			DryRun:      true,
+			PrintBundle: true,
+			BundleOut:   filepath.Join(t.TempDir(), "bundle.txt"),
+		}
+		_, err := prepareBundle(cmd, opts, "prompt", t.TempDir())
+		if err != nil {
+			t.Fatalf("prepareBundle() error = %v", err)
+		}
+		if opts.Model != "cli-model" {
+			t.Fatalf("expected Model=%q, got %q", "cli-model", opts.Model)
+		}
+		if opts.Provider != "cli-provider" {
+			t.Fatalf("expected Provider=%q, got %q", "cli-provider", opts.Provider)
+		}
+	})
+}
+
 func TestInvokeModelMissingAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	opts := &RunOptions{Provider: "openai-responses", Model: "gpt-5"}
@@ -536,6 +594,26 @@ func writeTestAgent(t *testing.T, agentName string) string {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	manifest := fmt.Sprintf("name: %s\nversion: 0.0.0\nentrypoint: system.md\nwrapper: wrapper.md\n", agentName)
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile agent.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("System prompt."), 0o644); err != nil {
+		t.Fatalf("WriteFile system.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "wrapper.md"), []byte("Wrapper prompt."), 0o644); err != nil {
+		t.Fatalf("WriteFile wrapper.md: %v", err)
+	}
+	return agentsDir
+}
+
+func writeTestAgentWithModels(t *testing.T, agentName, model, provider string) string {
+	t.Helper()
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, agentName)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := fmt.Sprintf("name: %s\nversion: 0.0.0\nentrypoint: system.md\nwrapper: wrapper.md\nmodels:\n  - model: %s\n    provider: %s\n", agentName, model, provider)
 	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatalf("WriteFile agent.yaml: %v", err)
 	}

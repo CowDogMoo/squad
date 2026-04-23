@@ -138,6 +138,16 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 		return nil, err
 	}
 
+	// Apply manifest model/provider when not explicitly set via CLI flags.
+	if opts.Model == "" && bundle.Model != "" {
+		opts.Model = bundle.Model
+		logging.InfoContext(cmd.Context(), "using manifest model: %s", bundle.Model)
+	}
+	if opts.Provider == "" && bundle.Provider != "" {
+		opts.Provider = bundle.Provider
+		logging.InfoContext(cmd.Context(), "using manifest provider: %s", bundle.Provider)
+	}
+
 	logging.InfoContext(cmd.Context(), "agent bundle ready (agent=%s provider=%s model=%s)", opts.Agent, opts.Provider, opts.Model)
 
 	if opts.PrintBundle {

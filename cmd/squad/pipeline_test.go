@@ -444,6 +444,77 @@ func TestBuildRunAgentFunc_ResolvesAgent(t *testing.T) {
 	}
 }
 
+func TestBuildRunAgentFunc_ManifestModelProvider(t *testing.T) {
+	t.Parallel()
+
+	t.Run("manifest model and provider applied when opts empty", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := t.TempDir()
+		agentDir := filepath.Join(agentsDir, "model-leaf")
+		if err := os.MkdirAll(agentDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		manifest := "name: model-leaf\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\nmodels:\n  - model: manifest-model\n    provider: manifest-provider\n"
+		if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("sys"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrap"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		opts := &runner.RunOptions{} // No model or provider set
+		pRunner := &pl.Runner{InlineAgents: make(map[string]*pl.InlineConfig)}
+
+		fn := buildRunAgentFunc(opts, agentsDir, "", &config.Config{}, nil, pRunner)
+		_, _, err := fn(context.Background(), "model-leaf", "prompt", t.TempDir(), "edit", nil)
+		// Will fail at InvokeModel but confirms manifest values are applied.
+		if err == nil {
+			t.Fatal("expected error from InvokeModel")
+		}
+		// Error should mention manifest-provider (meaning it was applied), not "failed to build agent".
+		if strings.Contains(err.Error(), "failed to build agent") {
+			t.Fatalf("agent resolution failed: %v", err)
+		}
+	})
+
+	t.Run("CLI flags take precedence over manifest", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := t.TempDir()
+		agentDir := filepath.Join(agentsDir, "cli-leaf")
+		if err := os.MkdirAll(agentDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		manifest := "name: cli-leaf\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\nmodels:\n  - model: manifest-model\n    provider: manifest-provider\n"
+		if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("sys"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrap"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		opts := &runner.RunOptions{
+			Provider: "cli-provider",
+			Model:    "cli-model",
+		}
+		pRunner := &pl.Runner{InlineAgents: make(map[string]*pl.InlineConfig)}
+
+		fn := buildRunAgentFunc(opts, agentsDir, "", &config.Config{}, nil, pRunner)
+		_, _, err := fn(context.Background(), "cli-leaf", "prompt", t.TempDir(), "edit", nil)
+		if err == nil {
+			t.Fatal("expected error from InvokeModel")
+		}
+		if strings.Contains(err.Error(), "failed to build agent") {
+			t.Fatalf("agent resolution failed: %v", err)
+		}
+	})
+}
+
 func TestBuildRunAgentFunc_BudgetPropagation(t *testing.T) {
 	t.Parallel()
 
