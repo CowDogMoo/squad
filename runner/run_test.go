@@ -365,7 +365,9 @@ func TestExecuteRunSuccessOllama(t *testing.T) {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"model":"mistral","message":{"role":"assistant","content":"ok"},"done":true}`))
+		if _, err := w.Write([]byte(`{"model":"mistral","message":{"role":"assistant","content":"ok"},"done":true}`)); err != nil {
+			t.Errorf("failed to write response: %v", err)
+		}
 	}))
 	defer server.Close()
 
@@ -445,30 +447,30 @@ func TestFindAgentDir(t *testing.T) {
 	t.Run("explicit dir", func(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()
-		got, err := findAgentDir("myagent", tmp, nil)
+		got, err := FindAgentDir("myagent", tmp, nil)
 		if err != nil {
-			t.Fatalf("findAgentDir() error = %v", err)
+			t.Fatalf("FindAgentDir() error = %v", err)
 		}
 		want := filepath.Join(tmp, "myagent")
 		if got != want {
-			t.Fatalf("findAgentDir() = %q, want %q", got, want)
+			t.Fatalf("FindAgentDir() = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("nil config returns error", func(t *testing.T) {
 		t.Parallel()
-		_, err := findAgentDir("myagent", "", nil)
+		_, err := FindAgentDir("myagent", "", nil)
 		if err == nil {
-			t.Fatal("findAgentDir() expected error with nil config, got nil")
+			t.Fatal("FindAgentDir() expected error with nil config, got nil")
 		}
 	})
 
 	t.Run("config with no sources returns error", func(t *testing.T) {
 		t.Parallel()
 		cfg := &config.Config{}
-		_, err := findAgentDir("myagent", "", cfg)
+		_, err := FindAgentDir("myagent", "", cfg)
 		if err == nil {
-			t.Fatal("findAgentDir() expected error with empty config, got nil")
+			t.Fatal("FindAgentDir() expected error with empty config, got nil")
 		}
 	})
 }

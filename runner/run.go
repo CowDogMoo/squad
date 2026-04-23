@@ -95,7 +95,9 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Run stopped: cost budget of $%.4f exceeded (actual: $%.4f)\n", opts.MaxCost, m.TotalCostWithChildren())
+			if _, fmtErr := fmt.Fprintf(cmd.ErrOrStderr(), "Run stopped: cost budget of $%.4f exceeded (actual: $%.4f)\n", opts.MaxCost, m.TotalCostWithChildren()); fmtErr != nil {
+				logging.Warn("failed to write budget warning: %v", fmtErr)
+			}
 			if response != "" {
 				if handleErr := handleResponse(cmd, opts, response, workingDir); handleErr != nil {
 					logging.Warn("failed to handle partial response: %v", handleErr)
@@ -123,7 +125,7 @@ func printMetrics(cmd *cobra.Command, m *metrics.Metrics) error {
 
 // prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
 func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir string) (*agent.Bundle, error) {
-	agentDir, err := findAgentDir(opts.Agent, opts.AgentsDir, opts.Config)
+	agentDir, err := FindAgentDir(opts.Agent, opts.AgentsDir, opts.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +158,9 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 		if err != nil {
 			logging.Warn("cost estimation failed: %v", err)
 		} else {
-			_, _ = fmt.Fprint(cmd.ErrOrStderr(), metrics.FormatEstimate(estimate, opts.Provider, opts.Model))
+			if _, fmtErr := fmt.Fprint(cmd.ErrOrStderr(), metrics.FormatEstimate(estimate, opts.Provider, opts.Model)); fmtErr != nil {
+				logging.Warn("failed to write cost estimate: %v", fmtErr)
+			}
 		}
 		return nil, nil
 	}
@@ -241,8 +245,9 @@ func resolveWorkingDir(dir string) (string, error) {
 	return filepath.Abs(dir)
 }
 
-// findAgentDir locates an agent by name using the source manager.
-func findAgentDir(agentName, explicitDir string, cfg *config.Config) (string, error) {
+// FindAgentDir locates an agent by name using the source manager.
+// It returns the path to the agent directory (containing agent.yaml).
+func FindAgentDir(agentName, explicitDir string, cfg *config.Config) (string, error) {
 	if explicitDir != "" {
 		absDir, err := filepath.Abs(explicitDir)
 		if err != nil {

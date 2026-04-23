@@ -30,7 +30,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/mcp"
+	pl "github.com/cowdogmoo/squad/pipeline"
 	"github.com/cowdogmoo/squad/runner"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -222,6 +225,19 @@ user_prompt will be used (if configured in the agent's manifest).`,
 			if opts == nil {
 				return fmt.Errorf("run configuration not initialized")
 			}
+
+			// Check if the agent is a composed agent (has stages).
+			// If so, fork to the composed agent execution path.
+			if opts.Agent != "" {
+				agentDir, err := runner.FindAgentDir(opts.Agent, opts.AgentsDir, opts.Config)
+				if err == nil {
+					manifest, mErr := agent.LoadManifest(agentDir)
+					if mErr == nil && manifest.IsComposed() {
+						return runComposedAgent(cmd, args, opts, manifest, agentDir)
+					}
+				}
+			}
+
 			return runner.ExecuteRun(cmd, args, opts)
 		},
 	}
@@ -256,6 +272,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().StringArray("mcp-server", nil, "MCP server: stdio NAME:COMMAND[:ARG1,ARG2,...] or SSE NAME:sse:URL (can be repeated)")
 	cmd.Flags().Bool("stream", false, "Stream model output tokens to stderr as they arrive")
 	cmd.Flags().Int("max-concurrent-tasks", 0, "Max concurrent background child tasks (default: 4)")
+	cmd.Flags().Bool("json", false, "Force JSON output format (composed agents only)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 
@@ -309,6 +326,145 @@ func completeAgentNames(_ *cobra.Command, _ []string, toComplete string) ([]stri
 		}
 	}
 	return names, cobra.ShellCompDirectiveNoFileComp
+}
+
+// runComposedAgent executes a composed agent (one with stages) by converting
+// its manifest to a pipeline and running it through the pipeline runner.
+func runComposedAgent(cmd *cobra.Command, args []string, opts *runner.RunOptions, manifest *agent.Manifest, agentDir string) error {
+	if err := validateComposedFlags(cmd); err != nil {
+		return err
+	}
+
+	p, err := runner.ManifestToPipeline(manifest)
+	if err != nil {
+		return err
+	}
+
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	if dryRun {
+		return composedDryRun(cmd, manifest, p)
+	}
+
+	cfg := configFromContext(cmd)
+	if cfg == nil {
+		return fmt.Errorf("config not available")
+	}
+
+	prompt := ""
+	if len(args) > 0 {
+		prompt = strings.Join(args, " ")
+	} else if hasPipedInput(cmd.InOrStdin()) {
+		input, readErr := io.ReadAll(cmd.InOrStdin())
+		if readErr != nil {
+			return fmt.Errorf("failed to read stdin: %w", readErr)
+		}
+		prompt = strings.TrimSpace(string(input))
+	}
+
+	workingDir := opts.WorkingDir
+	if workingDir == "" {
+		workingDir, err = os.Getwd()
+		if err != nil {
+			return err
+		}
+	} else {
+		workingDir, err = filepath.Abs(workingDir)
+		if err != nil {
+			return err
+		}
+	}
+
+	agentsDir := filepath.Dir(agentDir)
+	varStrings, _ := cmd.Flags().GetStringArray("var")
+	vars := parseVars(varStrings)
+
+	pipelineOpts := buildComposedRunOpts(cmd, cfg)
+
+	logging.InfoContext(cmd.Context(), "composed agent: starting %q with %d stages (max_cost=$%.2f)",
+		manifest.Name, len(p.Stages), opts.MaxCost)
+
+	// Collect inline agent configs from stages.
+	inlineAgents := make(map[string]*pl.InlineConfig)
+	for _, stage := range p.Stages {
+		if stage.InlineConfig != nil {
+			inlineAgents[stage.Name] = stage.InlineConfig
+		}
+	}
+
+	pipelineRunner := &pl.Runner{
+		Pipeline:     p,
+		WorkingDir:   workingDir,
+		Prompt:       prompt,
+		MaxCost:      opts.MaxCost,
+		InlineAgents: inlineAgents,
+		ComposedDir:  agentDir,
+	}
+	pipelineRunner.RunAgent = buildRunAgentFunc(pipelineOpts, agentsDir, agentDir, cfg, vars, pipelineRunner)
+
+	report, runErr := pipelineRunner.Run(cmd.Context())
+
+	if report != nil {
+		outputReport(cmd, p, pipelineRunner, report)
+	}
+
+	return runErr
+}
+
+// validateComposedFlags checks that no incompatible flags are set for composed agents.
+func validateComposedFlags(cmd *cobra.Command) error {
+	for _, flag := range runner.ComposedFlags {
+		if cmd.Flags().Changed(flag) {
+			return fmt.Errorf("--%s is not applicable to composed agents (sub-agents declare their own configuration)", flag)
+		}
+	}
+	return nil
+}
+
+// composedDryRun validates and prints the composed agent's pipeline structure.
+func composedDryRun(cmd *cobra.Command, manifest *agent.Manifest, p *pl.Pipeline) error {
+	w := cmd.OutOrStdout()
+	if _, err := fmt.Fprintf(w, "Composed agent %q (%s) validated: %d stages\n\n", manifest.Name, manifest.Version, len(p.Stages)); err != nil {
+		return fmt.Errorf("failed to write dry-run output: %w", err)
+	}
+
+	tiers := p.TopologicalOrder()
+	for i, tier := range tiers {
+		if _, err := fmt.Fprintf(w, "Tier %d:\n", i+1); err != nil {
+			return fmt.Errorf("failed to write dry-run output: %w", err)
+		}
+		for _, stage := range tier {
+			agents := stage.AgentList()
+			mode := stage.Mode
+			if mode == "" {
+				mode = "edit"
+			}
+			if _, err := fmt.Fprintf(w, "  Stage %q [mode=%s]: %s\n", stage.Name, mode, strings.Join(agents, ", ")); err != nil {
+				return fmt.Errorf("failed to write dry-run output: %w", err)
+			}
+			if len(stage.DependsOn) > 0 {
+				if _, err := fmt.Fprintf(w, "    depends_on: %s\n", strings.Join(stage.DependsOn, ", ")); err != nil {
+					return fmt.Errorf("failed to write dry-run output: %w", err)
+				}
+			}
+		}
+	}
+
+	if len(p.Gates) > 0 {
+		if _, err := fmt.Fprintf(w, "\nGates:\n"); err != nil {
+			return fmt.Errorf("failed to write dry-run output: %w", err)
+		}
+		for _, g := range p.Gates {
+			onFailure := g.OnFailure
+			if onFailure == "" {
+				onFailure = "stop"
+			}
+			if _, err := fmt.Fprintf(w, "  after %q: %s (on_failure=%s)\n", g.After, g.Command, onFailure); err != nil {
+				return fmt.Errorf("failed to write dry-run output: %w", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // parseMCPServers parses MCP server specs into ServerConfig.

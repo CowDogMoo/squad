@@ -68,15 +68,17 @@ type RunAgentFunc func(ctx context.Context, agentName, prompt, workingDir, mode 
 
 // Runner executes a pipeline configuration.
 type Runner struct {
-	Pipeline   *Pipeline
-	WorkingDir string
-	RunAgent   RunAgentFunc
-	Prompt     string  // base prompt passed to each agent
-	MaxCost    float64 // total cost budget for the pipeline (0 = unlimited)
-	Findings   *tools.FindingsStore
-	Summarize  SummarizeFunc // optional LLM summarization for stage handoffs
-	spent      *csync.Value[float64]
-	sumCache   *summaryCache
+	Pipeline     *Pipeline
+	WorkingDir   string
+	RunAgent     RunAgentFunc
+	Prompt       string  // base prompt passed to each agent
+	MaxCost      float64 // total cost budget for the pipeline (0 = unlimited)
+	Findings     *tools.FindingsStore
+	Summarize    SummarizeFunc            // optional LLM summarization for stage handoffs
+	InlineAgents map[string]*InlineConfig // inline agent configs keyed by stage name
+	ComposedDir  string                   // directory of the composed agent (for resolving inline prompt files)
+	spent        *csync.Value[float64]
+	sumCache     *summaryCache
 }
 
 // Run executes the pipeline and returns a structured report.

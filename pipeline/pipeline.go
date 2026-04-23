@@ -22,6 +22,8 @@ type Pipeline struct {
 
 // Stage is a unit of work in a pipeline. A stage runs one agent or
 // multiple agents in parallel, and may depend on prior stages.
+// A stage can reference external agents (Agent/Agents) or define an
+// inline agent (InlineConfig). These are mutually exclusive.
 type Stage struct {
 	Name            string            `yaml:"name"`
 	Agent           string            `yaml:"agent,omitempty"`  // single agent
@@ -35,6 +37,28 @@ type Stage struct {
 	Partition       *Partition        `yaml:"partition,omitempty"`        // automatic work partitioning
 	Summarize       string            `yaml:"summarize,omitempty"`        // auto | always | never — controls stage output summarization
 	SummarizePrompt string            `yaml:"summarize_prompt,omitempty"` // custom summarization instruction
+	InlineConfig    *InlineConfig     `yaml:"-"`                          // inline agent config (set programmatically, not from YAML)
+}
+
+// InlineConfig holds inline agent configuration set by ManifestToPipeline
+// for stages that define their agent inline rather than referencing an external one.
+type InlineConfig struct {
+	EntryPoint string
+	Wrapper    string
+	Task       string
+	Models     []ModelPreference
+	References []string
+}
+
+// ModelPreference mirrors agent.ModelPreference to avoid circular imports.
+type ModelPreference struct {
+	Model    string
+	Provider string
+}
+
+// IsInline returns true if the stage defines an inline agent.
+func (s Stage) IsInline() bool {
+	return s.InlineConfig != nil
 }
 
 // Partition configures automatic work splitting for a stage.

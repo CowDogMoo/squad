@@ -281,6 +281,216 @@ func TestCompactRepoSummary(t *testing.T) {
 	})
 }
 
+func TestResolveInlinePromptDir(t *testing.T) {
+	t.Parallel()
+
+	t.Run("stage dir exists with entrypoint", func(t *testing.T) {
+		t.Parallel()
+		baseDir := t.TempDir()
+		stageDir := filepath.Join(baseDir, "stages", "my-stage")
+		if err := os.MkdirAll(stageDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(stageDir, "system.md"), []byte("stage system"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		got := resolveInlinePromptDir(baseDir, "my-stage", "system.md")
+		if got != stageDir {
+			t.Fatalf("expected %q, got %q", stageDir, got)
+		}
+	})
+
+	t.Run("stage dir missing falls back to baseDir", func(t *testing.T) {
+		t.Parallel()
+		baseDir := t.TempDir()
+
+		got := resolveInlinePromptDir(baseDir, "no-stage", "system.md")
+		if got != baseDir {
+			t.Fatalf("expected %q, got %q", baseDir, got)
+		}
+	})
+
+	t.Run("stage dir exists but no entrypoint falls back", func(t *testing.T) {
+		t.Parallel()
+		baseDir := t.TempDir()
+		stageDir := filepath.Join(baseDir, "stages", "my-stage")
+		if err := os.MkdirAll(stageDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		got := resolveInlinePromptDir(baseDir, "my-stage", "system.md")
+		if got != baseDir {
+			t.Fatalf("expected fallback to %q, got %q", baseDir, got)
+		}
+	})
+}
+
+// setupInlineDir creates a temp dir with the given files for inline agent tests.
+func setupInlineDir(t *testing.T, files map[string]string) string {
+	t.Helper()
+	baseDir := t.TempDir()
+	for name, content := range files {
+		full := filepath.Join(baseDir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return baseDir
+}
+
+func TestBuildBundleInline_Basic(t *testing.T) {
+	t.Parallel()
+	baseDir := setupInlineDir(t, map[string]string{
+		"system.md": "inline system prompt",
+		"agent.md":  "inline wrapper",
+	})
+
+	cfg := &InlineAgentConfig{Name: "test-inline", EntryPoint: "system.md", Wrapper: "agent.md"}
+	bundle, err := BuildBundleInline(baseDir, cfg, "review this", "/tmp/work", "edit", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(bundle.System, "inline system prompt") {
+		t.Error("expected system prompt content")
+	}
+	if !strings.Contains(bundle.System, "inline wrapper") {
+		t.Error("expected wrapper content")
+	}
+	if bundle.User != "review this" {
+		t.Errorf("User = %q, want 'review this'", bundle.User)
+	}
+	if bundle.WorkDir != "/tmp/work" {
+		t.Errorf("WorkDir = %q, want '/tmp/work'", bundle.WorkDir)
+	}
+}
+
+func TestBuildBundleInline_EmptyPrompt(t *testing.T) {
+	t.Parallel()
+	baseDir := setupInlineDir(t, map[string]string{"system.md": "sys", "agent.md": "wrap"})
+
+	cfg := &InlineAgentConfig{Name: "test-inline", EntryPoint: "system.md", Wrapper: "agent.md"}
+	bundle, err := BuildBundleInline(baseDir, cfg, "", "/tmp", "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bundle.User != "Begin." {
+		t.Errorf("User = %q, want 'Begin.'", bundle.User)
+	}
+}
+
+func TestBuildBundleInline_WithModels(t *testing.T) {
+	t.Parallel()
+	baseDir := setupInlineDir(t, map[string]string{"system.md": "sys", "agent.md": "wrap"})
+
+	cfg := &InlineAgentConfig{
+		Name: "test-inline", EntryPoint: "system.md", Wrapper: "agent.md",
+		Models: []ModelPreference{{Model: "gpt-4", Provider: "openai"}},
+	}
+	bundle, err := BuildBundleInline(baseDir, cfg, "go", "/tmp", "edit", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bundle.Model != "gpt-4" {
+		t.Errorf("Model = %q, want gpt-4", bundle.Model)
+	}
+	if bundle.Provider != "openai" {
+		t.Errorf("Provider = %q, want openai", bundle.Provider)
+	}
+}
+
+func TestBuildBundleInline_WithReferences(t *testing.T) {
+	t.Parallel()
+	baseDir := setupInlineDir(t, map[string]string{
+		"system.md": "sys", "agent.md": "wrap", "ref.md": "reference content",
+	})
+
+	cfg := &InlineAgentConfig{
+		Name: "test-inline", EntryPoint: "system.md", Wrapper: "agent.md",
+		References: []string{"ref.md"},
+	}
+	bundle, err := BuildBundleInline(baseDir, cfg, "go", "/tmp", "edit", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(bundle.System, "reference content") {
+		t.Error("expected reference content in system prompt")
+	}
+}
+
+func TestBuildBundleInline_StageSpecificPrompts(t *testing.T) {
+	t.Parallel()
+	baseDir := setupInlineDir(t, map[string]string{
+		"stages/my-stage/system.md": "stage-specific system",
+		"stages/my-stage/agent.md":  "stage-specific wrapper",
+	})
+
+	cfg := &InlineAgentConfig{Name: "my-stage", EntryPoint: "system.md", Wrapper: "agent.md"}
+	bundle, err := BuildBundleInline(baseDir, cfg, "test", "/tmp", "edit", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(bundle.System, "stage-specific system") {
+		t.Error("expected stage-specific system content")
+	}
+}
+
+func TestBuildBundleInline_WithVars(t *testing.T) {
+	t.Parallel()
+	baseDir := setupInlineDir(t, map[string]string{
+		"system.md": "target: {{.Vars.TARGET}}", "agent.md": "wrap",
+	})
+
+	cfg := &InlineAgentConfig{Name: "test-inline", EntryPoint: "system.md", Wrapper: "agent.md"}
+	bundle, err := BuildBundleInline(baseDir, cfg, "go", "/tmp", "edit", map[string]string{"TARGET": "85"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(bundle.System, "target: 85") {
+		t.Error("expected vars to be expanded in system prompt")
+	}
+}
+
+func TestBuildBundleInline_ReferenceFallbackToBaseDir(t *testing.T) {
+	t.Parallel()
+	// Put prompts in a stage subdir but references only in baseDir.
+	// This exercises the reference fallback path (lines 715-720).
+	baseDir := setupInlineDir(t, map[string]string{
+		"stages/fallback-stage/system.md": "stage system",
+		"stages/fallback-stage/agent.md":  "stage wrapper",
+		"shared-ref.md":                   "shared reference content",
+	})
+
+	cfg := &InlineAgentConfig{
+		Name:       "fallback-stage",
+		EntryPoint: "system.md",
+		Wrapper:    "agent.md",
+		References: []string{"shared-ref.md"},
+	}
+
+	bundle, err := BuildBundleInline(baseDir, cfg, "go", "/tmp", "edit", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(bundle.System, "shared reference content") {
+		t.Error("expected shared reference content from baseDir fallback")
+	}
+}
+
+func TestBuildBundleInline_MissingEntrypoint(t *testing.T) {
+	t.Parallel()
+	baseDir := t.TempDir()
+
+	cfg := &InlineAgentConfig{Name: "test-inline", EntryPoint: "missing.md", Wrapper: "agent.md"}
+	_, err := BuildBundleInline(baseDir, cfg, "go", "/tmp", "edit", nil)
+	if err == nil {
+		t.Fatal("expected error for missing entrypoint")
+	}
+}
+
 // fakeDirEntry implements fs.DirEntry for testing.
 type fakeDirEntry struct {
 	fname string

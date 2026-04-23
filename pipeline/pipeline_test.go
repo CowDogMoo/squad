@@ -1392,3 +1392,52 @@ func TestRunnerAttachFindings(t *testing.T) {
 		t.Fatalf("expected nil findings for nil store, got %v", nilReport.Findings)
 	}
 }
+
+func TestStageIsInline(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil InlineConfig", func(t *testing.T) {
+		t.Parallel()
+		s := Stage{Name: "s1", Agent: "a1"}
+		if s.IsInline() {
+			t.Fatal("expected IsInline() = false for stage without InlineConfig")
+		}
+	})
+
+	t.Run("with InlineConfig", func(t *testing.T) {
+		t.Parallel()
+		s := Stage{
+			Name:  "s1",
+			Agent: "s1",
+			InlineConfig: &InlineConfig{
+				EntryPoint: "system.md",
+				Wrapper:    "agent.md",
+			},
+		}
+		if !s.IsInline() {
+			t.Fatal("expected IsInline() = true for stage with InlineConfig")
+		}
+	})
+}
+
+func TestStageAgentList(t *testing.T) {
+	t.Parallel()
+
+	t.Run("single agent", func(t *testing.T) {
+		t.Parallel()
+		s := Stage{Name: "s1", Agent: "a1"}
+		got := s.AgentList()
+		if len(got) != 1 || got[0] != "a1" {
+			t.Fatalf("expected [a1], got %v", got)
+		}
+	})
+
+	t.Run("multiple agents", func(t *testing.T) {
+		t.Parallel()
+		s := Stage{Name: "s1", Agents: []string{"a1", "a2"}}
+		got := s.AgentList()
+		if len(got) != 2 {
+			t.Fatalf("expected 2 agents, got %d", len(got))
+		}
+	})
+}

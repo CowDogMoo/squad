@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
@@ -39,164 +38,50 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newPipelineCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "pipeline",
-		Short: "Run multi-agent pipelines",
-		Long:  "Execute declarative multi-agent pipelines defined in YAML.",
-	}
-
-	cmd.AddCommand(newPipelineRunCmd())
-	return cmd
-}
-
-func newPipelineRunCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "run <pipeline.yaml> [prompt]",
-		Short: "Execute a pipeline",
-		Long: `Execute a multi-agent pipeline defined in a YAML file.
-
-The pipeline file declares stages with agents, dependencies, gates, and
-output format. Agents within a stage run in parallel; stages execute in
-dependency order.
-
-Examples:
-  # Run a pipeline
-  squad pipeline run recon.yaml "Assess the target system"
-
-  # Run with cost limit and output file
-  squad pipeline run security-audit.yaml --max-cost 5.00 --out report.md
-
-  # Dry run to validate the pipeline
-  squad pipeline run recon.yaml --dry-run`,
-		Args: cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cmd.SilenceUsage = true
-			return runPipeline(cmd, args)
-		},
-	}
-
-	cmd.Flags().String("agents-dir", "", "Agents directory (default: ./agents, then ~/.config/squad/agents)")
-	cmd.Flags().String("working-dir", "", "Working directory (default: current working directory)")
-	cmd.Flags().String("api-key", "", "API key (overrides env/config)")
-	cmd.Flags().String("base-url", "", "Base URL override for provider")
-	cmd.Flags().String("organization", "", "Organization ID")
-	cmd.Flags().String("api-version", "", "API version")
-	cmd.Flags().String("api-type", "", "API type (openai or azure)")
-	cmd.Flags().Bool("openai-compat-max-tokens", false, "Use max_tokens for OpenAI-compatible endpoints")
-	cmd.Flags().String("provider", "", "Model provider")
-	cmd.Flags().String("model", "", "Model name")
-	cmd.Flags().Float64("temperature", -1, "Sampling temperature")
-	cmd.Flags().Int("max-tokens", -1, "Max output tokens")
-	cmd.Flags().Int("max-iterations", 100, "Max tool-calling iterations per agent (10-1000)")
-	cmd.Flags().Float64("max-cost", 10, "Max total cost budget in USD for entire pipeline (0 = unlimited)")
-	cmd.Flags().String("out", "", "Write report to file")
-	cmd.Flags().Bool("print", true, "Print report to stdout")
-	cmd.Flags().Bool("dry-run", false, "Validate pipeline and exit without running")
-	cmd.Flags().Bool("json", false, "Force JSON output format")
-	cmd.Flags().Int("num-ctx", 32768, "Context window size for Ollama models")
-	cmd.Flags().StringArray("var", nil, "Template variable in KEY=VALUE format (can be repeated)")
-
-	return cmd
-}
-
-func runPipeline(cmd *cobra.Command, args []string) error {
-	pipelinePath := args[0]
-	prompt := ""
-	if len(args) > 1 {
-		prompt = strings.Join(args[1:], " ")
-	}
-
-	// Load and validate the pipeline.
-	p, err := pl.Load(pipelinePath)
-	if err != nil {
-		return fmt.Errorf("failed to load pipeline: %w", err)
-	}
-
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	if dryRun {
-		_, err := fmt.Fprintf(cmd.OutOrStdout(), "Pipeline %q (%s) validated: %d stages\n", p.Name, p.Version, len(p.Stages))
-		return err
-	}
-
-	cfg := configFromContext(cmd)
-	if cfg == nil {
-		return fmt.Errorf("config not available")
-	}
-
-	workingDir, err := resolveWorkingDir(cmd)
-	if err != nil {
-		return err
-	}
-
-	maxCost, _ := cmd.Flags().GetFloat64("max-cost")
-	if maxCost < 0 {
-		maxCost = 0
-	}
-
-	opts := buildPipelineRunOpts(cmd, cfg)
-
-	agentsDir, err := resolveAgentsDir(cmd, cfg)
-	if err != nil {
-		return err
-	}
-
-	varStrings, _ := cmd.Flags().GetStringArray("var")
-	vars := parseVars(varStrings)
-
-	logging.InfoContext(cmd.Context(), "pipeline: starting %q with %d stages (max_cost=$%.2f)", p.Name, len(p.Stages), maxCost)
-
-	pipelineRunner := &pl.Runner{
-		Pipeline:   p,
-		WorkingDir: workingDir,
-		Prompt:     prompt,
-		MaxCost:    maxCost,
-	}
-	pipelineRunner.RunAgent = buildRunAgentFunc(opts, agentsDir, cfg, vars, pipelineRunner)
-
-	report, err := pipelineRunner.Run(cmd.Context())
-
-	// Always try to output the report, even on error.
-	if report != nil {
-		outputReport(cmd, p, pipelineRunner, report)
-	}
-
-	return err
-}
-
-func resolveWorkingDir(cmd *cobra.Command) (string, error) {
-	workingDir, _ := cmd.Flags().GetString("working-dir")
-	if workingDir == "" {
-		return os.Getwd()
-	}
-	return filepath.Abs(workingDir)
-}
-
-func resolveAgentsDir(cmd *cobra.Command, cfg *config.Config) (string, error) {
-	agentsDir, _ := cmd.Flags().GetString("agents-dir")
-	if agentsDir == "" {
-		return resolveAgentsDirForPipeline(cfg)
-	}
-	return filepath.Abs(agentsDir)
-}
-
-func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, cfg *config.Config, vars map[string]string, pipelineRunner *pl.Runner) func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
+// buildRunAgentFunc creates the callback used by the pipeline runner to execute
+// individual agents. It handles agent resolution, bundle building, budget
+// propagation, and model invocation.
+func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentDir string, cfg *config.Config, vars map[string]string, pipelineRunner *pl.Runner) func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
 	return func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
 		mergedVars := mergeVars(vars, stageVars)
 
-		resolvedAgentsDir, agentErr := findAgentDirForPipeline(agentName, agentsDir, cfg)
-		if agentErr != nil {
-			return "", nil, agentErr
-		}
+		var bundle *agent.Bundle
 
-		bundle, agentErr := agent.BuildBundle(resolvedAgentsDir, agentName, agentPrompt, wd, mode, mergedVars)
-		if agentErr != nil {
-			return "", nil, fmt.Errorf("failed to build agent %s: %w", agentName, agentErr)
+		// Check if this is an inline agent defined in the composed manifest.
+		if inlineCfg, ok := pipelineRunner.InlineAgents[agentName]; ok && inlineCfg != nil {
+			inlineAgent := &agent.InlineAgentConfig{
+				Name:       agentName,
+				EntryPoint: inlineCfg.EntryPoint,
+				Wrapper:    inlineCfg.Wrapper,
+				Task:       inlineCfg.Task,
+				References: inlineCfg.References,
+			}
+			for _, m := range inlineCfg.Models {
+				inlineAgent.Models = append(inlineAgent.Models, agent.ModelPreference{
+					Model:    m.Model,
+					Provider: m.Provider,
+				})
+			}
+			var buildErr error
+			bundle, buildErr = agent.BuildBundleInline(pipelineRunner.ComposedDir, inlineAgent, agentPrompt, wd, mode, mergedVars)
+			if buildErr != nil {
+				return "", nil, fmt.Errorf("failed to build inline agent %s: %w", agentName, buildErr)
+			}
+		} else {
+			resolvedAgentsDir, agentErr := findAgentDirForComposed(agentName, agentsDir, composedAgentDir, cfg)
+			if agentErr != nil {
+				return "", nil, agentErr
+			}
+
+			var buildErr error
+			bundle, buildErr = agent.BuildBundle(resolvedAgentsDir, agentName, agentPrompt, wd, mode, mergedVars)
+			if buildErr != nil {
+				return "", nil, fmt.Errorf("failed to build agent %s: %w", agentName, buildErr)
+			}
 		}
 
 		agentOpts := *opts
 		agentOpts.Agent = agentName
-		agentOpts.AgentsDir = resolvedAgentsDir
 		agentOpts.WorkingDir = wd
 		agentOpts.Mode = mode
 		agentOpts.Vars = mergedVars
@@ -219,6 +104,7 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, cfg *config.Co
 	}
 }
 
+// outputReport formats and writes the pipeline report to stdout and/or a file.
 func outputReport(cmd *cobra.Command, p *pl.Pipeline, pipelineRunner *pl.Runner, report *pl.Report) {
 	forceJSON, _ := cmd.Flags().GetBool("json")
 	if forceJSON && (p.Output == nil || p.Output.Format != "json") {
@@ -238,18 +124,22 @@ func outputReport(cmd *cobra.Command, p *pl.Pipeline, pipelineRunner *pl.Runner,
 	outFile, _ := cmd.Flags().GetString("out")
 
 	if printOut || outFile == "" {
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), formatted)
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), formatted); err != nil {
+			logging.Warn("failed to print report: %v", err)
+		}
 	}
 	if outFile != "" {
 		if writeErr := os.WriteFile(outFile, []byte(formatted), 0o644); writeErr != nil {
 			logging.Warn("failed to write report: %v", writeErr)
 		} else {
-			logging.InfoContext(cmd.Context(), "pipeline report written to %s", outFile)
+			logging.InfoContext(cmd.Context(), "report written to %s", outFile)
 		}
 	}
 }
 
-func buildPipelineRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOptions {
+// buildComposedRunOpts creates RunOptions for composed agent execution from
+// CLI flags and Viper config.
+func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOptions {
 	v := viperFromContext(cmd)
 
 	provider := flagOrViper(cmd, "provider", v, "provider.default")
@@ -308,6 +198,7 @@ func flagOrViper(cmd *cobra.Command, flagName string, v interface{ GetString(str
 	return ""
 }
 
+// mergeVars combines base and override variable maps, with override taking precedence.
 func mergeVars(base, override map[string]string) map[string]string {
 	if len(base) == 0 && len(override) == 0 {
 		return nil
@@ -322,8 +213,8 @@ func mergeVars(base, override map[string]string) map[string]string {
 	return merged
 }
 
-// resolveAgentsDirForPipeline resolves the agents directory from config sources.
-func resolveAgentsDirForPipeline(cfg *config.Config) (string, error) {
+// resolveAgentsDirFromConfig resolves the agents directory from config sources.
+func resolveAgentsDirFromConfig(cfg *config.Config) (string, error) {
 	if cfg == nil {
 		return "", fmt.Errorf("no config provided and no explicit agents directory specified")
 	}
@@ -341,8 +232,19 @@ func resolveAgentsDirForPipeline(cfg *config.Config) (string, error) {
 	return paths[0], nil
 }
 
-// findAgentDirForPipeline locates an agent's parent directory.
-func findAgentDirForPipeline(agentName, defaultDir string, cfg *config.Config) (string, error) {
+// findAgentDirForComposed locates an agent's parent directory for composed agent execution.
+// It checks for nested sub-agents inside composedDir/agents/ first, then falls back to
+// global search paths and the default directory.
+func findAgentDirForComposed(agentName, defaultDir, composedDir string, cfg *config.Config) (string, error) {
+	// Check for nested sub-agents inside the composed agent's directory.
+	if composedDir != "" {
+		nestedDir := filepath.Join(composedDir, "agents")
+		manifestPath := filepath.Join(nestedDir, agentName, "agent.yaml")
+		if _, err := os.Stat(manifestPath); err == nil {
+			return nestedDir, nil
+		}
+	}
+
 	if cfg != nil {
 		manager, err := source.NewManager(cfg)
 		if err == nil {

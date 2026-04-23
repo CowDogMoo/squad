@@ -66,7 +66,6 @@ Define an agent in markdown and YAML, point it at any LLM, and turn it loose on 
 	})
 
 	rootCmd.AddCommand(newRunCmd())
-	rootCmd.AddCommand(newPipelineCmd())
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(newGradeCmd())

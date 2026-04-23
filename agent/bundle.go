@@ -27,14 +27,25 @@ type ModelPreference struct {
 }
 
 // Manifest represents the structure of an agent's manifest file.
+// A manifest is either a leaf agent (has entrypoint/wrapper) or a composed
+// agent (has stages). These are mutually exclusive; Validate() enforces this.
 type Manifest struct {
-	Name          string             `yaml:"name"`
-	Version       string             `yaml:"version"`
-	Models        []ModelPreference  `yaml:"models,omitempty"` // ranked model preferences
-	EntryPoint    string             `yaml:"entrypoint"`
-	Wrapper       string             `yaml:"wrapper"`
-	References    []string           `yaml:"references"`
-	Task          string             `yaml:"task,omitempty"`
+	Name        string `yaml:"name"`
+	Version     string `yaml:"version"`
+	Description string `yaml:"description,omitempty"`
+
+	// Leaf agent fields.
+	Models     []ModelPreference `yaml:"models,omitempty"` // ranked model preferences
+	EntryPoint string            `yaml:"entrypoint,omitempty"`
+	Wrapper    string            `yaml:"wrapper,omitempty"`
+	References []string          `yaml:"references,omitempty"`
+	Task       string            `yaml:"task,omitempty"`
+
+	// Composed agent fields.
+	Stages []ComposedStage `yaml:"stages,omitempty"`
+	Gates  []ComposedGate  `yaml:"gates,omitempty"`
+
+	// Shared fields.
 	Environment   *executor.Config   `yaml:"environment,omitempty"`
 	DependsOn     []string           `yaml:"depends_on,omitempty"`
 	Output        *OutputConfig      `yaml:"output,omitempty"`
@@ -262,6 +273,8 @@ func loadTask(agentPath, taskFile string) (string, error) {
 }
 
 // LoadManifest reads and parses the agent manifest from the given agent directory.
+// It validates the manifest structure, ensuring composed and leaf fields are
+// mutually exclusive.
 func LoadManifest(agentPath string) (*Manifest, error) {
 	manifestPath := filepath.Join(agentPath, "agent.yaml")
 	manifestData, err := os.ReadFile(manifestPath)
@@ -271,6 +284,9 @@ func LoadManifest(agentPath string) (*Manifest, error) {
 	var manifest Manifest
 	if err := yaml.Unmarshal(manifestData, &manifest); err != nil {
 		return nil, fmt.Errorf("failed to parse agent manifest: %w", err)
+	}
+	if err := manifest.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid agent manifest: %w", err)
 	}
 	return &manifest, nil
 }
@@ -461,7 +477,10 @@ func compactRepoSummary(workingDir string) string {
 	dirs := make(map[string]*dirInfo)
 	totalFiles := 0
 
-	_ = filepath.WalkDir(workingDir, repoSummaryVisitor(workingDir, dirs, &totalFiles))
+	if err := filepath.WalkDir(workingDir, repoSummaryVisitor(workingDir, dirs, &totalFiles)); err != nil {
+		logging.Warn("failed to walk working directory for repo summary: %v", err)
+		return ""
+	}
 
 	if totalFiles == 0 {
 		return ""
@@ -638,5 +657,95 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		DisableTask:   manifest.DisableTask,
 		MaxIterations: manifest.MaxIterations,
 		EditDeadline:  manifest.EditDeadline,
+	}, nil
+}
+
+// InlineAgentConfig holds the configuration for an agent defined inline
+// within a composed agent's stage.
+type InlineAgentConfig struct {
+	Name       string            // stage name, used as the agent identity
+	EntryPoint string            // path to system prompt, relative to base dir
+	Wrapper    string            // path to wrapper prompt, relative to base dir
+	Task       string            // path to task prompt, relative to base dir
+	Models     []ModelPreference // model preferences
+	References []string          // paths to reference files, relative to base dir
+}
+
+// resolveInlinePromptDir returns the directory containing the inline agent's
+// prompt files. It checks stages/<name>/ first (for stage-specific prompts),
+// then falls back to baseDir.
+func resolveInlinePromptDir(baseDir, name, entryPoint string) string {
+	stageDir := filepath.Join(baseDir, "stages", name)
+	if _, err := os.Stat(filepath.Join(stageDir, entryPoint)); err == nil {
+		return stageDir
+	}
+	return baseDir
+}
+
+// BuildBundleInline assembles a bundle from inline agent config.
+// baseDir is the composed agent's directory where prompt files live.
+// Files are resolved with progressive lookup: stages/<name>/ first, then baseDir.
+func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDir, mode string, vars map[string]string) (*Bundle, error) {
+	// Resolve the prompt directory: check stages/<name>/ first, then baseDir.
+	promptDir := resolveInlinePromptDir(baseDir, cfg.Name, cfg.EntryPoint)
+
+	manifest := &Manifest{
+		Name:       cfg.Name,
+		Version:    "inline",
+		EntryPoint: cfg.EntryPoint,
+		Wrapper:    cfg.Wrapper,
+		Task:       cfg.Task,
+		Models:     cfg.Models,
+		References: cfg.References,
+	}
+
+	displayMode := mode
+	if displayMode == "" {
+		displayMode = "edit"
+	}
+
+	data := TemplateData{Mode: mode, Vars: vars}
+	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(promptDir, baseDir, manifest, data)
+	if err != nil {
+		return nil, err
+	}
+
+	// References are resolved from baseDir (shared) or promptDir (stage-specific).
+	refs, err := loadReferences(promptDir, manifest.References)
+	if err != nil {
+		// Fall back to baseDir for shared references.
+		refs, err = loadReferences(baseDir, manifest.References)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	sys := buildSystemMessage(manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent, refs)
+
+	userMessage := prompt
+	if userMessage == "" {
+		userMessage = "Begin."
+	}
+
+	var combined bytes.Buffer
+	combined.Write(sys.Bytes())
+	combined.WriteString("\n\n## User Message\n\n")
+	combined.WriteString(userMessage)
+	combined.WriteString("\n")
+
+	var primaryModel, primaryProvider string
+	if len(manifest.Models) > 0 {
+		primaryModel = manifest.Models[0].Model
+		primaryProvider = manifest.Models[0].Provider
+	}
+
+	return &Bundle{
+		System:   sys.String(),
+		User:     userMessage,
+		Combined: combined.Bytes(),
+		WorkDir:  workingDir,
+		Model:    primaryModel,
+		Provider: primaryProvider,
+		Models:   manifest.Models,
 	}, nil
 }

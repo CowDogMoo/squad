@@ -57,8 +57,8 @@ squad run --agent go-review --provider openai --model gpt-4.1-mini
 # Run with local Ollama
 squad run --agent go-review --provider ollama --model qwen2.5-coder:7b-instruct
 
-# Run a multi-agent pipeline
-squad pipeline run security-audit.yaml "Review this codebase"
+# Run a composed (multi-agent) pipeline
+squad run --agent security-audit "Review this codebase"
 ```
 
 ## Documentation

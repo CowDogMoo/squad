@@ -10,15 +10,15 @@ import (
 
 	"github.com/cowdogmoo/squad/config"
 	pl "github.com/cowdogmoo/squad/pipeline"
+	"github.com/cowdogmoo/squad/runner"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-// newTestPipelineRunCmd creates a pipeline run command with a context that
-// includes a Viper instance and an optional config, mirroring what the
-// real root command sets up.
-func newTestPipelineRunCmd(cfg *config.Config) *cobra.Command {
-	cmd := newPipelineRunCmd()
+// newTestRunCmdWithContext creates a run command with a context that
+// includes a Viper instance and an optional config.
+func newTestRunCmdWithContext(cfg *config.Config) *cobra.Command {
+	cmd := newRunCmd()
 	ctx := context.Background()
 	ctx = withViper(ctx, viper.New())
 	if cfg != nil {
@@ -60,7 +60,7 @@ func TestMergeVars(t *testing.T) {
 
 func TestFlagOrViper(t *testing.T) {
 	t.Parallel()
-	cmd := newPipelineRunCmd()
+	cmd := newRunCmd()
 	// Without changing flags, flagOrViper should return empty string.
 	val := flagOrViper(cmd, "provider", nil, "provider.default")
 	if val != "" {
@@ -68,108 +68,22 @@ func TestFlagOrViper(t *testing.T) {
 	}
 }
 
-func TestPipelineRunDryRun(t *testing.T) {
-	// Create a minimal pipeline file.
-	dir := t.TempDir()
-	pipelinePath := filepath.Join(dir, "test.yaml")
-	content := `
-name: test-pipeline
-version: v1
-stages:
-  - name: review
-    agent: go-review
-`
-	if err := os.WriteFile(pipelinePath, []byte(content), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	rootCmd := NewRootCmd()
-	rootCmd.SetArgs([]string{"pipeline", "run", pipelinePath, "--dry-run"})
-
-	var out strings.Builder
-	rootCmd.SetOut(&out)
-
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-
-	if !strings.Contains(out.String(), "validated") {
-		t.Fatalf("expected validation message, got: %s", out.String())
-	}
-}
-
-func TestResolveWorkingDir(t *testing.T) {
-	t.Parallel()
-
-	t.Run("default uses cwd", func(t *testing.T) {
-		t.Parallel()
-		cmd := newPipelineRunCmd()
-		dir, err := resolveWorkingDir(cmd)
-		if err != nil {
-			// os.Getwd can fail when parallel tests chdir to
-			// temp dirs that are later removed; not our bug.
-			t.Skipf("os.Getwd unavailable in parallel test env: %v", err)
-		}
-		if !filepath.IsAbs(dir) {
-			t.Fatalf("expected absolute path, got %q", dir)
-		}
-	})
-
-	t.Run("flag set returns absolute path", func(t *testing.T) {
-		t.Parallel()
-		tmp := t.TempDir()
-		cmd := newPipelineRunCmd()
-		if err := cmd.Flags().Set("working-dir", tmp); err != nil {
-			t.Fatalf("set flag: %v", err)
-		}
-		dir, err := resolveWorkingDir(cmd)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		abs, _ := filepath.Abs(tmp)
-		if dir != abs {
-			t.Fatalf("expected %q, got %q", abs, dir)
-		}
-	})
-}
-
-func TestResolveAgentsDir(t *testing.T) {
-	t.Parallel()
-
-	t.Run("flag set returns absolute path", func(t *testing.T) {
-		t.Parallel()
-		tmp := t.TempDir()
-		cmd := newPipelineRunCmd()
-		if err := cmd.Flags().Set("agents-dir", tmp); err != nil {
-			t.Fatalf("set flag: %v", err)
-		}
-		dir, err := resolveAgentsDir(cmd, nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		abs, _ := filepath.Abs(tmp)
-		if dir != abs {
-			t.Fatalf("expected %q, got %q", abs, dir)
-		}
-	})
-}
-
-func TestBuildPipelineRunOpts(t *testing.T) {
+func TestBuildComposedRunOpts(t *testing.T) {
 	t.Parallel()
 
 	t.Run("defaults", func(t *testing.T) {
 		t.Parallel()
 		cfg := &config.Config{}
-		cmd := newTestPipelineRunCmd(cfg)
-		opts := buildPipelineRunOpts(cmd, cfg)
+		cmd := newTestRunCmdWithContext(cfg)
+		opts := buildComposedRunOpts(cmd, cfg)
 		if opts == nil {
 			t.Fatal("expected non-nil opts")
 		}
 		if opts.MaxIterations != 100 {
 			t.Fatalf("expected MaxIterations=100, got %d", opts.MaxIterations)
 		}
-		if opts.MaxCost != 10 {
-			t.Fatalf("expected MaxCost=10, got %f", opts.MaxCost)
+		if opts.MaxCost != 5 {
+			t.Fatalf("expected MaxCost=5, got %f", opts.MaxCost)
 		}
 		if opts.NumCtx != 32768 {
 			t.Fatalf("expected NumCtx=32768, got %d", opts.NumCtx)
@@ -181,8 +95,8 @@ func TestBuildPipelineRunOpts(t *testing.T) {
 
 	t.Run("nil config", func(t *testing.T) {
 		t.Parallel()
-		cmd := newTestPipelineRunCmd(nil)
-		opts := buildPipelineRunOpts(cmd, nil)
+		cmd := newTestRunCmdWithContext(nil)
+		opts := buildComposedRunOpts(cmd, nil)
 		if opts.ConfigAvailable {
 			t.Fatal("expected ConfigAvailable=false")
 		}
@@ -190,9 +104,9 @@ func TestBuildPipelineRunOpts(t *testing.T) {
 
 	t.Run("max-iterations clamped low", func(t *testing.T) {
 		t.Parallel()
-		cmd := newTestPipelineRunCmd(nil)
+		cmd := newTestRunCmdWithContext(nil)
 		_ = cmd.Flags().Set("max-iterations", "3")
-		opts := buildPipelineRunOpts(cmd, nil)
+		opts := buildComposedRunOpts(cmd, nil)
 		if opts.MaxIterations != 10 {
 			t.Fatalf("expected MaxIterations=10, got %d", opts.MaxIterations)
 		}
@@ -200,9 +114,9 @@ func TestBuildPipelineRunOpts(t *testing.T) {
 
 	t.Run("max-iterations clamped high", func(t *testing.T) {
 		t.Parallel()
-		cmd := newTestPipelineRunCmd(nil)
+		cmd := newTestRunCmdWithContext(nil)
 		_ = cmd.Flags().Set("max-iterations", "5000")
-		opts := buildPipelineRunOpts(cmd, nil)
+		opts := buildComposedRunOpts(cmd, nil)
 		if opts.MaxIterations != 1000 {
 			t.Fatalf("expected MaxIterations=1000, got %d", opts.MaxIterations)
 		}
@@ -210,9 +124,9 @@ func TestBuildPipelineRunOpts(t *testing.T) {
 
 	t.Run("negative max-cost becomes zero", func(t *testing.T) {
 		t.Parallel()
-		cmd := newTestPipelineRunCmd(nil)
+		cmd := newTestRunCmdWithContext(nil)
 		_ = cmd.Flags().Set("max-cost", "-5")
-		opts := buildPipelineRunOpts(cmd, nil)
+		opts := buildComposedRunOpts(cmd, nil)
 		if opts.MaxCost != 0 {
 			t.Fatalf("expected MaxCost=0, got %f", opts.MaxCost)
 		}
@@ -220,13 +134,13 @@ func TestBuildPipelineRunOpts(t *testing.T) {
 
 	t.Run("flag values propagate", func(t *testing.T) {
 		t.Parallel()
-		cmd := newTestPipelineRunCmd(nil)
+		cmd := newTestRunCmdWithContext(nil)
 		_ = cmd.Flags().Set("provider", "openai")
 		_ = cmd.Flags().Set("model", "gpt-4")
 		_ = cmd.Flags().Set("api-key", "sk-test")
 		_ = cmd.Flags().Set("temperature", "0.7")
 		_ = cmd.Flags().Set("max-tokens", "2048")
-		opts := buildPipelineRunOpts(cmd, nil)
+		opts := buildComposedRunOpts(cmd, nil)
 		if opts.Provider != "openai" {
 			t.Fatalf("expected Provider=openai, got %q", opts.Provider)
 		}
@@ -260,7 +174,7 @@ func TestOutputReport(t *testing.T) {
 
 	t.Run("print to stdout markdown", func(t *testing.T) {
 		t.Parallel()
-		cmd := newPipelineRunCmd()
+		cmd := newRunCmd()
 		var out strings.Builder
 		cmd.SetOut(&out)
 
@@ -276,7 +190,7 @@ func TestOutputReport(t *testing.T) {
 
 	t.Run("json output", func(t *testing.T) {
 		t.Parallel()
-		cmd := newPipelineRunCmd()
+		cmd := newRunCmd()
 		_ = cmd.Flags().Set("json", "true")
 		var out strings.Builder
 		cmd.SetOut(&out)
@@ -298,7 +212,7 @@ func TestOutputReport(t *testing.T) {
 
 	t.Run("json sets output format on nil Output", func(t *testing.T) {
 		t.Parallel()
-		cmd := newPipelineRunCmd()
+		cmd := newRunCmd()
 		_ = cmd.Flags().Set("json", "true")
 		var out strings.Builder
 		cmd.SetOut(&out)
@@ -317,7 +231,7 @@ func TestOutputReport(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()
 		outFile := filepath.Join(tmp, "report.md")
-		cmd := newPipelineRunCmd()
+		cmd := newRunCmd()
 		_ = cmd.Flags().Set("out", outFile)
 		_ = cmd.Flags().Set("print", "false")
 		var out strings.Builder
@@ -340,7 +254,7 @@ func TestOutputReport(t *testing.T) {
 
 	t.Run("print false and no out still prints", func(t *testing.T) {
 		t.Parallel()
-		cmd := newPipelineRunCmd()
+		cmd := newRunCmd()
 		_ = cmd.Flags().Set("print", "false")
 		var out strings.Builder
 		cmd.SetOut(&out)
@@ -350,20 +264,18 @@ func TestOutputReport(t *testing.T) {
 		report := makeReport()
 
 		outputReport(cmd, p, pRunner, report)
-		// When print=false but out="" the condition (printOut || outFile == "") is true
-		// because outFile is empty, so it still prints.
 		if out.Len() == 0 {
 			t.Fatal("expected output when no out file is specified")
 		}
 	})
 }
 
-func TestResolveAgentsDirForPipeline(t *testing.T) {
+func TestResolveAgentsDirFromConfig(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil config returns error", func(t *testing.T) {
 		t.Parallel()
-		_, err := resolveAgentsDirForPipeline(nil)
+		_, err := resolveAgentsDirFromConfig(nil)
 		if err == nil {
 			t.Fatal("expected error with nil config, got nil")
 		}
@@ -372,20 +284,37 @@ func TestResolveAgentsDirForPipeline(t *testing.T) {
 	t.Run("empty config returns error", func(t *testing.T) {
 		t.Parallel()
 		cfg := &config.Config{}
-		_, err := resolveAgentsDirForPipeline(cfg)
+		_, err := resolveAgentsDirFromConfig(cfg)
 		if err == nil {
 			t.Fatal("expected error with empty config, got nil")
 		}
 	})
+
+	t.Run("config with local path returns path", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := t.TempDir()
+		cfg := &config.Config{
+			Agents: config.AgentsConfig{
+				LocalPaths: []string{agentsDir},
+			},
+		}
+		result, err := resolveAgentsDirFromConfig(cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == "" {
+			t.Fatal("expected non-empty path")
+		}
+	})
 }
 
-func TestFindAgentDirForPipeline(t *testing.T) {
+func TestFindAgentDirForComposed(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil config returns default dir", func(t *testing.T) {
 		t.Parallel()
 		defaultDir := "/some/default/agents"
-		dir, err := findAgentDirForPipeline("my-agent", defaultDir, nil)
+		dir, err := findAgentDirForComposed("my-agent", defaultDir, "", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -398,7 +327,7 @@ func TestFindAgentDirForPipeline(t *testing.T) {
 		t.Parallel()
 		defaultDir := "/fallback/agents"
 		cfg := &config.Config{}
-		dir, err := findAgentDirForPipeline("nonexistent-agent", defaultDir, cfg)
+		dir, err := findAgentDirForComposed("nonexistent-agent", defaultDir, "", cfg)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -406,49 +335,40 @@ func TestFindAgentDirForPipeline(t *testing.T) {
 			t.Fatalf("expected %q, got %q", defaultDir, dir)
 		}
 	})
-}
 
-func TestNewPipelineCmd(t *testing.T) {
-	t.Parallel()
-	cmd := newPipelineCmd()
-	if cmd.Use != "pipeline" {
-		t.Fatalf("expected Use=pipeline, got %q", cmd.Use)
-	}
-	if !cmd.HasSubCommands() {
-		t.Fatal("expected pipeline cmd to have subcommands")
-	}
-	// Verify 'run' subcommand exists.
-	found := false
-	for _, sub := range cmd.Commands() {
-		if sub.Use == "run <pipeline.yaml> [prompt]" {
-			found = true
-			break
+	t.Run("nested sub-agent found inside composed dir", func(t *testing.T) {
+		t.Parallel()
+		composedDir := t.TempDir()
+		subAgentDir := filepath.Join(composedDir, "agents", "my-sub-agent")
+		if err := os.MkdirAll(subAgentDir, 0o755); err != nil {
+			t.Fatal(err)
 		}
-	}
-	if !found {
-		t.Fatal("expected 'run' subcommand")
-	}
-}
-
-func TestNewPipelineRunCmd(t *testing.T) {
-	t.Parallel()
-	cmd := newPipelineRunCmd()
-	if cmd.Use != "run <pipeline.yaml> [prompt]" {
-		t.Fatalf("expected Use='run <pipeline.yaml> [prompt]', got %q", cmd.Use)
-	}
-
-	// Verify key flags exist.
-	expectedFlags := []string{
-		"agents-dir", "working-dir", "api-key", "base-url",
-		"provider", "model", "temperature", "max-tokens",
-		"max-iterations", "max-cost", "out", "print",
-		"dry-run", "json", "num-ctx", "var",
-	}
-	for _, name := range expectedFlags {
-		if cmd.Flags().Lookup(name) == nil {
-			t.Fatalf("expected flag %q to exist", name)
+		if err := os.WriteFile(filepath.Join(subAgentDir, "agent.yaml"), []byte("name: my-sub-agent\n"), 0o644); err != nil {
+			t.Fatal(err)
 		}
-	}
+
+		dir, err := findAgentDirForComposed("my-sub-agent", "/fallback", composedDir, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := filepath.Join(composedDir, "agents")
+		if dir != expected {
+			t.Fatalf("expected %q, got %q", expected, dir)
+		}
+	})
+
+	t.Run("nested dir checked before global fallback", func(t *testing.T) {
+		t.Parallel()
+		composedDir := t.TempDir()
+		// No sub-agent exists — should fall back to default
+		dir, err := findAgentDirForComposed("missing-agent", "/fallback", composedDir, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if dir != "/fallback" {
+			t.Fatalf("expected /fallback, got %q", dir)
+		}
+	})
 }
 
 func TestFlagOrViperWithMockViper(t *testing.T) {
@@ -479,6 +399,226 @@ func TestFlagOrViperWithMockViper(t *testing.T) {
 			t.Fatalf("expected viper value 'openai', got %q", val)
 		}
 	})
+}
+
+func TestBuildRunAgentFunc_ResolvesAgent(t *testing.T) {
+	t.Parallel()
+
+	// Create a real agent on disk that buildRunAgentFunc can resolve.
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, "test-leaf")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifestYAML := "name: test-leaf\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifestYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("system prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("agent wrapper"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &runner.RunOptions{
+		Provider: "test",
+		Model:    "test-model",
+	}
+	pRunner := &pl.Runner{
+		InlineAgents: make(map[string]*pl.InlineConfig),
+	}
+
+	fn := buildRunAgentFunc(opts, agentsDir, "", &config.Config{}, nil, pRunner)
+
+	// The callback should resolve the agent and build its bundle. It will fail
+	// at InvokeModel (no real provider), but that confirms the agent resolution
+	// and bundle building paths are exercised.
+	_, _, err := fn(context.Background(), "test-leaf", "review this", t.TempDir(), "edit", nil)
+	if err == nil {
+		t.Fatal("expected error from InvokeModel (no real provider)")
+	}
+	// The error should come from the model invocation, not agent resolution.
+	if strings.Contains(err.Error(), "failed to build agent") {
+		t.Fatalf("agent resolution failed: %v", err)
+	}
+}
+
+func TestBuildRunAgentFunc_BudgetPropagation(t *testing.T) {
+	t.Parallel()
+
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, "budgeted")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"),
+		[]byte("name: budgeted\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("sys"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrap"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &runner.RunOptions{MaxCost: 10.0}
+	pRunner := &pl.Runner{InlineAgents: make(map[string]*pl.InlineConfig)}
+
+	fn := buildRunAgentFunc(opts, agentsDir, "", &config.Config{}, nil, pRunner)
+
+	// Inject pipeline budget var.
+	stageVars := map[string]string{pl.PipelineMaxCostVar: "3.50"}
+	_, _, err := fn(context.Background(), "budgeted", "prompt", t.TempDir(), "edit", stageVars)
+	// Will fail at InvokeModel but confirms budget parsing path runs.
+	if err == nil {
+		t.Fatal("expected error from InvokeModel")
+	}
+}
+
+func TestBuildRunAgentFunc_ExhaustedBudget(t *testing.T) {
+	t.Parallel()
+
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, "cheapo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"),
+		[]byte("name: cheapo\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("sys"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrap"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &runner.RunOptions{}
+	pRunner := &pl.Runner{InlineAgents: make(map[string]*pl.InlineConfig)}
+
+	fn := buildRunAgentFunc(opts, agentsDir, "", &config.Config{}, nil, pRunner)
+
+	// Budget var with invalid (non-positive) value triggers exhaustion error.
+	stageVars := map[string]string{pl.PipelineMaxCostVar: "0.00"}
+	_, _, err := fn(context.Background(), "cheapo", "prompt", t.TempDir(), "edit", stageVars)
+	if err == nil {
+		t.Fatal("expected error for exhausted budget")
+	}
+	if !strings.Contains(err.Error(), "budget exhausted") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildRunAgentFunc_AgentNotFound(t *testing.T) {
+	t.Parallel()
+
+	agentsDir := t.TempDir()
+	opts := &runner.RunOptions{}
+	pRunner := &pl.Runner{InlineAgents: make(map[string]*pl.InlineConfig)}
+
+	fn := buildRunAgentFunc(opts, agentsDir, "", nil, nil, pRunner)
+
+	_, _, err := fn(context.Background(), "nonexistent", "prompt", t.TempDir(), "edit", nil)
+	if err == nil {
+		t.Fatal("expected error for missing agent")
+	}
+	if !strings.Contains(err.Error(), "failed to build agent") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildRunAgentFunc_InlineAgent(t *testing.T) {
+	t.Parallel()
+
+	// Create a composed agent directory with inline prompt files.
+	composedDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(composedDir, "system.md"), []byte("inline system"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(composedDir, "agent.md"), []byte("inline wrapper"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &runner.RunOptions{Provider: "test", Model: "test-model"}
+	pRunner := &pl.Runner{
+		ComposedDir: composedDir,
+		InlineAgents: map[string]*pl.InlineConfig{
+			"my-inline": {
+				EntryPoint: "system.md",
+				Wrapper:    "agent.md",
+				Models: []pl.ModelPreference{
+					{Model: "gpt-4", Provider: "openai"},
+				},
+			},
+		},
+	}
+
+	fn := buildRunAgentFunc(opts, t.TempDir(), composedDir, &config.Config{}, nil, pRunner)
+
+	// The inline path resolves successfully and fails at model invocation.
+	_, _, err := fn(context.Background(), "my-inline", "test prompt", t.TempDir(), "edit", nil)
+	if err == nil {
+		t.Fatal("expected error from InvokeModel (no real provider)")
+	}
+	// Should NOT fail at inline build.
+	if strings.Contains(err.Error(), "failed to build inline agent") {
+		t.Fatalf("inline agent build failed: %v", err)
+	}
+}
+
+func TestBuildRunAgentFunc_InlineBuildError(t *testing.T) {
+	t.Parallel()
+
+	// composedDir has no prompt files — BuildBundleInline will fail.
+	composedDir := t.TempDir()
+	opts := &runner.RunOptions{}
+	pRunner := &pl.Runner{
+		ComposedDir: composedDir,
+		InlineAgents: map[string]*pl.InlineConfig{
+			"bad-inline": {
+				EntryPoint: "missing.md",
+				Wrapper:    "also-missing.md",
+			},
+		},
+	}
+
+	fn := buildRunAgentFunc(opts, t.TempDir(), composedDir, nil, nil, pRunner)
+
+	_, _, err := fn(context.Background(), "bad-inline", "test", t.TempDir(), "edit", nil)
+	if err == nil {
+		t.Fatal("expected error for missing inline prompts")
+	}
+	if !strings.Contains(err.Error(), "failed to build inline agent") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestOutputReport_FormatError(t *testing.T) {
+	t.Parallel()
+
+	cmd := newRunCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+
+	// Pipeline with nil Output causes FormatReport to use markdown.
+	p := &pl.Pipeline{Name: "test", Version: "v1"}
+	pRunner := &pl.Runner{Pipeline: p}
+
+	// Report with nil internals — FormatReport will still produce output.
+	report := &pl.Report{
+		Pipeline: "test",
+		Version:  "v1",
+		Status:   pl.StatusPassed,
+		Duration: "1s",
+	}
+
+	outputReport(cmd, p, pRunner, report)
+	if out.Len() == 0 {
+		t.Fatal("expected output")
+	}
 }
 
 // mockViper implements the interface { GetString(string) string } for testing.
