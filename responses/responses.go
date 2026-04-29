@@ -12,6 +12,7 @@ import (
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/cowdogmoo/squad/tools"
 	openai "github.com/openai/openai-go/v3"
@@ -83,7 +84,9 @@ func UseResponsesAPI(provider, model string, prefixes []string) bool {
 }
 
 // RunWithTools drives a tool-calling loop using the OpenAI Responses API.
-func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization string, temperature float64, maxTokens, maxIterations, editDeadline int, reasoningPrefixes []string, taskCfg *tools.TaskConfig, m *metrics.Metrics, ex executor.Executor) (string, error) {
+// resumeResponseID, if non-empty, chains the initial request via
+// PreviousResponseID so a prior session can be continued server-side.
+func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization, resumeResponseID string, temperature float64, maxTokens, maxIterations, editDeadline int, reasoningPrefixes []string, taskCfg *tools.TaskConfig, m *metrics.Metrics, ex executor.Executor) (string, error) {
 	ctx, span := telemetry.Tracer().Start(ctx, "responses.tool_loop",
 		trace.WithAttributes(
 			attribute.String("gen_ai.request.model", model),
@@ -94,6 +97,7 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 
 	client := newClient(apiKey, baseURL, organization)
 	handlers, toolDefs := tools.BuildHandlers(workingDir, taskCfg, ex)
+	registerLargeResultTool(ctx, handlers, &toolDefs)
 	if maxIterations <= 0 {
 		maxIterations = tools.MaxToolIterations
 	}
@@ -106,6 +110,13 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		ReasoningPrefixes: reasoningPrefixes,
 	}
 
+	logger := session.FromContext(ctx)
+	logEvent(logger, session.EventPrompt, map[string]any{
+		"role":          "user",
+		"bytes":         len(userPrompt),
+		"resumed_chain": resumeResponseID != "",
+	})
+
 	params := oairesponses.ResponseNewParams{
 		Model:        model,
 		Instructions: openai.String(systemPrompt),
@@ -115,16 +126,21 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		Tools:      rc.Tools,
 		Truncation: oairesponses.ResponseNewParamsTruncation("auto"),
 	}
+	if resumeResponseID != "" {
+		params.PreviousResponseID = openai.String(resumeResponseID)
+	}
 	rc.applyOptionals(&params)
 
-	logging.InfoContext(ctx, "responses API: initial request (model=%s)", model)
+	logging.InfoContext(ctx, "responses API: initial request (model=%s, resumed=%v)", model, resumeResponseID != "")
 	resp, err := client.Responses.New(ctx, params)
 	if err != nil {
 		logAPIError(ctx, err, "initial request")
+		logEvent(logger, session.EventError, map[string]any{"phase": "initial", "error": err.Error()})
 		return "", fmt.Errorf("responses API call failed: %w", err)
 	}
 	logOutputItems(ctx, resp, "initial")
 	trackResponseMetrics(resp, m)
+	recordResponse(logger, resp, "initial")
 
 	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc, maxIterations, editDeadline, m)
 	if err != nil {
@@ -179,6 +195,7 @@ func newClient(apiKey, baseURL, organization string) openai.Client {
 func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config, maxIter, editDeadline int, m *metrics.Metrics) (*oairesponses.Response, string, error) {
 	var repeat tools.RepeatTracker
 	editEnforcer := tools.NewEditEnforcer(editDeadline)
+	logger := session.FromContext(ctx)
 	for i := 0; i < maxIter; i++ {
 		calls := ExtractFunctionCalls(resp)
 		if len(calls) == 0 {
@@ -190,6 +207,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 			return resp, text, nil
 		}
 
+		logEvent(logger, session.EventIteration, map[string]any{"index": i + 1, "tool_calls": len(calls)})
 		logging.InfoContext(ctx, "responses API: iteration %d with %d tool call(s)", i+1, len(calls))
 		if checkRepeat(ctx, &repeat, calls) {
 			break
@@ -226,10 +244,12 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 		resp, err = client.Responses.New(ctx, params)
 		if err != nil {
 			logAPIError(ctx, err, fmt.Sprintf("follow-up iteration %d", i+1))
+			logEvent(logger, session.EventError, map[string]any{"phase": "follow-up", "iteration": i + 1, "error": err.Error()})
 			return resp, "", fmt.Errorf("responses API follow-up failed at iteration %d: %w", i+1, err)
 		}
 		logOutputItems(ctx, resp, fmt.Sprintf("follow-up-iter-%d", i+1))
 		trackResponseMetrics(resp, m)
+		recordResponse(logger, resp, fmt.Sprintf("iter-%d", i+1))
 
 		if m != nil && m.BudgetExceeded() {
 			logging.InfoContext(ctx, "responses API: budget exceeded ($%.4f >= $%.4f max), stopping", m.TotalCostWithChildren(), m.MaxCost)
@@ -454,7 +474,13 @@ func logAPIError(ctx context.Context, err error, label string) {
 
 func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers map[string]tools.Handler) []oairesponses.ResponseInputItemUnionParam {
 	outputs := make([]oairesponses.ResponseInputItemUnionParam, 0, len(calls))
+	logger := session.FromContext(ctx)
 	for _, call := range calls {
+		logEvent(logger, session.EventToolCall, map[string]any{
+			"call_id": call.CallID,
+			"name":    call.Name,
+			"args":    tools.TruncateString(call.Arguments, 4096),
+		})
 		handler, ok := handlers[call.Name]
 		if !ok {
 			logging.DebugContext(ctx, "responses API: unknown tool %s", call.Name)
@@ -499,7 +525,32 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 		toolSpan.SetAttributes(attribute.Int("squad.tool.output_bytes", len(output)))
 		toolSpan.End()
 
+		fullBytes := len(output)
+		// get_tool_result must always pass through verbatim — its whole job is
+		// to deliver content the model already knows is large.
+		if logger != nil && call.Name != toolGetToolResult && fullBytes > session.LargeResultThreshold {
+			if id, storeErr := logger.StoreLargeResult(output); storeErr == nil {
+				logEvent(logger, session.EventLargeResult, map[string]any{
+					"call_id":   call.CallID,
+					"name":      call.Name,
+					"result_id": id,
+					"bytes":     fullBytes,
+				})
+				output = formatLargeResultPlaceholder(id, call.Name, fullBytes)
+			} else {
+				logging.Warn("session: failed to spill large result: %v", storeErr)
+			}
+		}
+
 		output = tools.TruncateToolOutputHeadTail(output, 32*1024)
+
+		logEvent(logger, session.EventToolResult, map[string]any{
+			"call_id":     call.CallID,
+			"name":        call.Name,
+			"bytes":       fullBytes,
+			"sent_bytes":  len(output),
+			"duration_ms": toolDuration.Milliseconds(),
+		})
 
 		outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
 			OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
@@ -511,4 +562,41 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 		})
 	}
 	return outputs
+}
+
+// logEvent is a nil-safe helper for appending to the session log.
+func logEvent(l *session.Logger, eventType string, payload any) {
+	if l == nil {
+		return
+	}
+	if err := l.Append(eventType, payload); err != nil {
+		logging.Warn("session: append %s failed: %v", eventType, err)
+	}
+}
+
+// recordResponse persists the response id and writes a session event with
+// status + token usage.
+func recordResponse(l *session.Logger, resp *oairesponses.Response, label string) {
+	if l == nil || resp == nil {
+		return
+	}
+	l.SetLastResponseID(resp.ID)
+	logEvent(l, session.EventResponse, map[string]any{
+		"label":         label,
+		"id":            resp.ID,
+		"status":        string(resp.Status),
+		"output_items":  len(resp.Output),
+		"input_tokens":  resp.Usage.InputTokens,
+		"output_tokens": resp.Usage.OutputTokens,
+	})
+}
+
+// formatLargeResultPlaceholder is the inline summary returned to the model
+// when a tool result has been spilled to disk. The wording tells the model
+// how to fetch the full bytes via get_tool_result.
+func formatLargeResultPlaceholder(resultID, toolName string, totalBytes int) string {
+	return fmt.Sprintf(
+		"[result:%s — %d bytes from %s elided. Call get_tool_result(result_id=%q) to read the full content; pass offset/limit for paging.]",
+		resultID, totalBytes, toolName, resultID,
+	)
 }

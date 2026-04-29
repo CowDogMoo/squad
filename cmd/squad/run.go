@@ -125,6 +125,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		MCPServers:         mcpServers,
 		Stream:             v.GetBool("run.stream"),
 		MaxConcurrentTasks: v.GetInt("run.max_concurrent_tasks"),
+		ResumeID:           v.GetString("run.resume"),
 	}
 }
 
@@ -189,6 +190,7 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 		{"run.max_cost", "max-cost"},
 		{"run.stream", "stream"},
 		{"run.max_concurrent_tasks", "max-concurrent-tasks"},
+		{"run.resume", "resume"},
 	} {
 		if err := bind(pair[0], pair[1]); err != nil {
 			return err
@@ -273,6 +275,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Bool("stream", false, "Stream model output tokens to stderr as they arrive")
 	cmd.Flags().Int("max-concurrent-tasks", 0, "Max concurrent background child tasks (default: 4)")
 	cmd.Flags().Bool("json", false, "Force JSON output format (composed agents only)")
+	cmd.Flags().String("resume", "", "Resume a prior session by id (see ./.squad/sessions/)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 
