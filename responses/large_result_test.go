@@ -81,3 +81,24 @@ func TestGetToolResultRejectsEmptyID(t *testing.T) {
 		t.Fatalf("expected error for invalid json")
 	}
 }
+
+func TestRegisterLargeResultToolNoopOnNilContainers(t *testing.T) {
+	registerLargeResultTool(context.Background(), nil, nil) // no panic
+
+	defs := []llms.Tool{}
+	registerLargeResultTool(context.Background(), nil, &defs)
+	if len(defs) != 0 {
+		t.Fatalf("expected no defs when handlers is nil")
+	}
+}
+
+func TestGetToolResultPropagatesUnknownID(t *testing.T) {
+	wd := t.TempDir()
+	l, _ := session.New(wd, "a", "p", "m", "")
+	t.Cleanup(func() { _ = l.Close() })
+	ctx := session.WithLogger(context.Background(), l)
+
+	if _, err := getToolResult(ctx, []byte(`{"result_id":"deadbeef"}`)); err == nil {
+		t.Fatalf("expected error for unknown id")
+	}
+}

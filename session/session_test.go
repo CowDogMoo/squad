@@ -286,6 +286,83 @@ func TestSetLastResponseIDIgnoresEmpty(t *testing.T) {
 	}
 }
 
+func TestFinishWithErrMessageRecordsBoth(t *testing.T) {
+	l, _ := newTestLogger(t)
+	l.Finish(StatusError, "boom")
+
+	meta := readMeta(t, l)
+	if meta.Status != StatusError {
+		t.Fatalf("status=%q, want %q", meta.Status, StatusError)
+	}
+	events := readEvents(t, l)
+	last := events[len(events)-1]
+	if last.Type != EventRunEnd {
+		t.Fatalf("last event type=%q", last.Type)
+	}
+	if !strings.Contains(string(last.Payload), "boom") {
+		t.Fatalf("run_end payload missing error: %s", last.Payload)
+	}
+}
+
+func TestReadLargeResultClampsNegativeOffset(t *testing.T) {
+	l, _ := newTestLogger(t)
+	id, err := l.StoreLargeResult("hello world")
+	if err != nil {
+		t.Fatalf("StoreLargeResult: %v", err)
+	}
+	chunk, total, err := l.ReadLargeResult(id, -10, 5)
+	if err != nil {
+		t.Fatalf("ReadLargeResult: %v", err)
+	}
+	if total != len("hello world") {
+		t.Fatalf("total=%d", total)
+	}
+	if chunk != "hello" {
+		t.Fatalf("chunk=%q, want hello", chunk)
+	}
+}
+
+func TestAppendUnmarshalablePayloadErrors(t *testing.T) {
+	l, _ := newTestLogger(t)
+	// channel cannot be JSON-marshaled.
+	err := l.Append(EventToolCall, map[string]any{"ch": make(chan int)})
+	if err == nil {
+		t.Fatalf("expected marshal error for channel payload")
+	}
+	if !strings.Contains(err.Error(), "marshal") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestOpenFailsWhenSessionPathIsAFile(t *testing.T) {
+	wd := t.TempDir()
+	id := "blockedSession"
+	dir := filepath.Join(wd, SessionsRoot)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// Create the session id path as a regular file so MkdirAll(<id>/results) fails.
+	if err := os.WriteFile(filepath.Join(dir, id), []byte(""), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := Open(wd, id); err == nil {
+		t.Fatalf("expected mkdir error when session path is a file")
+	}
+}
+
+func TestOpenMissingMetaJSONErrors(t *testing.T) {
+	wd := t.TempDir()
+	id := "abc"
+	dir := filepath.Join(wd, SessionsRoot, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// no meta.json — Open should fail at read step
+	if _, err := Open(wd, id); err == nil {
+		t.Fatalf("expected error opening session without meta.json")
+	}
+}
+
 func TestAppendAfterCloseIsNoop(t *testing.T) {
 	l, _ := newTestLogger(t)
 	if err := l.Close(); err != nil {

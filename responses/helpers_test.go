@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +15,28 @@ import (
 	"github.com/cowdogmoo/squad/session"
 	oairesponses "github.com/openai/openai-go/v3/responses"
 )
+
+// httptestNewServerCapturingBody returns a server that records the
+// `previous_response_id` field of incoming JSON bodies into outPrev,
+// then replies with the supplied payload. Used by tests that need to
+// confirm RunWithTools wired resumeResponseID through to the API.
+func httptestNewServerCapturingBody(t *testing.T, outPrev *string, payload map[string]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+			return
+		}
+		var parsed struct {
+			PreviousResponseID string `json:"previous_response_id"`
+		}
+		_ = json.Unmarshal(body, &parsed)
+		*outPrev = parsed.PreviousResponseID
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+}
 
 func TestFormatLargeResultPlaceholder(t *testing.T) {
 	out := formatLargeResultPlaceholder("abcd1234", "Read", 12345)
@@ -124,5 +149,45 @@ func TestExtractFunctionCallsHandlesNilAndEmpty(t *testing.T) {
 	}
 	if calls := ExtractFunctionCalls(&oairesponses.Response{}); calls != nil {
 		t.Fatalf("empty resp should return nil calls")
+	}
+}
+
+// TestRunWithToolsForwardsResumeResponseID exercises the
+// PreviousResponseID branch when resumeResponseID is non-empty.
+func TestRunWithToolsForwardsResumeResponseID(t *testing.T) {
+	payload := map[string]any{
+		"id": "resp-final", "object": "response", "created_at": 0,
+		"model": "gpt-4o", "parallel_tool_calls": false,
+		"temperature": 0, "tool_choice": "auto", "tools": []any{},
+		"top_p":              1,
+		"error":              map[string]any{"code": "server_error", "message": ""},
+		"incomplete_details": map[string]any{"reason": ""},
+		"instructions":       "system",
+		"metadata":           map[string]any{},
+		"output": []map[string]any{
+			{
+				"id": "msg-1", "type": "message", "role": "assistant", "status": "completed",
+				"content": []map[string]any{{"type": "output_text", "text": "hi"}},
+			},
+		},
+	}
+	var seenPrev string
+	server := httptestNewServerCapturingBody(t, &seenPrev, payload)
+	defer server.Close()
+
+	td := t.TempDir()
+	out, err := RunWithTools(
+		context.Background(),
+		"key", server.URL, "gpt-4o", "system", "user", td,
+		"", "resp_prior", 0.4, 0, 1, 0, nil, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("RunWithTools: %v", err)
+	}
+	if seenPrev != "resp_prior" {
+		t.Fatalf("previous_response_id = %q, want resp_prior", seenPrev)
+	}
+	if out != "hi" {
+		t.Fatalf("response = %q, want hi", out)
 	}
 }

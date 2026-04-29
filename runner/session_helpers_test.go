@@ -92,6 +92,18 @@ func TestCloseSessionNilLoggerNoop(t *testing.T) {
 	closeSession(nil, nil, nil) // must not panic
 }
 
+func TestOpenSessionFreshFailsWhenSessionsRootBlocked(t *testing.T) {
+	wd := t.TempDir()
+	// Make .squad a file so session.New's MkdirAll fails.
+	if err := os.WriteFile(filepath.Join(wd, ".squad"), []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	opts := &RunOptions{WorkingDir: wd, Agent: "a", Provider: "p", Model: "m"}
+	if _, err := openSession(opts, &agent.Bundle{}, "go"); err == nil {
+		t.Fatalf("expected error when session dir cannot be created")
+	}
+}
+
 func TestCloseSessionStatusMapping(t *testing.T) {
 	cases := []struct {
 		name   string
