@@ -282,6 +282,8 @@ func buildLLM(ctx context.Context, opts *RunOptions, provider, model string) (ll
 		return buildAnthropicLLM(opts, model)
 	case "gemini":
 		return buildGeminiLLM(ctx, opts, model)
+	case "nvidia":
+		return buildNvidiaLLM(opts, model)
 	default:
 		return nil, fmt.Errorf("provider not implemented: %s", provider)
 	}
@@ -350,6 +352,22 @@ func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
 }
 
+func buildNvidiaLLM(opts *RunOptions, model string) (llms.Model, error) {
+	oaiOpts := []openai.Option{}
+	if model != "" {
+		oaiOpts = append(oaiOpts, openai.WithModel(model))
+	}
+	baseURL := opts.BaseURL
+	if baseURL == "" {
+		baseURL = "https://integrate.api.nvidia.com/v1"
+	}
+	oaiOpts = append(oaiOpts, openai.WithBaseURL(baseURL))
+	if opts.APIKey != "" {
+		oaiOpts = append(oaiOpts, openai.WithToken(opts.APIKey))
+	}
+	return openai.New(oaiOpts...)
+}
+
 func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 	baseURL := opts.BaseURL
 	if baseURL == "" {
@@ -363,7 +381,7 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 }
 
 func isOpenAICompatProvider(provider string) bool {
-	return provider == "" || provider == "openai"
+	return provider == "" || provider == "openai" || provider == "nvidia"
 }
 
 // reasoningPrefixes returns the configured reasoning model prefixes,
