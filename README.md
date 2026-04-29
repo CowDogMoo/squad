@@ -59,7 +59,29 @@ squad run --agent go-review --provider ollama --model qwen2.5-coder:7b-instruct
 
 # Run a composed (multi-agent) pipeline
 squad run --agent security-audit "Review this codebase"
+
+# Resume a prior run after a crash, ctrl-c, or budget stop
+squad run --agent go-review --resume 20260429T150220Z-a1b2c3d4 \
+    "continue where you left off; finish the remaining files"
 ```
+
+### Sessions
+
+Every run writes an append-only event log to
+`./.squad/sessions/<id>/`:
+
+| File                   | Contents                                              |
+| ---------------------- | ----------------------------------------------------- |
+| `meta.json`            | run options, last response id, cost, status          |
+| `events.jsonl`         | one line per prompt, response, tool call, tool result |
+| `results/<id>.txt`     | full bytes of any tool result that exceeded 8 KiB     |
+
+`--resume <id>` reopens that session and chains the next request to the
+prior OpenAI Responses API id, so the model picks up server-side state
+without re-sending the transcript. When a tool result is too large to
+inline, the model sees a `[result:<id> — N bytes elided …]` placeholder
+and can fetch the full bytes (or any byte range) via the
+`get_tool_result` tool.
 
 ## Documentation
 

@@ -15,6 +15,7 @@ import (
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/mcp"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/source"
 	"github.com/cowdogmoo/squad/tools"
 	"github.com/spf13/cobra"
@@ -56,6 +57,9 @@ type RunOptions struct {
 	MCPServers         []mcp.ServerConfig   // MCP servers from CLI --mcp-server flags
 	Stream             bool                 // stream model output tokens to stderr as they arrive
 	MaxConcurrentTasks int                  // max concurrent background child tasks (0 = default)
+	ResumeID           string               // session id to resume; empty = start a new session
+	ResumeResponseID   string               // OpenAI response id to chain from (set by openSession when resuming)
+	NoSession          bool                 // disable session log entirely (e.g. for tests)
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.
@@ -82,6 +86,16 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 
 	ctx := tools.InitEdits(cmd.Context())
 	ctx = tools.InitEditDeadline(ctx)
+
+	logger, err := openSession(opts, bundle, prompt)
+	if err != nil {
+		logging.Warn("failed to open session log: %v", err)
+	}
+	if logger != nil {
+		ctx = session.WithLogger(ctx, logger)
+		fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\n", logger.SessionID())
+	}
+
 	cmd.SetContext(ctx)
 	tools.ResetEditsApplied(ctx)
 	response, m, err := InvokeModel(ctx, opts, bundle)
@@ -91,6 +105,7 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 		if metricsErr := printMetrics(cmd, m); metricsErr != nil {
 			logging.Warn("failed to print metrics: %v", metricsErr)
 		}
+		closeSession(logger, m, err)
 	}()
 
 	if err != nil {
@@ -212,6 +227,64 @@ func writeResponse(cmd *cobra.Command, response string, opts *RunOptions) error 
 		logging.InfoContext(cmd.Context(), "response written to %s", opts.Output)
 	}
 	return nil
+}
+
+// openSession creates or resumes a session log under workingDir/.squad/sessions.
+// Returns nil (with no error) when session logging is disabled.
+func openSession(opts *RunOptions, bundle *agent.Bundle, prompt string) (*session.Logger, error) {
+	if opts.NoSession {
+		return nil, nil
+	}
+	if opts.ResumeID != "" {
+		l, err := session.Open(opts.WorkingDir, opts.ResumeID)
+		if err != nil {
+			return nil, err
+		}
+		// Pull the prior response id so the Responses API call chains
+		// server-side state from where the previous run left off.
+		opts.ResumeResponseID = l.LastResponseID()
+		_ = l.Append(session.EventResume, map[string]any{
+			"agent":            opts.Agent,
+			"prompt":           prompt,
+			"prev_response_id": opts.ResumeResponseID,
+		})
+		return l, nil
+	}
+	l, err := session.New(opts.WorkingDir, opts.Agent, opts.Provider, opts.Model, prompt)
+	if err != nil {
+		return nil, err
+	}
+	_ = l.Append(session.EventRunStart, map[string]any{
+		"agent":        opts.Agent,
+		"provider":     opts.Provider,
+		"model":        opts.Model,
+		"mode":         opts.Mode,
+		"system_bytes": len(bundle.System),
+	})
+	return l, nil
+}
+
+// closeSession finalizes the session log with status and metrics.
+func closeSession(l *session.Logger, m *metrics.Metrics, runErr error) {
+	if l == nil {
+		return
+	}
+	if m != nil {
+		l.UpdateMetrics(m.InputTokens(), m.OutputTokens(), m.TotalCostWithChildren(), m.Iterations())
+	}
+	status := session.StatusCompleted
+	errMsg := ""
+	switch {
+	case errors.Is(runErr, metrics.ErrBudgetExceeded):
+		status = session.StatusBudget
+	case runErr != nil:
+		status = session.StatusError
+		errMsg = runErr.Error()
+	}
+	l.Finish(status, errMsg)
+	if cerr := l.Close(); cerr != nil {
+		logging.Warn("failed to close session log: %v", cerr)
+	}
 }
 
 // logRunHistory persists token usage to the cost history cache.

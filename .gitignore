@@ -55,5 +55,8 @@ FIXME.md
 # Tool version files (machine-specific)
 .tool-versions
 
+# Session logs (per-run event traces)
+.squad/
+
 # Go vendor directory
 vendor/
