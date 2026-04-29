@@ -326,6 +326,7 @@ func lookupLiteLLMPricing(provider, model string) (Pricing, bool) {
 		"openai-responses": {"openai", "azure"},
 		"anthropic":        {"anthropic", "bedrock", "vertex_ai"},
 		"gemini":           {"gemini", "vertex_ai", "vertex_ai-language-models"},
+		"nvidia":           {"nvidia"},
 	}
 
 	if prefixes, ok := providerMappings[provider]; ok {

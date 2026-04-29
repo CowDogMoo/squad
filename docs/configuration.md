@@ -79,6 +79,7 @@ variables, or config file.
 | Anthropic  | supported | `https://api.anthropic.com/v1`        | required | Claude models via LangChainGo                |
 | Google AI  | supported | Google AI endpoints                   | required | Gemini models via LangChainGo                |
 | Ollama     | supported | `http://localhost:11434/v1` (default) | optional | Local models, uses `max_tokens` compat       |
+| NVIDIA NIM | supported | `https://integrate.api.nvidia.com/v1` (default) | required | OpenAI-compatible; models at build.nvidia.com |
 
 ### OpenAI
 
@@ -96,6 +97,22 @@ squad run --agent go-review --provider anthropic --model claude-sonnet-4-2025051
 
 ```bash
 squad run --agent go-review --provider googleai --model gemini-2.5-flash
+```
+
+### NVIDIA NIM
+
+```bash
+# Using an NVIDIA API key from build.nvidia.com
+squad run --agent go-review \
+  --provider nvidia \
+  --api-key $NVIDIA_API_KEY \
+  --model meta/llama-3.1-8b-instruct
+
+# Or via config / env vars
+export SQUAD_PROVIDER_DEFAULT=nvidia
+export SQUAD_PROVIDER_TOKEN=$NVIDIA_API_KEY
+export SQUAD_MODEL_DEFAULT=meta/llama-3.1-8b-instruct
+squad run --agent go-review
 ```
 
 ### Ollama
