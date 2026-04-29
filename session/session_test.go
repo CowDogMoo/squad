@@ -229,4 +229,70 @@ func TestNilLoggerSafe(t *testing.T) {
 	if got := l.LastResponseID(); got != "" {
 		t.Fatalf("LastResponseID on nil should be empty")
 	}
+	if _, err := l.StoreLargeResult("x"); err == nil {
+		t.Fatalf("StoreLargeResult on nil should error")
+	}
+	if _, _, err := l.ReadLargeResult("x", 0, 0); err == nil {
+		t.Fatalf("ReadLargeResult on nil should error")
+	}
+}
+
+func TestWithLoggerNilLeavesCtxUnchanged(t *testing.T) {
+	base := context.Background()
+	if got := WithLogger(base, nil); got != base {
+		t.Fatalf("WithLogger(ctx, nil) should return ctx unchanged")
+	}
+}
+
+func TestNewFailsWhenSessionsRootIsAFile(t *testing.T) {
+	wd := t.TempDir()
+	// Make .squad a regular file so MkdirAll on .squad/sessions/<id> fails.
+	if err := os.WriteFile(filepath.Join(wd, ".squad"), []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := New(wd, "a", "p", "m", ""); err == nil {
+		t.Fatalf("expected mkdir error when .squad is a regular file")
+	}
+}
+
+func TestOpenFailsForMissingSession(t *testing.T) {
+	wd := t.TempDir()
+	if _, err := Open(wd, "no-such-session"); err == nil {
+		t.Fatalf("expected error opening missing session")
+	}
+}
+
+func TestOpenFailsOnInvalidMeta(t *testing.T) {
+	wd := t.TempDir()
+	id := "20260101T000000Z-deadbeef"
+	dir := filepath.Join(wd, SessionsRoot, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := Open(wd, id); err == nil {
+		t.Fatalf("expected parse error on invalid meta.json")
+	}
+}
+
+func TestSetLastResponseIDIgnoresEmpty(t *testing.T) {
+	l, _ := newTestLogger(t)
+	l.SetLastResponseID("first")
+	l.SetLastResponseID("") // no-op
+	if got := l.LastResponseID(); got != "first" {
+		t.Fatalf("LastResponseID = %q, want first", got)
+	}
+}
+
+func TestAppendAfterCloseIsNoop(t *testing.T) {
+	l, _ := newTestLogger(t)
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// appendLocked short-circuits when events is nil; should not error.
+	if err := l.Append(EventToolCall, map[string]any{"k": "v"}); err != nil {
+		t.Fatalf("Append after Close: %v", err)
+	}
 }
