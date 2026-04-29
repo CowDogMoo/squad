@@ -57,3 +57,6 @@ FIXME.md
 
 # Go vendor directory
 vendor/
+
+# feature file
+ADD_NVIVIA_AS_PROVIDER.md

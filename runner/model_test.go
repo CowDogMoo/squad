@@ -55,6 +55,7 @@ func TestIsOpenAICompatProvider(t *testing.T) {
 		{"openai", "openai", true},
 		{"ollama", "ollama", false},
 		{"anthropic", "anthropic", false},
+		{"nvidia", "nvidia", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -111,6 +112,7 @@ func TestBuildLLMVariants(t *testing.T) {
 		{"openai", "openai", "gpt-4o", &RunOptions{APIKey: "token"}, "*openai.LLM", false},
 		{"anthropic", "anthropic", "claude-3", &RunOptions{APIKey: "token"}, "*anthropic.LLM", false},
 		{"gemini", "gemini", "gemini-2.0-flash", &RunOptions{APIKey: "token"}, "*googleai.GoogleAI", false},
+		{"nvidia provider", "nvidia", "meta/llama-3.1-8b-instruct", &RunOptions{APIKey: "nvapi-test-key"}, "*openai.LLM", false},
 		{"unknown provider", "unknown", "model", &RunOptions{}, "", true},
 	}
 	for _, tt := range tests {
