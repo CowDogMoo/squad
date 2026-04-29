@@ -91,6 +91,8 @@ and can fetch the full bytes (or any byte range) via the
   and config file reference
 - **[Creating Agents](docs/creating-agents.md)** - Build your own agents from
   scratch or from templates
+- **[Prompt Engineering Basics](docs/prompt-engineering-basics.md)** - LLM
+  fundamentals, context windows, and how to write effective agent prompts
 
 ### Guides
 
