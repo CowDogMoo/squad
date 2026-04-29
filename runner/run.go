@@ -93,7 +93,9 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	}
 	if logger != nil {
 		ctx = session.WithLogger(ctx, logger)
-		fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\n", logger.SessionID())
+		if _, fmtErr := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\n", logger.SessionID()); fmtErr != nil {
+			logging.Warn("failed to write session banner: %v", fmtErr)
+		}
 	}
 
 	cmd.SetContext(ctx)
