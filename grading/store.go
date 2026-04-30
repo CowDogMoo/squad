@@ -8,18 +8,20 @@ import (
 	"sort"
 )
 
-// Store persists grade results to disk.
+// Store persists grade results to a JSON file on disk.
+// Use [NewStore] to create one at the default cache location or
+// [NewStoreAt] to specify an explicit path.
 type Store struct {
-	path string
+	path string // absolute path to the grades JSON file
 }
 
-// GradeHistory holds all stored grades.
+// GradeHistory is the top-level container written to and read from the store
+// file. It holds all recorded [GradeResult] values in append order.
 type GradeHistory struct {
 	Grades []*GradeResult `json:"grades"`
 }
 
 // NewStore creates a store at the default location (~/.cache/squad/grades.json).
-
 func NewStore() (*Store, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {

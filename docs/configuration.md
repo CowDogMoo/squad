@@ -80,6 +80,7 @@ variables, or config file.
 | Google AI  | supported | Google AI endpoints                   | required | Gemini models via LangChainGo                |
 | Ollama     | supported | `http://localhost:11434/v1` (default) | optional | Local models, uses `max_tokens` compat       |
 | NVIDIA NIM | supported | `https://integrate.api.nvidia.com/v1` (default) | required | OpenAI-compatible; models at build.nvidia.com |
+| Databricks AI Gateway | supported | `https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1` | required | OpenAI-compatible; PAT (`dapi-` prefix) as Bearer token |
 
 ### OpenAI
 
@@ -114,6 +115,78 @@ export SQUAD_PROVIDER_TOKEN=$NVIDIA_API_KEY
 export SQUAD_MODEL_DEFAULT=meta/llama-3.1-8b-instruct
 squad run --agent go-review
 ```
+
+### Databricks AI Gateway
+
+Databricks AI Gateway is an OpenAI-compatible proxy that routes requests to
+foundation models hosted on Databricks. It is currently in **beta** (no charges
+during beta; unavailable on GovCloud/Azure Government).
+
+**Endpoint format:** The base URL uses the `ai-gateway` subdomain — not the
+workspace URL. The path is always `/mlflow/v1` regardless of which model you
+target; langchaingo appends `/chat/completions` automatically:
+
+```
+https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1
+```
+
+**Authentication:** Send a Databricks PAT (`dapi-` prefix) or OAuth access token
+via `--api-key` / `SQUAD_PROVIDER_TOKEN`. The token is forwarded as
+`Authorization: Bearer <token>`. PATs can be scoped to specific API operations
+for least-privilege access.
+
+**Model field:** The `--model` value is the name of the deployed gateway endpoint
+(e.g. `databricks-gpt-5-5-pro`), not a model family.
+
+```bash
+# CLI flags
+squad run --agent go-review \
+  --provider databricks \
+  --base-url "https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1" \
+  --api-key "dapi-your-databricks-token" \
+  --model databricks-gpt-5-5-pro
+
+# Environment variables
+export SQUAD_PROVIDER_DEFAULT=databricks
+export SQUAD_PROVIDER_BASE_URL=https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1
+export SQUAD_PROVIDER_TOKEN=dapi-your-databricks-token
+export SQUAD_MODEL_DEFAULT=databricks-gpt-5-5-pro
+squad run --agent go-review
+```
+
+Config file with short-lived OAuth token via shell substitution:
+
+```yaml
+provider:
+  default: databricks
+  base_url: https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1
+  token: $(databricks auth token --host https://<workspace-url> 2>/dev/null | jq -r .access_token)
+model:
+  default: databricks-gpt-5-5-pro
+```
+
+Agent manifest override:
+
+```yaml
+models:
+  - model: databricks-gpt-5-5-pro
+    provider: databricks
+```
+
+Example endpoint names: `databricks-gpt-5-5-pro`, `databricks-claude-sonnet-4-5`,
+`databricks-meta-llama-3-3-70b-instruct`.
+
+**Rate limiting** is configured on the Databricks side per endpoint, per user,
+and per group — not in squad.
+
+**Claude Code integration:** Databricks AI Gateway natively supports Claude Code
+as a coding agent, making it straightforward to route squad's LLM calls through
+the gateway for enterprise governance.
+
+**Known limitation:** The `usage_context` map (per-request cost attribution stored
+as `request_tags` in `system.ai_gateway.usage`) requires `extra_body` support in
+the OpenAI client, which langchaingo does not currently provide. This is a
+candidate follow-on item.
 
 ### Ollama
 

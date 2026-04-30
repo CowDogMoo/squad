@@ -38,12 +38,15 @@ type GradeResult struct {
 }
 
 // GradeOptions configures the grading calculation.
-
 type GradeOptions struct {
-	Agent      string
+	// Agent is the name of the agent being graded.
+	Agent string
+	// Iterations is the number of model iterations consumed by the run.
 	Iterations int
-	FileCount  int
-	RunID      string
+	// FileCount is the number of files in the target codebase.
+	FileCount int
+	// RunID is an optional identifier linking the grade to a specific run.
+	RunID string
 }
 
 // iterationTargets defines iteration budgets by codebase size.
@@ -57,7 +60,10 @@ var iterationTargets = []struct {
 	{999999, 40, 60}, // Large
 }
 
-// ComputeGrade calculates the grade for a parsed agent output.
+// ComputeGrade calculates the automated grade for a parsed agent output.
+// It scores report quality (10% of total) and iteration efficiency (15%),
+// returning a [GradeResult] with a letter grade and component breakdowns.
+// The remaining 75% requires manual review.
 func ComputeGrade(parsed *ParsedOutput, opts GradeOptions) *GradeResult {
 	result := &GradeResult{
 		Agent:      opts.Agent,
@@ -196,7 +202,7 @@ func calculateLetterGrade(score float64) string {
 	}
 }
 
-// FormatResult returns a human-readable summary of the grade.
+// FormatResult returns a human-readable multi-line summary of the grade result.
 func FormatResult(r *GradeResult) string {
 	s := fmt.Sprintf("Grade: %s (Automated Score: %.0f%%)\n", r.Grade, r.TotalScore)
 	s += fmt.Sprintf("  Report Quality:       %.0f%%\n", r.ReportQuality)
