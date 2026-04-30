@@ -2,6 +2,8 @@
 
 A step-by-step guide to creating new Squad agents.
 
+> New to prompt engineering? Read [Prompt Engineering Basics](./prompt-engineering-basics.md) before writing your first `system.md`.
+
 ## Quick Start (3 Commands)
 
 ```bash
