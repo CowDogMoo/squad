@@ -256,6 +256,7 @@ The remaining 75% of the grade requires manual review:
 ### Examples
 
 **Grading mode file input:**
+
 ```bash
 squad grade output.md --agent go-review --iterations 15 --files 12
 ```
@@ -278,6 +279,7 @@ to a file.
 ---
 
 **Grading mode stdin:**
+
 ```bash
 cat output.md | squad grade - --agent go-review --iterations 15 --files 12
 ```
@@ -293,6 +295,7 @@ agent's markdown report to stdout — verify this before using it in CI.
 ---
 
 **Grading with run tracking:**
+
 ```bash
 squad grade output.md --agent go-review --iterations 15 --files 12 \
   --run-id "2026-04-30-main"
@@ -308,6 +311,7 @@ different system prompts.
 ---
 
 **Grading without saving to history:**
+
 ```bash
 squad grade output.md --agent go-review --iterations 15 --files 12 \
   --save=false
@@ -322,6 +326,7 @@ the stats baseline.
 ---
 
 **View grade history (last 10 runs):**
+
 ```bash
 squad grade --history --agent go-review
 ```
@@ -332,6 +337,7 @@ especially after making a prompt change.
 ---
 
 **View grade history — extended window:**
+
 ```bash
 squad grade --history --agent go-review --limit 25
 ```
@@ -341,6 +347,7 @@ squad grade --history --agent go-review --limit 25
 ---
 
 **View grade history as JSON:**
+
 ```bash
 squad grade --history --agent go-review --json
 ```
@@ -351,6 +358,7 @@ import, or a CI quality gate script).
 ---
 
 **View aggregate stats:**
+
 ```bash
 squad grade --stats --agent go-review
 ```
