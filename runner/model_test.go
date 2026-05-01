@@ -56,6 +56,7 @@ func TestIsOpenAICompatProvider(t *testing.T) {
 		{"ollama", "ollama", false},
 		{"anthropic", "anthropic", false},
 		{"nvidia", "nvidia", true},
+		{"databricks", "databricks", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -114,6 +115,33 @@ func TestBuildLLMVariants(t *testing.T) {
 		{"gemini", "gemini", "gemini-2.0-flash", &RunOptions{APIKey: "token"}, "*googleai.GoogleAI", false},
 		{"nvidia provider", "nvidia", "meta/llama-3.1-8b-instruct", &RunOptions{APIKey: "nvapi-test-key"}, "*openai.LLM", false},
 		{"unknown provider", "unknown", "model", &RunOptions{}, "", true},
+		{
+			"databricks provider",
+			"databricks",
+			"databricks-gpt-5-5-pro",
+			&RunOptions{
+				APIKey:  "dapi-test-token",
+				BaseURL: "https://7474657828785521.ai-gateway.cloud.databricks.com/mlflow/v1",
+			},
+			"*openai.LLM",
+			false,
+		},
+		{
+			"databricks provider missing base URL",
+			"databricks",
+			"databricks-gpt-5-5-pro",
+			&RunOptions{APIKey: "dapi-test-token"},
+			"",
+			true,
+		},
+		{
+			"databricks provider missing api key",
+			"databricks",
+			"databricks-gpt-5-5-pro",
+			&RunOptions{BaseURL: "https://7474657828785521.ai-gateway.cloud.databricks.com/mlflow/v1"},
+			"",
+			true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

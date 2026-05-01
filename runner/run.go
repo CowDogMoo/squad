@@ -23,43 +23,82 @@ import (
 
 // RunOptions holds the resolved configuration for a single run invocation.
 type RunOptions struct {
-	Agent              string
-	AgentsDir          string
-	WorkingDir         string
-	APIKey             string
-	BaseURL            string
-	Org                string
-	APIVersion         string
-	APIType            string
-	OpenAICompatMax    bool
-	Provider           string
-	Model              string
-	Temperature        float64
-	MaxTokens          int
-	System             string
-	Output             string
-	Print              bool
-	BundleOut          string
-	PrintBundle        bool
-	DryRun             bool
-	RequireActionable  bool
-	Apply              bool
-	ApplyFallback      bool
-	NumCtx             int
-	MaxIterations      int
-	MaxCost            float64
-	Mode               string
-	Vars               map[string]string // Template variables (e.g., COVERAGE_TARGET=85)
-	ConfigAvailable    bool
-	Config             *config.Config
-	Findings           *tools.FindingsStore // shared findings store (set by pipeline runner)
-	AgentName          string               // current agent name for finding attribution
-	MCPServers         []mcp.ServerConfig   // MCP servers from CLI --mcp-server flags
-	Stream             bool                 // stream model output tokens to stderr as they arrive
-	MaxConcurrentTasks int                  // max concurrent background child tasks (0 = default)
-	ResumeID           string               // session id to resume; empty = start a new session
-	ResumeResponseID   string               // OpenAI response id to chain from (set by openSession when resuming)
-	NoSession          bool                 // disable session log entirely (e.g. for tests)
+	// Agent is the name of the agent to run (must exist under AgentsDir).
+	Agent string
+	// AgentsDir is the directory containing agent sub-directories.
+	AgentsDir string
+	// WorkingDir is the directory the agent operates in.
+	WorkingDir string
+	// APIKey is the provider API key (overrides config/env).
+	APIKey string
+	// BaseURL overrides the provider's default API endpoint.
+	BaseURL string
+	// Org is the OpenAI organization ID.
+	Org string
+	// APIVersion is used by Azure OpenAI and other versioned APIs.
+	APIVersion string
+	// APIType selects the API variant (e.g., "azure").
+	APIType string
+	// OpenAICompatMax enforces max_tokens for OpenAI-compatible providers.
+	OpenAICompatMax bool
+	// Provider is the model provider name (e.g., "openai", "anthropic").
+	Provider string
+	// Model is the model identifier, overriding the agent manifest.
+	Model string
+	// Temperature controls sampling randomness.
+	Temperature float64
+	// MaxTokens is the per-request output token budget.
+	MaxTokens int
+	// System overrides the agent's assembled system prompt.
+	System string
+	// Output is the file path for writing the model's final response.
+	Output string
+	// Print reports whether to write the response to stdout.
+	Print bool
+	// BundleOut is the file path for writing the assembled prompt bundle.
+	BundleOut string
+	// PrintBundle reports whether to print the bundle to stdout.
+	PrintBundle bool
+	// DryRun reports whether to estimate cost and exit without running.
+	DryRun bool
+	// RequireActionable reports whether the run must produce file edits.
+	RequireActionable bool
+	// Apply reports whether to apply a unified diff from the response.
+	Apply bool
+	// ApplyFallback reports whether to attempt diff parsing as a fallback.
+	ApplyFallback bool
+	// NumCtx is the context window size for Ollama models.
+	NumCtx int
+	// MaxIterations caps the number of model iterations (0 = unlimited).
+	MaxIterations int
+	// MaxCost is the total cost budget in USD (0 = unlimited).
+	MaxCost float64
+	// Mode is the run mode passed to prompt templates (e.g., "edit").
+	Mode string
+	// Vars holds template variables passed to prompt templates.
+	Vars map[string]string
+	// ConfigAvailable reports whether a config file was loaded.
+	ConfigAvailable bool
+	// Config is the loaded squad configuration.
+	Config *config.Config
+	// Findings is a shared findings store set by the pipeline runner.
+	Findings *tools.FindingsStore
+	// AgentName is the current agent name used for finding attribution.
+	AgentName string
+	// MCPServers lists MCP servers declared via --mcp-server flags.
+	MCPServers []mcp.ServerConfig
+	// Stream reports whether to stream response tokens to stderr.
+	Stream bool
+	// MaxConcurrentTasks is the maximum number of concurrent background
+	// child tasks (0 = default).
+	MaxConcurrentTasks int
+	// ResumeID is the session ID to resume; empty starts a new session.
+	ResumeID string
+	// ResumeResponseID is the OpenAI response ID to chain from, set by
+	// openSession when resuming an existing session.
+	ResumeResponseID string
+	// NoSession disables session logging (e.g., for tests).
+	NoSession bool
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.

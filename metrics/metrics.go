@@ -21,6 +21,8 @@ const (
 // ErrBudgetExceeded is returned when the configured cost budget is exhausted.
 var ErrBudgetExceeded = fmt.Errorf("cost budget exceeded")
 
+// ChildMetrics holds token usage from a single child agent run,
+// recorded in the parent [Metrics] by [Metrics.AddChild].
 type ChildMetrics struct {
 	Agent        string
 	InputTokens  int64
@@ -327,6 +329,7 @@ func lookupLiteLLMPricing(provider, model string) (Pricing, bool) {
 		"anthropic":        {"anthropic", "bedrock", "vertex_ai"},
 		"gemini":           {"gemini", "vertex_ai", "vertex_ai-language-models"},
 		"nvidia":           {"nvidia"},
+		"databricks":       {"databricks"},
 	}
 
 	if prefixes, ok := providerMappings[provider]; ok {

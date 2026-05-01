@@ -49,6 +49,8 @@ type Config struct {
 
 // OtelConfig holds OpenTelemetry configuration.
 type OtelConfig struct {
+	// Endpoint is the OTLP gRPC endpoint (e.g., "localhost:4317").
+	// An empty string disables telemetry export.
 	Endpoint string `mapstructure:"endpoint" yaml:"endpoint"`
 }
 
@@ -72,27 +74,46 @@ type AgentsConfig struct {
 
 // LogConfig holds logging configuration.
 type LogConfig struct {
-	Level  string `mapstructure:"level" yaml:"level"`
+	// Level is the minimum log level: debug, info, warn, or error.
+	Level string `mapstructure:"level" yaml:"level"`
+	// Format is the log output format: text or json.
 	Format string `mapstructure:"format" yaml:"format"`
 }
 
 // ProviderConfig holds provider defaults.
 type ProviderConfig struct {
-	Default               string `mapstructure:"default" yaml:"default"`
-	BaseURL               string `mapstructure:"base_url" yaml:"base_url"`
-	Organization          string `mapstructure:"organization" yaml:"organization"`
-	APIVersion            string `mapstructure:"api_version" yaml:"api_version"`
-	APIType               string `mapstructure:"api_type" yaml:"api_type"`
-	OpenAICompatMaxTokens bool   `mapstructure:"openai_compat_max_tokens" yaml:"openai_compat_max_tokens"`
-	Token                 string `mapstructure:"token" yaml:"token"`
-	NumCtx                int    `mapstructure:"num_ctx" yaml:"num_ctx"`
+	// Default is the provider name used when none is specified on the
+	// command line or in an agent manifest (e.g., "openai", "anthropic").
+	Default string `mapstructure:"default" yaml:"default"`
+	// BaseURL overrides the provider's default API endpoint URL.
+	BaseURL string `mapstructure:"base_url" yaml:"base_url"`
+	// Organization is the OpenAI organization ID, if required.
+	Organization string `mapstructure:"organization" yaml:"organization"`
+	// APIVersion is used by Azure OpenAI and other versioned APIs.
+	APIVersion string `mapstructure:"api_version" yaml:"api_version"`
+	// APIType selects the API variant (e.g., "azure" for Azure OpenAI).
+	APIType string `mapstructure:"api_type" yaml:"api_type"`
+	// OpenAICompatMaxTokens enforces max_tokens in OpenAI-compatible
+	// requests even when the provider does not strictly require it.
+	OpenAICompatMaxTokens bool `mapstructure:"openai_compat_max_tokens" yaml:"openai_compat_max_tokens"`
+	// Token is the API key or bearer token. It supports command
+	// substitution ($(cmd)) and env-var references ($VAR).
+	Token string `mapstructure:"token" yaml:"token"`
+	// NumCtx is the context window size for Ollama models.
+	NumCtx int `mapstructure:"num_ctx" yaml:"num_ctx"`
 }
 
 // ModelConfig holds model defaults.
 type ModelConfig struct {
-	Default           string   `mapstructure:"default" yaml:"default"`
-	Temperature       float64  `mapstructure:"temperature" yaml:"temperature"`
-	MaxTokens         int      `mapstructure:"max_tokens" yaml:"max_tokens"`
+	// Default is the model identifier used when none is specified on the
+	// command line or in an agent manifest.
+	Default string `mapstructure:"default" yaml:"default"`
+	// Temperature controls sampling randomness (0.0 = deterministic).
+	Temperature float64 `mapstructure:"temperature" yaml:"temperature"`
+	// MaxTokens is the default output-token budget per request.
+	MaxTokens int `mapstructure:"max_tokens" yaml:"max_tokens"`
+	// ReasoningPrefixes lists model name prefixes that support extended
+	// reasoning; requests to these models use higher token budgets.
 	ReasoningPrefixes []string `mapstructure:"reasoning_prefixes" yaml:"reasoning_prefixes"`
 }
 

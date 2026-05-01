@@ -589,6 +589,11 @@ func buildSystemMessage(manifest *Manifest, displayMode, workingDir, wrapperCont
 	return sys
 }
 
+// BuildBundle assembles a [Bundle] from the named agent in agentsDir.
+// It loads the manifest, processes system/wrapper/task templates with the
+// given mode and vars, resolves references and MCP server configs, and
+// constructs the combined system and user messages. prompt becomes the user
+// message (defaulting to "Begin." when empty).
 func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map[string]string) (*Bundle, error) {
 	agentPath := filepath.Join(agentsDir, agentName)
 

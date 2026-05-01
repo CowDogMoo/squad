@@ -20,7 +20,7 @@ Build, share, and run AI agents from the command line. Inspired by
 Define an agent in markdown and YAML, point it at any LLM, and turn it
 loose on a codebase.
 
-- Works with OpenAI, Anthropic, Google AI, and Ollama
+- Works with OpenAI, Anthropic, Google AI, Ollama, NVIDIA NIM, and Databricks AI Gateway
 - Agents are just files: markdown prompts + YAML manifest, checked into git
 - Built-in tools: Read, Write, Edit, Glob, Grep, Bash, plus any MCP server
 - Multi-agent pipelines with dependency ordering, parallel stages, and regression gates
@@ -119,7 +119,7 @@ and can fetch the full bytes (or any byte range) via the
 | Feature                     | Description                                        |
 | --------------------------- | -------------------------------------------------- |
 | **Agent Execution**         | Run agents with Read, Write, Edit, Glob, Grep, Bash |
-| **Multi-provider**          | OpenAI, Anthropic, Google AI, Ollama               |
+| **Multi-provider**          | OpenAI, Anthropic, Google AI, Ollama, NVIDIA NIM, Databricks AI Gateway |
 | **Streaming Output**        | Real-time token streaming to stderr                |
 | **Fix + Analyze Modes**     | Agents can apply fixes or report-only              |
 | **Agent Scaffolding**       | `squad init agent` from templates or existing agents |

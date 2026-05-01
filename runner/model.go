@@ -284,6 +284,8 @@ func buildLLM(ctx context.Context, opts *RunOptions, provider, model string) (ll
 		return buildGeminiLLM(ctx, opts, model)
 	case "nvidia":
 		return buildNvidiaLLM(opts, model)
+	case "databricks":
+		return buildDatabricksLLM(opts, model)
 	default:
 		return nil, fmt.Errorf("provider not implemented: %s", provider)
 	}
@@ -368,6 +370,28 @@ func buildNvidiaLLM(opts *RunOptions, model string) (llms.Model, error) {
 	return openai.New(oaiOpts...)
 }
 
+func buildDatabricksLLM(opts *RunOptions, model string) (llms.Model, error) {
+	if opts.BaseURL == "" {
+		return nil, fmt.Errorf(
+			"databricks provider requires --base-url " +
+				"(e.g. https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1)",
+		)
+	}
+	if opts.APIKey == "" {
+		return nil, fmt.Errorf(
+			"databricks provider requires --api-key (Databricks PAT, prefix dapi-)",
+		)
+	}
+	oaiOpts := []openai.Option{
+		openai.WithBaseURL(opts.BaseURL),
+		openai.WithToken(opts.APIKey),
+	}
+	if model != "" {
+		oaiOpts = append(oaiOpts, openai.WithModel(model))
+	}
+	return openai.New(oaiOpts...)
+}
+
 func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 	baseURL := opts.BaseURL
 	if baseURL == "" {
@@ -381,7 +405,7 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 }
 
 func isOpenAICompatProvider(provider string) bool {
-	return provider == "" || provider == "openai" || provider == "nvidia"
+	return provider == "" || provider == "openai" || provider == "nvidia" || provider == "databricks"
 }
 
 // reasoningPrefixes returns the configured reasoning model prefixes,

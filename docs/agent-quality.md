@@ -91,7 +91,7 @@ Did the agent use its iteration budget well?
 - Read each file once during analysis, catalog all findings, then fix
 - One Grep/Glob on repo root instead of N calls per-directory
 - Verify edits by reading only the changed lines, not the whole file
-- After build+test pass, emit report immediately -- no post-fix exploration
+- After build+test pass, emit report immediately; no post-fix exploration
 
 **Wasteful patterns (deduct points for each):**
 
@@ -153,7 +153,7 @@ list. Strengthen the "follow conventions" rule to name specific patterns
 The agent sees a `panic()` call, knows "panic is bad," and replaces it
 with a warning + fallback. But the panic is intentional (a precondition
 guard) and a test asserts it with `wantPanic: true`. The replacement
-may even pass tests by accident -- e.g. a nil dereference panics before
+may even pass tests by accident; e.g. a nil dereference panics before
 the new code is reached, so `recover()` still catches something.
 
 **Fix:** Make test-asserted behavior an absolute ban: "If a test asserts
@@ -164,7 +164,7 @@ add panic" and "never remove intentional panics."
 
 After applying fixes and verifying build+test pass, the agent spends
 5+ iterations re-reading files, running extra greps, or gathering details
-for the skipped table -- all information it already had from the analysis
+for the skipped table; all information it already had from the analysis
 phase.
 
 **Fix:** Add explicit workflow guidance: "After verification passes, emit
@@ -189,7 +189,9 @@ When creating a new agent (e.g. `go-tests`, `go-cobra`, `security-review`):
    harm), 18 (proportionality), and 19-21 (efficiency) are universal.
 
 2. **Run the agent 3+ times** on the same codebase and grade each run.
-   Look for patterns in what it gets wrong.
+   After each run, pass the agent output to `squad grade` to capture the
+   automated scores, then complete the manual dimensions before recording
+   the final grade. Look for patterns in what it gets wrong.
 
 3. **The first failure mode you see will repeat.** Fix it in the prompt
    immediately. Over-engineering and test-asserted-behavior violations
@@ -206,3 +208,210 @@ When creating a new agent (e.g. `go-tests`, `go-cobra`, `security-review`):
 
 6. **Grade against this rubric after every prompt change.** If the grade
    doesn't improve, the change didn't help -- revert it.
+
+## Using `squad grade`
+
+### What the command automates
+
+`squad grade` scores two dimensions automatically:
+
+- **Report Quality (10%)** checks for required sections using the report
+  parser. The parser auto-detects the report mode from its content and applies
+  the corresponding required-section list:
+  - **Edit mode** (triggered when `## Changes Summary` or
+    `## Issues Found and Fixed` is present): requires `## Changes Summary`,
+    `## Issues Found and Fixed`, `## Files Touched`, `## Validation`.
+  - **Readonly mode** (triggered when `## Analysis Summary` or `## Findings`
+    is present, and neither edit trigger is): requires `## Analysis Summary`,
+    `## Findings`.
+  - If neither trigger is detected the parser defaults to edit mode
+    requirements, which will produce a low Report Quality score. An agent
+    report that uses non-standard headings will be evaluated against the wrong
+    required sections and may score 0% on Report Quality even if all
+    information is present.
+- **Iteration Efficiency (15%)** compares `--iterations` against the
+  target/max thresholds for the codebase size derived from `--files`.
+
+The remaining 75% of the grade requires manual review:
+
+- **Finding Quality (50%)** no tool can judge whether a fix prevents a real
+  bug.
+- **Skip Discipline (25%)** no tool can judge whether the agent respected
+  test-asserted behavior.
+
+### Flag reference
+
+| Flag | Short | Type | Default | Purpose |
+|------|-------|------|---------|---------|
+| `--agent` | `-a` | string | — | Agent name; required for grading and `--stats`; optional for `--history` (omit to show all agents) |
+| `--iterations` | `-i` | int | `0` | Iterations the agent used; required for Efficiency score — omitting silently scores Efficiency as 0% |
+| `--files` | `-f` | int | `0` | Source file count; determines small/medium/large bucket — omitting defaults to the Small bucket (≤20 files) thresholds |
+| `--run-id` | | string | — | Optional label for tracking a specific run in history |
+| `--save` | | bool | `true` | Persist grade to local history store |
+| `--history` | | bool | `false` | Print past grades for the agent instead of grading; takes precedence if combined with `--stats` |
+| `--stats` | | bool | `false` | Print aggregate stats (mean, distribution) for the agent |
+| `--limit` | | int | `10` | Number of history records to show |
+| `--json` | | bool | `false` | Output machine-readable JSON (history and stats modes) |
+
+### Examples
+
+**Grading mode file input:**
+
+```bash
+squad grade output.md --agent go-review --iterations 15 --files 12
+```
+
+- `output.md` — the report the agent wrote; the parser scans it for required
+  sections to compute the Report Quality score.
+- `--agent go-review` — identifies which agent produced the run. Used to
+  namespace the grade in the history store so `--history` and `--stats`
+  queries stay agent-specific.
+- `--iterations 15` — the number of tool-call iterations the agent consumed.
+  Compared against the target/max thresholds for the codebase size bucket to
+  compute the Iteration Efficiency score.
+- `--files 12` — the number of source files in the codebase. With 12 files the
+  run is classified as "small" (≤20 files), so the efficiency target is ≤12
+  iterations and the max acceptable is 18.
+
+**Use this form** as the default after any `squad run` that writes its output
+to a file.
+
+---
+
+**Grading mode stdin:**
+
+```bash
+cat output.md | squad grade - --agent go-review --iterations 15 --files 12
+```
+
+The `-` positional argument tells the command to read from stdin instead of a
+file. The flags mean exactly the same thing as the file-input form.
+
+**Use this form** when you want to pipe a report directly into the grader
+without writing an intermediate file, or in CI pipelines. Note: a pipeline of
+the form `squad run ... | squad grade -` only works if `squad run` emits the
+agent's markdown report to stdout — verify this before using it in CI.
+
+---
+
+**Grading with run tracking:**
+
+```bash
+squad grade output.md --agent go-review --iterations 15 --files 12 \
+  --run-id "2026-04-30-main"
+```
+
+- `--run-id "2026-04-30-main"` an arbitrary label stored alongside the grade.
+  No effect on scoring; exists solely to make history records identifiable when
+  queried later.
+
+**Use this form** when doing systematic prompt tuning across multiple runs with
+different system prompts.
+
+---
+
+**Grading without saving to history:**
+
+```bash
+squad grade output.md --agent go-review --iterations 15 --files 12 \
+  --save=false
+```
+
+- `--save=false` — overrides the default (`true`) and skips writing to the
+  local grade store.
+
+**Use this form** for exploratory or throwaway runs you do not want polluting
+the stats baseline.
+
+---
+
+**View grade history (last 10 runs):**
+
+```bash
+squad grade --history --agent go-review
+```
+
+**Use this form** to review how an agent has been trending across recent runs,
+especially after making a prompt change.
+
+---
+
+**View grade history — extended window:**
+
+```bash
+squad grade --history --agent go-review --limit 25
+```
+
+**Use this form** when you need a longer baseline to spot slow regressions.
+
+---
+
+**View grade history as JSON:**
+
+```bash
+squad grade --history --agent go-review --json
+```
+
+**Use this form** when piping history into another tool (`jq`, a spreadsheet
+import, or a CI quality gate script).
+
+---
+
+**View aggregate stats:**
+
+```bash
+squad grade --stats --agent go-review
+```
+
+**Use this form** to get a single-number summary of agent quality across all
+saved runs; useful at the end of a prompt-tuning sprint.
+
+### Interpreting the output
+
+**Grading mode** prints a header line with the letter grade and automated
+score, then per-dimension percentages, run metadata, and a manual-review
+warning:
+
+```
+Grade: B+ (Automated Score: 88%)
+  Report Quality:       100%
+  Iteration Efficiency: 72%
+
+  Iterations: 15 | Files: 12 | Touched: 3 | Fixed: 2 | Skipped: 0
+
+⚠ Manual review required:
+    - Finding Quality (50% of grade)
+    - Skip Discipline (25% of grade)
+  Note: Iteration target: 12 (max acceptable: 18) for 12 files
+```
+
+**Critical**: the letter grade and "Automated Score" reflect only the
+automated 25% of the rubric, scaled to 0–100 using the formula:
+
+```
+automated_points = (report_quality / 100) * 10
+                 + (iteration_efficiency / 100) * 15
+total_score      = (automated_points / 25) * 100
+```
+
+A displayed grade of A+ means the agent scored 100% on the two automated
+dimensions only. The grade is provisional — it will change once Finding
+Quality (50%) and Skip Discipline (25%) are scored manually.
+
+**History mode** prints a table of past grades with timestamps, agent name,
+letter grade, automated score, and iteration count, sorted newest-first.
+
+**Stats mode** prints total runs, latest grade, average automated score,
+average per-dimension scores, and grade distribution (A+/A/A-/B+/… counts).
+
+### Notes
+
+- The grading store is local (no remote sync); grades are written to
+  `~/.cache/squad/grades.json`.
+- Omitting `--iterations` defaults to `0`, which scores Efficiency as 0% and
+  appends "No iteration count provided". Always pass `--iterations` explicitly.
+- Omitting `--files` defaults to `0`, which silently falls into the Small
+  bucket. If the codebase is medium or large this produces an artificially
+  strict score — always pass `--files`.
+- If both `--history` and `--stats` are passed, `--history` takes precedence
+  and `--stats` is silently ignored.
