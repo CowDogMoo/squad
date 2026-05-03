@@ -2,8 +2,11 @@
 
 Composed agents run multiple sub-agents across stages with dependency
 ordering, parallel execution, regression gates, and structured output.
-A composed agent declares its pipeline topology in `agent.yaml` — users
+A composed agent declares its pipeline topology in `agent.yaml`; users
 run it with `squad run` like any other agent.
+
+For the reasoning behind this structure such as when to use a pipeline, how to design stages,
+and anti-patterns to avoid, see a primer on agents and pipelines at [pipeline engineering basics](./agents-engineering-pipeline-basics.md).
 
 ## Running Composed Agents
 
