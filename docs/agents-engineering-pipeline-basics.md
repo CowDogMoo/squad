@@ -21,12 +21,14 @@ Pipelines solve all three: each agent gets a focused, fresh context; each agent 
 A pipeline has real overhead: more YAML to maintain, more agents to tune, and more failure points to debug. Before reaching for one, ask: does this task have genuinely independent sub-problems with distinct output artifacts?
 
 **Single agent is usually sufficient when:**
+
 - The task fits in ~5–10 focused turns with one clear output
 - There is only one concern (review, test, or document, but not all three)
 - Every step needs the previous step's full reasoning, not just its structured output
 - No parallelism benefit exists because each step depends entirely on the prior
 
 **Reach for a pipeline when:**
+
 - Two or more independent concerns exist that could run concurrently
 - Different stages warrant different models or cost profiles
 - A downstream stage should verify upstream output programmatically
@@ -231,7 +233,7 @@ Without this pattern, each run starts completely fresh even when accumulated pri
 
 ---
 
-## Designing a Pipeline: The Right Questions To Ask!
+## Designing a Pipeline: The Right Questions To Ask
 
 Before writing a `stages:` block, answer these:
 
@@ -260,6 +262,7 @@ Set `--max-cost` before running. Estimate per-stage cost from agent iteration bu
 For each stage, decide in advance what happens on failure. The choice of `on_failure: stop` vs. `on_failure: revert` matters, but so does whether the failure is transient or semantic.
 
 Three categories:
+
 1. **Transient failures:** (rate limits, flaky tests, network timeouts): add a retry budget rather than hard-stopping.
 1. **Semantic failures** (malformed output, wrong artifact structure): stop the pipeline, diagnose the agent's `system.md` or output contract, fix it, and re-run from that stage. Prior stage artifacts remain valid.
 1. **Irreversible action risk:** (commit, deploy, delete): these require a human-in-the-loop checkpoint *before* the stage, not a gate *after*. Add a `mode: ask` stage that surfaces the agent's planned changes and waits for approval before executing them.
@@ -275,6 +278,7 @@ This section walks through the five questions above to arrive at the `security-a
 **Question 1 — Independent concerns:**
 
 Three distinct jobs, each with its own stage:
+
 - Code quality and correctness → `go-review`
 - Security patterns and vulnerabilities → `go-security-audit`
 - Test coverage and correctness → `go-tests`
