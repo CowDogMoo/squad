@@ -45,6 +45,7 @@ testdata/tmp/
 
 .claude
 FIXME.md
+CLAUDE.md
 
 # Secrets and environment files
 .env
