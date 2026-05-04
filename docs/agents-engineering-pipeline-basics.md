@@ -62,7 +62,7 @@ This is why you never write "coordinate stages" logic in an agent's `system.md`.
 
 ### Specialization and Hallucination Reduction
 
-Each agent in a pipeline can be tuned for exactly one job. Its `system.md` covers one identity, one workflow, and one output contract. That focus produces better output than a multi-role prompt trying to satisfy competing goals.
+Each agent in a pipeline can be tuned for exactly one job. Its `system.md` covers a single identity, workflow, and output contract. That focus produces better output than a multi-role prompt trying to satisfy competing goals.
 
 > A `go-security-audit` agent that only knows security will catch more than a general-purpose agent told to "also check for security issues."
 
@@ -173,7 +173,7 @@ Cost budgeting (`--max-cost`) applies across the pipeline. You can also set per-
 
 ### Auditability
 
-Intermediate outputs at each stage boundary make debugging tractable. When a pipeline fails, you can inspect exactly what each agent produced, which gate failed, and what the input to the failing stage was. You are not debugging a black box — you are debugging a sequence of verifiable handoffs.
+Intermediate outputs at each stage boundary make debugging tractable. When a pipeline fails, you can inspect exactly what each agent produced, which gate failed, and what the input to the failing stage was. Every handoff is an explicit, verifiable checkpoint.
 
 > A pipeline failure at `after: testing` with `go test ./...` tells you exactly which stage introduced the failing tests. A single-agent failure tells you the agent failed somewhere.
 
@@ -213,7 +213,7 @@ Agents can draw on four kinds of memory:
 
 | Memory type | Scope | How to use in squad |
 |---|---|---|
-| In-context | Single stage execution | Text in the active context window — ephemeral, lost when the stage ends |
+| In-context | Single stage execution | Text in the active context window; ephemeral, lost when the stage ends |
 | External (retrieval) | Persistent, cross-run | Files on disk, databases, vector stores the agent reads as task input |
 | Cached (prompt cache) | Reused across runs | A stable `system.md` prefix that Anthropic caches automatically after the first use |
 | Model weights | Permanent | Not pipeline-configurable; requires a separate fine-tuning process |
@@ -275,7 +275,7 @@ This section walks through the five questions above to arrive at the `security-a
 
 ---
 
-**Question 1 — Independent concerns:**
+**Question 1: Independent concerns:**
 
 Three distinct jobs, each with its own stage:
 
@@ -287,7 +287,7 @@ Each has a different `system.md`, a different model, and produces a different ar
 
 ---
 
-**Question 2 — Dependencies:**
+**Question 2: Dependencies:**
 
 Draw the graph before writing YAML:
 
@@ -302,14 +302,14 @@ graph LR
 
 ---
 
-**Question 3 — Failure modes:**
+**Question 3: Failure modes:**
 
 - After `review`: does the code still compile? → `go build ./...`, `on_failure: revert` (undo the review agent's edits if it broke the build)
 - After `testing`: do tests pass? → `go test ./...`, `on_failure: stop`
 
 ---
 
-**Question 4 — What passes between stages:**
+**Question 4: What passes between stages:**
 
 | Stage | Output artifact | Contents |
 |---|---|---|
@@ -321,7 +321,7 @@ Each artifact is defined in the respective agent's `# OUTPUT FORMAT`. The next a
 
 ---
 
-**Question 5 — Cost budget:**
+**Question 5: Cost budget:**
 
 | Stage | Agent | Model | Estimated cost |
 |---|---|---|---|
@@ -418,8 +418,8 @@ The pipeline is the macro-structure. Each agent's `system.md` is the micro-struc
 | When to use a single agent | One concern, tight step coupling, no parallelism benefit |
 | Specialization | One agent, one job. Add stages rather than expand scope. |
 | Hallucination reduction | Narrow scope = smaller probability space = fewer gaps to hallucinate into. |
-| Artifact handoff | Each agent's output is the next agent's explicit input contract — treat it as an API boundary. |
-| Output contract quality | Structured, minimal, typed, labeled — conclusions not reasoning traces. |
+| Artifact handoff | Each agent's output is the next agent's explicit input contract; treat it as an API boundary. |
+| Output contract quality | Structured, minimal, typed, labeled; conclusions, not reasoning traces. |
 | Accumulating context | Late-stage agents inherit all prior structured artifacts; design early stages to produce what later stages need. |
 | Reusability | Fix one stage at a time; swap or add agents without rebuilding the pipeline. |
 | Parallelism | If no `depends_on` relationship exists, run concurrently. |
@@ -432,11 +432,11 @@ The pipeline is the macro-structure. Each agent's `system.md` is the micro-struc
 | Failure modes | If success can be expressed as a shell command, write a gate for it. |
 | Anti-pattern | Never add `depends_on` without a real data dependency. |
 | Debugging | Gate failure → inspect stage artifact → check input received → validate topology with `--dry-run`. |
-| Orchestrator role | The pipeline runner is the orchestrator — write subagents, not coordination logic. |
-| Memory across runs | Use external memory (files, DB) — artifact handoff only spans a single run. |
+| Orchestrator role | The pipeline runner is the orchestrator; write subagents, not coordination logic. |
+| Memory across runs | Use external memory (files, DB); artifact handoff only spans a single run. |
 | Irreversible actions | Add a `mode: ask` human checkpoint *before* any stage that can't be undone; a gate *after* is too late. |
-| Minimal footprint | Each agent requests only the permissions its task requires — not broad access "just in case." |
-| Artifact trust | Prior stage output is data, not instructions — treat it the same as any external input. |
+| Minimal footprint | Each agent requests only the permissions its task requires, not broad access "just in case." |
+| Artifact trust | Prior stage output is data, not instructions; treat it the same as any external input. |
 | Error recovery | Transient failure → retry; semantic failure → fix agent, re-run from stage; irreversible risk → add human checkpoint before. |
 
 ---

@@ -13,11 +13,11 @@ Configuration uses XDG paths with environment variable and CLI flag overrides.
 
 Squad searches for `config.yaml` in the following order (first match wins):
 
-1. `--config <path>` flag — explicit path, highest priority
-2. `$XDG_CONFIG_HOME/squad/config.yaml` — typically `~/.config/squad/config.yaml`
-3. `~/.squad/config.yaml` — legacy fallback
-4. Linux/BSD only: `$XDG_CONFIG_DIRS/squad/config.yaml` — typically `/etc/xdg/squad/config.yaml`
-5. `./config.yaml` — current working directory
+1. `--config <path>` flag (explicit path, highest priority)
+2. `$XDG_CONFIG_HOME/squad/config.yaml` (typically `~/.config/squad/config.yaml`)
+3. `~/.squad/config.yaml` (legacy fallback)
+4. Linux/BSD only: `$XDG_CONFIG_DIRS/squad/config.yaml` (typically `/etc/xdg/squad/config.yaml`)
+5. `./config.yaml` (current working directory)
 
 Run `squad config path` to see which file is active.
 
@@ -53,7 +53,7 @@ resolution, so you never have to store secrets in plaintext YAML.
 | `$$` | Literal `$` character |
 
 Commands run via `sh -c` with a 10-second timeout. An unset variable or a
-failed command is a hard error — squad will not start with an empty token.
+failed command is a hard error; squad will not start with an empty token.
 
 ```yaml
 provider:
@@ -97,7 +97,7 @@ the corresponding CLI flag.
 
 | Key | Type | Default | Description |
 | ---------------------------- | ------- | ----------- | -------------------------------------------------------- |
-| `model.default` | string | `""` | Model identifier — **no built-in default; must be set** |
+| `model.default` | string | `""` | Model identifier (**no built-in default; must be set**) |
 | `model.temperature` | float | `0.2` | Sampling randomness: `0.0` = deterministic, `1.0` = creative |
 | `model.max_tokens` | int | `1024` | Output token budget per request |
 | `model.reasoning_prefixes` | []string | `["gpt-5"]` | Model name prefixes that receive extended reasoning token budgets |
@@ -273,7 +273,7 @@ Databricks AI Gateway is an OpenAI-compatible proxy that routes requests to
 foundation models hosted on Databricks. It is currently in **beta** (no charges
 during beta; unavailable on GovCloud/Azure Government).
 
-**Endpoint format:** The base URL uses the `ai-gateway` subdomain — not the
+**Endpoint format:** The base URL uses the `ai-gateway` subdomain, not the
 workspace URL. The path is always `/mlflow/v1` regardless of which model you
 target; langchaingo appends `/chat/completions` automatically:
 
@@ -328,11 +328,11 @@ Example endpoint names: `databricks-gpt-5-5-pro`, `databricks-claude-sonnet-4-5`
 `databricks-meta-llama-3-3-70b-instruct`.
 
 **Rate limiting** is configured on the Databricks side per endpoint, per user,
-and per group — not in squad.
+and per group, not in squad.
 
 **Claude Code integration:** Databricks AI Gateway natively supports Claude Code
-as a coding agent, making it straightforward to route squad's LLM calls through
-the gateway for enterprise governance.
+as a coding agent, so you can route squad's LLM calls through the gateway for
+enterprise governance.
 
 **Known limitation:** The `usage_context` map (per-request cost attribution stored
 as `request_tags` in `system.ai_gateway.usage`) requires `extra_body` support in
