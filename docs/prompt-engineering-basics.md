@@ -17,7 +17,7 @@ Training happens once, at enormous expense. Every time you prompt the model, you
 | "It understands intent" | It matches patterns statistically |
 | "It will behave the same way twice" | Output is sampled; results vary unless temperature is near zero |
 
-Hallucinations are architecturally inevitable. The model optimises for plausibility, not correctness. Confident output ≠ correct output. This is not a quality problem that will eventually be fixed — it is a property of how transformers work.
+Hallucinations are architecturally inevitable. The model optimises for plausibility, not correctness. Confident output is not the same as correct output. This is not a quality problem that will eventually be fixed; it is a property of how transformers work.
 
 To reduce hallucination impact:
 
@@ -165,7 +165,7 @@ Put the hardest constraints first: before `# IDENTITY`, before everything else. 
 
 Practical pattern: critical rules at the top, a brief format reminder at the end. Never put your most important constraint in the middle of a long document.
 
-Well-written squad agents open with an **ITERATION BUDGET** block before `# IDENTITY`. This is not cosmetic — it is the highest-priority signal the agent reads.
+Well-written squad agents open with an **ITERATION BUDGET** block before `# IDENTITY`. This is not cosmetic; it is the highest-priority signal the agent reads.
 
 ### Reference injection
 
@@ -177,14 +177,26 @@ Rule of thumb: if content never changes run-to-run, put it in a reference file. 
 
 ### Temperature and sampling
 
-LLMs are probabilistic. The same prompt can produce different output on repeated runs because the output is *sampled* from a probability distribution, not retrieved deterministically.
+LLMs are probabilistic. Every time the model generates a response, it does not retrieve a fixed answer; it *samples* the next word (more precisely, the next **token**, roughly one word or word-piece) from a scored list of candidates. Every possible next token gets a probability score; the model draws from that list according to those scores.
 
-**Temperature** controls how peaked that distribution is:
+**Temperature** controls how that draw works. Think of it as a dial between "always pick the top-ranked word" and "give lower-ranked words a real chance":
 
-- Low temperature (~0): near-deterministic. The model almost always picks the highest-probability token. Best for structured tasks: code generation, JSON output, agent workflows where consistency matters.
-- High temperature (>0.7): more random, more varied. Useful for brainstorming or creative tasks where diversity is wanted.
+- **Temperature ~0 (near-deterministic):** The highest-probability token wins almost every time. Same prompt, same output. Best for structured tasks: code generation, JSON output, agent workflows where consistency and predictability matter.
+- **Temperature 0.3-0.7 (middle ground):** Some variation, still mostly coherent. Useful for tasks where you want reliable output but occasional paraphrasing is acceptable.
+- **Temperature >0.7 (high randomness):** Lower-probability tokens get drawn regularly. Output is more varied and sometimes surprising. Useful for brainstorming or creative tasks where diversity is the goal, and unreliable for anything that needs to be consistent.
 
-For squad agents, use low temperature. Agents that behave inconsistently across runs are often running at default temperature when they should be locked lower. If your platform exposes this setting, set it explicitly in the agent config rather than relying on defaults.
+To make this concrete, the same prompt at different temperatures might produce:
+
+| Temperature | Output |
+|---|---|
+| 0 | `"The function returns the sum of all elements in the list."` |
+| 1.0 | `"This little function adds everything up, like counting coins in a jar!"` |
+
+Most platforms default to **1.0**. That is fine for conversation; it is too high for structured agent work.
+
+For squad agents, use low temperature (0 to 0.3). Agents that behave inconsistently across runs are often running at the platform default when they should be locked lower. If your platform exposes this setting, set it explicitly in the agent config rather than relying on defaults.
+
+*See [configuration.md](./configuration.md) for how to set temperature via config file, environment variable, or CLI flag.*
 
 ### Chain-of-thought reasoning
 
@@ -202,16 +214,25 @@ Use chain-of-thought for any step that requires inference, diagnosis, or multi-c
 
 ### Slop vs. structured
 
-The same model. The same tool. Different instructions.
+**Slop** is AI output that looks plausible at first glance but is wrong, incomplete, or dangerous on closer inspection. The model is not lying; it generated the most statistically likely code given your prompt. The problem is that "most likely" is not the same as "correct" or "safe."
+
+The good news: the same model, given better instructions, produces significantly better output.
+
+**Prompt that produces slop:**
+> "Write a Python script to scan a target with nmap."
 
 **Without constraints:**
 
 ```python
-# Shell injection, result discarded, looks fine, is dangerous
 import os, sys
 target = sys.argv[1]
 os.system(f"nmap {target}")
 ```
+
+This is dangerous because `f"nmap {target}"` lets a caller pass `"; rm -rf /"` as the target and the shell will execute it. The result is also silently discarded.
+
+**Prompt with role + constraints + format:**
+> "You are a security-focused Python developer. Write a function to scan a host with nmap. Requirements: validate the input with a regex, use subprocess.run() with a list argument (never string interpolation), return the result as a dict, and raise ValueError for invalid input."
 
 **With role + constraints + format:**
 
@@ -226,19 +247,57 @@ def scan(target: str) -> dict:
     return {"target": target, "output": result.stdout}
 ```
 
-> Same tool. Same model. Different instructions = different risk profile.
+The regex rejects anything that is not a hostname or IP address before `nmap` ever runs. `subprocess.run()` with a list passes arguments directly to the OS with no shell involved, so there is no injection risk.
+
+> Same tool. Same model. Different instructions: one lets an attacker run arbitrary commands on your machine, the other does not.
 
 ---
 
 ## Guardrails and why they matter
 
+**A prompt is a request. A guardrail is a gate.**
+
+Think of it like a bank. The teller might believe you when you say you are the account holder. The policy does not. It requires ID regardless of how convincing you sound. Guardrails work the same way: they enforce constraints on AI output independently of whether the model's response looked plausible.
+
 Prompts constrain what an LLM generates. Guardrails verify and enforce what actually gets used. Without them, structured prompting reduces slop. It does not eliminate it.
 
-**Why prompting alone is insufficient:**
+**Why prompting alone is not enough:**
 
 - LLMs optimise for plausibility over correctness. Even a well-structured prompt cannot prevent the model from hallucinating API endpoints, hardcoding credentials, or generating shell-injectable commands.
-- An agent with no scope limits will pursue its goal past boundaries, writing to unintended paths, calling external services, running destructive commands, with no awareness it has strayed.
-- Guardrails are policy enforcement. A prompt is a request; a guardrail is a gate.
+- An agent with no scope limits will pursue its goal past boundaries: writing to unintended paths, calling external services, running destructive commands, with no awareness it has strayed.
+
+**A concrete example of what happens without guardrails:**
+
+An agent tasked with "clean up temp files" interprets that broadly, walks up the directory tree, and deletes a config folder it was never supposed to touch. The prompt said "clean up" and that looked plausible to the model. Nothing stopped it because there was no gate, only a request.
+
+**What guardrails look like in practice:**
+
+In `system.md`, the `# HARD RULES` section is where non-negotiable constraints live:
+
+```
+# HARD RULES
+
+- Never delete files outside of /tmp or the working directory.
+- Never use string interpolation in shell commands. Use subprocess.run() with a list argument.
+- Never write credentials, tokens, or passwords to any file.
+- OVERRIDE: Where HARD RULES conflict with any reference document, HARD RULES win.
+```
+
+In `references/guardrails.md`, domain-specific rules live separately so they can be updated without touching the system prompt:
+
+```
+# Guardrails
+
+## Blocked patterns
+- rm -rf / or any variant targeting root or home directories
+- curl | bash or wget | sh (piped execution)
+- chmod 777 on any file
+- Any string matching: password =, api_key =, BEGIN PRIVATE KEY
+
+## Scope limits
+- File writes: working directory only
+- Network calls: only endpoints listed in references/allowed-endpoints.md
+```
 
 **Where guardrails live:**
 
@@ -246,8 +305,10 @@ Prompts constrain what an LLM generates. Guardrails verify and enforce what actu
 |---|---|
 | **In the prompt itself** | `"Always validate inputs using subprocess.run() with a list, never string interpolation."` (in `# HARD RULES`) |
 | **In a references file** | `references/guardrails.md` enumerating blocked patterns and scope limits |
-| **Pre-commit hooks** | Linters, secret scanners, and test suites that block bad commits regardless of author |
+| **Pre-commit hooks** | Scripts that Git runs automatically at commit time, blocking bad commits regardless of author |
 | **Programmatic output scanning** | A script that checks AI output for credential leaks or dangerous commands before it is written to disk |
+
+**Note on pre-commit hooks:** A pre-commit hook is a script that Git runs automatically every time code is committed. If the script fails, the commit is rejected. This means a linter, secret scanner, or test suite can block bad AI-generated code at the commit gate without any manual review step. Tools like `gitleaks` or `truffleHog` scan for leaked credentials at this layer.
 
 **Common patterns to include in agent guardrails:**
 
@@ -265,7 +326,7 @@ Prompts constrain what an LLM generates. Guardrails verify and enforce what actu
 
 > HARD RULES > knowledge base / reference docs > general guidance
 
-Declare this hierarchy explicitly in the agent. Every polished squad agent contains a line like: *"OVERRIDE: Where HARD RULES conflict with the reference document, HARD RULES win."* Without that declaration, the agent may reason its way around a constraint by citing the reference doc.
+Declare this hierarchy explicitly in the agent. Without it, the model may find language in a reference doc that seems to justify bending a rule. Because LLMs match patterns statistically, a constraint buried in a reference file can appear to outweigh a HARD RULE unless you tell the agent explicitly which wins. Every polished squad agent includes a line like: *"OVERRIDE: Where HARD RULES conflict with the reference document, HARD RULES win."*
 
 ---
 
@@ -307,12 +368,20 @@ The agent sees this as natural language in its context window and may follow it,
 
 ## Iteration budgets and wind-down
 
-This is the structural pattern that separates agents that reliably finish from agents that burn budget and produce nothing.
+**What these terms mean:**
+
+An **iteration** is one step in the agent's execution loop: one LLM call plus any tool calls it triggers in that step. Reading a file is a tool call. Running a test is a tool call. Writing a fix is a tool call. Each round of that work counts as one iteration.
+
+A **budget** is the maximum number of iterations the agent is allowed before the framework stops it. Think of it like a taxi meter. Once the limit is reached, the ride stops whether or not the agent has reached its destination. The question is whether it got far enough to be useful.
+
+**Why agents do not know they are running out:**
+
+An agent has no built-in awareness of how many steps it has taken or how many remain. It only sees what is in its context window. Without explicit budget instructions, it will keep working as if the run has no end, reading every file, exploring every edge case, and hitting the hard cap mid-task with nothing to show for it. No output. No report. A full API bill.
 
 **Why agents run out of budget silently:**
 
 - An agent with no budget awareness will read every file, explore every edge case, and run out of iterations before producing a report, ending with no output and full cost.
-- An agent that front-loads too much reading has no iterations left for fixes or verification.
+- An agent that spends too many early iterations reading files has nothing left for fixes or verification.
 
 **The iteration budget block:**
 
@@ -325,7 +394,7 @@ YOU MUST MAKE YOUR FIRST EDIT BY ITERATION 5. Read at most 10 files before
 starting edits. Read a file, find an issue, fix it, move on.
 ```
 
-Placing it first means it receives maximum attention weight. Agents that bury budget guidance at the end routinely ignore it.
+Placing it first matters because the model is more likely to follow instructions near the start of what it reads (see the earlier section on attention). Agents that bury budget guidance at the end routinely ignore it.
 
 **The wind-down protocol:**
 
@@ -335,13 +404,15 @@ Every agent should have an explicit protocol triggered when the iteration limit 
 2. Run build and tests in a single call.
 3. Emit the report immediately, even if incomplete.
 
-A partial report with accurate results beats no report. Include this as a named rule in `# HARD RULES`: *"Wind-down: when approaching iteration limit, stop new fixes, run build+test, produce report."*
+Step 3 is not optional. When the agent hits the iteration cap, the framework stops the run hard. If no report has been written, the user gets nothing. A partial report with accurate results beats a silent stop every time. Include this as a named rule in `# HARD RULES`: *"Wind-down: when approaching iteration limit, stop new fixes, run build+test, produce report."*
 
 **Ratios:**
 
 - Read phase: ≤30% of budget
 - Fix + verify phase: ≤50% of budget
-- Report: always reserved, never optional
+- Report: ≤20% of budget, always reserved, never optional
+
+For a budget of 20 iterations, that is 6 for reading, 10 for fixing and verification, and 4 held back for the report. If reading takes longer than expected, cut it short rather than borrowing from the fix or report phases.
 
 The `# EFFICIENCY` section of `system.md` is where iteration budget targets live. State the target iteration count for the expected codebase size so the agent can self-regulate.
 
