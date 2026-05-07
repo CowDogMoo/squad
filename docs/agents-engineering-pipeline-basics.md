@@ -4,7 +4,7 @@ A supplement to [pipelines.md](./pipelines.md) and [prompt-engineering-basics.md
 
 ---
 
-## Why Multiple Agents Instead of One?
+## Why multiple agents instead of one?
 
 The instinct when building an AI workflow is to write one large system prompt that handles everything. The result is an agent that is mediocre at many things rather than excellent at one. Three structural ceilings explain why.
 
@@ -16,7 +16,7 @@ The instinct when building an AI workflow is to write one large system prompt th
 
 Pipelines solve all three: each agent gets a focused, fresh context; each agent has one clear role; independent stages run concurrently.
 
-### When NOT to Use a Pipeline
+### When NOT to use a pipeline
 
 A pipeline has real overhead: more YAML to maintain, more agents to tune, and more failure points to debug. Before reaching for one, ask: does this task have genuinely independent sub-problems with distinct output artifacts?
 
@@ -34,7 +34,7 @@ A pipeline has real overhead: more YAML to maintain, more agents to tune, and mo
 - A downstream stage should verify upstream output programmatically
 - The task will run repeatedly and per-stage auditability matters
 
-### Pipeline Topology at a Glance
+### Pipeline topology at a glance
 
 ```mermaid
 graph LR
@@ -45,12 +45,11 @@ graph LR
 
 Stages 1 and 2 declare no `depends_on` and start concurrently. Stage 3 depends on both and waits for both to complete. Stage 4 follows Stage 3. Regression gates (not shown) run between stages that mutate code.
 
-### Orchestrator and Subagent Roles
+### Orchestrator and subagent roles
 
 What Anthropic's documentation calls a "network of agents" or "multi-agent system," squad implements as a pipeline: a declarative dependency graph with explicit artifact handoffs and regression gates. Within that model, every pipeline has two distinct roles:
 
-- **The pipeline runner is the orchestrator.** It reads the `stages:` graph, resolves dependencies, spawns agents in the correct order, routes artifacts between stages, and enforces gates. You configure it in YAML; you do not write its logic.
-- **Each `agent:` entry is a subagent.** It receives scoped input (the task and any prior stage artifacts), executes one job, and writes one output artifact. You write these in `system.md` + `task.md`.
+The pipeline runner is the orchestrator. It reads the `stages:` graph, resolves dependencies, spawns agents in the correct order, routes artifacts between stages, and enforces gates. You configure it in YAML; you do not write its logic. Each `agent:` entry is a subagent. It receives scoped input — the task and any prior stage artifacts — executes one job, and writes one output artifact. You write these in `system.md` + `task.md`.
 
 This is why you never write "coordinate stages" logic in an agent's `system.md`. Coordination is the orchestrator's job. The subagent's job is to do one thing well and produce a clean artifact.
 
@@ -58,9 +57,9 @@ This is why you never write "coordinate stages" logic in an agent's `system.md`.
 
 ---
 
-## The Core Benefits
+## The core benefits
 
-### Specialization and Hallucination Reduction
+### Specialization and hallucination reduction
 
 Each agent in a pipeline can be tuned for exactly one job. Its `system.md` covers a single identity, workflow, and output contract. That focus produces better output than a multi-role prompt trying to satisfy competing goals.
 
@@ -97,7 +96,7 @@ Stages that declare no `depends_on` relationship run concurrently. In `pipelines
 
 The constraint is dependency, not infrastructure. If Stage B needs Stage A's output, it must wait. If it does not, there is no reason to make it wait.
 
-### Two Kinds of Verification: Agents and Gates
+### Two kinds of verification: agents and gates
 
 Pipelines provide two distinct verification mechanisms. Conflating them leads to using the wrong tool for the job.
 
@@ -124,7 +123,7 @@ Use gate-based enforcement whenever success can be expressed as a pass/fail comm
 
 **The rule:** if the check requires judgment, write an agent. If it can be expressed as a shell command, write a gate. Both can coexist in the same pipeline. Think of gates as automated assertions between stages, the pipeline equivalent of unit tests.
 
-### Artifact Handoff and Accumulating Context
+### Artifact handoff and accumulating context
 
 Each agent in a pipeline produces structured output that becomes the next agent's explicit context. The format varies: a markdown document, a JSON report, a findings list. This is artifact handoff, and it is what makes linear pipelines more reliable than a single long-running agent.
 
@@ -145,23 +144,15 @@ This is not the same as a bloated context window. Each artifact is structured an
 
 **Practical rule:** define each agent's output artifact explicitly in its `# OUTPUT FORMAT`. The artifact is the next agent's input contract, not merely output. Treat it as an API boundary.
 
-**What makes a good output contract:**
-
-- **Structured, not prose.** The next agent should reference specific sections by heading name or JSON field. A narrative paragraph is not a reliable target.
-- **Minimal.** Include conclusions, not reasoning traces. The next stage needs the findings, not the 40-turn deliberation that produced them.
-- **Typed.** Use consistent field names and value formats across runs. `severity: high | medium | low` is more useful than `"this is a critical issue"`.
-- **Labeled.** Every section has a name the next agent can reference (`## Findings`, `## Affected Files`, `## Recommendations`), not a wall of unlabeled text.
+A good output contract has four properties. It's structured, not prose — the next agent should reference sections by heading name or JSON field, not parse a narrative paragraph. It's minimal — conclusions only, not reasoning traces; the next stage needs the findings, not the 40-turn deliberation that produced them. It's typed — consistent field names and value formats across runs (`severity: high | medium | low` beats `"this is a critical issue"`). And every section is labeled with a name the next agent can reference (`## Findings`, `## Affected Files`, `## Recommendations`), not a wall of unlabeled text.
 
 A well-defined output contract is what lets you swap one agent for another without rebuilding the pipeline. If the output format changes, it is a breaking change; version it accordingly.
 
-### Reusability and Replaceability
+### Reusability and replaceability
 
 Because each agent is an isolated unit with a defined input contract and a defined output artifact, agents are independently replaceable. Improving the pipeline means improving one stage, not rewriting everything.
 
-- **Swap an agent**: replace the `go-security-audit` agent with a different security model or prompt without touching any other stage.
-- **Improve an artifact**: if the access extraction agent's output is missing edge cases, fix that agent's `system.md` and re-run from that stage forward.
-- **Add a stage**: insert a new concern (e.g., license compliance) between existing stages without rebuilding the pipeline topology.
-- **Reuse across pipelines**: a well-written `go-review` agent can be referenced in multiple composed pipelines. The agent is not coupled to any one workflow.
+You can swap `go-security-audit` for a different model or prompt without touching any other stage. If the access extraction agent's output is missing edge cases, fix that agent's `system.md` and re-run from that stage forward. New concerns like license compliance drop in as new stages; existing stages don't move. A well-written `go-review` agent can appear in multiple composed pipelines because it isn't coupled to any one workflow.
 
 This is the opposite of a monolithic agent prompt, where every improvement risks breaking something else because all the logic is entangled in one context. A pipeline's modularity follows from its artifact handoff model: clean stage boundaries create clean seams for iteration.
 
@@ -183,11 +174,11 @@ With `--json` output, every stage result is machine-readable and can be fed into
 
 When a pipeline fails, work through this in order:
 
-1. **Identify which gate failed.** The gate output names the stage and command. A compilation failure points to the agent that wrote the code; a test failure points to the agent that wrote or broke the tests.
-2. **Inspect the failing stage's output artifact.** Does it match the output contract? Is it structured as expected, or did the agent produce prose where structured output was required?
-3. **Check what the failing stage received as input.** Did the prior stage's artifact actually contain what this stage's `system.md` expects?
-4. **Validate the pipeline topology with `--dry-run`.** If the structure itself is wrong (a missing `depends_on`, a misspelled agent name), `--dry-run` surfaces it without running any agents.
-5. **Re-run from the failing stage.** Once the root cause is fixed, you do not need to re-run prior stages if their output artifacts are intact.
+1. Identify which gate failed. The gate output names the stage and command. A compilation failure points to the agent that wrote the code; a test failure points to the agent that wrote or broke the tests.
+2. Inspect the failing stage's output artifact. Does it match the output contract? Is it structured as expected, or did the agent produce prose where structured output was required?
+3. Check what the failing stage received as input. Did the prior stage's artifact actually contain what this stage's `system.md` expects?
+4. Validate the pipeline topology with `--dry-run`. If the structure itself is wrong (a missing `depends_on`, a misspelled agent name), `--dry-run` surfaces it without running any agents.
+5. Re-run from the failing stage. Once the root cause is fixed, you do not need to re-run prior stages if their output artifacts are intact.
 
 ### Cost Control
 
@@ -233,7 +224,7 @@ Without this pattern, each run starts completely fresh even when accumulated pri
 
 ---
 
-## Designing a Pipeline: The Right Questions To Ask
+## Designing a pipeline: the right questions to ask
 
 Before writing a `stages:` block, answer these:
 
@@ -372,7 +363,7 @@ Arriving at a pipeline from first principles is the skill. The YAML is a transcr
 
 ---
 
-## Pipeline Anti-Patterns
+## Pipeline anti-patterns
 
 **Passing raw context between stages.** Injecting a prior stage's full chat history into the next stage's context window re-introduces context rot inside the pipeline. Pass structured output, not transcripts.
 
@@ -410,7 +401,7 @@ The pipeline is the macro-structure. Each agent's `system.md` is the micro-struc
 
 ---
 
-## Quick Reference
+## Quick reference
 
 | Concept | Rule of thumb |
 |---|---|
