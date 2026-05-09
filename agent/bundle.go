@@ -54,6 +54,10 @@ type Manifest struct {
 	DisableTask   bool               `yaml:"disable_task,omitempty"`
 	MaxIterations int                `yaml:"max_iterations,omitempty"` // iteration cap for this agent (0 = use CLI default)
 	EditDeadline  int                `yaml:"edit_deadline,omitempty"`  // stop after N iterations with no Edit calls (0 = disabled)
+	// Isolation declares the recommended isolation mode: "" (none) or
+	// "worktree" to run inside a fresh git worktree on a new branch.
+	// CLI --isolate and config run.isolation override this.
+	Isolation string `yaml:"isolation,omitempty"`
 }
 
 // BudgetConfig provides static hints for cost estimation.
