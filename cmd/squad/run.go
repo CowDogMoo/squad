@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/mcp"
 	pl "github.com/cowdogmoo/squad/pipeline"
@@ -96,6 +97,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		Agent:              agent,
 		AgentsDir:          agentsDir,
 		WorkingDir:         workingDir,
+		Isolation:          v.GetString("run.isolation"),
 		APIKey:             v.GetString("provider.token"),
 		BaseURL:            v.GetString("provider.base_url"),
 		Org:                v.GetString("provider.organization"),
@@ -191,6 +193,7 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 		{"run.stream", "stream"},
 		{"run.max_concurrent_tasks", "max-concurrent-tasks"},
 		{"run.resume", "resume"},
+		{"run.isolation", "isolate"},
 	} {
 		if err := bind(pair[0], pair[1]); err != nil {
 			return err
@@ -276,6 +279,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Int("max-concurrent-tasks", 0, "Max concurrent background child tasks (default: 4)")
 	cmd.Flags().Bool("json", false, "Force JSON output format (composed agents only)")
 	cmd.Flags().String("resume", "", "Resume a prior session by id (see ./.squad/sessions/)")
+	cmd.Flags().String("isolate", "", "Run agent in an isolated git worktree: 'worktree' or 'none' (default: from manifest/config)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 
@@ -290,6 +294,9 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	})
 	_ = cmd.RegisterFlagCompletionFunc("model", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return nil, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = cmd.RegisterFlagCompletionFunc("isolate", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"none", "worktree"}, cobra.ShellCompDirectiveNoFileComp
 	})
 
 	return cmd
@@ -377,6 +384,13 @@ func runComposedAgent(cmd *cobra.Command, args []string, opts *runner.RunOptions
 		}
 	}
 
+	iso, err := setupComposedIsolation(cmd, opts, manifest, cfg, workingDir)
+	if err != nil {
+		return err
+	}
+	defer reportComposedIsolationTeardown(cmd, iso)
+	workingDir = iso.Effective
+
 	agentsDir := filepath.Dir(agentDir)
 	varStrings, _ := cmd.Flags().GetStringArray("var")
 	vars := parseVars(varStrings)
@@ -411,6 +425,35 @@ func runComposedAgent(cmd *cobra.Command, args []string, opts *runner.RunOptions
 	}
 
 	return runErr
+}
+
+// setupComposedIsolation resolves the effective IsolationMode for a composed
+// agent run from CLI > manifest > config precedence and prepares the worktree.
+func setupComposedIsolation(cmd *cobra.Command, opts *runner.RunOptions, manifest *agent.Manifest, cfg *config.Config, workingDir string) (*runner.Isolation, error) {
+	configIso := ""
+	if cfg != nil {
+		configIso = cfg.Run.Isolation
+	}
+	mode, err := runner.ResolveIsolationMode(opts.Isolation, manifest.Isolation, configIso)
+	if err != nil {
+		return nil, err
+	}
+	return runner.PrepareIsolation(cmd.Context(), workingDir, mode, manifest.Name)
+}
+
+// reportComposedIsolationTeardown tears down the worktree and prints a notice
+// when the worktree was retained for review.
+func reportComposedIsolationTeardown(cmd *cobra.Command, iso *runner.Isolation) {
+	if iso == nil {
+		return
+	}
+	kept, path := iso.Teardown(cmd.Context())
+	if !kept {
+		return
+	}
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Worktree retained: %s (branch %s)\n", path, iso.Branch); err != nil {
+		logging.Warn("failed to write isolation notice: %v", err)
+	}
 }
 
 // validateComposedFlags checks that no incompatible flags are set for composed agents.

@@ -3,6 +3,7 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -99,6 +100,9 @@ type RunOptions struct {
 	ResumeResponseID string
 	// NoSession disables session logging (e.g., for tests).
 	NoSession bool
+	// Isolation overrides the agent manifest's isolation preference.
+	// Empty falls through to manifest, then config, then IsolationNone.
+	Isolation string
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.
@@ -112,6 +116,13 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	if err != nil {
 		return err
 	}
+
+	iso, err := setupIsolation(cmd.Context(), opts, workingDir)
+	if err != nil {
+		return err
+	}
+	defer reportIsolationTeardown(cmd, iso)
+	workingDir = iso.Effective
 
 	bundle, err := prepareBundle(cmd, opts, prompt, workingDir)
 	if err != nil {
@@ -150,16 +161,7 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	}()
 
 	if err != nil {
-		if errors.Is(err, metrics.ErrBudgetExceeded) {
-			if _, fmtErr := fmt.Fprintf(cmd.ErrOrStderr(), "Run stopped: cost budget of $%.4f exceeded (actual: $%.4f)\n", opts.MaxCost, m.TotalCostWithChildren()); fmtErr != nil {
-				logging.Warn("failed to write budget warning: %v", fmtErr)
-			}
-			if response != "" {
-				if handleErr := handleResponse(cmd, opts, response, workingDir); handleErr != nil {
-					logging.Warn("failed to handle partial response: %v", handleErr)
-				}
-			}
-		}
+		handleBudgetExceeded(cmd, opts, m, response, workingDir, err)
 		return err
 	}
 
@@ -168,6 +170,23 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	}
 
 	return nil
+}
+
+// handleBudgetExceeded reports a budget-exceeded run and applies any partial
+// response that was produced before the budget cap stopped the loop.
+func handleBudgetExceeded(cmd *cobra.Command, opts *RunOptions, m *metrics.Metrics, response, workingDir string, err error) {
+	if !errors.Is(err, metrics.ErrBudgetExceeded) {
+		return
+	}
+	if _, fmtErr := fmt.Fprintf(cmd.ErrOrStderr(), "Run stopped: cost budget of $%.4f exceeded (actual: $%.4f)\n", opts.MaxCost, m.TotalCostWithChildren()); fmtErr != nil {
+		logging.Warn("failed to write budget warning: %v", fmtErr)
+	}
+	if response == "" {
+		return
+	}
+	if handleErr := handleResponse(cmd, opts, response, workingDir); handleErr != nil {
+		logging.Warn("failed to handle partial response: %v", handleErr)
+	}
 }
 
 // printMetrics outputs the metrics summary to stderr.
@@ -367,6 +386,54 @@ func resolveWorkingDir(dir string) (string, error) {
 		return os.Getwd()
 	}
 	return filepath.Abs(dir)
+}
+
+// setupIsolation resolves the effective IsolationMode from CLI/manifest/config
+// precedence and prepares the worktree (if any). The returned Isolation must
+// be torn down via reportIsolationTeardown after the run completes.
+func setupIsolation(ctx context.Context, opts *RunOptions, workingDir string) (*Isolation, error) {
+	manifestVal := manifestIsolation(opts)
+	configVal := ""
+	if opts.Config != nil {
+		configVal = opts.Config.Run.Isolation
+	}
+	mode, err := ResolveIsolationMode(opts.Isolation, manifestVal, configVal)
+	if err != nil {
+		return nil, err
+	}
+	return PrepareIsolation(ctx, workingDir, mode, opts.Agent)
+}
+
+// manifestIsolation reads only the isolation field from the agent manifest.
+// Returns empty string when the manifest cannot be located or parsed; any
+// real loading error will surface again from prepareBundle.
+func manifestIsolation(opts *RunOptions) string {
+	if opts.Agent == "" {
+		return ""
+	}
+	agentDir, err := FindAgentDir(opts.Agent, opts.AgentsDir, opts.Config)
+	if err != nil {
+		return ""
+	}
+	m, err := agent.LoadManifest(agentDir)
+	if err != nil {
+		return ""
+	}
+	return m.Isolation
+}
+
+// reportIsolationTeardown runs the worktree teardown and prints a notice on
+// stderr when the worktree was retained for review.
+func reportIsolationTeardown(cmd *cobra.Command, iso *Isolation) {
+	if iso == nil {
+		return
+	}
+	kept, path := iso.Teardown(cmd.Context())
+	if kept {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Worktree retained: %s (branch %s)\n", path, iso.Branch); err != nil {
+			logging.Warn("failed to write isolation notice: %v", err)
+		}
+	}
 }
 
 // FindAgentDir locates an agent by name using the source manager.

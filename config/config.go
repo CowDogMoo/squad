@@ -45,6 +45,14 @@ type Config struct {
 	Model    ModelConfig    `mapstructure:"model" yaml:"model"`
 	Agents   AgentsConfig   `mapstructure:"agents" yaml:"agents"`
 	Otel     OtelConfig     `mapstructure:"otel" yaml:"otel"`
+	Run      RunConfig      `mapstructure:"run" yaml:"run"`
+}
+
+// RunConfig holds run-time defaults that apply to every agent invocation.
+type RunConfig struct {
+	// Isolation is the default isolation mode when neither the CLI flag nor
+	// the agent manifest specifies one. Valid values: "" (none) or "worktree".
+	Isolation string `mapstructure:"isolation" yaml:"isolation"`
 }
 
 // OtelConfig holds OpenTelemetry configuration.
@@ -210,6 +218,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("model.max_tokens", 1024)
 	v.SetDefault("model.reasoning_prefixes", []string{"gpt-5"})
 	v.SetDefault("run.max_cost", 5.0)
+	v.SetDefault("run.isolation", "")
 	v.SetDefault("agents.cache_dir", "")
 	v.SetDefault("agents.repositories", map[string]string{
 		"official": "https://github.com/cowdogmoo/squad-agents.git",
