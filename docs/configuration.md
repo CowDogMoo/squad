@@ -9,15 +9,15 @@ Configuration uses XDG paths with environment variable and CLI flag overrides.
 3. Configuration file
 4. Built-in defaults
 
-## File Locations
+## File locations
 
 Squad searches for `config.yaml` in the following order (first match wins):
 
-1. `--config <path>` flag — explicit path, highest priority
-2. `$XDG_CONFIG_HOME/squad/config.yaml` — typically `~/.config/squad/config.yaml`
-3. `~/.squad/config.yaml` — legacy fallback
-4. Linux/BSD only: `$XDG_CONFIG_DIRS/squad/config.yaml` — typically `/etc/xdg/squad/config.yaml`
-5. `./config.yaml` — current working directory
+1. `--config <path>` flag (explicit path, highest priority)
+2. `$XDG_CONFIG_HOME/squad/config.yaml` (typically `~/.config/squad/config.yaml`)
+3. `~/.squad/config.yaml` (legacy fallback)
+4. Linux/BSD only: `$XDG_CONFIG_DIRS/squad/config.yaml` (typically `/etc/xdg/squad/config.yaml`)
+5. `./config.yaml` (current working directory)
 
 Run `squad config path` to see which file is active.
 
@@ -41,7 +41,7 @@ squad config set model.default gpt-4.1-mini
 squad config get provider.default
 ```
 
-## Token Resolution
+## Token resolution
 
 The `provider.token` field (and only this field) supports dynamic value
 resolution, so you never have to store secrets in plaintext YAML.
@@ -53,7 +53,7 @@ resolution, so you never have to store secrets in plaintext YAML.
 | `$$` | Literal `$` character |
 
 Commands run via `sh -c` with a 10-second timeout. An unset variable or a
-failed command is a hard error — squad will not start with an empty token.
+failed command is a hard error; squad will not start with an empty token.
 
 ```yaml
 provider:
@@ -67,7 +67,7 @@ provider:
   token: $(databricks auth token --host https://<workspace-url> 2>/dev/null | jq -r .access_token)
 ```
 
-## Configuration Reference
+## Configuration reference
 
 All keys can be set in the config file, overridden by the matching `SQUAD_*`
 environment variable (replace `.` → `_`, uppercase), and further overridden by
@@ -97,7 +97,7 @@ the corresponding CLI flag.
 
 | Key | Type | Default | Description |
 | ---------------------------- | ------- | ----------- | -------------------------------------------------------- |
-| `model.default` | string | `""` | Model identifier — **no built-in default; must be set** |
+| `model.default` | string | `""` | Model identifier (**no built-in default; must be set**) |
 | `model.temperature` | float | `0.2` | Sampling randomness: `0.0` = deterministic, `1.0` = creative |
 | `model.max_tokens` | int | `1024` | Output token budget per request |
 | `model.reasoning_prefixes` | []string | `["gpt-5"]` | Model name prefixes that receive extended reasoning token budgets |
@@ -145,7 +145,7 @@ by the corresponding `squad run` flags.
 | `run.max_concurrent_tasks` | int | `0` (→4) | Max concurrent background child tasks; `0` uses default of 4 |
 | `run.resume` | string | `""` | Resume a prior session by ID (see `./.squad/sessions/`) |
 
-## Environment Variables
+## Environment variables
 
 All `SQUAD_*` variables follow the rule: config key with `.` replaced by `_`,
 uppercased, prefixed with `SQUAD_`.
@@ -178,7 +178,7 @@ uppercased, prefixed with `SQUAD_`.
 | `SQUAD_RUN_DRY_RUN` | `run.dry_run` | Build bundle without calling the model |
 | `SQUAD_RUN_MAX_CONCURRENT_TASKS` | `run.max_concurrent_tasks` | Concurrent background task limit |
 
-## Example Config
+## Example config
 
 `~/.config/squad/config.yaml`:
 
@@ -221,7 +221,7 @@ run:
 Providers are OpenAI-compatible by default. Configure with flags, environment
 variables, or config file.
 
-### Provider Matrix
+### Provider matrix
 
 | Provider | Status | Base URL | API Key | Notes |
 | ---------------------- | --------- | --------------------------------------------- | -------- | -------------------------------------------- |
@@ -273,21 +273,15 @@ Databricks AI Gateway is an OpenAI-compatible proxy that routes requests to
 foundation models hosted on Databricks. It is currently in **beta** (no charges
 during beta; unavailable on GovCloud/Azure Government).
 
-**Endpoint format:** The base URL uses the `ai-gateway` subdomain — not the
-workspace URL. The path is always `/mlflow/v1` regardless of which model you
-target; langchaingo appends `/chat/completions` automatically:
+The base URL uses the `ai-gateway` subdomain, not the workspace URL. The path is always `/mlflow/v1` regardless of which model you target; langchaingo appends `/chat/completions` automatically:
 
 ```
 https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1
 ```
 
-**Authentication:** Send a Databricks PAT (`dapi-` prefix) or OAuth access token
-via `--api-key` / `SQUAD_PROVIDER_TOKEN`. The token is forwarded as
-`Authorization: Bearer <token>`. PATs can be scoped to specific API operations
-for least-privilege access.
+Send a Databricks PAT (`dapi-` prefix) or OAuth access token via `--api-key` / `SQUAD_PROVIDER_TOKEN`. The token is forwarded as `Authorization: Bearer <token>`. PATs can be scoped to specific API operations for least-privilege access.
 
-**Model field:** The `--model` value is the name of the deployed gateway endpoint
-(e.g. `databricks-gpt-5-5-pro`), not a model family.
+The `--model` value is the name of the deployed gateway endpoint (e.g. `databricks-gpt-5-5-pro`), not a model family.
 
 ```bash
 # CLI flags
@@ -327,17 +321,11 @@ models:
 Example endpoint names: `databricks-gpt-5-5-pro`, `databricks-claude-sonnet-4-5`,
 `databricks-meta-llama-3-3-70b-instruct`.
 
-**Rate limiting** is configured on the Databricks side per endpoint, per user,
-and per group — not in squad.
+Rate limiting is configured on the Databricks side per endpoint, per user, and per group, not in squad.
 
-**Claude Code integration:** Databricks AI Gateway natively supports Claude Code
-as a coding agent, making it straightforward to route squad's LLM calls through
-the gateway for enterprise governance.
+Databricks AI Gateway natively supports Claude Code as a coding agent, so you can route squad's LLM calls through the gateway for enterprise governance.
 
-**Known limitation:** The `usage_context` map (per-request cost attribution stored
-as `request_tags` in `system.ai_gateway.usage`) requires `extra_body` support in
-the OpenAI client, which langchaingo does not currently provide. This is a
-candidate follow-on item.
+Known limitation: the `usage_context` map (per-request cost attribution stored as `request_tags` in `system.ai_gateway.usage`) requires `extra_body` support in the OpenAI client, which langchaingo does not currently provide. This is a candidate follow-on item.
 
 ### Ollama
 
