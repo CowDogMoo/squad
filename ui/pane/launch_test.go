@@ -235,6 +235,36 @@ func TestLaunchArrowsForwardedToTypeaheadDropdown(t *testing.T) {
 	}
 }
 
+func TestLaunchArrowsNavigateOnButtons(t *testing.T) {
+	// ←/→ are claimed by text inputs (cursor) and selectFields (cycle),
+	// but Launch/Cancel buttons have nothing to do with them. On those,
+	// ←/→ should move focus like Tab/Shift+Tab so the user can flip
+	// between the two without reaching for Tab.
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x"})
+	v := View(form)
+	for {
+		l, ok := AsLaunchView(v)
+		if !ok {
+			t.Fatal("unexpected view")
+		}
+		if l.focus == fldLaunch {
+			break
+		}
+		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	}
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyRight})
+	l, _ := AsLaunchView(v)
+	if l.focus != fldCancel {
+		t.Errorf("→ on Launch should advance to Cancel (%d), got %d", fldCancel, l.focus)
+	}
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	l, _ = AsLaunchView(v)
+	if l.focus != fldLaunch {
+		t.Errorf("← on Cancel should return to Launch (%d), got %d", fldLaunch, l.focus)
+	}
+}
+
 func TestLaunchModelOptionsFollowProvider(t *testing.T) {
 	// The model typeahead's suggestion list must match the selected
 	// provider — picking "anthropic" should never show gpt-* models.

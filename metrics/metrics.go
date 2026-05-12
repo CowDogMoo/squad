@@ -366,7 +366,9 @@ func ModelsForProvider(provider string) []string {
 // providerMappings (which also includes proxy backends like bedrock /
 // vertex_ai used during pricing lookup) — using only the canonical key
 // here avoids surfacing cross-vendor models like bedrock-hosted cohere
-// under "anthropic".
+// under "anthropic". Ollama maps to LiteLLM's "ollama_chat" key; users
+// still need the model pulled locally, but at least the typeahead
+// hints at popular options instead of going blank.
 var modelListingProviders = map[string]string{
 	"openai":           "openai",
 	"openai-responses": "openai",
@@ -374,6 +376,7 @@ var modelListingProviders = map[string]string{
 	"gemini":           "gemini",
 	"nvidia":           "nvidia",
 	"databricks":       "databricks",
+	"ollama":           "ollama_chat",
 }
 
 // liveModelsForProvider filters the LiteLLM cache to chat-completion

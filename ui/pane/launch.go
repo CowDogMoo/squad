@@ -208,6 +208,20 @@ func (l Launch) handleKey(km tea.KeyMsg) (View, tea.Cmd, bool) {
 		l.focus = (l.focus + 1) % fldCount
 		l.applyFocus()
 		return l, nil, true
+	case "left":
+		if l.fieldOwnsHorizontalKeys() {
+			return l, nil, false
+		}
+		l.focus = (l.focus - 1 + fldCount) % fldCount
+		l.applyFocus()
+		return l, nil, true
+	case "right":
+		if l.fieldOwnsHorizontalKeys() {
+			return l, nil, false
+		}
+		l.focus = (l.focus + 1) % fldCount
+		l.applyFocus()
+		return l, nil, true
 	case "enter":
 		return l.handleEnter()
 	case "ctrl+s":
@@ -227,6 +241,18 @@ func (l Launch) fieldOwnsVerticalKeys() bool {
 		return true
 	}
 	return false
+}
+
+// fieldOwnsHorizontalKeys reports whether the focused field uses ←/→
+// for its own purpose. Text inputs and the prompt textarea need them
+// for cursor movement; selectField widgets use them to cycle values.
+// Only the Launch / Cancel buttons leave them free for form-nav.
+func (l Launch) fieldOwnsHorizontalKeys() bool {
+	switch l.focus {
+	case fldLaunch, fldCancel:
+		return false
+	}
+	return true
 }
 
 func (l Launch) handleEnter() (View, tea.Cmd, bool) {
