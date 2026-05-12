@@ -103,6 +103,15 @@ type RunOptions struct {
 	// Isolation overrides the agent manifest's isolation preference.
 	// Empty falls through to manifest, then config, then IsolationNone.
 	Isolation string
+	// RoutineID, when set, is stamped onto the session's meta.json so
+	// `squad routine history` can filter by exact provenance. Qualified
+	// form: "global:nightly" / "repo:audit".
+	RoutineID string
+	// LastSessionID is an OUTPUT field populated by ExecuteRun with the
+	// session id it created (or resumed). Empty when NoSession is true or
+	// session creation failed. Callers like the routines daemon read this
+	// after ExecuteRun returns to record which session a fire produced.
+	LastSessionID string
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.
@@ -142,6 +151,10 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 		logging.Warn("failed to open session log: %v", err)
 	}
 	if logger != nil {
+		opts.LastSessionID = logger.SessionID()
+		if opts.RoutineID != "" {
+			logger.SetRoutineID(opts.RoutineID)
+		}
 		ctx = session.WithLogger(ctx, logger)
 		if _, fmtErr := fmt.Fprintf(cmd.ErrOrStderr(), "Session: %s\n", logger.SessionID()); fmtErr != nil {
 			logging.Warn("failed to write session banner: %v", fmtErr)

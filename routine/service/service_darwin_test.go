@@ -1,0 +1,135 @@
+//go:build darwin
+
+package service
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestLaunchdInstallRejectsMissingBinary(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	if err := s.Install("/nonexistent/squad", InstallOptions{}); err == nil {
+		t.Error("expected error for missing binary")
+	}
+}
+
+func TestPlistWakeSystemToggle(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	binary := mockBinary(t)
+	off, err := s.renderPlist(binary, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(off), "<key>WakeSystem</key>") {
+		t.Errorf("wake_system=false should omit WakeSystem key, got:\n%s", off)
+	}
+	on, err := s.renderPlist(binary, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(on), "<key>WakeSystem</key>") {
+		t.Errorf("wake_system=true should include WakeSystem key, got:\n%s", on)
+	}
+}
+
+func TestLaunchdStatusReflectsMissingPlist(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	st, err := s.Status()
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.State != StateNotInstalled {
+		t.Errorf("expected not installed, got %v", st.State)
+	}
+	if st.ServicePath == "" {
+		t.Error("ServicePath should be populated even when not installed")
+	}
+}
+
+func TestDaemonBinaryFromPlist(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	binary := mockBinary(t)
+
+	if err := writePlist(s.plistPath, binary, s.logPath, s.home, false); err != nil {
+		t.Fatal(err)
+	}
+	got := s.daemonBinaryFromPlist()
+	if got != binary {
+		t.Errorf("got %q, want %q", got, binary)
+	}
+}
+
+func TestPlistContainsExpectedFields(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	binary := mockBinary(t)
+	if err := writePlist(s.plistPath, binary, s.logPath, s.home, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(s.plistPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		launchdLabel,
+		"<key>RunAtLoad</key>",
+		"<true/>",
+		"<key>KeepAlive</key>",
+		"<key>ProgramArguments</key>",
+		"routined",
+		binary,
+		s.logPath,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("plist missing %q\nfull content:\n%s", want, content)
+		}
+	}
+}
+
+// newTestService builds a launchdService rooted at a temp dir so tests never
+// touch the user's real ~/Library/LaunchAgents.
+func newTestService(t *testing.T) *launchdService {
+	t.Helper()
+	tmp := t.TempDir()
+	return &launchdService{
+		home:      tmp,
+		uid:       os.Getuid(),
+		plistPath: filepath.Join(tmp, "Library", "LaunchAgents", launchdLabel+".plist"),
+		logPath:   filepath.Join(tmp, "Library", "Logs", "squad", "routined.log"),
+	}
+}
+
+func mockBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "squad")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// writePlist exercises the Install template path without invoking launchctl,
+// so we can assert on the rendered file in unit tests.
+func writePlist(plistPath, binary, logPath, home string, wakeSystem bool) error {
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		return err
+	}
+	// Render via the same template Install uses by reusing the implementation
+	// internals — call Install would shell to launchctl, so we replicate the
+	// file-creation half here.
+	s := &launchdService{home: home, plistPath: plistPath, logPath: logPath}
+	tmpl, err := s.renderPlist(binary, wakeSystem)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(plistPath, tmpl, 0o644)
+}
