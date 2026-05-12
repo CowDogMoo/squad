@@ -71,15 +71,33 @@ type App struct {
 
 	presets    *presets.Store      // optional — nil disables /preset
 	lastLaunch *pane.LaunchRequest // remembered for /preset save
+	agents     []string            // names of discoverable agents, fed to the launch form
 
 	selected string // session ID of currently-selected sidebar row
 	pane     pane.View
+
+	// focusedRegion routes ↑/↓ to the right sub-view: composer (history),
+	// sidebar (cycle runs), or the focused-detail panel (no-op for now).
+	// Tab/Shift+Tab cycle the regions when no modal is active.
+	focusedRegion focusRegion
 
 	width, height int
 	frame         uint64
 
 	quitting bool
 }
+
+// focusRegion is the App's "which sub-view owns arrow keys right now"
+// state. Three values keep the cycle small; new regions can slot in
+// later if the UI grows panels.
+type focusRegion int
+
+const (
+	regionComposer focusRegion = iota
+	regionSidebar
+	regionFocused
+	regionCount
+)
 
 const (
 	// rediscoverEvery is how often the app re-scans the sessions root for
@@ -112,6 +130,13 @@ func New(runs []sidebar.Run) App {
 // chain cleanly with the constructors.
 func (a App) WithPresets(store *presets.Store) App {
 	a.presets = store
+	return a
+}
+
+// WithAgents seeds the discovered-agents list shown in the launch form
+// typeahead. Order is preserved; callers should pass already-sorted names.
+func (a App) WithAgents(names []string) App {
+	a.agents = append([]string(nil), names...)
 	return a
 }
 
@@ -173,27 +198,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, frameTick()
 
 	case tea.KeyMsg:
-		// ctrl+c always quits. All other global shortcuts (tab/shift+tab
-		// cycle sidebar, ctrl+k cancel) are suppressed while a modal
-		// pane (the launch form) is active — otherwise the form can't
-		// receive Tab to move between fields.
+		// ctrl+c always quits. Modal pane (launch form) handles its own
+		// keys, so everything else is forwarded unchanged.
 		if m.String() == "ctrl+c" || m.String() == "ctrl+q" {
 			a.quitting = true
 			return a, tea.Quit
 		}
 		if _, modal := pane.AsLaunchView(a.pane); !modal {
-			switch m.String() {
-			case "tab", "down", "ctrl+n":
-				a.cycleSelection(+1)
-				return a, nil
-			case "shift+tab", "up", "ctrl+p":
-				a.cycleSelection(-1)
-				return a, nil
-			case "ctrl+k":
-				// ctrl+k cancels the focused run's subprocess. Bare "k"
-				// would conflict with composer typing; ctrl+k is global.
-				a.cancelFocused()
-				return a, nil
+			if cmd, handled := a.handleRegionKey(m); handled {
+				return a, cmd
 			}
 		}
 		var cmd tea.Cmd
@@ -276,6 +289,8 @@ func (a App) View() string {
 
 	composer := a.pane.View(w, 0)
 	composerH := strings.Count(composer, "\n") + 1
+	focusBar := a.renderFocusBar()
+	focusBarH := 1
 	toast := a.currentToast()
 	toastH := 0
 	if toast != "" {
@@ -286,7 +301,7 @@ func (a App) View() string {
 	// chrome encloses it — no orphaned text between panel and composer.
 	statusLine := a.renderStatus(innerW)
 
-	panelH := h - composerH - toastH
+	panelH := h - composerH - toastH - focusBarH
 	minH := style.PanelHeight(body) + 1 // body + 1 row for status
 	if panelH < minH {
 		panelH = minH
@@ -302,12 +317,37 @@ func (a App) View() string {
 
 	panel := style.PanelFixed("SQUAD", panelBody, w, panelH)
 
-	parts := []string{panel}
+	parts := []string{panel, focusBar}
 	if toast != "" {
 		parts = append(parts, toast)
 	}
 	parts = append(parts, composer)
 	return strings.Join(parts, "\n")
+}
+
+// renderFocusBar is the one-line strip between the SQUAD panel and the
+// composer. Shows which region currently owns Tab focus so the user can
+// see what they're cycling — arrow keys themselves are not region-
+// gated, but Tab + the focus indicator give a coherent affordance.
+func (a App) renderFocusBar() string {
+	labels := []struct {
+		region focusRegion
+		name   string
+	}{
+		{regionComposer, "composer"},
+		{regionSidebar, "sidebar"},
+		{regionFocused, "focused"},
+	}
+	parts := make([]string, 0, len(labels))
+	for _, l := range labels {
+		if l.region == a.focusedRegion {
+			parts = append(parts, style.Hint.Render("● "+l.name))
+		} else {
+			parts = append(parts, style.Faint.Render("· "+l.name))
+		}
+	}
+	hint := style.Faint.Render("tab cycles · ctrl+↑/↓ history")
+	return "  " + strings.Join(parts, "  ") + "    " + hint
 }
 
 // padBlock normalizes each line of s to exactly `width` visible columns:
@@ -432,9 +472,9 @@ func (a *App) rediscover() {
 	}
 }
 
-// handleSubmit dispatches a pane.Submitted into the right action. Today:
-// only "/run agent prompt" is wired; other commands are toasted as
-// unknown so the user sees something happen.
+// handleSubmit dispatches a pane.Submitted into the right action.
+// Commands route through handleCommand; other kinds toast a not-yet-
+// wired hint so the user sees feedback.
 func (a *App) handleSubmit(sub pane.Submitted) {
 	switch sub.Kind {
 	case pane.KindCommand:
@@ -456,8 +496,6 @@ func (a *App) handleCommand(text string) {
 	switch parts[0] {
 	case "run":
 		a.cmdRun(parts[1:])
-	case "new":
-		a.openLaunchForm()
 	case "preset":
 		a.cmdPreset(parts[1:])
 	case "help", "?":
@@ -472,8 +510,8 @@ func (a *App) handleCommand(text string) {
 // cmdHelp toasts the available slash commands and global keys.
 func (a *App) cmdHelp() {
 	a.setToast(style.Hint.Render(
-		"commands: /new (launch form) · /run AGENT PROMPT · /preset save|load|list|delete NAME · /quit · /help" +
-			" · keys: tab/shift-tab cycle · ctrl+k cancel · ctrl+c quit",
+		"commands: /run (launch form) · /preset save|load|list|delete NAME · /quit · /help" +
+			" · keys: tab cycle regions · ↑/↓ sidebar · ctrl+↑/↓ history · ctrl+k cancel · ctrl+c quit",
 	))
 }
 
@@ -551,6 +589,7 @@ func (a *App) cmdPresetLoad(args []string) {
 		Provider:   p.Provider,
 		Model:      p.Model,
 		Isolate:    p.Isolate,
+		Agents:     a.agents,
 	})
 	form.SetSize(a.width, a.height)
 	// If the preset has a prompt, seed the textarea.
@@ -727,20 +766,17 @@ func (a *App) cancelFocused() {
 func (a *App) openLaunchForm() {
 	form := pane.NewLaunch(a.pane, pane.LaunchDefaults{
 		WorkingDir: a.workingDir,
+		Agents:     a.agents,
 	})
 	form.SetSize(a.width, a.height)
 	a.pane = form
 }
 
-func (a *App) cmdRun(args []string) {
-	if len(args) < 2 {
-		a.setToast(style.Error.Render("usage: /run <agent> <prompt>"))
-		return
-	}
-	a.launch(pane.LaunchRequest{
-		Agent:  args[0],
-		Prompt: strings.Join(args[1:], " "),
-	})
+// cmdRun opens the launch form. Inline launches belong on the CLI
+// (`squad run ...`); inside the TUI the form is the only path so all
+// fields stay editable until the user actually submits.
+func (a *App) cmdRun(_ []string) {
+	a.openLaunchForm()
 }
 
 // launch is the single subprocess-launch entry point. Empty optional
@@ -814,6 +850,41 @@ func (a App) currentToast() string {
 	return a.toast
 }
 
+// handleRegionKey is the non-modal arrow/tab dispatcher. Returns
+// (cmd, true) when the key was a region-level shortcut and the App
+// state has been mutated in place; (_, false) tells the caller to
+// forward the message to the focused pane untouched.
+//
+// Bindings:
+//   - tab / shift+tab: cycle focus among regions (composer ↔ sidebar ↔
+//     focused detail). Visual indicator only — arrow keys are not
+//     region-gated, so the user can always cycle runs without leaving
+//     composer focus (an explicit user request).
+//   - ↑/↓: cycle sidebar runs from any region. Composer history lives
+//     on ctrl+↑/ctrl+↓ to keep ↑/↓ available globally.
+//   - ctrl+n / ctrl+p: aliases for ↑/↓ sidebar cycle.
+//   - ctrl+k: cancel the focused run's subprocess from anywhere.
+func (a *App) handleRegionKey(m tea.KeyMsg) (tea.Cmd, bool) {
+	switch m.String() {
+	case "tab":
+		a.focusedRegion = (a.focusedRegion + 1) % regionCount
+		return nil, true
+	case "shift+tab":
+		a.focusedRegion = (a.focusedRegion + regionCount - 1) % regionCount
+		return nil, true
+	case "up", "ctrl+p":
+		a.cycleSelection(-1)
+		return nil, true
+	case "down", "ctrl+n":
+		a.cycleSelection(+1)
+		return nil, true
+	case "ctrl+k":
+		a.cancelFocused()
+		return nil, true
+	}
+	return nil, false
+}
+
 func (a *App) cycleSelection(delta int) {
 	runs := a.currentRuns()
 	if len(runs) == 0 {
@@ -838,7 +909,7 @@ func (a App) renderSidebar(width int) string {
 	if len(runs) == 0 {
 		return style.Title.Render("RUNS") + "\n\n" +
 			style.Faint.Render("  no runs yet") + "\n" +
-			style.Faint.Render("  press /new to launch")
+			style.Faint.Render("  type /run to launch")
 	}
 	return sidebar.Render(sidebar.Snapshot{
 		Runs:        runs,
@@ -905,7 +976,7 @@ func (a App) renderFocused(width int) string {
 }
 
 // renderWelcome is the focused-panel content when no run is selected
-// (typically because none exist yet). Onboards the user toward /new
+// (typically because none exist yet). Onboards the user toward /run
 // and lists a few useful shortcuts.
 func (a App) renderWelcome(_ int) string {
 	rows := []string{
@@ -914,13 +985,14 @@ func (a App) renderWelcome(_ int) string {
 		style.Body.Render("  squad — a multi-agent runner"),
 		"",
 		style.Header.Render("  GET STARTED"),
-		"  " + style.Hint.Render("/new") + style.Secondary.Render("                     open the launch form"),
-		"  " + style.Hint.Render("/run AGENT PROMPT") + style.Secondary.Render("        quick launch"),
+		"  " + style.Hint.Render("/run") + style.Secondary.Render("                     open the launch form"),
 		"  " + style.Hint.Render("/preset load NAME") + style.Secondary.Render("        load a saved config"),
 		"  " + style.Hint.Render("/help") + style.Secondary.Render("                    full command list"),
 		"",
 		style.Header.Render("  KEYS"),
-		"  " + style.Hint.Render("tab / shift+tab") + style.Secondary.Render("          cycle selection"),
+		"  " + style.Hint.Render("tab / shift+tab") + style.Secondary.Render("          cycle focus regions"),
+		"  " + style.Hint.Render("↑ / ↓") + style.Secondary.Render("                    cycle runs in sidebar"),
+		"  " + style.Hint.Render("ctrl+↑ / ctrl+↓") + style.Secondary.Render("          recall prompt history"),
 		"  " + style.Hint.Render("ctrl+k") + style.Secondary.Render("                   cancel focused run"),
 		"  " + style.Hint.Render("ctrl+c") + style.Secondary.Render("                   quit"),
 	}

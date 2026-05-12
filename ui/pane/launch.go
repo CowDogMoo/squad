@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/ui/style"
 )
 
@@ -24,18 +25,36 @@ import (
 type Launch struct {
 	parent View
 
-	agent      textinput.Model
+	agent      typeahead
 	workingDir textinput.Model
 	budget     textinput.Model
-	mode       textinput.Model
+	mode       selectField
 	iter       textinput.Model
-	provider   textinput.Model
-	model      textinput.Model
-	isolate    textinput.Model
+	provider   typeahead
+	model      typeahead
+	isolate    selectField
 	prompt     textarea.Model
 
 	focus int
 	err   string
+}
+
+// modeOptions, providerOptions, isolateOptions are the closed sets
+// presented in the corresponding select fields. Empty strings stand for
+// "use the default" — the agent manifest decides when no value is given.
+var (
+	modeOptions     = []string{"edit", "plan"}
+	providerOptions = []string{"openai", "openai-responses", "anthropic", "gemini", "ollama"}
+	isolateOptions  = []string{"", "worktree", "branch", "commit", "staged", "unstaged", "none"}
+)
+
+// modelsForProvider returns the model typeahead options for `p`. The
+// list is derived from the live LiteLLM registry when available and
+// falls back to an embedded curated list otherwise (see metrics
+// package). The typeahead still accepts any free-text value the user
+// types.
+func modelsForProvider(p string) []string {
+	return metrics.ModelsForProvider(p)
 }
 
 // Field indices for cycling focus. Order chosen to read left-to-right,
@@ -56,7 +75,9 @@ const (
 )
 
 // LaunchDefaults seeds the form fields. Callers pass the current cwd as
-// WorkingDir so the user doesn't retype it for every run.
+// WorkingDir so the user doesn't retype it for every run. Agents is the
+// list of discoverable agent names — when non-empty the agent field
+// renders a filterable typeahead dropdown instead of a free-text input.
 type LaunchDefaults struct {
 	Agent      string
 	WorkingDir string
@@ -68,6 +89,8 @@ type LaunchDefaults struct {
 	Provider string
 	Model    string
 	Isolate  string
+
+	Agents []string
 }
 
 // NewLaunch builds a Launch form using `parent` as the return target
@@ -87,14 +110,14 @@ func NewLaunch(parent View, defaults LaunchDefaults) Launch {
 	// panel (96 inner). textinput scrolls horizontally when content
 	// exceeds the visible width, so smaller widths still accept long
 	// strings — they just don't render the whole value at once.
-	agent := mkInput("agent", defaults.Agent, 22)
+	agentInput := newTypeahead("agent", defaults.Agent, 22, defaults.Agents)
 	workingDir := mkInput("working-dir", defaults.WorkingDir, 30)
 	budget := mkInput("budget", fmt.Sprintf("%.2f", defaults.MaxCost), 7)
-	mode := mkInput("mode", defaults.Mode, 9)
+	mode := newSelectField(modeOptions, defaults.Mode, "edit")
 	iter := mkInput("iter", strconv.Itoa(defaults.MaxIter), 4)
-	provider := mkInput("(default)", defaults.Provider, 16)
-	model := mkInput("(default)", defaults.Model, 20)
-	isolate := mkInput("(manifest)", defaults.Isolate, 10)
+	provider := newTypeahead("(default)", defaults.Provider, 16, providerOptions)
+	model := newTypeahead("(default)", defaults.Model, 20, modelsForProvider(defaults.Provider))
+	isolate := newSelectField(isolateOptions, defaults.Isolate, "(manifest)")
 
 	prompt := textarea.New()
 	prompt.Placeholder = "prompt — what should the agent do? (shift+enter for newline)"
@@ -112,7 +135,7 @@ func NewLaunch(parent View, defaults LaunchDefaults) Launch {
 
 	f := Launch{
 		parent:     parent,
-		agent:      agent,
+		agent:      agentInput,
 		workingDir: workingDir,
 		budget:     budget,
 		mode:       mode,
@@ -171,6 +194,20 @@ func (l Launch) handleKey(km tea.KeyMsg) (View, tea.Cmd, bool) {
 		l.focus = (l.focus - 1 + fldCount) % fldCount
 		l.applyFocus()
 		return l, nil, true
+	case "up":
+		if l.fieldOwnsVerticalKeys() {
+			return l, nil, false
+		}
+		l.focus = (l.focus - 1 + fldCount) % fldCount
+		l.applyFocus()
+		return l, nil, true
+	case "down":
+		if l.fieldOwnsVerticalKeys() {
+			return l, nil, false
+		}
+		l.focus = (l.focus + 1) % fldCount
+		l.applyFocus()
+		return l, nil, true
 	case "enter":
 		return l.handleEnter()
 	case "ctrl+s":
@@ -178,6 +215,18 @@ func (l Launch) handleKey(km tea.KeyMsg) (View, tea.Cmd, bool) {
 		return v, c, true
 	}
 	return l, nil, false
+}
+
+// fieldOwnsVerticalKeys reports whether the currently focused field
+// uses ↑/↓ for its own purpose (typeahead dropdown navigation, textarea
+// line nav). For all other fields ↑/↓ moves focus to the prev/next
+// field — the natural form-nav behavior on single-line inputs.
+func (l Launch) fieldOwnsVerticalKeys() bool {
+	switch l.focus {
+	case fldAgent, fldProvider, fldModel, fldPrompt:
+		return true
+	}
+	return false
 }
 
 func (l Launch) handleEnter() (View, tea.Cmd, bool) {
@@ -191,6 +240,32 @@ func (l Launch) handleEnter() (View, tea.Cmd, bool) {
 		// Inside the prompt textarea, let Enter fall through (no-op —
 		// the textarea has shift+enter for newlines).
 		return l, nil, false
+	case fldAgent:
+		// Commit the highlighted dropdown match into the input, then
+		// advance focus. Lets the user pick a suggestion with Enter
+		// without it acting as a form submit.
+		l.agent, _ = l.agent.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		l.focus = (l.focus + 1) % fldCount
+		l.applyFocus()
+		return l, nil, true
+	case fldProvider:
+		// Same dropdown-commit-then-advance behavior for the provider
+		// typeahead.
+		prev := l.provider.Value()
+		l.provider, _ = l.provider.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if l.provider.Value() != prev {
+			l.model.SetOptions(modelsForProvider(l.provider.Value()))
+		}
+		l.focus = (l.focus + 1) % fldCount
+		l.applyFocus()
+		return l, nil, true
+	case fldModel:
+		// Same dropdown-commit-then-advance behavior for the model
+		// typeahead.
+		l.model, _ = l.model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		l.focus = (l.focus + 1) % fldCount
+		l.applyFocus()
+		return l, nil, true
 	default:
 		l.focus = (l.focus + 1) % fldCount
 		l.applyFocus()
@@ -201,6 +276,19 @@ func (l Launch) handleEnter() (View, tea.Cmd, bool) {
 // forwardToFocused routes input to whichever sub-control currently has
 // focus.
 func (l Launch) forwardToFocused(msg tea.Msg) (View, tea.Cmd) {
+	// Drop rune keystrokes that would push the numeric fields into
+	// invalid territory (letters, minus, multiple dots). Non-rune keys
+	// (backspace, arrows, etc.) still pass through.
+	switch l.focus {
+	case fldBudget:
+		if !budgetAcceptKey(msg, l.budget.Value()) {
+			return l, nil
+		}
+	case fldIters:
+		if !digitsOnlyAcceptKey(msg) {
+			return l, nil
+		}
+	}
 	var cmd tea.Cmd
 	switch l.focus {
 	case fldAgent:
@@ -214,7 +302,11 @@ func (l Launch) forwardToFocused(msg tea.Msg) (View, tea.Cmd) {
 	case fldIters:
 		l.iter, cmd = l.iter.Update(msg)
 	case fldProvider:
+		prev := l.provider.Value()
 		l.provider, cmd = l.provider.Update(msg)
+		if l.provider.Value() != prev {
+			l.model.SetOptions(modelsForProvider(l.provider.Value()))
+		}
 	case fldModel:
 		l.model, cmd = l.model.Update(msg)
 	case fldIsolate:
@@ -223,6 +315,77 @@ func (l Launch) forwardToFocused(msg tea.Msg) (View, tea.Cmd) {
 		l.prompt, cmd = l.prompt.Update(msg)
 	}
 	return l, cmd
+}
+
+// digitsOnlyAcceptKey returns false for rune keystrokes that aren't
+// digits 0-9 (so the iter field rejects letters, `-`, `.`). Non-rune
+// keys like backspace and arrows return true.
+func digitsOnlyAcceptKey(msg tea.Msg) bool {
+	km, ok := msg.(tea.KeyMsg)
+	if !ok || km.Type != tea.KeyRunes {
+		return true
+	}
+	for _, r := range km.Runes {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// budgetAcceptKey returns false for rune keystrokes that aren't digits
+// or the first dot. `current` is the existing field value so the second
+// dot can be rejected without resorting to ParseFloat on every keystroke.
+func budgetAcceptKey(msg tea.Msg, current string) bool {
+	km, ok := msg.(tea.KeyMsg)
+	if !ok || km.Type != tea.KeyRunes {
+		return true
+	}
+	hasDot := strings.ContainsRune(current, '.')
+	for _, r := range km.Runes {
+		switch {
+		case r >= '0' && r <= '9':
+		case r == '.' && !hasDot:
+			hasDot = true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// onAgentField reports whether focus is on the agent typeahead. Used to
+// decide which keys (up/down/enter) the form swallows vs. forwards to
+// the dropdown.
+func (l Launch) onAgentField() bool { return l.focus == fldAgent }
+
+// contextualHint returns a faint one-line description of the currently
+// focused field — what each option means or how the value is used. The
+// host always reserves a row for it so the layout doesn't jump when
+// focus moves between fields.
+func (l Launch) contextualHint() string {
+	var hint string
+	switch l.focus {
+	case fldAgent:
+		hint = "↑/↓ pick · enter commit · type to filter"
+	case fldWorkingDir:
+		hint = "directory the agent operates in (defaults to cwd)"
+	case fldBudget:
+		hint = "max USD spend before the agent stops"
+	case fldMode:
+		hint = "edit: agent may modify files · plan: analysis only (template var .Mode)"
+	case fldIters:
+		hint = "max LLM round trips before the agent stops"
+	case fldProvider:
+		hint = "(default): use config.yaml · openai/openai-responses/anthropic/gemini/ollama: override"
+	case fldModel:
+		hint = "↑/↓ pick · enter commit · type to filter · provider-specific; empty = manifest default"
+	case fldIsolate:
+		hint = "(manifest)/worktree: separate dir · branch/commit/staged: in-place w/ git snapshot · unstaged/none: in-place as-is"
+	case fldPrompt:
+		hint = "what should the agent do? · shift+enter for newline · ctrl+s to submit"
+	}
+	return style.Faint.Render("  " + hint)
 }
 
 // applyFocus blurs all inputs and focuses the currently-selected one.
@@ -291,13 +454,7 @@ func (l Launch) submit() (View, tea.Cmd) {
 		l.applyFocus()
 		return l, nil
 	}
-	isolate := strings.TrimSpace(l.isolate.Value())
-	if isolate != "" && isolate != "worktree" && isolate != "none" {
-		l.err = "isolate must be 'worktree', 'none', or empty"
-		l.focus = fldIsolate
-		l.applyFocus()
-		return l, nil
-	}
+	// isolate is a closed-set selectField — no validation needed.
 	req := LaunchRequest{
 		Agent:      agent,
 		WorkingDir: strings.TrimSpace(l.workingDir.Value()),
@@ -307,7 +464,7 @@ func (l Launch) submit() (View, tea.Cmd) {
 		MaxIter:    maxIter,
 		Provider:   strings.TrimSpace(l.provider.Value()),
 		Model:      strings.TrimSpace(l.model.Value()),
-		Isolate:    isolate,
+		Isolate:    l.isolate.Value(),
 	}
 	return l.parent, func() tea.Msg { return req }
 }
@@ -337,35 +494,65 @@ func (l Launch) View(width, height int) string {
 		labelW("agent", 12), boxed(l.agent.View(), l.focus == fldAgent),
 		labelW("working dir", 12), boxed(l.workingDir.View(), l.focus == fldWorkingDir),
 	)
+	// Render the agent dropdown directly below row1 when the agent
+	// field has focus. Reserves up to maxRows of vertical space so the
+	// rest of the form doesn't jump around while typing.
+	var agentDropdown string
+	if l.onAgentField() {
+		agentDropdown = l.agent.DropdownView()
+	}
 	row2 := fmt.Sprintf("%s  %s    %s  %s    %s  %s",
 		labelW("budget", 12), boxed(l.budget.View(), l.focus == fldBudget),
-		labelW("mode", 6), boxed(l.mode.View(), l.focus == fldMode),
+		labelW("mode", 6), l.mode.View(9),
 		labelW("iter", 6), boxed(l.iter.View(), l.focus == fldIters),
 	)
 	row3 := style.Faint.Render("advanced  ") + fmt.Sprintf("%s  %s    %s  %s    %s  %s",
 		labelW("provider", 9), boxed(l.provider.View(), l.focus == fldProvider),
 		labelW("model", 6), boxed(l.model.View(), l.focus == fldModel),
-		labelW("isolate", 8), boxed(l.isolate.View(), l.focus == fldIsolate),
+		labelW("isolate", 8), l.isolate.View(10),
 	)
+	var providerDropdown string
+	if l.focus == fldProvider {
+		providerDropdown = l.provider.DropdownView()
+	}
+	var modelDropdown string
+	if l.focus == fldModel {
+		modelDropdown = l.model.DropdownView()
+	}
 	promptRow := style.Header.Render("prompt") + "\n" + l.prompt.View()
 
 	buttonLaunch := button("[ Launch ]", l.focus == fldLaunch, style.Success)
 	buttonCancel := button("[ Cancel ]", l.focus == fldCancel, style.Secondary)
 	buttons := buttonLaunch + "    " + buttonCancel
 
-	rows := []string{
-		row1,
+	rows := []string{row1}
+	if agentDropdown != "" {
+		rows = append(rows, agentDropdown)
+	}
+	rows = append(rows,
+		"",
 		row2,
+		"",
 		row3,
+	)
+	if providerDropdown != "" {
+		rows = append(rows, providerDropdown)
+	}
+	if modelDropdown != "" {
+		rows = append(rows, modelDropdown)
+	}
+	rows = append(rows,
+		"",
+		l.contextualHint(),
 		"",
 		promptRow,
 		"",
 		buttons,
-	}
+	)
 	if l.err != "" {
-		rows = append(rows, "", style.Error.Render(l.err))
+		rows = append(rows, "", style.Error.Bold(true).Render("  ! "+l.err))
 	}
-	help := style.Faint.Render("tab/shift-tab move · enter activate · ctrl+s submit · esc cancel")
+	help := style.Faint.Render("tab/shift-tab move · ↑/↓ pick · ←/→ cycle · enter select · ctrl+s submit · esc cancel")
 	body := strings.Join(rows, "\n")
 	if height > 0 {
 		// Pad between the form content and the help footer so the
@@ -409,7 +596,7 @@ func AsLaunchView(v any) (Launch, bool) {
 
 // SetSize lets the host size the form before its first WindowSizeMsg
 // arrives — important when the form is installed mid-session (e.g.
-// triggered by /new) and the resize message has already fired once.
+// triggered by /run) and the resize message has already fired once.
 func (l *Launch) SetSize(width, _ int) {
 	if width > 0 {
 		l.prompt.SetWidth(width - 2)

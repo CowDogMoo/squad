@@ -26,11 +26,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/cowdogmoo/squad/config"
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/session"
+	"github.com/cowdogmoo/squad/source"
 	"github.com/cowdogmoo/squad/ui/app"
 	"github.com/cowdogmoo/squad/ui/presets"
 )
@@ -52,6 +56,7 @@ to point at a different sessions root.`,
 	cmd.Flags().Bool("mock", false, "Render hand-crafted mock runs instead of discovering disk sessions")
 	cmd.Flags().String("sessions-dir", "", "Sessions root to watch (default: <cwd>/.squad/sessions)")
 	cmd.Flags().String("working-dir", "", "Working directory for launched subprocesses (default: cwd)")
+	cmd.Flags().String("agents-dir", "", "Extra directory to search for agents (prepended to configured sources)")
 	return cmd
 }
 
@@ -59,6 +64,7 @@ func runUI(cmd *cobra.Command, _ []string) error {
 	useMock, _ := cmd.Flags().GetBool("mock")
 	sessionsDir, _ := cmd.Flags().GetString("sessions-dir")
 	workingDir, _ := cmd.Flags().GetString("working-dir")
+	agentsDir, _ := cmd.Flags().GetString("agents-dir")
 	if workingDir == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -66,6 +72,10 @@ func runUI(cmd *cobra.Command, _ []string) error {
 		}
 		workingDir = cwd
 	}
+
+	// Kick the LiteLLM pricing fetch off in the background so the launch
+	// form's model typeahead has the live registry ready to suggest from.
+	metrics.WarmPricing()
 
 	var model app.App
 	if useMock {
@@ -89,6 +99,12 @@ func runUI(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	// Discover available agents for the launch form typeahead. Failures
+	// here are non-fatal — the form falls back to free-text entry.
+	if names := discoverAgents(agentsDir); len(names) > 0 {
+		model = model.WithAgents(names)
+	}
+
 	prog := tea.NewProgram(
 		model,
 		tea.WithAltScreen(),
@@ -96,4 +112,33 @@ func runUI(cmd *cobra.Command, _ []string) error {
 	)
 	_, err := prog.Run()
 	return err
+}
+
+// discoverAgents returns sorted names of all agents reachable through the
+// configured source manager. Errors are swallowed — the launch form falls
+// back to free-text entry when the list is empty.
+func discoverAgents(extraDir string) []string {
+	cfg, _, err := config.Load()
+	if err != nil || cfg == nil {
+		return nil
+	}
+	if extraDir != "" {
+		if abs, err := filepath.Abs(extraDir); err == nil {
+			cfg.Agents.LocalPaths = append([]string{abs}, cfg.Agents.LocalPaths...)
+		}
+	}
+	mgr, err := source.NewManager(cfg)
+	if err != nil {
+		return nil
+	}
+	infos, err := mgr.ListAgents()
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(infos))
+	for _, info := range infos {
+		names = append(names, info.Name)
+	}
+	sort.Strings(names)
+	return names
 }

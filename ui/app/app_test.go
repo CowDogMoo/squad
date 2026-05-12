@@ -85,11 +85,30 @@ func TestWindowSizeRoutes(t *testing.T) {
 	}
 }
 
-func TestTabAdvancesSelection(t *testing.T) {
+func TestCtrlNAdvancesSelection(t *testing.T) {
+	// Tab now cycles focus regions, not sidebar selection. ctrl+n is the
+	// "always advance sidebar" shortcut that works from any region (so
+	// users can flip through runs without leaving the composer).
 	a := makeApp()
-	next, _ := a.Update(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ := a.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
 	if got := asApp(t, next).Selected(); got != "b" {
-		t.Errorf("tab: got %q, want %q", got, "b")
+		t.Errorf("ctrl+n: got %q, want %q", got, "b")
+	}
+}
+
+func TestTabCyclesRegions(t *testing.T) {
+	a := makeApp()
+	if got := a.focusedRegion; got != regionComposer {
+		t.Fatalf("default region: got %v, want regionComposer", got)
+	}
+	next, _ := a.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if got := asApp(t, next).focusedRegion; got != regionSidebar {
+		t.Errorf("after tab: got %v, want regionSidebar", got)
+	}
+	// In sidebar region, ↓ cycles runs.
+	after, _ := next.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if got := asApp(t, after).Selected(); got != "b" {
+		t.Errorf("sidebar+↓: got %q, want %q", got, "b")
 	}
 }
 
@@ -104,15 +123,15 @@ func TestSelectedRunReflectsState(t *testing.T) {
 	}
 }
 
-func TestHandleSubmitNewOpensLaunchForm(t *testing.T) {
+func TestHandleSubmitBareRunOpensLaunchForm(t *testing.T) {
 	a := makeApp()
 	// Before: pane is a Composer (the default).
 	if _, ok := pane.AsLaunchView(a.pane); ok {
 		t.Fatal("precondition failed: pane should not be a Launch form yet")
 	}
-	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "new"})
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "run"})
 	if _, ok := pane.AsLaunchView(a.pane); !ok {
-		t.Errorf("after /new the pane should be a Launch form, got %T", a.pane)
+		t.Errorf("bare /run should open the launch form, got %T", a.pane)
 	}
 }
 
@@ -132,14 +151,6 @@ func TestHandleSubmitUnknownCommandSetsToast(t *testing.T) {
 	}
 }
 
-func TestHandleSubmitRunMissingArgsSetsToast(t *testing.T) {
-	a := makeApp()
-	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "run"})
-	if a.currentToast() == "" {
-		t.Error("/run with no args should set a toast")
-	}
-}
-
 func TestViewRendersLaunchFormAfterOpen(t *testing.T) {
 	a := makeApp()
 	// Size the app so the form has room to lay out.
@@ -148,10 +159,10 @@ func TestViewRendersLaunchFormAfterOpen(t *testing.T) {
 	if !ok {
 		t.Fatal("expected App after resize")
 	}
-	sized.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "new"})
+	sized.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "run"})
 	out := sized.View()
 	if !contains(out, "NEW RUN") {
-		t.Errorf("after /new, View() should contain NEW RUN heading; got:\n%s", out)
+		t.Errorf("after /run, View() should contain NEW RUN heading; got:\n%s", out)
 	}
 }
 
@@ -232,7 +243,7 @@ func TestHelpToastsCommandList(t *testing.T) {
 	a := makeApp()
 	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "help"})
 	toast := a.currentToast()
-	if toast == "" || !contains(toast, "/new") {
+	if toast == "" || !contains(toast, "/run") {
 		t.Errorf("help toast should list commands, got %q", toast)
 	}
 }

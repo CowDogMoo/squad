@@ -191,28 +191,91 @@ func TestLaunchSubmitIncludesAdvanced(t *testing.T) {
 	}
 }
 
-func TestLaunchInvalidIsolateRejected(t *testing.T) {
+func TestLaunchArrowsNavigateFieldsOnSingleLineInputs(t *testing.T) {
+	// On a single-line textinput (working dir is field 1), ↓ should
+	// move focus forward to the next field — the form-nav behavior
+	// expected on plain text inputs that don't otherwise use ↑/↓.
 	parent := stubView{name: "parent"}
-	form := NewLaunch(parent, LaunchDefaults{Agent: "x", Isolate: "garbage", MaxIter: 10})
+	form := NewLaunch(parent, LaunchDefaults{Agent: "go-review"})
 	v := View(form)
-	for {
-		l, ok := AsLaunchView(v)
-		if !ok {
-			t.Fatal("unexpected view")
+	// Move focus to working dir (single-line textinput).
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	l, ok := AsLaunchView(v)
+	if !ok || l.focus != fldWorkingDir {
+		t.Fatalf("expected focus on workingDir, got %d", l.focus)
+	}
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyDown})
+	l, _ = AsLaunchView(v)
+	if l.focus != fldBudget {
+		t.Errorf("↓ on workingDir should advance to budget (%d), got %d", fldBudget, l.focus)
+	}
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyUp})
+	l, _ = AsLaunchView(v)
+	if l.focus != fldWorkingDir {
+		t.Errorf("↑ on budget should return to workingDir (%d), got %d", fldWorkingDir, l.focus)
+	}
+}
+
+func TestLaunchArrowsForwardedToTypeaheadDropdown(t *testing.T) {
+	// On the agent typeahead, ↓ must reach the dropdown — not jump to
+	// the next field. fieldOwnsVerticalKeys gates this so the dropdown
+	// remains usable.
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agents: []string{"alpha", "beta"}})
+	v := View(form)
+	// Agent field is focused by default.
+	l, _ := AsLaunchView(v)
+	if l.focus != fldAgent {
+		t.Fatalf("expected default focus on agent, got %d", l.focus)
+	}
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyDown})
+	l, _ = AsLaunchView(v)
+	if l.focus != fldAgent {
+		t.Errorf("↓ on agent should stay on agent (dropdown nav), got focus=%d", l.focus)
+	}
+}
+
+func TestLaunchModelOptionsFollowProvider(t *testing.T) {
+	// The model typeahead's suggestion list must match the selected
+	// provider — picking "anthropic" should never show gpt-* models.
+	form := NewLaunch(stubView{name: "parent"}, LaunchDefaults{Provider: "anthropic"})
+	for _, opt := range form.model.options {
+		if !contains(opt, "claude") {
+			t.Errorf("anthropic provider showed non-Claude model %q", opt)
 		}
-		if l.focus == fldPrompt {
+	}
+
+	// Typing in the provider field should refresh model options as soon
+	// as the typed value matches a known provider.
+	form = NewLaunch(stubView{name: "parent"}, LaunchDefaults{})
+	v := View(form)
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab}) // workingDir
+	for {
+		l, _ := AsLaunchView(v)
+		if l.focus == fldProvider {
 			break
 		}
 		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
 	}
-	v = typeAll(t, v, "p")
-	v, cmd := v.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
-	if cmd != nil {
-		if _, ok := AsLaunchRequest(cmd()); ok {
-			t.Error("invalid isolate value should have blocked submit")
+	v = typeAll(t, v, "gemini")
+	l, _ := AsLaunchView(v)
+	if len(l.model.options) == 0 {
+		t.Fatal("model options not refreshed after typing provider")
+	}
+	for _, opt := range l.model.options {
+		if !contains(opt, "gemini") {
+			t.Errorf("gemini provider showed non-Gemini model %q", opt)
 		}
 	}
-	if _, ok := AsLaunchView(v); !ok {
-		t.Errorf("form should stay open on validation error, got %T", v)
+}
+
+func TestLaunchUnknownIsolateDefaultsToBlank(t *testing.T) {
+	// Isolate is now a closed-set selectField. An unrecognized default
+	// silently lands on the blank "use manifest default" option rather
+	// than blocking submit (the value can no longer be invalid).
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x", Isolate: "garbage", MaxIter: 10})
+	if got := form.isolate.Value(); got != "" {
+		t.Errorf("unknown isolate default: got %q, want %q (blank/manifest)", got, "")
 	}
 }

@@ -150,10 +150,14 @@ func (m *Manager) UpdateRepositories() error {
 func (m *Manager) GetSearchPaths() ([]string, error) {
 	var paths []string
 
-	// 1. Local ./agents directory (highest priority for development)
-	if stat, err := os.Stat("agents"); err == nil && stat.IsDir() {
-		if abs, err := filepath.Abs("agents"); err == nil {
-			paths = append(paths, abs)
+	// 1. Well-known cwd directories (highest priority for development).
+	// Both ./agents and ./squad-agents are checked so repos can use either
+	// convention (the latter matches the public squad-agents repo name).
+	for _, name := range []string{"agents", "squad-agents"} {
+		if stat, err := os.Stat(name); err == nil && stat.IsDir() {
+			if abs, err := filepath.Abs(name); err == nil {
+				paths = append(paths, abs)
+			}
 		}
 	}
 

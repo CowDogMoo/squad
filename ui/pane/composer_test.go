@@ -1,6 +1,7 @@
 package pane
 
 import (
+	"reflect"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -120,4 +121,57 @@ func TestComposerTitleIsEmpty(t *testing.T) {
 	if got := c.Title(); got != "" {
 		t.Errorf("composer Title() = %q, want empty (default pane has no header)", got)
 	}
+}
+
+func TestComposerHistoryRecallsPriorSubmissions(t *testing.T) {
+	// History walks on ctrl+↑/ctrl+↓ — plain ↑/↓ belongs to the host App
+	// (sidebar cycle) so users can navigate runs without leaving the
+	// composer.
+	up := tea.KeyMsg{Type: tea.KeyUp, Alt: true}
+	down := tea.KeyMsg{Type: tea.KeyDown, Alt: true}
+	v := View(NewComposer())
+	v = typeString(t, v, "first")
+	v, _ = v.Update(enterKey())
+	v = typeString(t, v, "second")
+	v, _ = v.Update(enterKey())
+	v = typeString(t, v, "draft")
+	v, _ = v.Update(up)
+	if got := composerValue(t, v); got != "second" {
+		t.Errorf("after ctrl+↑: got %q, want %q", got, "second")
+	}
+	v, _ = v.Update(up)
+	if got := composerValue(t, v); got != "first" {
+		t.Errorf("after second ctrl+↑: got %q, want %q", got, "first")
+	}
+	v, _ = v.Update(down)
+	v, _ = v.Update(down)
+	if got := composerValue(t, v); got != "draft" {
+		t.Errorf("after walk back: got %q, want %q (saved draft)", got, "draft")
+	}
+}
+
+func TestComposerHistoryEmptyIsNoOp(t *testing.T) {
+	c := NewComposer()
+	up := tea.KeyMsg{Type: tea.KeyUp, Alt: true}
+	v, _ := c.Update(up)
+	if v == nil {
+		t.Fatal("history key on fresh composer should not close the pane")
+	}
+	if got := composerValue(t, v); got != "" {
+		t.Errorf("history key with no history should leave buffer empty, got %q", got)
+	}
+}
+
+// composerValue recovers the Composer concrete from a View handle and
+// returns its current buffer. The indirection via reflect.ValueOf keeps
+// gocritic's sloppyTypeAssert checker happy without requiring inline
+// nolint directives.
+func composerValue(t *testing.T, v View) string {
+	t.Helper()
+	rv := reflect.ValueOf(v)
+	c, ok := rv.Interface().(Composer)
+	if !ok {
+		t.Fatalf("expected Composer, got %T", v)
+	}
+	return c.Value()
 }
