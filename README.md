@@ -4,8 +4,6 @@
 
 # `squad`
 
-[![Mission](https://img.shields.io/badge/mission-fabric_for_AI_agents-purple)](https://github.com/CowDogMoo/squad)
-<br />
 [![License](https://img.shields.io/github/license/CowDogMoo/squad?label=License&style=flat&color=blue&logo=github)](https://github.com/CowDogMoo/squad/blob/main/LICENSE)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/CowDogMoo/squad?logo=go)](https://go.dev/)
 [![Release](https://img.shields.io/github/v/release/CowDogMoo/squad?label=Release&logo=github)](https://github.com/CowDogMoo/squad/releases)
