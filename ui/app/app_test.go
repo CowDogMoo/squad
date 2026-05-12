@@ -164,6 +164,52 @@ func contains(s, substr string) bool {
 	return false
 }
 
+func TestRenderProgressBar(t *testing.T) {
+	// Render with ANSI stripped via the existing helper from sidebar tests
+	// — but we need our own minimal stripper here.
+	cases := []struct {
+		spent, budget float64
+		width         int
+		wantFilled    int
+	}{
+		{0, 5, 10, 0},
+		{2.5, 5, 10, 5},
+		{5, 5, 10, 10},
+		{10, 5, 10, 10}, // capped
+		{-1, 5, 10, 0},  // clamped at 0
+	}
+	for _, tc := range cases {
+		out := renderProgressBar(tc.spent, tc.budget, tc.width)
+		// Count filled segments (▰).
+		filled := 0
+		for _, r := range out {
+			if r == '▰' {
+				filled++
+			}
+		}
+		if filled != tc.wantFilled {
+			t.Errorf("renderProgressBar(%v,%v,%v): filled=%d, want %d (out=%q)",
+				tc.spent, tc.budget, tc.width, filled, tc.wantFilled, out)
+		}
+	}
+}
+
+func TestBudgetForExternalRunIsZero(t *testing.T) {
+	a := makeApp()
+	if got := a.budgetFor("nonexistent-session"); got != 0 {
+		t.Errorf("budgetFor unknown should be 0, got %v", got)
+	}
+}
+
+func TestBudgetForPairedLaunch(t *testing.T) {
+	a := makeApp()
+	a.launchPairs["session-x"] = "L0001"
+	a.launchBudgets["L0001"] = 7.5
+	if got := a.budgetFor("session-x"); got != 7.5 {
+		t.Errorf("budgetFor paired: got %v, want 7.5", got)
+	}
+}
+
 func TestHelpToastsCommandList(t *testing.T) {
 	a := makeApp()
 	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "help"})

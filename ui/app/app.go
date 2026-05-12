@@ -64,6 +64,11 @@ type App struct {
 	launchPairs     map[string]string
 	pendingLaunches []string // launch IDs awaiting their session dir
 
+	// launchBudgets maps registry Launch ID → max-cost budget the run
+	// was started with. Used to render the cost progress bar in the
+	// focused panel against a known cap (external runs have no entry).
+	launchBudgets map[string]float64
+
 	presets    *presets.Store      // optional — nil disables /preset
 	lastLaunch *pane.LaunchRequest // remembered for /preset save
 
@@ -94,11 +99,12 @@ func New(runs []sidebar.Run) App {
 		selected = runs[0].ID
 	}
 	return App{
-		static:      runs,
-		selected:    selected,
-		pane:        pane.NewComposer(),
-		registry:    registry.New(),
-		launchPairs: map[string]string{},
+		static:        runs,
+		selected:      selected,
+		pane:          pane.NewComposer(),
+		registry:      registry.New(),
+		launchPairs:   map[string]string{},
+		launchBudgets: map[string]float64{},
 	}
 }
 
@@ -128,14 +134,15 @@ func NewWithSessions(sessionsRoot, workingDir string) (App, error) {
 		selected = tailers[0].SessionID()
 	}
 	return App{
-		tailers:      tailers,
-		knownDirs:    known,
-		sessionsRoot: sessionsRoot,
-		workingDir:   workingDir,
-		selected:     selected,
-		pane:         pane.NewComposer(),
-		registry:     registry.New(),
-		launchPairs:  map[string]string{},
+		tailers:       tailers,
+		knownDirs:     known,
+		sessionsRoot:  sessionsRoot,
+		workingDir:    workingDir,
+		selected:      selected,
+		pane:          pane.NewComposer(),
+		registry:      registry.New(),
+		launchPairs:   map[string]string{},
+		launchBudgets: map[string]float64{},
 	}, nil
 }
 
@@ -449,6 +456,66 @@ func presetOrDefault(v, fallback string) string {
 	return fallback
 }
 
+// renderCostRow returns the cost metric line, with a progress bar when
+// the run was launched from this TUI (so we know the budget cap).
+// External runs render as a plain cost figure.
+func (a App) renderCostRow(sessionID string, spent float64) string {
+	budget := a.budgetFor(sessionID)
+	if budget <= 0 {
+		return style.Secondary.Render(fmt.Sprintf("  cost      $%.2f", spent))
+	}
+	bar := renderProgressBar(spent, budget, 10)
+	pct := int(spent / budget * 100)
+	if pct > 100 {
+		pct = 100
+	}
+	return style.Secondary.Render(
+		fmt.Sprintf("  cost      $%.2f / $%.2f  ", spent, budget),
+	) + bar + style.Secondary.Render(fmt.Sprintf("  %d%%", pct))
+}
+
+// budgetFor returns the budget cap for sessionID, or 0 if the run wasn't
+// launched from this TUI (we don't know the cap).
+func (a App) budgetFor(sessionID string) float64 {
+	launchID, ok := a.launchPairs[sessionID]
+	if !ok {
+		return 0
+	}
+	return a.launchBudgets[launchID]
+}
+
+// renderProgressBar returns a width-segment block bar. Segments fill
+// green up to spent/budget, with the leading filled segment red when
+// the run is over 90% of budget.
+func renderProgressBar(spent, budget float64, width int) string {
+	if budget <= 0 || width <= 0 {
+		return ""
+	}
+	ratio := spent / budget
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	filled := int(ratio*float64(width) + 0.5)
+	if filled > width {
+		filled = width
+	}
+	fillStyle := style.Success
+	if ratio >= 0.9 {
+		fillStyle = style.Error
+	}
+	var b strings.Builder
+	for i := 0; i < filled; i++ {
+		b.WriteString(fillStyle.Render("▰"))
+	}
+	for i := filled; i < width; i++ {
+		b.WriteString(style.Faint.Render("▱"))
+	}
+	return b.String()
+}
+
 // wrapPrefix wraps `s` to fit within `width` columns, prefixing each
 // continuation line with `prefix`. Word-aware (splits on whitespace).
 // Used for multi-line error messages in the focused panel.
@@ -557,6 +624,9 @@ func (a *App) launch(agent, prompt, workingDir string, maxCost float64, mode str
 		return
 	}
 	a.pendingLaunches = append(a.pendingLaunches, lr.ID)
+	if maxCost > 0 {
+		a.launchBudgets[lr.ID] = maxCost
+	}
 	a.lastLaunch = &pane.LaunchRequest{
 		Agent:      agent,
 		Prompt:     prompt,
@@ -637,7 +707,7 @@ func (a App) renderFocused(width int) string {
 			style.Secondary.Render(fmt.Sprintf("  iter      %d", state.Counts.Iterations)),
 			style.Secondary.Render(fmt.Sprintf("  tools     %d", state.Counts.ToolCalls)),
 			style.Secondary.Render(fmt.Sprintf("  responses %d", state.Counts.Responses)),
-			style.Secondary.Render(fmt.Sprintf("  cost      $%.2f", state.Meta.Cost)),
+			a.renderCostRow(run.ID, state.Meta.Cost),
 			style.Secondary.Render(fmt.Sprintf("  tokens    %d in · %d out", state.Meta.InputTokens, state.Meta.OutputTokens)),
 		)
 		if events := state.Events; len(events) > 0 {
