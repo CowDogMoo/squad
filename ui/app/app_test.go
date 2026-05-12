@@ -102,6 +102,18 @@ func TestSelectedRunReflectsState(t *testing.T) {
 	}
 }
 
+func TestHandleSubmitNewOpensLaunchForm(t *testing.T) {
+	a := makeApp()
+	// Before: pane is a Composer (the default).
+	if _, ok := pane.AsLaunchView(a.pane); ok {
+		t.Fatal("precondition failed: pane should not be a Launch form yet")
+	}
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "new"})
+	if _, ok := pane.AsLaunchView(a.pane); !ok {
+		t.Errorf("after /new the pane should be a Launch form, got %T", a.pane)
+	}
+}
+
 func TestHandleSubmitQuit(t *testing.T) {
 	a := makeApp()
 	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "quit"})
@@ -124,6 +136,30 @@ func TestHandleSubmitRunMissingArgsSetsToast(t *testing.T) {
 	if a.currentToast() == "" {
 		t.Error("/run with no args should set a toast")
 	}
+}
+
+func TestViewRendersLaunchFormAfterOpen(t *testing.T) {
+	a := makeApp()
+	// Size the app so the form has room to lay out.
+	next, _ := a.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	sized, ok := AsApp(next)
+	if !ok {
+		t.Fatal("expected App after resize")
+	}
+	sized.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "new"})
+	out := sized.View()
+	if !contains(out, "NEW RUN") {
+		t.Errorf("after /new, View() should contain NEW RUN heading; got:\n%s", out)
+	}
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 func TestToastExpires(t *testing.T) {

@@ -1,0 +1,336 @@
+package pane
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/cowdogmoo/squad/ui/style"
+)
+
+// Launch is the new-run form: a minimal subset of `squad run` flags that
+// matters for the first-launch flow. Advanced flags (provider, model,
+// isolate, vars, MCP servers) land in a later step.
+//
+// Layout: agent + working dir on row 1, budget + mode + iter on row 2,
+// prompt textarea below, [Launch]/[Cancel] buttons at the bottom. Tab /
+// Shift+Tab cycle focus; Enter on the Launch button submits; Esc closes
+// the form and returns to the parent view.
+type Launch struct {
+	parent View
+
+	agent      textinput.Model
+	workingDir textinput.Model
+	budget     textinput.Model
+	mode       textinput.Model
+	iter       textinput.Model
+	prompt     textarea.Model
+
+	focus int
+	err   string
+}
+
+// Field indices for cycling focus. Order chosen to read left-to-right,
+// top-to-bottom so Tab feels natural.
+const (
+	fldAgent = iota
+	fldWorkingDir
+	fldBudget
+	fldMode
+	fldIters
+	fldPrompt
+	fldLaunch
+	fldCancel
+	fldCount
+)
+
+// LaunchDefaults seeds the form fields. Callers pass the current cwd as
+// WorkingDir so the user doesn't retype it for every run.
+type LaunchDefaults struct {
+	Agent      string
+	WorkingDir string
+	MaxCost    float64
+	Mode       string
+	MaxIter    int
+}
+
+// NewLaunch builds a Launch form using `parent` as the return target
+// when Esc is pressed or the form submits.
+func NewLaunch(parent View, defaults LaunchDefaults) Launch {
+	if defaults.MaxCost == 0 {
+		defaults.MaxCost = 5
+	}
+	if defaults.Mode == "" {
+		defaults.Mode = "edit"
+	}
+	if defaults.MaxIter == 0 {
+		defaults.MaxIter = 40
+	}
+
+	agent := mkInput("agent", defaults.Agent, 32)
+	workingDir := mkInput("working-dir", defaults.WorkingDir, 64)
+	budget := mkInput("budget", fmt.Sprintf("%.2f", defaults.MaxCost), 8)
+	mode := mkInput("mode", defaults.Mode, 12)
+	iter := mkInput("iter", strconv.Itoa(defaults.MaxIter), 6)
+
+	prompt := textarea.New()
+	prompt.Placeholder = "prompt — what should the agent do? (shift+enter for newline)"
+	prompt.ShowLineNumbers = false
+	prompt.SetHeight(4)
+	prompt.MaxHeight = 8
+	prompt.KeyMap.InsertNewline = key.NewBinding(
+		key.WithKeys("shift+enter", "ctrl+j"),
+	)
+	prompt.FocusedStyle.Placeholder = style.Faint
+	prompt.BlurredStyle.Placeholder = style.Faint
+	prompt.FocusedStyle.Text = style.Body
+	prompt.BlurredStyle.Text = style.Body
+	prompt.Prompt = "  "
+
+	f := Launch{
+		parent:     parent,
+		agent:      agent,
+		workingDir: workingDir,
+		budget:     budget,
+		mode:       mode,
+		iter:       iter,
+		prompt:     prompt,
+		focus:      fldAgent,
+	}
+	f.applyFocus()
+	return f
+}
+
+func mkInput(placeholder, value string, width int) textinput.Model {
+	ti := textinput.New()
+	ti.Placeholder = placeholder
+	ti.SetValue(value)
+	ti.Width = width
+	ti.Prompt = ""
+	ti.PromptStyle = style.Hint
+	ti.PlaceholderStyle = style.Faint
+	ti.TextStyle = style.Body
+	return ti
+}
+
+// Init blinks the focused field's cursor.
+func (l Launch) Init() tea.Cmd { return textinput.Blink }
+
+// Update handles input. Branches are split into small helpers so each
+// stays cyclo-friendly.
+func (l Launch) Update(msg tea.Msg) (View, tea.Cmd) {
+	if m, ok := msg.(tea.WindowSizeMsg); ok {
+		l.prompt.SetWidth(m.Width - 2)
+	}
+	if km, ok := msg.(tea.KeyMsg); ok {
+		if next, cmd, handled := l.handleKey(km); handled {
+			return next, cmd
+		}
+	}
+	return l.forwardToFocused(msg)
+}
+
+// handleKey returns (view, cmd, true) when the key is one the form
+// owns (navigation, submit, esc). Returning (_, _, false) lets the
+// caller forward the message to the focused control.
+func (l Launch) handleKey(km tea.KeyMsg) (View, tea.Cmd, bool) {
+	switch km.String() {
+	case "esc":
+		return l.parent, nil, true
+	case "tab":
+		l.focus = (l.focus + 1) % fldCount
+		l.applyFocus()
+		return l, nil, true
+	case "shift+tab":
+		l.focus = (l.focus - 1 + fldCount) % fldCount
+		l.applyFocus()
+		return l, nil, true
+	case "enter":
+		return l.handleEnter()
+	case "ctrl+s":
+		v, c := l.submit()
+		return v, c, true
+	}
+	return l, nil, false
+}
+
+func (l Launch) handleEnter() (View, tea.Cmd, bool) {
+	switch l.focus {
+	case fldLaunch:
+		v, c := l.submit()
+		return v, c, true
+	case fldCancel:
+		return l.parent, nil, true
+	case fldPrompt:
+		// Inside the prompt textarea, let Enter fall through (no-op —
+		// the textarea has shift+enter for newlines).
+		return l, nil, false
+	default:
+		l.focus = (l.focus + 1) % fldCount
+		l.applyFocus()
+		return l, nil, true
+	}
+}
+
+// forwardToFocused routes input to whichever sub-control currently has
+// focus.
+func (l Launch) forwardToFocused(msg tea.Msg) (View, tea.Cmd) {
+	var cmd tea.Cmd
+	switch l.focus {
+	case fldAgent:
+		l.agent, cmd = l.agent.Update(msg)
+	case fldWorkingDir:
+		l.workingDir, cmd = l.workingDir.Update(msg)
+	case fldBudget:
+		l.budget, cmd = l.budget.Update(msg)
+	case fldMode:
+		l.mode, cmd = l.mode.Update(msg)
+	case fldIters:
+		l.iter, cmd = l.iter.Update(msg)
+	case fldPrompt:
+		l.prompt, cmd = l.prompt.Update(msg)
+	}
+	return l, cmd
+}
+
+// applyFocus blurs all inputs and focuses the currently-selected one.
+// Buttons (fldLaunch, fldCancel) have no input to focus; they render with
+// a highlight.
+func (l *Launch) applyFocus() {
+	l.agent.Blur()
+	l.workingDir.Blur()
+	l.budget.Blur()
+	l.mode.Blur()
+	l.iter.Blur()
+	l.prompt.Blur()
+	switch l.focus {
+	case fldAgent:
+		l.agent.Focus()
+	case fldWorkingDir:
+		l.workingDir.Focus()
+	case fldBudget:
+		l.budget.Focus()
+	case fldMode:
+		l.mode.Focus()
+	case fldIters:
+		l.iter.Focus()
+	case fldPrompt:
+		l.prompt.Focus()
+	}
+}
+
+// submit validates fields and emits a LaunchRequest. On validation
+// failure the form stays open with `err` set.
+func (l Launch) submit() (View, tea.Cmd) {
+	agent := strings.TrimSpace(l.agent.Value())
+	prompt := strings.TrimSpace(l.prompt.Value())
+	if agent == "" {
+		l.err = "agent is required"
+		l.focus = fldAgent
+		l.applyFocus()
+		return l, nil
+	}
+	if prompt == "" {
+		l.err = "prompt is required"
+		l.focus = fldPrompt
+		l.applyFocus()
+		return l, nil
+	}
+	maxCost, err := strconv.ParseFloat(strings.TrimSpace(l.budget.Value()), 64)
+	if err != nil || maxCost < 0 {
+		l.err = "budget must be a non-negative number"
+		l.focus = fldBudget
+		l.applyFocus()
+		return l, nil
+	}
+	maxIter, err := strconv.Atoi(strings.TrimSpace(l.iter.Value()))
+	if err != nil || maxIter <= 0 {
+		l.err = "iter must be a positive integer"
+		l.focus = fldIters
+		l.applyFocus()
+		return l, nil
+	}
+	req := LaunchRequest{
+		Agent:      agent,
+		WorkingDir: strings.TrimSpace(l.workingDir.Value()),
+		Prompt:     prompt,
+		MaxCost:    maxCost,
+		Mode:       strings.TrimSpace(l.mode.Value()),
+		MaxIter:    maxIter,
+	}
+	return l.parent, func() tea.Msg { return req }
+}
+
+// View renders the form. Width comes from the host.
+func (l Launch) View(_, _ int) string {
+	title := style.Title.Render("NEW RUN")
+	// Row 1: agent + working dir
+	row1 := fmt.Sprintf("  %s  %s    %s  %s",
+		style.Header.Render("agent"), boxed(l.agent.View(), l.focus == fldAgent),
+		style.Header.Render("working dir"), boxed(l.workingDir.View(), l.focus == fldWorkingDir),
+	)
+	// Row 2: budget + mode + iter
+	row2 := fmt.Sprintf("  %s  %s    %s  %s    %s  %s",
+		style.Header.Render("budget"), boxed(l.budget.View(), l.focus == fldBudget),
+		style.Header.Render("mode"), boxed(l.mode.View(), l.focus == fldMode),
+		style.Header.Render("iter"), boxed(l.iter.View(), l.focus == fldIters),
+	)
+	// Prompt row (full width)
+	promptRow := "  " + style.Header.Render("prompt") + "\n" + l.prompt.View()
+
+	buttonLaunch := button("[ Launch ]", l.focus == fldLaunch, style.Success)
+	buttonCancel := button("[ Cancel ]", l.focus == fldCancel, style.Secondary)
+	buttons := "  " + buttonLaunch + "  " + buttonCancel
+
+	rows := []string{title, "", row1, row2, "", promptRow, "", buttons}
+	if l.err != "" {
+		rows = append(rows, "  "+style.Error.Render(l.err))
+	}
+	rows = append(rows, "", style.Faint.Render("  tab/shift-tab move · enter activate · ctrl+s submit · esc cancel"))
+	return strings.Join(rows, "\n")
+}
+
+// Title — the pane header is empty for the form (its own title is in View).
+func (l Launch) Title() string { return "" }
+
+// AsLaunchView narrows a View (or any other tea.Model) back to Launch.
+// Accepts `any` to sidestep go-critic's sloppyTypeAssert when asserting
+// from a specific interface to a concrete struct that satisfies it.
+// Kept in production code so the per-file go-critic runner can resolve
+// the type — tests can't reference cross-file types under the per-file
+// caseOrder check.
+func AsLaunchView(v any) (Launch, bool) {
+	l, ok := v.(Launch)
+	return l, ok
+}
+
+// SetSize lets the host size the form before its first WindowSizeMsg
+// arrives — important when the form is installed mid-session (e.g.
+// triggered by /new) and the resize message has already fired once.
+func (l *Launch) SetSize(width, _ int) {
+	if width > 0 {
+		l.prompt.SetWidth(width - 2)
+	}
+}
+
+// boxed wraps a value in brackets, highlighting if focused. textinput
+// already shows a cursor when focused; the bracket gives visual structure.
+func boxed(s string, focused bool) string {
+	br := style.Faint
+	if focused {
+		br = style.Hint
+	}
+	return br.Render("[ ") + s + br.Render(" ]")
+}
+
+func button(label string, focused bool, baseStyle interface{ Render(strs ...string) string }) string {
+	if focused {
+		return style.Hint.Render("› ") + baseStyle.Render(label)
+	}
+	return "  " + baseStyle.Render(label)
+}

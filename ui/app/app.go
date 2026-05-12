@@ -8,6 +8,7 @@ package app
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -162,10 +163,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, cmd
 
 	default:
-		// Route submits BEFORE forwarding to the pane so the pane can
-		// also clear its buffer in the same tick.
+		// Route submits and launch requests BEFORE forwarding to the
+		// pane so the pane can also clear its buffer in the same tick.
 		if sub, ok := pane.AsSubmitted(msg); ok {
 			a.handleSubmit(sub)
+		}
+		if req, ok := pane.AsLaunchRequest(msg); ok {
+			a.launch(req.Agent, req.Prompt, req.WorkingDir, req.MaxCost, req.Mode, req.MaxIter)
 		}
 		var cmd tea.Cmd
 		a.pane, cmd = a.pane.Update(msg)
@@ -278,11 +282,23 @@ func (a *App) handleCommand(text string) {
 	switch parts[0] {
 	case "run":
 		a.cmdRun(parts[1:])
+	case "new":
+		a.openLaunchForm()
 	case "quit", "exit":
 		a.quitting = true
 	default:
 		a.setToast(style.Faint.Render(fmt.Sprintf("unknown command: /%s", parts[0])))
 	}
+}
+
+// openLaunchForm swaps the bottom pane to a Launch view. The composer
+// is preserved as the form's parent so Esc / submit returns to it.
+func (a *App) openLaunchForm() {
+	form := pane.NewLaunch(a.pane, pane.LaunchDefaults{
+		WorkingDir: a.workingDir,
+	})
+	form.SetSize(a.width, a.height)
+	a.pane = form
 }
 
 func (a *App) cmdRun(args []string) {
@@ -292,11 +308,20 @@ func (a *App) cmdRun(args []string) {
 	}
 	agent := args[0]
 	prompt := strings.Join(args[1:], " ")
+	a.launch(agent, prompt, "", 0, "", 0)
+}
+
+// launch is the single subprocess-launch entry point. Empty workingDir,
+// maxCost, mode, or maxIter fall back to the app's defaults or squad
+// run's defaults (skipped from argv when zero).
+func (a *App) launch(agent, prompt, workingDir string, maxCost float64, mode string, maxIter int) {
 	if a.registry == nil {
 		a.setToast(style.Error.Render("registry not initialized"))
 		return
 	}
-	workingDir := a.workingDir
+	if workingDir == "" {
+		workingDir = a.workingDir
+	}
 	if workingDir == "" {
 		workingDir = "."
 	}
@@ -307,6 +332,15 @@ func (a *App) cmdRun(args []string) {
 		"--prompt", prompt,
 		"--working-dir", workingDir,
 		"--print=false",
+	}
+	if maxCost > 0 {
+		argv = append(argv, "--max-cost", fmt.Sprintf("%g", maxCost))
+	}
+	if mode != "" {
+		argv = append(argv, "--mode", mode)
+	}
+	if maxIter > 0 {
+		argv = append(argv, "--max-iterations", strconv.Itoa(maxIter))
 	}
 	lr, err := a.registry.Launch(workingDir, argv)
 	if err != nil {

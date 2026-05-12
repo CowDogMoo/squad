@@ -84,6 +84,23 @@ func AsSubmitted(m tea.Msg) (Submitted, bool) {
 	return s, ok
 }
 
+// LaunchRequest is the tea.Msg the launch form emits on submit. The host
+// (app.App) consumes it to spawn a subprocess via the registry.
+type LaunchRequest struct {
+	Agent      string
+	WorkingDir string
+	Prompt     string
+	MaxCost    float64
+	Mode       string
+	MaxIter    int
+}
+
+// AsLaunchRequest unwraps a tea.Msg to a LaunchRequest.
+func AsLaunchRequest(m tea.Msg) (LaunchRequest, bool) {
+	r, ok := m.(LaunchRequest)
+	return r, ok
+}
+
 // ClassifyKind inspects raw composer text and returns its kind plus the
 // payload with the leading sigil (if any) stripped. Exported so the
 // command-palette and shell views can re-classify pasted text.
