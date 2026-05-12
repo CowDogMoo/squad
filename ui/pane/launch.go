@@ -83,14 +83,18 @@ func NewLaunch(parent View, defaults LaunchDefaults) Launch {
 		defaults.MaxIter = 40
 	}
 
-	agent := mkInput("agent", defaults.Agent, 32)
-	workingDir := mkInput("working-dir", defaults.WorkingDir, 64)
-	budget := mkInput("budget", fmt.Sprintf("%.2f", defaults.MaxCost), 8)
-	mode := mkInput("mode", defaults.Mode, 12)
-	iter := mkInput("iter", strconv.Itoa(defaults.MaxIter), 6)
-	provider := mkInput("(default)", defaults.Provider, 20)
-	model := mkInput("(default)", defaults.Model, 28)
-	isolate := mkInput("(manifest)", defaults.Isolate, 12)
+	// Field widths chosen so the three labeled rows fit inside a ~100-col
+	// panel (96 inner). textinput scrolls horizontally when content
+	// exceeds the visible width, so smaller widths still accept long
+	// strings — they just don't render the whole value at once.
+	agent := mkInput("agent", defaults.Agent, 22)
+	workingDir := mkInput("working-dir", defaults.WorkingDir, 30)
+	budget := mkInput("budget", fmt.Sprintf("%.2f", defaults.MaxCost), 7)
+	mode := mkInput("mode", defaults.Mode, 9)
+	iter := mkInput("iter", strconv.Itoa(defaults.MaxIter), 4)
+	provider := mkInput("(default)", defaults.Provider, 16)
+	model := mkInput("(default)", defaults.Model, 20)
+	isolate := mkInput("(manifest)", defaults.Isolate, 10)
 
 	prompt := textarea.New()
 	prompt.Placeholder = "prompt — what should the agent do? (shift+enter for newline)"
@@ -308,39 +312,72 @@ func (l Launch) submit() (View, tea.Cmd) {
 	return l.parent, func() tea.Msg { return req }
 }
 
-// View renders the form. Width comes from the host.
-func (l Launch) View(_, _ int) string {
-	title := style.Title.Render("NEW RUN")
-	// Row 1: agent + working dir
-	row1 := fmt.Sprintf("  %s  %s    %s  %s",
-		style.Header.Render("agent"), boxed(l.agent.View(), l.focus == fldAgent),
-		style.Header.Render("working dir"), boxed(l.workingDir.View(), l.focus == fldWorkingDir),
+// View renders the form. Width is supplied by the host; when ≤ 0 the
+// form falls back to a sensible default. The form wraps its body in a
+// rounded panel with a brand-colored title so it feels distinct from
+// the surrounding chrome.
+func (l Launch) View(width, _ int) string {
+	if width <= 0 {
+		width = 100
+	}
+	// Reserve panel border (2) + padding (2) for the inner content.
+	innerW := width - 4
+	if innerW < 40 {
+		innerW = 40
+	}
+	// Size the textarea to match the panel's inner width so its line
+	// wrapping aligns with the panel border. textinputs already scroll
+	// horizontally when content exceeds their width — only the textarea
+	// needs explicit sizing for visual alignment.
+	l.prompt.SetWidth(innerW)
+
+	row1 := fmt.Sprintf("%s  %s    %s  %s",
+		labelW("agent", 12), boxed(l.agent.View(), l.focus == fldAgent),
+		labelW("working dir", 12), boxed(l.workingDir.View(), l.focus == fldWorkingDir),
 	)
-	// Row 2: budget + mode + iter
-	row2 := fmt.Sprintf("  %s  %s    %s  %s    %s  %s",
-		style.Header.Render("budget"), boxed(l.budget.View(), l.focus == fldBudget),
-		style.Header.Render("mode"), boxed(l.mode.View(), l.focus == fldMode),
-		style.Header.Render("iter"), boxed(l.iter.View(), l.focus == fldIters),
+	row2 := fmt.Sprintf("%s  %s    %s  %s    %s  %s",
+		labelW("budget", 12), boxed(l.budget.View(), l.focus == fldBudget),
+		labelW("mode", 6), boxed(l.mode.View(), l.focus == fldMode),
+		labelW("iter", 6), boxed(l.iter.View(), l.focus == fldIters),
 	)
-	// Row 3: advanced — provider + model + isolate (worktree|none)
-	row3 := fmt.Sprintf("  %s  %s    %s  %s    %s  %s",
-		style.Header.Render("provider"), boxed(l.provider.View(), l.focus == fldProvider),
-		style.Header.Render("model"), boxed(l.model.View(), l.focus == fldModel),
-		style.Header.Render("isolate"), boxed(l.isolate.View(), l.focus == fldIsolate),
+	row3 := style.Faint.Render("advanced  ") + fmt.Sprintf("%s  %s    %s  %s    %s  %s",
+		labelW("provider", 9), boxed(l.provider.View(), l.focus == fldProvider),
+		labelW("model", 6), boxed(l.model.View(), l.focus == fldModel),
+		labelW("isolate", 8), boxed(l.isolate.View(), l.focus == fldIsolate),
 	)
-	// Prompt row (full width)
-	promptRow := "  " + style.Header.Render("prompt") + "\n" + l.prompt.View()
+	promptRow := style.Header.Render("prompt") + "\n" + l.prompt.View()
 
 	buttonLaunch := button("[ Launch ]", l.focus == fldLaunch, style.Success)
 	buttonCancel := button("[ Cancel ]", l.focus == fldCancel, style.Secondary)
-	buttons := "  " + buttonLaunch + "  " + buttonCancel
+	buttons := buttonLaunch + "    " + buttonCancel
 
-	rows := []string{title, "", row1, row2, row3, "", promptRow, "", buttons}
-	if l.err != "" {
-		rows = append(rows, "  "+style.Error.Render(l.err))
+	rows := []string{
+		row1,
+		row2,
+		row3,
+		"",
+		promptRow,
+		"",
+		buttons,
 	}
-	rows = append(rows, "", style.Faint.Render("  tab/shift-tab move · enter activate · ctrl+s submit · esc cancel"))
-	return strings.Join(rows, "\n")
+	if l.err != "" {
+		rows = append(rows, "", style.Error.Render(l.err))
+	}
+	rows = append(rows, "",
+		style.Faint.Render("tab/shift-tab move · enter activate · ctrl+s submit · esc cancel"),
+	)
+	body := strings.Join(rows, "\n")
+	return style.Panel("NEW RUN", body, width)
+}
+
+// labelW renders a header-styled label right-padded to the given visible
+// width so subsequent inputs align in vertical columns.
+func labelW(s string, w int) string {
+	pad := w - len(s)
+	if pad < 0 {
+		pad = 0
+	}
+	return style.Header.Render(s) + strings.Repeat(" ", pad)
 }
 
 // Title — the pane header is empty for the form (its own title is in View).

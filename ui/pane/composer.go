@@ -28,7 +28,7 @@ type Composer struct {
 func NewComposer() Composer {
 	ta := textarea.New()
 	ta.Placeholder = "type a prompt, /command, !shell, or @file …"
-	ta.Prompt = "  "
+	ta.Prompt = "> "
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
 	ta.SetHeight(3)

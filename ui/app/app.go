@@ -209,6 +209,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View renders the full screen.
+//
+// Layout:
+//
+//	╭── SQUAD ──────────────────────────────────────────────────╮
+//	│  RUNS                    FOCUSED                          │
+//	│  WORKING (3)             session id ...                   │
+//	│  ▶ go-review             metrics, events, errors          │
+//	│  ...                     ...                              │
+//	╰───────────────────────────────────────────────────────────╯
+//	  ✻ Working · go-review · 3m 12s          esc to interrupt
+//	  toast message (if any)
+//	> type a prompt, /command, !shell, or @file …
 func (a App) View() string {
 	if a.quitting {
 		return ""
@@ -218,20 +230,88 @@ func (a App) View() string {
 		w = 120
 	}
 
-	sb := a.renderSidebar()
-	focus := a.renderFocused(w - sidebarWidth - 2)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, sb, "  ", focus)
+	innerW := w - 4 // panel border (2) + padding (2)
+	if innerW < 40 {
+		innerW = 40
+	}
+	sidebarW := sidebarWidth
+	if sidebarW > innerW/2 {
+		sidebarW = innerW / 2
+	}
+	focusW := innerW - sidebarW - 2 // 2-col gutter between columns
 
-	sep := style.Faint.Render(strings.Repeat("─", w))
-	statusLine := a.renderStatus(w)
+	sbBody := padBlock(a.renderSidebar(sidebarW), sidebarW)
+	focusBody := padBlock(a.renderFocused(focusW), focusW)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, sbBody, "  ", focusBody)
+
+	panel := style.Panel("SQUAD", body, w)
+	statusLine := "  " + a.renderStatus(w-2)
 	composer := a.pane.View(w, 3)
 
-	parts := []string{body, sep, statusLine}
+	parts := []string{panel, statusLine}
 	if toast := a.currentToast(); toast != "" {
 		parts = append(parts, toast)
 	}
 	parts = append(parts, composer)
 	return strings.Join(parts, "\n")
+}
+
+// padBlock normalizes each line of s to exactly `width` visible columns:
+// shorter lines are right-padded with spaces, longer lines are truncated
+// with an ellipsis. Used to give both sidebar and focused-panel columns
+// matching widths so JoinHorizontal produces a clean grid even when one
+// side is shorter and the other might overflow on a narrow terminal.
+func padBlock(s string, width int) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		visW := lipgloss.Width(line)
+		switch {
+		case visW < width:
+			lines[i] = line + strings.Repeat(" ", width-visW)
+		case visW > width:
+			lines[i] = truncateAnsi(line, width)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// truncateAnsi cuts a styled line to `width` visible columns, appending
+// an ellipsis. ANSI escape sequences pass through untouched so the
+// remaining color/bold styling stays intact.
+func truncateAnsi(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if width == 1 {
+		return "…"
+	}
+	target := width - 1
+	in := []rune(s)
+	var b strings.Builder
+	visible := 0
+	for i := 0; i < len(in); i++ {
+		r := in[i]
+		if r == 0x1b && i+1 < len(in) && in[i+1] == '[' {
+			b.WriteRune(r)
+			i++
+			for i < len(in) {
+				b.WriteRune(in[i])
+				c := in[i]
+				if c >= 0x40 && c <= 0x7e {
+					break
+				}
+				i++
+			}
+			continue
+		}
+		if visible >= target {
+			b.WriteRune('…')
+			break
+		}
+		b.WriteRune(r)
+		visible++
+	}
+	return b.String()
 }
 
 // AsApp narrows a tea.Model back to App. Kept in production code so the
@@ -696,11 +776,20 @@ func (a *App) cycleSelection(delta int) {
 	a.selected = runs[idx].ID
 }
 
-func (a App) renderSidebar() string {
+// renderSidebar renders the left column. When no runs exist it renders
+// a brief onboarding hint instead of an empty `(no runs)` label so the
+// column has a visible identity from first launch.
+func (a App) renderSidebar(width int) string {
+	runs := a.currentRuns()
+	if len(runs) == 0 {
+		return style.Title.Render("RUNS") + "\n\n" +
+			style.Faint.Render("  no runs yet") + "\n" +
+			style.Faint.Render("  press /new to launch")
+	}
 	return sidebar.Render(sidebar.Snapshot{
-		Runs:        a.currentRuns(),
+		Runs:        runs,
 		Selected:    a.selected,
-		Width:       sidebarWidth,
+		Width:       width,
 		MaxPerGroup: 12,
 	})
 }
@@ -708,7 +797,7 @@ func (a App) renderSidebar() string {
 func (a App) renderFocused(width int) string {
 	run, ok := a.selectedSidebarRun()
 	if !ok {
-		return style.Faint.Render("  (no run selected)")
+		return a.renderWelcome(width)
 	}
 	title := style.Title.Render(fmt.Sprintf("FOCUSED · %s", run.Agent))
 	rows := []string{
@@ -757,6 +846,29 @@ func (a App) renderFocused(width int) string {
 		rows = append(rows, "",
 			style.Faint.Render("  (events tail loads when this run has a session on disk)"),
 		)
+	}
+	return strings.Join(rows, "\n")
+}
+
+// renderWelcome is the focused-panel content when no run is selected
+// (typically because none exist yet). Onboards the user toward /new
+// and lists a few useful shortcuts.
+func (a App) renderWelcome(_ int) string {
+	rows := []string{
+		style.Title.Render("WELCOME"),
+		"",
+		style.Body.Render("  squad — a multi-agent runner"),
+		"",
+		style.Header.Render("  GET STARTED"),
+		"  " + style.Hint.Render("/new") + style.Secondary.Render("                     open the launch form"),
+		"  " + style.Hint.Render("/run AGENT PROMPT") + style.Secondary.Render("        quick launch"),
+		"  " + style.Hint.Render("/preset load NAME") + style.Secondary.Render("        load a saved config"),
+		"  " + style.Hint.Render("/help") + style.Secondary.Render("                    full command list"),
+		"",
+		style.Header.Render("  KEYS"),
+		"  " + style.Hint.Render("tab / shift+tab") + style.Secondary.Render("          cycle selection"),
+		"  " + style.Hint.Render("ctrl+k") + style.Secondary.Render("                   cancel focused run"),
+		"  " + style.Hint.Render("ctrl+c") + style.Secondary.Render("                   quit"),
 	}
 	return strings.Join(rows, "\n")
 }
