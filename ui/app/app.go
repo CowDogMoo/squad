@@ -17,6 +17,7 @@ import (
 
 	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/ui/pane"
+	"github.com/cowdogmoo/squad/ui/presets"
 	"github.com/cowdogmoo/squad/ui/registry"
 	"github.com/cowdogmoo/squad/ui/sidebar"
 	"github.com/cowdogmoo/squad/ui/status"
@@ -63,6 +64,9 @@ type App struct {
 	launchPairs     map[string]string
 	pendingLaunches []string // launch IDs awaiting their session dir
 
+	presets    *presets.Store      // optional — nil disables /preset
+	lastLaunch *pane.LaunchRequest // remembered for /preset save
+
 	selected string // session ID of currently-selected sidebar row
 	pane     pane.View
 
@@ -96,6 +100,13 @@ func New(runs []sidebar.Run) App {
 		registry:    registry.New(),
 		launchPairs: map[string]string{},
 	}
+}
+
+// WithPresets attaches a presets store. Returns the receiver so calls
+// chain cleanly with the constructors.
+func (a App) WithPresets(store *presets.Store) App {
+	a.presets = store
+	return a
 }
 
 // NewWithSessions returns an App that auto-discovers + tails the session
@@ -306,11 +317,126 @@ func (a *App) handleCommand(text string) {
 		a.cmdRun(parts[1:])
 	case "new":
 		a.openLaunchForm()
+	case "preset":
+		a.cmdPreset(parts[1:])
 	case "quit", "exit":
 		a.quitting = true
 	default:
 		a.setToast(style.Faint.Render(fmt.Sprintf("unknown command: /%s", parts[0])))
 	}
+}
+
+// cmdPreset dispatches /preset subcommands: save, load, list, delete.
+func (a *App) cmdPreset(args []string) {
+	if a.presets == nil {
+		a.setToast(style.Faint.Render("presets disabled (no store configured)"))
+		return
+	}
+	if len(args) == 0 {
+		a.setToast(style.Faint.Render("usage: /preset {save|load|list|delete} [name]"))
+		return
+	}
+	switch args[0] {
+	case "save":
+		a.cmdPresetSave(args[1:])
+	case "load":
+		a.cmdPresetLoad(args[1:])
+	case "list":
+		a.cmdPresetList()
+	case "delete", "rm":
+		a.cmdPresetDelete(args[1:])
+	default:
+		a.setToast(style.Faint.Render(fmt.Sprintf("unknown preset action: %s", args[0])))
+	}
+}
+
+func (a *App) cmdPresetSave(args []string) {
+	if len(args) == 0 {
+		a.setToast(style.Error.Render("usage: /preset save NAME"))
+		return
+	}
+	name := args[0]
+	if a.lastLaunch == nil {
+		a.setToast(style.Error.Render("nothing to save — launch a run first"))
+		return
+	}
+	p := presets.Preset{
+		Name:       name,
+		Agent:      a.lastLaunch.Agent,
+		WorkingDir: a.lastLaunch.WorkingDir,
+		MaxCost:    a.lastLaunch.MaxCost,
+		Mode:       a.lastLaunch.Mode,
+		MaxIter:    a.lastLaunch.MaxIter,
+		Prompt:     a.lastLaunch.Prompt,
+	}
+	if err := a.presets.Set(p); err != nil {
+		a.setToast(style.Error.Render("save failed: " + err.Error()))
+		return
+	}
+	a.setToast(style.Success.Render(fmt.Sprintf("Saved preset '%s'", name)))
+}
+
+func (a *App) cmdPresetLoad(args []string) {
+	if len(args) == 0 {
+		a.setToast(style.Error.Render("usage: /preset load NAME"))
+		return
+	}
+	name := args[0]
+	p, ok := a.presets.Get(name)
+	if !ok {
+		a.setToast(style.Error.Render(fmt.Sprintf("preset '%s' not found", name)))
+		return
+	}
+	// Open the form with the preset's values pre-populated.
+	form := pane.NewLaunch(a.pane, pane.LaunchDefaults{
+		Agent:      p.Agent,
+		WorkingDir: presetOrDefault(p.WorkingDir, a.workingDir),
+		MaxCost:    p.MaxCost,
+		Mode:       p.Mode,
+		MaxIter:    p.MaxIter,
+	})
+	form.SetSize(a.width, a.height)
+	// If the preset has a prompt, seed the textarea.
+	if p.Prompt != "" {
+		form.SetPromptValue(p.Prompt)
+	}
+	a.pane = form
+	a.setToast(style.Hint.Render(fmt.Sprintf("Loaded preset '%s'", name)))
+}
+
+func (a *App) cmdPresetList() {
+	names := a.presets.Names()
+	if len(names) == 0 {
+		a.setToast(style.Faint.Render("no presets saved yet"))
+		return
+	}
+	a.setToast(style.Hint.Render("presets: " + strings.Join(names, ", ")))
+}
+
+func (a *App) cmdPresetDelete(args []string) {
+	if len(args) == 0 {
+		a.setToast(style.Error.Render("usage: /preset delete NAME"))
+		return
+	}
+	name := args[0]
+	removed, err := a.presets.Remove(name)
+	if err != nil {
+		a.setToast(style.Error.Render("delete failed: " + err.Error()))
+		return
+	}
+	if !removed {
+		a.setToast(style.Faint.Render(fmt.Sprintf("preset '%s' not found", name)))
+		return
+	}
+	a.setToast(style.Success.Render(fmt.Sprintf("Deleted preset '%s'", name)))
+}
+
+// presetOrDefault returns v if non-empty, otherwise fallback.
+func presetOrDefault(v, fallback string) string {
+	if v != "" {
+		return v
+	}
+	return fallback
 }
 
 // cancelFocused sends SIGTERM to the subprocess associated with the
@@ -391,6 +517,14 @@ func (a *App) launch(agent, prompt, workingDir string, maxCost float64, mode str
 		return
 	}
 	a.pendingLaunches = append(a.pendingLaunches, lr.ID)
+	a.lastLaunch = &pane.LaunchRequest{
+		Agent:      agent,
+		Prompt:     prompt,
+		WorkingDir: workingDir,
+		MaxCost:    maxCost,
+		Mode:       mode,
+		MaxIter:    maxIter,
+	}
 	a.setToast(style.Success.Render(fmt.Sprintf("Launched %s (%s)", agent, lr.ID)))
 	// Force a discovery on the next tick so the new session shows up promptly.
 	a.lastDiscovery = time.Time{}

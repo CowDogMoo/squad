@@ -1,12 +1,14 @@
 package app
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/cowdogmoo/squad/ui/pane"
+	"github.com/cowdogmoo/squad/ui/presets"
 	"github.com/cowdogmoo/squad/ui/sidebar"
 )
 
@@ -160,6 +162,72 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestPresetSaveRequiresLastLaunch(t *testing.T) {
+	store, _ := presets.Load(filepath.Join(t.TempDir(), "p.yaml"))
+	a := makeApp().WithPresets(store)
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "preset save mypreset"})
+	if a.currentToast() == "" {
+		t.Error("save without prior launch should toast")
+	}
+	if _, ok := store.Get("mypreset"); ok {
+		t.Error("nothing should have been saved")
+	}
+}
+
+func TestPresetSaveAndLoadRoundTrip(t *testing.T) {
+	store, _ := presets.Load(filepath.Join(t.TempDir(), "p.yaml"))
+	a := makeApp().WithPresets(store)
+	// Simulate a prior launch having occurred.
+	a.lastLaunch = &pane.LaunchRequest{
+		Agent:      "go-review",
+		WorkingDir: "/tmp",
+		MaxCost:    4.5,
+		Mode:       "edit",
+		MaxIter:    50,
+		Prompt:     "fix the bug",
+	}
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "preset save dev"})
+	p, ok := store.Get("dev")
+	if !ok {
+		t.Fatal("preset 'dev' should exist after save")
+	}
+	if p.Agent != "go-review" || p.Prompt != "fix the bug" {
+		t.Errorf("preset persisted as %+v", p)
+	}
+
+	// Load should open the launch form.
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "preset load dev"})
+	if _, ok := pane.AsLaunchView(a.pane); !ok {
+		t.Errorf("after /preset load the pane should be a Launch form, got %T", a.pane)
+	}
+}
+
+func TestPresetListEmpty(t *testing.T) {
+	store, _ := presets.Load(filepath.Join(t.TempDir(), "p.yaml"))
+	a := makeApp().WithPresets(store)
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "preset list"})
+	if a.currentToast() == "" {
+		t.Error("preset list should toast even when empty")
+	}
+}
+
+func TestPresetDeleteUnknown(t *testing.T) {
+	store, _ := presets.Load(filepath.Join(t.TempDir(), "p.yaml"))
+	a := makeApp().WithPresets(store)
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "preset delete nope"})
+	if a.currentToast() == "" {
+		t.Error("delete unknown should toast")
+	}
+}
+
+func TestPresetWithoutStoreToasts(t *testing.T) {
+	a := makeApp() // no WithPresets
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "preset save x"})
+	if a.currentToast() == "" {
+		t.Error("preset commands without a store should toast 'disabled'")
+	}
 }
 
 func TestCancelFocusedNoSelection(t *testing.T) {

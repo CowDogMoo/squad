@@ -318,6 +318,12 @@ func (l *Launch) SetSize(width, _ int) {
 	}
 }
 
+// SetPromptValue seeds the prompt textarea. Useful when a preset carries
+// a pre-written prompt the user wants to edit before launching.
+func (l *Launch) SetPromptValue(s string) {
+	l.prompt.SetValue(s)
+}
+
 // boxed wraps a value in brackets, highlighting if focused. textinput
 // already shows a cursor when focused; the bracket gives visual structure.
 func boxed(s string, focused bool) string {

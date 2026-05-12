@@ -32,6 +32,7 @@ import (
 
 	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/ui/app"
+	"github.com/cowdogmoo/squad/ui/presets"
 )
 
 func newUICmd() *cobra.Command {
@@ -78,6 +79,13 @@ func runUI(cmd *cobra.Command, _ []string) error {
 		model, err = app.NewWithSessions(root, workingDir)
 		if err != nil {
 			return fmt.Errorf("discover sessions: %w", err)
+		}
+	}
+
+	// Attach a presets store; missing file is fine, store starts empty.
+	if path, err := presets.DefaultPath(); err == nil {
+		if store, err := presets.Load(path); err == nil {
+			model = model.WithPresets(store)
 		}
 	}
 
