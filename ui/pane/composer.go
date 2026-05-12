@@ -23,15 +23,16 @@ type Composer struct {
 	ta textarea.Model
 }
 
-// NewComposer returns a Composer with sensible defaults: 3-line visible
-// height, no line numbers, placeholder hint, prompt arrow.
+// NewComposer returns a Composer with sensible defaults: 1-line visible
+// height when empty (grows to MaxHeight as the user types), no line
+// numbers, placeholder hint, prompt arrow.
 func NewComposer() Composer {
 	ta := textarea.New()
 	ta.Placeholder = "type a prompt, /command, !shell, or @file …"
 	ta.Prompt = "> "
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
-	ta.SetHeight(3)
+	ta.SetHeight(1)
 	ta.MaxHeight = 8
 
 	// Enter is reserved for submit; map newline-insert to shift+enter and
@@ -75,7 +76,22 @@ func (c Composer) Update(msg tea.Msg) (View, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	c.ta, cmd = c.ta.Update(msg)
+	c.fitHeight()
 	return c, cmd
+}
+
+// fitHeight resizes the textarea to match the buffer's line count, capped
+// at MaxHeight. Keeps the composer flat (1 row) when empty so the bottom
+// edge doesn't display stacks of empty `>` rows.
+func (c *Composer) fitHeight() {
+	lines := strings.Count(c.ta.Value(), "\n") + 1
+	if lines < 1 {
+		lines = 1
+	}
+	if lines > c.ta.MaxHeight {
+		lines = c.ta.MaxHeight
+	}
+	c.ta.SetHeight(lines)
 }
 
 // View renders the composer. Width/height come from the host; if width is
@@ -86,6 +102,10 @@ func (c Composer) View(width, _ int) string {
 	}
 	return c.ta.View()
 }
+
+// Height returns the composer's current rendered row count. The host uses
+// it to size the panel above so the chrome fills the terminal.
+func (c Composer) Height() int { return c.ta.Height() }
 
 // Title — the composer is the always-mounted default, so it has no header.
 func (c Composer) Title() string { return "" }

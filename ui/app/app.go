@@ -158,7 +158,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width = m.Width
 		a.height = m.Height
 		var cmd tea.Cmd
-		a.pane, cmd = a.pane.Update(tea.WindowSizeMsg{Width: m.Width, Height: 3})
+		a.pane, cmd = a.pane.Update(m)
 		return a, cmd
 
 	case frameTickMsg:
@@ -173,21 +173,28 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, frameTick()
 
 	case tea.KeyMsg:
-		switch m.String() {
-		case "ctrl+c", "ctrl+q":
+		// ctrl+c always quits. All other global shortcuts (tab/shift+tab
+		// cycle sidebar, ctrl+k cancel) are suppressed while a modal
+		// pane (the launch form) is active — otherwise the form can't
+		// receive Tab to move between fields.
+		if m.String() == "ctrl+c" || m.String() == "ctrl+q" {
 			a.quitting = true
 			return a, tea.Quit
-		case "tab", "down", "ctrl+n":
-			a.cycleSelection(+1)
-			return a, nil
-		case "shift+tab", "up", "ctrl+p":
-			a.cycleSelection(-1)
-			return a, nil
-		case "ctrl+k":
-			// ctrl+k cancels the focused run's subprocess. Bare "k"
-			// would conflict with composer typing; ctrl+k is global.
-			a.cancelFocused()
-			return a, nil
+		}
+		if _, modal := pane.AsLaunchView(a.pane); !modal {
+			switch m.String() {
+			case "tab", "down", "ctrl+n":
+				a.cycleSelection(+1)
+				return a, nil
+			case "shift+tab", "up", "ctrl+p":
+				a.cycleSelection(-1)
+				return a, nil
+			case "ctrl+k":
+				// ctrl+k cancels the focused run's subprocess. Bare "k"
+				// would conflict with composer typing; ctrl+k is global.
+				a.cancelFocused()
+				return a, nil
+			}
 		}
 		var cmd tea.Cmd
 		a.pane, cmd = a.pane.Update(msg)
@@ -216,11 +223,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 //	│  RUNS                    FOCUSED                          │
 //	│  WORKING (3)             session id ...                   │
 //	│  ▶ go-review             metrics, events, errors          │
-//	│  ...                     ...                              │
+//	│  ...                                                      │
+//	│  ✻ Working · go-review · 3m 12s          esc to interrupt │
 //	╰───────────────────────────────────────────────────────────╯
-//	  ✻ Working · go-review · 3m 12s          esc to interrupt
 //	  toast message (if any)
 //	> type a prompt, /command, !shell, or @file …
+//
+// The panel is padded vertically to fill (height - toast - composer), so
+// the chrome reaches the bottom of the terminal instead of leaving dead
+// black space below.
 func (a App) View() string {
 	if a.quitting {
 		return ""
@@ -229,27 +240,70 @@ func (a App) View() string {
 	if w <= 0 {
 		w = 120
 	}
+	h := a.height
+	if h <= 0 {
+		h = 30
+	}
+
+	// Modal panes (the launch form) take over the whole screen — no
+	// SQUAD panel above. The pane is responsible for filling the height
+	// when given a non-zero second argument.
+	if _, ok := pane.AsLaunchView(a.pane); ok {
+		return a.pane.View(w, h)
+	}
 
 	innerW := w - 4 // panel border (2) + padding (2)
 	if innerW < 40 {
 		innerW = 40
 	}
-	sidebarW := sidebarWidth
-	if sidebarW > innerW/2 {
-		sidebarW = innerW / 2
+
+	// Decide on layout: empty state collapses to a single full-width
+	// welcome card (no sidebar split) so the first launch doesn't feel
+	// like a barren grid.
+	var body string
+	if len(a.currentRuns()) == 0 {
+		body = padBlock(a.renderWelcome(innerW), innerW)
+	} else {
+		sidebarW := sidebarWidth
+		if sidebarW > innerW/2 {
+			sidebarW = innerW / 2
+		}
+		focusW := innerW - sidebarW - 2
+		sbBody := padBlock(a.renderSidebar(sidebarW), sidebarW)
+		focusBody := padBlock(a.renderFocused(focusW), focusW)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, sbBody, "  ", focusBody)
 	}
-	focusW := innerW - sidebarW - 2 // 2-col gutter between columns
 
-	sbBody := padBlock(a.renderSidebar(sidebarW), sidebarW)
-	focusBody := padBlock(a.renderFocused(focusW), focusW)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, sbBody, "  ", focusBody)
+	composer := a.pane.View(w, 0)
+	composerH := strings.Count(composer, "\n") + 1
+	toast := a.currentToast()
+	toastH := 0
+	if toast != "" {
+		toastH = 1
+	}
 
-	panel := style.Panel("SQUAD", body, w)
-	statusLine := "  " + a.renderStatus(w-2)
-	composer := a.pane.View(w, 3)
+	// Status indicator sits on the last body row of the panel so the
+	// chrome encloses it — no orphaned text between panel and composer.
+	statusLine := a.renderStatus(innerW)
 
-	parts := []string{panel, statusLine}
-	if toast := a.currentToast(); toast != "" {
+	panelH := h - composerH - toastH
+	minH := style.PanelHeight(body) + 1 // body + 1 row for status
+	if panelH < minH {
+		panelH = minH
+	}
+	// Pad the body up to (panelH - 2 borders - 1 status row) blank rows,
+	// then append the status line so it pins to the bottom of the panel.
+	bodyRows := strings.Count(body, "\n") + 1
+	pad := panelH - 2 - 1 - bodyRows
+	if pad < 0 {
+		pad = 0
+	}
+	panelBody := body + strings.Repeat("\n", pad+1) + statusLine
+
+	panel := style.PanelFixed("SQUAD", panelBody, w, panelH)
+
+	parts := []string{panel}
+	if toast != "" {
 		parts = append(parts, toast)
 	}
 	parts = append(parts, composer)

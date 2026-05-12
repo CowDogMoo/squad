@@ -53,6 +53,22 @@ func PanelHeight(body string) int {
 	return 2 + len(strings.Split(body, "\n"))
 }
 
+// PanelFixed renders Panel(...) padded out to exactly `height` rows. When
+// the body has fewer lines than fit, blank rows are appended so the
+// chrome reaches the bottom of the allotted space. Bodies that are
+// already at or over `height` render unchanged (the lipgloss border
+// still surrounds whatever they produce).
+func PanelFixed(title, body string, width, height int) string {
+	bodyRows := strings.Split(body, "\n")
+	needed := height - 2 // top + bottom border
+	if needed > len(bodyRows) {
+		for i := len(bodyRows); i < needed; i++ {
+			bodyRows = append(bodyRows, "")
+		}
+	}
+	return Panel(title, strings.Join(bodyRows, "\n"), width)
+}
+
 func renderPanelTop(title string, innerWidth int) string {
 	if title == "" {
 		return Border.Render("╭" + strings.Repeat("─", innerWidth+2) + "╮")

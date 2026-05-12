@@ -313,10 +313,12 @@ func (l Launch) submit() (View, tea.Cmd) {
 }
 
 // View renders the form. Width is supplied by the host; when ≤ 0 the
-// form falls back to a sensible default. The form wraps its body in a
-// rounded panel with a brand-colored title so it feels distinct from
-// the surrounding chrome.
-func (l Launch) View(width, _ int) string {
+// form falls back to a sensible default. When height > 0 the form panel
+// is padded to exactly that many rows so the chrome reaches the bottom
+// of the terminal (the host renders the launch form full-screen as a
+// modal). The form wraps its body in a rounded panel with a brand-
+// colored title so it feels distinct from the surrounding chrome.
+func (l Launch) View(width, height int) string {
 	if width <= 0 {
 		width = 100
 	}
@@ -363,10 +365,21 @@ func (l Launch) View(width, _ int) string {
 	if l.err != "" {
 		rows = append(rows, "", style.Error.Render(l.err))
 	}
-	rows = append(rows, "",
-		style.Faint.Render("tab/shift-tab move · enter activate · ctrl+s submit · esc cancel"),
-	)
+	help := style.Faint.Render("tab/shift-tab move · enter activate · ctrl+s submit · esc cancel")
 	body := strings.Join(rows, "\n")
+	if height > 0 {
+		// Pad between the form content and the help footer so the
+		// footer pins to the bottom of the panel chrome. Count actual
+		// rendered rows (the prompt textarea is multi-line).
+		bodyRows := strings.Count(body, "\n") + 1
+		pad := height - 2 - bodyRows - 1 // borders + content + help
+		if pad < 1 {
+			pad = 1
+		}
+		body += strings.Repeat("\n", pad) + "\n" + help
+		return style.PanelFixed("NEW RUN", body, width, height)
+	}
+	body += "\n\n" + help
 	return style.Panel("NEW RUN", body, width)
 }
 
