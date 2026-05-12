@@ -1,26 +1,23 @@
-<p align="center">
-  <a href="https://github.com/CowDogMoo/squad">
-    <img src="docs/images/squad-horizontal-lockup.svg" alt="Squad" width="720">
-  </a>
-</p>
+<div align="center">
 
-<p align="center">
-  <strong>Fabric for AI agents.</strong><br>
-  Build, share, and run AI agents from the command line.
-</p>
+<img src="docs/images/squad-sticker-square.svg" alt="squad logo" width="360" height="360"/>
 
-<p align="center">
-  <a href="https://github.com/CowDogMoo/squad/blob/main/LICENSE"><img src="https://img.shields.io/github/license/CowDogMoo/squad?label=License&style=flat&color=blue&logo=github" alt="License"></a>
-  <a href="https://go.dev/"><img src="https://img.shields.io/github/go-mod/go-version/CowDogMoo/squad?logo=go" alt="Go Version"></a>
-  <a href="https://github.com/CowDogMoo/squad/releases"><img src="https://img.shields.io/github/v/release/CowDogMoo/squad?label=Release&logo=github" alt="Release"></a>
-  <a href="https://codecov.io/github/CowDogMoo/squad"><img src="https://codecov.io/github/CowDogMoo/squad/graph/badge.svg?token=O74GTQA4J7" alt="codecov"></a>
-</p>
+# `squad`
 
-<p align="center">
-  <a href="https://github.com/CowDogMoo/squad/actions/workflows/semgrep.yaml"><img src="https://github.com/CowDogMoo/squad/actions/workflows/semgrep.yaml/badge.svg" alt="Semgrep"></a>
-  <a href="https://github.com/CowDogMoo/squad/actions/workflows/pre-commit.yaml"><img src="https://github.com/CowDogMoo/squad/actions/workflows/pre-commit.yaml/badge.svg" alt="Pre-Commit"></a>
-  <a href="https://github.com/CowDogMoo/squad/actions/workflows/renovate.yaml"><img src="https://github.com/CowDogMoo/squad/actions/workflows/renovate.yaml/badge.svg" alt="Renovate"></a>
-</p>
+[![Mission](https://img.shields.io/badge/mission-fabric_for_AI_agents-purple)](https://github.com/CowDogMoo/squad)
+<br />
+[![License](https://img.shields.io/github/license/CowDogMoo/squad?label=License&style=flat&color=blue&logo=github)](https://github.com/CowDogMoo/squad/blob/main/LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/CowDogMoo/squad?logo=go)](https://go.dev/)
+[![Release](https://img.shields.io/github/v/release/CowDogMoo/squad?label=Release&logo=github)](https://github.com/CowDogMoo/squad/releases)
+[![codecov](https://codecov.io/github/CowDogMoo/squad/graph/badge.svg?token=O74GTQA4J7)](https://codecov.io/github/CowDogMoo/squad)
+<br />
+[![Semgrep](https://github.com/CowDogMoo/squad/actions/workflows/semgrep.yaml/badge.svg)](https://github.com/CowDogMoo/squad/actions/workflows/semgrep.yaml)
+[![Pre-Commit](https://github.com/CowDogMoo/squad/actions/workflows/pre-commit.yaml/badge.svg)](https://github.com/CowDogMoo/squad/actions/workflows/pre-commit.yaml)
+[![Renovate](https://github.com/CowDogMoo/squad/actions/workflows/renovate.yaml/badge.svg)](https://github.com/CowDogMoo/squad/actions/workflows/renovate.yaml)
+
+<h4><code>squad</code> is an open-source framework for building, sharing, and running AI agents from the command line.</h4>
+
+</div>
 
 ---
 
