@@ -522,6 +522,21 @@ func renderProgressBar(spent, budget float64, width int) string {
 	return b.String()
 }
 
+// truncate cuts s to width chars, appending an ellipsis. Used for
+// single-line summaries that need to fit a column budget.
+func truncate(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if len(s) <= width {
+		return s
+	}
+	if width <= 1 {
+		return "…"
+	}
+	return s[:width-1] + "…"
+}
+
 // wrapPrefix wraps `s` to fit within `width` columns, prefixing each
 // continuation line with `prefix`. Word-aware (splits on whitespace).
 // Used for multi-line error messages in the focused panel.
@@ -707,8 +722,19 @@ func (a App) renderFocused(width int) string {
 		rows = append(rows, style.Secondary.Render(fmt.Sprintf("  last      %s", run.LastEvent)))
 	}
 
-	// Tailer-backed runs get a metrics block + recent events tail.
+	// Tailer-backed runs get a prompt summary, metrics block, recent events tail.
 	if state, ok := a.tailerStateFor(run.ID); ok {
+		if state.Meta.Prompt != "" {
+			rows = append(rows,
+				style.Secondary.Render("  prompt    "+truncate(state.Meta.Prompt, width-12)),
+			)
+		}
+		if state.Meta.Model != "" {
+			rows = append(rows,
+				style.Secondary.Render(fmt.Sprintf("  model     %s · %s",
+					state.Meta.Provider, state.Meta.Model)),
+			)
+		}
 		if state.LastError != "" {
 			rows = append(rows, "",
 				style.Header.Render("  ERROR"),

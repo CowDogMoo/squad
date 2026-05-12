@@ -164,6 +164,24 @@ func contains(s, substr string) bool {
 	return false
 }
 
+func TestTruncate(t *testing.T) {
+	cases := []struct {
+		in, want string
+		width    int
+	}{
+		{"short", "short", 20},
+		{"abcdef", "abcd…", 5},
+		{"x", "x", 1}, // fits exactly — no ellipsis needed
+		{"xy", "…", 1},
+		{"abc", "", 0},
+	}
+	for _, tc := range cases {
+		if got := truncate(tc.in, tc.width); got != tc.want {
+			t.Errorf("truncate(%q,%d) = %q, want %q", tc.in, tc.width, got, tc.want)
+		}
+	}
+}
+
 func TestRenderProgressBar(t *testing.T) {
 	// Render with ANSI stripped via the existing helper from sidebar tests
 	// — but we need our own minimal stripper here.
