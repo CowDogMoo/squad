@@ -24,6 +24,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -49,12 +50,21 @@ to point at a different sessions root.`,
 	}
 	cmd.Flags().Bool("mock", false, "Render hand-crafted mock runs instead of discovering disk sessions")
 	cmd.Flags().String("sessions-dir", "", "Sessions root to watch (default: <cwd>/.squad/sessions)")
+	cmd.Flags().String("working-dir", "", "Working directory for launched subprocesses (default: cwd)")
 	return cmd
 }
 
 func runUI(cmd *cobra.Command, _ []string) error {
 	useMock, _ := cmd.Flags().GetBool("mock")
 	sessionsDir, _ := cmd.Flags().GetString("sessions-dir")
+	workingDir, _ := cmd.Flags().GetString("working-dir")
+	if workingDir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("getwd: %w", err)
+		}
+		workingDir = cwd
+	}
 
 	var model app.App
 	if useMock {
@@ -62,10 +72,10 @@ func runUI(cmd *cobra.Command, _ []string) error {
 	} else {
 		root := sessionsDir
 		if root == "" {
-			root = filepath.Join(".", session.SessionsRoot)
+			root = filepath.Join(workingDir, session.SessionsRoot)
 		}
 		var err error
-		model, err = app.NewWithSessions(root)
+		model, err = app.NewWithSessions(root, workingDir)
 		if err != nil {
 			return fmt.Errorf("discover sessions: %w", err)
 		}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/ui/pane"
+	"github.com/cowdogmoo/squad/ui/registry"
 	"github.com/cowdogmoo/squad/ui/sidebar"
 	"github.com/cowdogmoo/squad/ui/status"
 	"github.com/cowdogmoo/squad/ui/style"
@@ -46,6 +47,15 @@ type App struct {
 	static  []sidebar.Run
 	tailers []*watch.Tailer
 
+	sessionsRoot  string // disk-backed mode only; "" for static
+	knownDirs     map[string]bool
+	lastDiscovery time.Time
+
+	registry   *registry.Registry
+	workingDir string // for launched subprocesses
+	toast      string // transient message ("Launched ..."), cleared after toastUntil
+	toastUntil time.Time
+
 	selected string // session ID of currently-selected sidebar row
 	pane     pane.View
 
@@ -54,6 +64,16 @@ type App struct {
 
 	quitting bool
 }
+
+const (
+	// rediscoverEvery is how often the app re-scans the sessions root for
+	// new directories. Cheap (ReadDir on a small directory) but not free.
+	rediscoverEvery = 500 * time.Millisecond
+
+	// toastDuration is how long a launch confirmation message stays
+	// visible in the footer.
+	toastDuration = 4 * time.Second
+)
 
 // New returns an App rendering a static list of runs (no disk I/O). Use
 // this for tests and demos.
@@ -66,29 +86,36 @@ func New(runs []sidebar.Run) App {
 		static:   runs,
 		selected: selected,
 		pane:     pane.NewComposer(),
+		registry: registry.New(),
 	}
 }
 
 // NewWithSessions returns an App that auto-discovers + tails the session
 // directories under sessionsRoot (typically ".squad/sessions"). Missing
 // root is not an error — the app renders empty until sessions appear.
-func NewWithSessions(sessionsRoot string) (App, error) {
+// workingDir is the directory in which launched subprocesses are spawned.
+func NewWithSessions(sessionsRoot, workingDir string) (App, error) {
 	tailers, err := watch.Discover(sessionsRoot)
 	if err != nil {
 		return App{}, err
 	}
+	known := make(map[string]bool, len(tailers))
+	for _, t := range tailers {
+		known[t.Dir()] = true
+		_, _ = t.Refresh()
+	}
 	selected := ""
 	if len(tailers) > 0 {
-		// Prime each tailer once so the first render has data.
-		for _, t := range tailers {
-			_, _ = t.Refresh()
-		}
 		selected = tailers[0].SessionID()
 	}
 	return App{
-		tailers:  tailers,
-		selected: selected,
-		pane:     pane.NewComposer(),
+		tailers:      tailers,
+		knownDirs:    known,
+		sessionsRoot: sessionsRoot,
+		workingDir:   workingDir,
+		selected:     selected,
+		pane:         pane.NewComposer(),
+		registry:     registry.New(),
 	}, nil
 }
 
@@ -112,6 +139,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, t := range a.tailers {
 			_, _ = t.Refresh()
 		}
+		// Periodically discover new session dirs (newly-launched subprocesses).
+		if a.sessionsRoot != "" && time.Since(a.lastDiscovery) >= rediscoverEvery {
+			a.rediscover()
+		}
 		return a, frameTick()
 
 	case tea.KeyMsg:
@@ -131,11 +162,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, cmd
 
 	default:
+		// Route submits BEFORE forwarding to the pane so the pane can
+		// also clear its buffer in the same tick.
+		if sub, ok := pane.AsSubmitted(msg); ok {
+			a.handleSubmit(sub)
+		}
 		var cmd tea.Cmd
 		a.pane, cmd = a.pane.Update(msg)
-		if sub, ok := pane.AsSubmitted(msg); ok {
-			_ = sub // future steps route by Kind
-		}
 		return a, cmd
 	}
 }
@@ -158,7 +191,12 @@ func (a App) View() string {
 	statusLine := a.renderStatus(w)
 	composer := a.pane.View(w, 3)
 
-	return strings.Join([]string{body, sep, statusLine, composer}, "\n")
+	parts := []string{body, sep, statusLine}
+	if toast := a.currentToast(); toast != "" {
+		parts = append(parts, toast)
+	}
+	parts = append(parts, composer)
+	return strings.Join(parts, "\n")
 }
 
 // AsApp narrows a tea.Model back to App. Kept in production code so the
@@ -191,6 +229,105 @@ func (a App) currentRuns() []sidebar.Run {
 		return out
 	}
 	return a.static
+}
+
+// rediscover scans sessionsRoot for any session dirs not yet known and
+// adds a fresh Tailer for each. Called from the frame loop at most every
+// rediscoverEvery; cost is one ReadDir.
+func (a *App) rediscover() {
+	a.lastDiscovery = time.Now()
+	all, err := watch.Discover(a.sessionsRoot)
+	if err != nil {
+		return
+	}
+	for _, t := range all {
+		if a.knownDirs[t.Dir()] {
+			continue
+		}
+		_, _ = t.Refresh()
+		a.tailers = append([]*watch.Tailer{t}, a.tailers...) // prepend (newest first)
+		a.knownDirs[t.Dir()] = true
+		// If nothing was selected before, focus the new session.
+		if a.selected == "" {
+			a.selected = t.SessionID()
+		}
+	}
+}
+
+// handleSubmit dispatches a pane.Submitted into the right action. Today:
+// only "/run agent prompt" is wired; other commands are toasted as
+// unknown so the user sees something happen.
+func (a *App) handleSubmit(sub pane.Submitted) {
+	switch sub.Kind {
+	case pane.KindCommand:
+		a.handleCommand(sub.Text)
+	case pane.KindShell:
+		a.setToast(style.Faint.Render("shell pass-through is not yet wired"))
+	case pane.KindFile:
+		a.setToast(style.Faint.Render("file mention picker coming in a later step"))
+	default:
+		a.setToast(style.Faint.Render("bare prompts need an agent — try /run <agent> <prompt>"))
+	}
+}
+
+func (a *App) handleCommand(text string) {
+	parts := strings.Fields(text)
+	if len(parts) == 0 {
+		return
+	}
+	switch parts[0] {
+	case "run":
+		a.cmdRun(parts[1:])
+	case "quit", "exit":
+		a.quitting = true
+	default:
+		a.setToast(style.Faint.Render(fmt.Sprintf("unknown command: /%s", parts[0])))
+	}
+}
+
+func (a *App) cmdRun(args []string) {
+	if len(args) < 2 {
+		a.setToast(style.Error.Render("usage: /run <agent> <prompt>"))
+		return
+	}
+	agent := args[0]
+	prompt := strings.Join(args[1:], " ")
+	if a.registry == nil {
+		a.setToast(style.Error.Render("registry not initialized"))
+		return
+	}
+	workingDir := a.workingDir
+	if workingDir == "" {
+		workingDir = "."
+	}
+	argv := []string{
+		registry.SquadBinary(),
+		"run",
+		"--agent", agent,
+		"--prompt", prompt,
+		"--working-dir", workingDir,
+		"--print=false",
+	}
+	lr, err := a.registry.Launch(workingDir, argv)
+	if err != nil {
+		a.setToast(style.Error.Render("launch failed: " + err.Error()))
+		return
+	}
+	a.setToast(style.Success.Render(fmt.Sprintf("Launched %s (%s)", agent, lr.ID)))
+	// Force a discovery on the next tick so the new session shows up promptly.
+	a.lastDiscovery = time.Time{}
+}
+
+func (a *App) setToast(msg string) {
+	a.toast = msg
+	a.toastUntil = time.Now().Add(toastDuration)
+}
+
+func (a App) currentToast() string {
+	if a.toast == "" || time.Now().After(a.toastUntil) {
+		return ""
+	}
+	return a.toast
 }
 
 func (a *App) cycleSelection(delta int) {

@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/cowdogmoo/squad/ui/pane"
 	"github.com/cowdogmoo/squad/ui/sidebar"
 )
 
@@ -98,6 +99,42 @@ func TestSelectedRunReflectsState(t *testing.T) {
 	}
 	if r.Agent != "alpha" {
 		t.Errorf("selected agent: got %q, want %q", r.Agent, "alpha")
+	}
+}
+
+func TestHandleSubmitQuit(t *testing.T) {
+	a := makeApp()
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "quit"})
+	if !a.Quitting() {
+		t.Error("/quit should set quitting=true")
+	}
+}
+
+func TestHandleSubmitUnknownCommandSetsToast(t *testing.T) {
+	a := makeApp()
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "bogus arg"})
+	if a.currentToast() == "" {
+		t.Error("unknown command should set a toast")
+	}
+}
+
+func TestHandleSubmitRunMissingArgsSetsToast(t *testing.T) {
+	a := makeApp()
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "run"})
+	if a.currentToast() == "" {
+		t.Error("/run with no args should set a toast")
+	}
+}
+
+func TestToastExpires(t *testing.T) {
+	a := makeApp()
+	a.setToast("hello")
+	if a.currentToast() == "" {
+		t.Fatal("toast should be visible immediately after set")
+	}
+	a.toastUntil = time.Now().Add(-time.Second)
+	if a.currentToast() != "" {
+		t.Error("toast should be hidden after toastUntil passes")
 	}
 }
 
