@@ -2,12 +2,16 @@
 package metrics
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/cowdogmoo/squad/logging"
 )
@@ -235,6 +239,7 @@ type liteLLMModel struct {
 	InputCostPerToken  float64 `json:"input_cost_per_token"`
 	OutputCostPerToken float64 `json:"output_cost_per_token"`
 	LiteLLMProvider    string  `json:"litellm_provider"`
+	Mode               string  `json:"mode"`
 }
 
 var (
@@ -244,6 +249,18 @@ var (
 	pricingFetchErr  error
 	pricingFetchOnce sync.Once
 )
+
+// providerMappings maps a squad provider name to the LiteLLM
+// `litellm_provider` keys that supply its models. The first entry is
+// treated as the canonical source when building model lists.
+var providerMappings = map[string][]string{
+	"openai":           {"openai", "azure", "azure_ai"},
+	"openai-responses": {"openai", "azure"},
+	"anthropic":        {"anthropic", "bedrock", "vertex_ai"},
+	"gemini":           {"gemini", "vertex_ai", "vertex_ai-language-models"},
+	"nvidia":           {"nvidia"},
+	"databricks":       {"databricks"},
+}
 
 func fetchPricing() {
 	client := &http.Client{Timeout: fetchTimeout}
@@ -280,6 +297,134 @@ func fetchPricing() {
 	pricingFetched = true
 	pricingFetchErr = nil
 	pricingCacheMu.Unlock()
+}
+
+// WarmPricing kicks off the LiteLLM pricing fetch in the background.
+// Subsequent calls are no-ops (sync.Once ensures the fetch runs at most
+// once). Call at app startup so the model typeahead has live data by
+// the time a user opens the launch form.
+func WarmPricing() {
+	go ensurePricingLoaded()
+}
+
+//go:embed fallback_models.yaml
+var fallbackModelsYAML []byte
+
+var (
+	fallbackModels   map[string][]string
+	fallbackOnce     sync.Once
+	fallbackParseErr error
+)
+
+func loadFallbackModels() {
+	if err := yaml.Unmarshal(fallbackModelsYAML, &fallbackModels); err != nil {
+		fallbackParseErr = err
+		logging.Warn("failed to parse fallback model list: %v", err)
+	}
+}
+
+// ModelsForProvider returns a sorted, deduped list of known model names
+// for `provider`. When the live LiteLLM cache is loaded the list is
+// derived from it (chat-mode entries only). Otherwise the embedded
+// fallback list is returned. An empty `provider` yields the union
+// across all known providers.
+func ModelsForProvider(provider string) []string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+
+	pricingCacheMu.RLock()
+	loaded := pricingFetched
+	cache := pricingCache
+	pricingCacheMu.RUnlock()
+
+	if loaded && cache != nil {
+		if live := liveModelsForProvider(cache, provider); len(live) > 0 {
+			return live
+		}
+	}
+
+	fallbackOnce.Do(loadFallbackModels)
+	if provider == "" {
+		var all []string
+		seen := make(map[string]struct{})
+		for _, models := range fallbackModels {
+			for _, m := range models {
+				if _, dup := seen[m]; dup {
+					continue
+				}
+				seen[m] = struct{}{}
+				all = append(all, m)
+			}
+		}
+		sort.Strings(all)
+		return all
+	}
+	return append([]string(nil), fallbackModels[provider]...)
+}
+
+// modelListingProviders names the canonical LiteLLM provider key for
+// each squad provider when populating dropdowns. Narrower than
+// providerMappings (which also includes proxy backends like bedrock /
+// vertex_ai used during pricing lookup) — using only the canonical key
+// here avoids surfacing cross-vendor models like bedrock-hosted cohere
+// under "anthropic".
+var modelListingProviders = map[string]string{
+	"openai":           "openai",
+	"openai-responses": "openai",
+	"anthropic":        "anthropic",
+	"gemini":           "gemini",
+	"nvidia":           "nvidia",
+	"databricks":       "databricks",
+}
+
+// liveModelsForProvider filters the LiteLLM cache to chat-completion
+// models whose `litellm_provider` matches `provider`'s canonical key.
+// Caller must not hold pricingCacheMu.
+func liveModelsForProvider(cache map[string]liteLLMModel, provider string) []string {
+	wanted := map[string]bool{}
+	if provider == "" {
+		for _, key := range modelListingProviders {
+			wanted[key] = true
+		}
+	} else if key, ok := modelListingProviders[provider]; ok {
+		wanted[key] = true
+	} else {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	for key, entry := range cache {
+		if !isChatMode(entry.Mode) {
+			continue
+		}
+		if !wanted[entry.LiteLLMProvider] {
+			continue
+		}
+		name := key
+		if i := strings.IndexByte(key, '/'); i >= 0 {
+			name = key[i+1:]
+		}
+		if name == "" {
+			continue
+		}
+		seen[name] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// isChatMode reports whether a LiteLLM entry is usable as a chat
+// completion model. Empty mode is accepted because older entries omit
+// the field and are still chat models in practice.
+func isChatMode(mode string) bool {
+	switch mode {
+	case "", "chat", "responses":
+		return true
+	}
+	return false
 }
 
 // PricingStatus reports whether pricing data was loaded successfully.
@@ -320,16 +465,6 @@ func lookupLiteLLMPricing(provider, model string) (Pricing, bool) {
 			InputPerMillion:  entry.InputCostPerToken * 1_000_000,
 			OutputPerMillion: entry.OutputCostPerToken * 1_000_000,
 		}, true
-	}
-
-	// Try with common provider mappings
-	providerMappings := map[string][]string{
-		"openai":           {"openai", "azure", "azure_ai"},
-		"openai-responses": {"openai", "azure"},
-		"anthropic":        {"anthropic", "bedrock", "vertex_ai"},
-		"gemini":           {"gemini", "vertex_ai", "vertex_ai-language-models"},
-		"nvidia":           {"nvidia"},
-		"databricks":       {"databricks"},
 	}
 
 	if prefixes, ok := providerMappings[provider]; ok {
