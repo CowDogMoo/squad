@@ -27,6 +27,7 @@ type State struct {
 	Events      []EventLine  // capped recent events, oldest first
 	Counts      Counts       // running totals
 	LastTool    string       // name of the most recent tool_call
+	LastError   string       // most recent error message (from error or run_end events)
 	LastEventAt time.Time    // ts of the most recent event
 }
 

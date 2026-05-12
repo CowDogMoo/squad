@@ -319,11 +319,21 @@ func (a *App) handleCommand(text string) {
 		a.openLaunchForm()
 	case "preset":
 		a.cmdPreset(parts[1:])
+	case "help", "?":
+		a.cmdHelp()
 	case "quit", "exit":
 		a.quitting = true
 	default:
-		a.setToast(style.Faint.Render(fmt.Sprintf("unknown command: /%s", parts[0])))
+		a.setToast(style.Faint.Render(fmt.Sprintf("unknown command: /%s — try /help", parts[0])))
 	}
+}
+
+// cmdHelp toasts the available slash commands and global keys.
+func (a *App) cmdHelp() {
+	a.setToast(style.Hint.Render(
+		"commands: /new (launch form) · /run AGENT PROMPT · /preset save|load|list|delete NAME · /quit · /help" +
+			" · keys: tab/shift-tab cycle · ctrl+k cancel · ctrl+c quit",
+	))
 }
 
 // cmdPreset dispatches /preset subcommands: save, load, list, delete.
@@ -437,6 +447,36 @@ func presetOrDefault(v, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// wrapPrefix wraps `s` to fit within `width` columns, prefixing each
+// continuation line with `prefix`. Word-aware (splits on whitespace).
+// Used for multi-line error messages in the focused panel.
+func wrapPrefix(s, prefix string, width int) string {
+	if width <= len(prefix)+1 {
+		return s
+	}
+	usable := width - len(prefix)
+	if len(s) <= usable {
+		return s
+	}
+	var out strings.Builder
+	for len(s) > usable {
+		// Find a space within the window to break on.
+		cut := usable
+		for cut > usable/2 && s[cut] != ' ' {
+			cut--
+		}
+		if cut == usable/2 {
+			cut = usable // no good break point — hard cut
+		}
+		out.WriteString(s[:cut])
+		out.WriteByte('\n')
+		out.WriteString(prefix)
+		s = strings.TrimLeft(s[cut:], " ")
+	}
+	out.WriteString(s)
+	return out.String()
 }
 
 // cancelFocused sends SIGTERM to the subprocess associated with the
@@ -586,6 +626,12 @@ func (a App) renderFocused(width int) string {
 
 	// Tailer-backed runs get a metrics block + recent events tail.
 	if state, ok := a.tailerStateFor(run.ID); ok {
+		if state.LastError != "" {
+			rows = append(rows, "",
+				style.Header.Render("  ERROR"),
+				style.Error.Render("  "+wrapPrefix(state.LastError, "  ", width-2)),
+			)
+		}
 		rows = append(rows, "",
 			style.Header.Render("  METRICS"),
 			style.Secondary.Render(fmt.Sprintf("  iter      %d", state.Counts.Iterations)),

@@ -164,6 +164,32 @@ func contains(s, substr string) bool {
 	return false
 }
 
+func TestHelpToastsCommandList(t *testing.T) {
+	a := makeApp()
+	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "help"})
+	toast := a.currentToast()
+	if toast == "" || !contains(toast, "/new") {
+		t.Errorf("help toast should list commands, got %q", toast)
+	}
+}
+
+func TestWrapPrefix(t *testing.T) {
+	cases := []struct {
+		in, prefix string
+		width      int
+		want       string
+	}{
+		{"short", "  ", 20, "short"},
+		{"abc def ghi", "  ", 6, "abc\n  def\n  ghi"},
+	}
+	for _, tc := range cases {
+		got := wrapPrefix(tc.in, tc.prefix, tc.width)
+		if got != tc.want {
+			t.Errorf("wrapPrefix(%q,%q,%d) = %q, want %q", tc.in, tc.prefix, tc.width, got, tc.want)
+		}
+	}
+}
+
 func TestPresetSaveRequiresLastLaunch(t *testing.T) {
 	store, _ := presets.Load(filepath.Join(t.TempDir(), "p.yaml"))
 	a := makeApp().WithPresets(store)

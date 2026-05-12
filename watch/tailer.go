@@ -143,7 +143,7 @@ func (t *Tailer) refreshEvents() error {
 }
 
 // applyEvent updates State with one event: appends to the tail, bumps the
-// relevant counter, and records LastTool/LastEventAt.
+// relevant counter, and records LastTool/LastError/LastEventAt.
 func (t *Tailer) applyEvent(ev session.Event) {
 	t.state.LastEventAt = ev.Ts
 	switch ev.Type {
@@ -151,16 +151,28 @@ func (t *Tailer) applyEvent(ev session.Event) {
 		t.state.Counts.Iterations++
 	case session.EventToolCall:
 		t.state.Counts.ToolCalls++
-		var p map[string]any
-		if json.Unmarshal(ev.Payload, &p) == nil {
+		if p := decodePayload(ev.Payload); p != nil {
 			t.state.LastTool = str(p, "name")
 		}
 	case session.EventResponse:
 		t.state.Counts.Responses++
 	case session.EventError:
 		t.state.Counts.Errors++
+		if p := decodePayload(ev.Payload); p != nil {
+			if msg := str(p, "error"); msg != "" {
+				t.state.LastError = msg
+			} else if msg := str(p, "message"); msg != "" {
+				t.state.LastError = msg
+			}
+		}
 	case session.EventLargeResult:
 		t.state.Counts.LargeResults++
+	case session.EventRunEnd:
+		if p := decodePayload(ev.Payload); p != nil {
+			if msg := str(p, "error"); msg != "" {
+				t.state.LastError = msg
+			}
+		}
 	}
 	line := EventLine{
 		Ts:      ev.Ts,
