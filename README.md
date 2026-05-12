@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/squad-sticker-square.svg" alt="squad logo" width="360" height="360"/>
+<img src="docs/images/squad-app-icon.svg" alt="squad logo" width="360"/>
 
 # `squad`
 
