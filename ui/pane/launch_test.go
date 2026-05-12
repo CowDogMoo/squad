@@ -1,6 +1,9 @@
 package pane
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -192,13 +195,86 @@ func TestLaunchSubmitIncludesAdvanced(t *testing.T) {
 }
 
 func TestLaunchArrowsNavigateFieldsOnSingleLineInputs(t *testing.T) {
-	// On a single-line textinput (working dir is field 1), ↓ should
-	// move focus forward to the next field — the form-nav behavior
-	// expected on plain text inputs that don't otherwise use ↑/↓.
+	// On a single-line input that doesn't own ↑/↓ (budget, iter), ↓
+	// should move focus forward to the next field — the form-nav
+	// behavior expected on inputs without dropdowns.
 	parent := stubView{name: "parent"}
 	form := NewLaunch(parent, LaunchDefaults{Agent: "go-review"})
 	v := View(form)
-	// Move focus to working dir (single-line textinput).
+	// Move focus to budget (single-line textinput, no dropdown).
+	for {
+		l, ok := AsLaunchView(v)
+		if !ok {
+			t.Fatal("unexpected view")
+		}
+		if l.focus == fldBudget {
+			break
+		}
+		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	}
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyDown})
+	l, _ := AsLaunchView(v)
+	if l.focus != fldMode {
+		t.Errorf("↓ on budget should advance to mode (%d), got %d", fldMode, l.focus)
+	}
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyUp})
+	l, _ = AsLaunchView(v)
+	if l.focus != fldBudget {
+		t.Errorf("↑ on mode should return to budget (%d), got %d", fldBudget, l.focus)
+	}
+}
+
+func TestWorkingDirSuggestions(t *testing.T) {
+	// Build a small tree: <tmp>/{alpha, beta, .hidden, file.txt}.
+	root := t.TempDir()
+	for _, name := range []string{"alpha", "beta", ".hidden"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trailing separator → list root's children.
+	got := workingDirSuggestions(root + string(filepath.Separator))
+	want := []string{
+		filepath.Join(root, "alpha") + string(filepath.Separator),
+		filepath.Join(root, "beta") + string(filepath.Separator),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d suggestions, want %d: %v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("[%d]: got %q, want %q", i, got[i], w)
+		}
+	}
+
+	// Bare segment under root → also lists root's children (typeahead
+	// does the prefix narrowing in filtered()).
+	got = workingDirSuggestions(filepath.Join(root, "a"))
+	if len(got) != 2 {
+		t.Errorf("bare segment: got %d suggestions, want 2: %v", len(got), got)
+	}
+
+	// Files and dotfiles must not appear.
+	for _, s := range got {
+		if strings.HasSuffix(strings.TrimRight(s, string(filepath.Separator)), "file.txt") {
+			t.Errorf("file.txt should not appear in suggestions: %v", got)
+		}
+		if strings.Contains(s, ".hidden") {
+			t.Errorf(".hidden should not appear in suggestions: %v", got)
+		}
+	}
+}
+
+func TestLaunchWorkingDirDropdownOwnsVerticalKeys(t *testing.T) {
+	// workingDir now exposes a filesystem typeahead — ↓ must stay on the
+	// field to navigate the dropdown, not advance focus to budget.
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "go-review"})
+	v := View(form)
 	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
 	l, ok := AsLaunchView(v)
 	if !ok || l.focus != fldWorkingDir {
@@ -206,13 +282,8 @@ func TestLaunchArrowsNavigateFieldsOnSingleLineInputs(t *testing.T) {
 	}
 	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyDown})
 	l, _ = AsLaunchView(v)
-	if l.focus != fldBudget {
-		t.Errorf("↓ on workingDir should advance to budget (%d), got %d", fldBudget, l.focus)
-	}
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyUp})
-	l, _ = AsLaunchView(v)
 	if l.focus != fldWorkingDir {
-		t.Errorf("↑ on budget should return to workingDir (%d), got %d", fldWorkingDir, l.focus)
+		t.Errorf("↓ on workingDir should stay on field (dropdown nav), got focus=%d", l.focus)
 	}
 }
 

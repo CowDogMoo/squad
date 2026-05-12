@@ -2,6 +2,9 @@ package pane
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -26,7 +29,7 @@ type Launch struct {
 	parent View
 
 	agent      typeahead
-	workingDir textinput.Model
+	workingDir typeahead
 	budget     textinput.Model
 	mode       selectField
 	iter       textinput.Model
@@ -55,6 +58,60 @@ var (
 // types.
 func modelsForProvider(p string) []string {
 	return metrics.ModelsForProvider(p)
+}
+
+// workingDirSuggestions returns the immediate subdirectories of the
+// parent of `path`, formatted as full paths with a trailing slash so
+// the typeahead's prefix filter picks them up as the user types. Leaf
+// segments are matched case-insensitively. Returns nil if the parent
+// can't be read (permission denied, missing). The typeahead is the
+// host for prefix-narrowing — this helper only chooses the directory
+// to read.
+func workingDirSuggestions(path string) []string {
+	dir := dirForCompletion(path)
+	if dir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		out = append(out, filepath.Join(dir, e.Name())+string(filepath.Separator))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// dirForCompletion picks the directory whose entries should populate
+// the working-dir typeahead given the user's current input. Trailing
+// separators expand into the named directory; bare segments expand
+// into the parent. Empty input falls back to the current working
+// directory.
+func dirForCompletion(path string) string {
+	if path == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return ""
+		}
+		return cwd
+	}
+	if strings.HasPrefix(path, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, strings.TrimPrefix(path, "~"))
+		}
+	}
+	if strings.HasSuffix(path, string(filepath.Separator)) {
+		return strings.TrimRight(path, string(filepath.Separator))
+	}
+	return filepath.Dir(path)
 }
 
 // Field indices for cycling focus. Order chosen to read left-to-right,
@@ -111,7 +168,7 @@ func NewLaunch(parent View, defaults LaunchDefaults) Launch {
 	// exceeds the visible width, so smaller widths still accept long
 	// strings — they just don't render the whole value at once.
 	agentInput := newTypeahead("agent", defaults.Agent, 22, defaults.Agents)
-	workingDir := mkInput("working-dir", defaults.WorkingDir, 30)
+	workingDir := newTypeahead("working-dir", defaults.WorkingDir, 30, workingDirSuggestions(defaults.WorkingDir))
 	budget := mkInput("budget", fmt.Sprintf("%.2f", defaults.MaxCost), 7)
 	mode := newSelectField(modeOptions, defaults.Mode, "edit")
 	iter := mkInput("iter", strconv.Itoa(defaults.MaxIter), 4)
@@ -237,7 +294,7 @@ func (l Launch) handleKey(km tea.KeyMsg) (View, tea.Cmd, bool) {
 // field — the natural form-nav behavior on single-line inputs.
 func (l Launch) fieldOwnsVerticalKeys() bool {
 	switch l.focus {
-	case fldAgent, fldProvider, fldModel, fldPrompt:
+	case fldAgent, fldWorkingDir, fldProvider, fldModel, fldPrompt:
 		return true
 	}
 	return false
@@ -274,6 +331,19 @@ func (l Launch) handleEnter() (View, tea.Cmd, bool) {
 		l.focus = (l.focus + 1) % fldCount
 		l.applyFocus()
 		return l, nil, true
+	case fldWorkingDir:
+		// Commit the highlighted directory into the input. When the
+		// commit took, keep focus on the field so the user can keep
+		// walking down the tree; otherwise treat Enter as "next field".
+		prev := l.workingDir.Value()
+		l.workingDir, _ = l.workingDir.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if l.workingDir.Value() != prev {
+			l.workingDir.SetOptions(workingDirSuggestions(l.workingDir.Value()))
+			return l, nil, true
+		}
+		l.focus = (l.focus + 1) % fldCount
+		l.applyFocus()
+		return l, nil, true
 	case fldProvider:
 		// Same dropdown-commit-then-advance behavior for the provider
 		// typeahead.
@@ -302,25 +372,39 @@ func (l Launch) handleEnter() (View, tea.Cmd, bool) {
 // forwardToFocused routes input to whichever sub-control currently has
 // focus.
 func (l Launch) forwardToFocused(msg tea.Msg) (View, tea.Cmd) {
-	// Drop rune keystrokes that would push the numeric fields into
-	// invalid territory (letters, minus, multiple dots). Non-rune keys
-	// (backspace, arrows, etc.) still pass through.
+	if !l.acceptKey(msg) {
+		return l, nil
+	}
+	return l.dispatchToField(msg)
+}
+
+// acceptKey gates rune input on the numeric fields so letters and
+// stray punctuation never enter the buffer. Returns true for everything
+// else (backspace, arrows, non-rune keys, non-numeric fields).
+func (l Launch) acceptKey(msg tea.Msg) bool {
 	switch l.focus {
 	case fldBudget:
-		if !budgetAcceptKey(msg, l.budget.Value()) {
-			return l, nil
-		}
+		return budgetAcceptKey(msg, l.budget.Value())
 	case fldIters:
-		if !digitsOnlyAcceptKey(msg) {
-			return l, nil
-		}
+		return digitsOnlyAcceptKey(msg)
 	}
+	return true
+}
+
+// dispatchToField forwards `msg` to the focused sub-control and runs
+// any cross-field side-effects (provider→model option refresh,
+// workingDir filesystem rescan).
+func (l Launch) dispatchToField(msg tea.Msg) (View, tea.Cmd) {
 	var cmd tea.Cmd
 	switch l.focus {
 	case fldAgent:
 		l.agent, cmd = l.agent.Update(msg)
 	case fldWorkingDir:
+		prev := l.workingDir.Value()
 		l.workingDir, cmd = l.workingDir.Update(msg)
+		if l.workingDir.Value() != prev {
+			l.workingDir.SetOptions(workingDirSuggestions(l.workingDir.Value()))
+		}
 	case fldBudget:
 		l.budget, cmd = l.budget.Update(msg)
 	case fldMode:
@@ -527,6 +611,10 @@ func (l Launch) View(width, height int) string {
 	if l.onAgentField() {
 		agentDropdown = l.agent.DropdownView()
 	}
+	var workingDirDropdown string
+	if l.focus == fldWorkingDir {
+		workingDirDropdown = l.workingDir.DropdownView()
+	}
 	row2 := fmt.Sprintf("%s  %s    %s  %s    %s  %s",
 		labelW("budget", 12), boxed(l.budget.View(), l.focus == fldBudget),
 		labelW("mode", 6), l.mode.View(9),
@@ -554,6 +642,9 @@ func (l Launch) View(width, height int) string {
 	rows := []string{row1}
 	if agentDropdown != "" {
 		rows = append(rows, agentDropdown)
+	}
+	if workingDirDropdown != "" {
+		rows = append(rows, workingDirDropdown)
 	}
 	rows = append(rows,
 		"",
