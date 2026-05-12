@@ -38,6 +38,9 @@ type Preset struct {
 	Mode       string    `yaml:"mode,omitempty"`
 	MaxIter    int       `yaml:"max_iter,omitempty"`
 	Prompt     string    `yaml:"prompt,omitempty"`
+	Provider   string    `yaml:"provider,omitempty"`
+	Model      string    `yaml:"model,omitempty"`
+	Isolate    string    `yaml:"isolate,omitempty"`
 	UpdatedAt  time.Time `yaml:"updated_at,omitempty"`
 }
 

@@ -200,7 +200,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.handleSubmit(sub)
 		}
 		if req, ok := pane.AsLaunchRequest(msg); ok {
-			a.launch(req.Agent, req.Prompt, req.WorkingDir, req.MaxCost, req.Mode, req.MaxIter)
+			a.launch(req)
 		}
 		var cmd tea.Cmd
 		a.pane, cmd = a.pane.Update(msg)
@@ -385,6 +385,9 @@ func (a *App) cmdPresetSave(args []string) {
 		Mode:       a.lastLaunch.Mode,
 		MaxIter:    a.lastLaunch.MaxIter,
 		Prompt:     a.lastLaunch.Prompt,
+		Provider:   a.lastLaunch.Provider,
+		Model:      a.lastLaunch.Model,
+		Isolate:    a.lastLaunch.Isolate,
 	}
 	if err := a.presets.Set(p); err != nil {
 		a.setToast(style.Error.Render("save failed: " + err.Error()))
@@ -411,6 +414,9 @@ func (a *App) cmdPresetLoad(args []string) {
 		MaxCost:    p.MaxCost,
 		Mode:       p.Mode,
 		MaxIter:    p.MaxIter,
+		Provider:   p.Provider,
+		Model:      p.Model,
+		Isolate:    p.Isolate,
 	})
 	form.SetSize(a.width, a.height)
 	// If the preset has a prompt, seed the textarea.
@@ -582,19 +588,21 @@ func (a *App) cmdRun(args []string) {
 		a.setToast(style.Error.Render("usage: /run <agent> <prompt>"))
 		return
 	}
-	agent := args[0]
-	prompt := strings.Join(args[1:], " ")
-	a.launch(agent, prompt, "", 0, "", 0)
+	a.launch(pane.LaunchRequest{
+		Agent:  args[0],
+		Prompt: strings.Join(args[1:], " "),
+	})
 }
 
-// launch is the single subprocess-launch entry point. Empty workingDir,
-// maxCost, mode, or maxIter fall back to the app's defaults or squad
-// run's defaults (skipped from argv when zero).
-func (a *App) launch(agent, prompt, workingDir string, maxCost float64, mode string, maxIter int) {
+// launch is the single subprocess-launch entry point. Empty optional
+// fields fall back to the app's defaults or squad run's defaults
+// (skipped from argv when zero).
+func (a *App) launch(req pane.LaunchRequest) {
 	if a.registry == nil {
 		a.setToast(style.Error.Render("registry not initialized"))
 		return
 	}
+	workingDir := req.WorkingDir
 	if workingDir == "" {
 		workingDir = a.workingDir
 	}
@@ -604,19 +612,28 @@ func (a *App) launch(agent, prompt, workingDir string, maxCost float64, mode str
 	argv := []string{
 		registry.SquadBinary(),
 		"run",
-		"--agent", agent,
-		"--prompt", prompt,
+		"--agent", req.Agent,
+		"--prompt", req.Prompt,
 		"--working-dir", workingDir,
 		"--print=false",
 	}
-	if maxCost > 0 {
-		argv = append(argv, "--max-cost", fmt.Sprintf("%g", maxCost))
+	if req.MaxCost > 0 {
+		argv = append(argv, "--max-cost", fmt.Sprintf("%g", req.MaxCost))
 	}
-	if mode != "" {
-		argv = append(argv, "--mode", mode)
+	if req.Mode != "" {
+		argv = append(argv, "--mode", req.Mode)
 	}
-	if maxIter > 0 {
-		argv = append(argv, "--max-iterations", strconv.Itoa(maxIter))
+	if req.MaxIter > 0 {
+		argv = append(argv, "--max-iterations", strconv.Itoa(req.MaxIter))
+	}
+	if req.Provider != "" {
+		argv = append(argv, "--provider", req.Provider)
+	}
+	if req.Model != "" {
+		argv = append(argv, "--model", req.Model)
+	}
+	if req.Isolate != "" {
+		argv = append(argv, "--isolate", req.Isolate)
 	}
 	lr, err := a.registry.Launch(workingDir, argv)
 	if err != nil {
@@ -624,18 +641,14 @@ func (a *App) launch(agent, prompt, workingDir string, maxCost float64, mode str
 		return
 	}
 	a.pendingLaunches = append(a.pendingLaunches, lr.ID)
-	if maxCost > 0 {
-		a.launchBudgets[lr.ID] = maxCost
+	if req.MaxCost > 0 {
+		a.launchBudgets[lr.ID] = req.MaxCost
 	}
-	a.lastLaunch = &pane.LaunchRequest{
-		Agent:      agent,
-		Prompt:     prompt,
-		WorkingDir: workingDir,
-		MaxCost:    maxCost,
-		Mode:       mode,
-		MaxIter:    maxIter,
-	}
-	a.setToast(style.Success.Render(fmt.Sprintf("Launched %s (%s)", agent, lr.ID)))
+	// Normalize the stored last-launch with the final workingDir.
+	stored := req
+	stored.WorkingDir = workingDir
+	a.lastLaunch = &stored
+	a.setToast(style.Success.Render(fmt.Sprintf("Launched %s (%s)", req.Agent, lr.ID)))
 	// Force a discovery on the next tick so the new session shows up promptly.
 	a.lastDiscovery = time.Time{}
 }

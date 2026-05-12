@@ -29,6 +29,9 @@ type Launch struct {
 	budget     textinput.Model
 	mode       textinput.Model
 	iter       textinput.Model
+	provider   textinput.Model
+	model      textinput.Model
+	isolate    textinput.Model
 	prompt     textarea.Model
 
 	focus int
@@ -43,6 +46,9 @@ const (
 	fldBudget
 	fldMode
 	fldIters
+	fldProvider
+	fldModel
+	fldIsolate
 	fldPrompt
 	fldLaunch
 	fldCancel
@@ -57,6 +63,11 @@ type LaunchDefaults struct {
 	MaxCost    float64
 	Mode       string
 	MaxIter    int
+
+	// Advanced.
+	Provider string
+	Model    string
+	Isolate  string
 }
 
 // NewLaunch builds a Launch form using `parent` as the return target
@@ -77,6 +88,9 @@ func NewLaunch(parent View, defaults LaunchDefaults) Launch {
 	budget := mkInput("budget", fmt.Sprintf("%.2f", defaults.MaxCost), 8)
 	mode := mkInput("mode", defaults.Mode, 12)
 	iter := mkInput("iter", strconv.Itoa(defaults.MaxIter), 6)
+	provider := mkInput("(default)", defaults.Provider, 20)
+	model := mkInput("(default)", defaults.Model, 28)
+	isolate := mkInput("(manifest)", defaults.Isolate, 12)
 
 	prompt := textarea.New()
 	prompt.Placeholder = "prompt — what should the agent do? (shift+enter for newline)"
@@ -99,6 +113,9 @@ func NewLaunch(parent View, defaults LaunchDefaults) Launch {
 		budget:     budget,
 		mode:       mode,
 		iter:       iter,
+		provider:   provider,
+		model:      model,
+		isolate:    isolate,
 		prompt:     prompt,
 		focus:      fldAgent,
 	}
@@ -192,6 +209,12 @@ func (l Launch) forwardToFocused(msg tea.Msg) (View, tea.Cmd) {
 		l.mode, cmd = l.mode.Update(msg)
 	case fldIters:
 		l.iter, cmd = l.iter.Update(msg)
+	case fldProvider:
+		l.provider, cmd = l.provider.Update(msg)
+	case fldModel:
+		l.model, cmd = l.model.Update(msg)
+	case fldIsolate:
+		l.isolate, cmd = l.isolate.Update(msg)
 	case fldPrompt:
 		l.prompt, cmd = l.prompt.Update(msg)
 	}
@@ -207,6 +230,9 @@ func (l *Launch) applyFocus() {
 	l.budget.Blur()
 	l.mode.Blur()
 	l.iter.Blur()
+	l.provider.Blur()
+	l.model.Blur()
+	l.isolate.Blur()
 	l.prompt.Blur()
 	switch l.focus {
 	case fldAgent:
@@ -219,6 +245,12 @@ func (l *Launch) applyFocus() {
 		l.mode.Focus()
 	case fldIters:
 		l.iter.Focus()
+	case fldProvider:
+		l.provider.Focus()
+	case fldModel:
+		l.model.Focus()
+	case fldIsolate:
+		l.isolate.Focus()
 	case fldPrompt:
 		l.prompt.Focus()
 	}
@@ -255,6 +287,13 @@ func (l Launch) submit() (View, tea.Cmd) {
 		l.applyFocus()
 		return l, nil
 	}
+	isolate := strings.TrimSpace(l.isolate.Value())
+	if isolate != "" && isolate != "worktree" && isolate != "none" {
+		l.err = "isolate must be 'worktree', 'none', or empty"
+		l.focus = fldIsolate
+		l.applyFocus()
+		return l, nil
+	}
 	req := LaunchRequest{
 		Agent:      agent,
 		WorkingDir: strings.TrimSpace(l.workingDir.Value()),
@@ -262,6 +301,9 @@ func (l Launch) submit() (View, tea.Cmd) {
 		MaxCost:    maxCost,
 		Mode:       strings.TrimSpace(l.mode.Value()),
 		MaxIter:    maxIter,
+		Provider:   strings.TrimSpace(l.provider.Value()),
+		Model:      strings.TrimSpace(l.model.Value()),
+		Isolate:    isolate,
 	}
 	return l.parent, func() tea.Msg { return req }
 }
@@ -280,6 +322,12 @@ func (l Launch) View(_, _ int) string {
 		style.Header.Render("mode"), boxed(l.mode.View(), l.focus == fldMode),
 		style.Header.Render("iter"), boxed(l.iter.View(), l.focus == fldIters),
 	)
+	// Row 3: advanced — provider + model + isolate (worktree|none)
+	row3 := fmt.Sprintf("  %s  %s    %s  %s    %s  %s",
+		style.Header.Render("provider"), boxed(l.provider.View(), l.focus == fldProvider),
+		style.Header.Render("model"), boxed(l.model.View(), l.focus == fldModel),
+		style.Header.Render("isolate"), boxed(l.isolate.View(), l.focus == fldIsolate),
+	)
 	// Prompt row (full width)
 	promptRow := "  " + style.Header.Render("prompt") + "\n" + l.prompt.View()
 
@@ -287,7 +335,7 @@ func (l Launch) View(_, _ int) string {
 	buttonCancel := button("[ Cancel ]", l.focus == fldCancel, style.Secondary)
 	buttons := "  " + buttonLaunch + "  " + buttonCancel
 
-	rows := []string{title, "", row1, row2, "", promptRow, "", buttons}
+	rows := []string{title, "", row1, row2, row3, "", promptRow, "", buttons}
 	if l.err != "" {
 		rows = append(rows, "  "+style.Error.Render(l.err))
 	}

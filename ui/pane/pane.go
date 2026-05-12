@@ -85,7 +85,9 @@ func AsSubmitted(m tea.Msg) (Submitted, bool) {
 }
 
 // LaunchRequest is the tea.Msg the launch form emits on submit. The host
-// (app.App) consumes it to spawn a subprocess via the registry.
+// (app.App) consumes it to spawn a subprocess via the registry. Empty
+// strings and zero numerics indicate "use the default" — they are
+// skipped from the child argv rather than forwarded as zero values.
 type LaunchRequest struct {
 	Agent      string
 	WorkingDir string
@@ -93,6 +95,11 @@ type LaunchRequest struct {
 	MaxCost    float64
 	Mode       string
 	MaxIter    int
+
+	// Advanced (optional).
+	Provider string // "openai-responses", "anthropic", "gemini", "ollama", ...
+	Model    string // model identifier (provider-specific)
+	Isolate  string // "worktree" or "none" — empty defers to agent manifest
 }
 
 // AsLaunchRequest unwraps a tea.Msg to a LaunchRequest.

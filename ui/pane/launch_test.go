@@ -142,7 +142,7 @@ func TestLaunchSubmitEmitsRequest(t *testing.T) {
 	})
 	// Type into agent.
 	v := typeAll(t, form, "go-review")
-	// Tab to prompt (skip workingDir/budget/mode/iter — keep defaults).
+	// Tab to prompt (skip workingDir/budget/mode/iter/provider/model/isolate).
 	for i := 0; i < fldPrompt-fldAgent; i++ {
 		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
 	}
@@ -160,5 +160,59 @@ func TestLaunchSubmitEmitsRequest(t *testing.T) {
 	// Submission returns the parent view.
 	if got := next.Title(); got != "parent" {
 		t.Errorf("after submit: got Title=%q, want parent", got)
+	}
+}
+
+func TestLaunchSubmitIncludesAdvanced(t *testing.T) {
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{
+		Agent:    "go-review",
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		Isolate:  "worktree",
+		MaxIter:  20,
+	})
+	v := View(form)
+	for {
+		l, ok := AsLaunchView(v)
+		if !ok {
+			t.Fatal("unexpected view")
+		}
+		if l.focus == fldPrompt {
+			break
+		}
+		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	}
+	v = typeAll(t, v, "do the thing")
+	_, cmd := v.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	req := asLaunchRequest(t, cmd)
+	if req.Provider != "anthropic" || req.Model != "claude-sonnet-4-6" || req.Isolate != "worktree" {
+		t.Errorf("advanced fields lost: got %+v", req)
+	}
+}
+
+func TestLaunchInvalidIsolateRejected(t *testing.T) {
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x", Isolate: "garbage", MaxIter: 10})
+	v := View(form)
+	for {
+		l, ok := AsLaunchView(v)
+		if !ok {
+			t.Fatal("unexpected view")
+		}
+		if l.focus == fldPrompt {
+			break
+		}
+		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	}
+	v = typeAll(t, v, "p")
+	v, cmd := v.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd != nil {
+		if _, ok := AsLaunchRequest(cmd()); ok {
+			t.Error("invalid isolate value should have blocked submit")
+		}
+	}
+	if _, ok := AsLaunchView(v); !ok {
+		t.Errorf("form should stay open on validation error, got %T", v)
 	}
 }
