@@ -23,9 +23,13 @@ THE SOFTWARE.
 package main
 
 import (
+	"fmt"
+	"path/filepath"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/ui/app"
 )
 
@@ -38,15 +42,35 @@ recent agent runs in a sidebar, a focused-run panel with live event tail,
 and a polymorphic bottom pane for composing prompts, picking presets, or
 launching new runs.
 
-This early build ships with mock runs so the layout is visible. Live
-session tailing and subprocess launch land in subsequent commits.`,
+By default the TUI discovers + tails .squad/sessions/ under the current
+working directory. Use --mock for a hand-crafted demo, or --sessions-dir
+to point at a different sessions root.`,
 		RunE: runUI,
 	}
+	cmd.Flags().Bool("mock", false, "Render hand-crafted mock runs instead of discovering disk sessions")
+	cmd.Flags().String("sessions-dir", "", "Sessions root to watch (default: <cwd>/.squad/sessions)")
 	return cmd
 }
 
 func runUI(cmd *cobra.Command, _ []string) error {
-	model := app.New(app.MockRuns())
+	useMock, _ := cmd.Flags().GetBool("mock")
+	sessionsDir, _ := cmd.Flags().GetString("sessions-dir")
+
+	var model app.App
+	if useMock {
+		model = app.New(app.MockRuns())
+	} else {
+		root := sessionsDir
+		if root == "" {
+			root = filepath.Join(".", session.SessionsRoot)
+		}
+		var err error
+		model, err = app.NewWithSessions(root)
+		if err != nil {
+			return fmt.Errorf("discover sessions: %w", err)
+		}
+	}
+
 	prog := tea.NewProgram(
 		model,
 		tea.WithAltScreen(),

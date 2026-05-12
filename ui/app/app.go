@@ -7,45 +7,47 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/ui/pane"
 	"github.com/cowdogmoo/squad/ui/sidebar"
 	"github.com/cowdogmoo/squad/ui/status"
 	"github.com/cowdogmoo/squad/ui/style"
+	"github.com/cowdogmoo/squad/watch"
 )
 
 // sidebarWidth is the fixed column count reserved for the sidebar. The
 // focused-run panel takes the rest of the width.
 const sidebarWidth = 36
 
-// frameTickMsg drives both the status shimmer and any per-frame liveness
-// in sub-views. Decoupled from status.TickMsg so the app owns its own
-// animation clock.
+// eventTailRows is the default number of recent events shown in the
+// focused-run panel. The renderer truncates to fit.
+const eventTailRows = 8
+
+// frameTickMsg drives both the status shimmer and per-frame liveness
+// (tailer refresh, elapsed timers). Decoupled from status.TickMsg so
+// the app owns its own animation clock.
 type frameTickMsg time.Time
 
 func frameTick() tea.Cmd {
 	return tea.Tick(status.TickInterval, func(t time.Time) tea.Msg { return frameTickMsg(t) })
 }
 
-// runStart pairs a sidebar.Run with a wall-clock anchor so the status
-// indicator's elapsed value drifts forward in real time even though the
-// run data is static (mock or session-derived).
-type runStart struct {
-	run     sidebar.Run
-	startAt time.Time
-}
-
-// App is the root model.
+// App is the root model. It holds either a static list of runs (mock /
+// test mode) or a set of disk-backed tailers, but not both. The renderer
+// derives the sidebar list from whichever source is populated.
 type App struct {
-	runs     []runStart // anchored copies of the input runs
-	selected string     // session ID of currently-selected sidebar row
+	static  []sidebar.Run
+	tailers []*watch.Tailer
 
-	pane pane.View
+	selected string // session ID of currently-selected sidebar row
+	pane     pane.View
 
 	width, height int
 	frame         uint64
@@ -53,23 +55,41 @@ type App struct {
 	quitting bool
 }
 
-// New returns an App with the given initial runs and the composer mounted
-// as the default pane view.
+// New returns an App rendering a static list of runs (no disk I/O). Use
+// this for tests and demos.
 func New(runs []sidebar.Run) App {
-	now := time.Now()
-	anchored := make([]runStart, len(runs))
-	for i, r := range runs {
-		anchored[i] = runStart{run: r, startAt: now.Add(-r.Elapsed)}
-	}
 	selected := ""
-	if len(anchored) > 0 {
-		selected = anchored[0].run.ID
+	if len(runs) > 0 {
+		selected = runs[0].ID
 	}
 	return App{
-		runs:     anchored,
+		static:   runs,
 		selected: selected,
 		pane:     pane.NewComposer(),
 	}
+}
+
+// NewWithSessions returns an App that auto-discovers + tails the session
+// directories under sessionsRoot (typically ".squad/sessions"). Missing
+// root is not an error — the app renders empty until sessions appear.
+func NewWithSessions(sessionsRoot string) (App, error) {
+	tailers, err := watch.Discover(sessionsRoot)
+	if err != nil {
+		return App{}, err
+	}
+	selected := ""
+	if len(tailers) > 0 {
+		// Prime each tailer once so the first render has data.
+		for _, t := range tailers {
+			_, _ = t.Refresh()
+		}
+		selected = tailers[0].SessionID()
+	}
+	return App{
+		tailers:  tailers,
+		selected: selected,
+		pane:     pane.NewComposer(),
+	}, nil
 }
 
 // Init starts the animation tick and forwards Init to the pane.
@@ -83,14 +103,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = m.Width
 		a.height = m.Height
-		// Forward to pane so internal widgets (textarea) resize too,
-		// but constrain to the pane's region (full width).
 		var cmd tea.Cmd
 		a.pane, cmd = a.pane.Update(tea.WindowSizeMsg{Width: m.Width, Height: 3})
 		return a, cmd
 
 	case frameTickMsg:
 		a.frame++
+		for _, t := range a.tailers {
+			_, _ = t.Refresh()
+		}
 		return a, frameTick()
 
 	case tea.KeyMsg:
@@ -105,19 +126,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.cycleSelection(-1)
 			return a, nil
 		}
-		// Forward unhandled keys to the pane (typing into composer, etc.).
 		var cmd tea.Cmd
 		a.pane, cmd = a.pane.Update(msg)
 		return a, cmd
 
 	default:
-		// Forward everything else (cursor blinks, custom msgs) to the pane.
 		var cmd tea.Cmd
 		a.pane, cmd = a.pane.Update(msg)
-		// Handle pane.Submitted by clearing the pane's "submit" channel.
-		// For step 4 we just drop the payload — step 5+ will dispatch it.
 		if sub, ok := pane.AsSubmitted(msg); ok {
-			_ = sub // placeholder; future steps route by Kind
+			_ = sub // future steps route by Kind
 		}
 		return a, cmd
 	}
@@ -128,22 +145,13 @@ func (a App) View() string {
 	if a.quitting {
 		return ""
 	}
-	w, h := a.width, a.height
+	w := a.width
 	if w <= 0 {
 		w = 120
 	}
-	if h <= 0 {
-		h = 32
-	}
 
-	// Reserve rows: 2 for status+composer area + 1 separator = 3.
-	bodyHeight := h - 4
-	if bodyHeight < 6 {
-		bodyHeight = 6
-	}
-
-	sb := a.renderSidebar(bodyHeight)
-	focus := a.renderFocused(w-sidebarWidth-2, bodyHeight)
+	sb := a.renderSidebar()
+	focus := a.renderFocused(w - sidebarWidth - 2)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, sb, "  ", focus)
 
 	sep := style.Faint.Render(strings.Repeat("─", w))
@@ -162,101 +170,216 @@ func AsApp(m tea.Model) (App, bool) {
 }
 
 // Selected returns the currently-selected run's session ID, or "" if no
-// run is selected. Exposed for tests and host introspection.
+// run is selected.
 func (a App) Selected() string { return a.selected }
 
-// Quitting reports whether ctrl-c has been pressed (and the next tick
-// will exit the program).
+// Quitting reports whether ctrl-c has been pressed.
 func (a App) Quitting() bool { return a.quitting }
 
 // Size returns the current (width, height) from the most recent
 // WindowSizeMsg, or (0, 0) before the first resize.
 func (a App) Size() (int, int) { return a.width, a.height }
 
+// currentRuns derives the sidebar's row list from whichever source is
+// populated. Returns a fresh slice each call.
+func (a App) currentRuns() []sidebar.Run {
+	if len(a.tailers) > 0 {
+		out := make([]sidebar.Run, 0, len(a.tailers))
+		for _, t := range a.tailers {
+			out = append(out, runFromTailer(t))
+		}
+		return out
+	}
+	return a.static
+}
+
 func (a *App) cycleSelection(delta int) {
-	if len(a.runs) == 0 {
+	runs := a.currentRuns()
+	if len(runs) == 0 {
 		return
 	}
 	idx := 0
-	for i, rs := range a.runs {
-		if rs.run.ID == a.selected {
+	for i, r := range runs {
+		if r.ID == a.selected {
 			idx = i
 			break
 		}
 	}
-	idx = (idx + delta + len(a.runs)) % len(a.runs)
-	a.selected = a.runs[idx].run.ID
+	idx = (idx + delta + len(runs)) % len(runs)
+	a.selected = runs[idx].ID
 }
 
-func (a App) renderSidebar(_ int) string {
-	runs := make([]sidebar.Run, len(a.runs))
-	for i, rs := range a.runs {
-		// Refresh elapsed so live runs drift forward each frame.
-		r := rs.run
-		if rs.run.Alive {
-			r.Elapsed = time.Since(rs.startAt)
-		}
-		runs[i] = r
-	}
+func (a App) renderSidebar() string {
 	return sidebar.Render(sidebar.Snapshot{
-		Runs:     runs,
-		Selected: a.selected,
-		Width:    sidebarWidth,
+		Runs:        a.currentRuns(),
+		Selected:    a.selected,
+		Width:       sidebarWidth,
+		MaxPerGroup: 12,
 	})
 }
 
-func (a App) renderFocused(width, _ int) string {
-	rs, ok := a.selectedRun()
+func (a App) renderFocused(width int) string {
+	run, ok := a.selectedSidebarRun()
 	if !ok {
 		return style.Faint.Render("  (no run selected)")
 	}
-	title := style.Title.Render(fmt.Sprintf("FOCUSED · %s", rs.run.Agent))
+	title := style.Title.Render(fmt.Sprintf("FOCUSED · %s", run.Agent))
 	rows := []string{
 		title,
 		"",
-		style.Secondary.Render(fmt.Sprintf("  session   %s", rs.run.ID)),
-		style.Secondary.Render(fmt.Sprintf("  state     %s", stateLabel(rs.run))),
-		style.Secondary.Render(fmt.Sprintf("  elapsed   %s", formatHMS(liveElapsed(rs)))),
+		style.Secondary.Render(fmt.Sprintf("  session   %s", run.ID)),
+		style.Secondary.Render(fmt.Sprintf("  state     %s", stateLabel(run))),
+		style.Secondary.Render(fmt.Sprintf("  elapsed   %s", formatHMS(run.Elapsed))),
 	}
-	if rs.run.LastEvent != "" {
-		rows = append(rows, style.Secondary.Render(fmt.Sprintf("  last      %s", rs.run.LastEvent)))
+	if run.LastEvent != "" {
+		rows = append(rows, style.Secondary.Render(fmt.Sprintf("  last      %s", run.LastEvent)))
 	}
-	rows = append(rows,
-		"",
-		style.Faint.Render("  (events tail, metrics, and diff viewer coming in later steps)"),
-	)
-	_ = width // reserved for future column-aware rendering
+
+	// Tailer-backed runs get a metrics block + recent events tail.
+	if state, ok := a.tailerStateFor(run.ID); ok {
+		rows = append(rows, "",
+			style.Header.Render("  METRICS"),
+			style.Secondary.Render(fmt.Sprintf("  iter      %d", state.Counts.Iterations)),
+			style.Secondary.Render(fmt.Sprintf("  tools     %d", state.Counts.ToolCalls)),
+			style.Secondary.Render(fmt.Sprintf("  responses %d", state.Counts.Responses)),
+			style.Secondary.Render(fmt.Sprintf("  cost      $%.2f", state.Meta.Cost)),
+			style.Secondary.Render(fmt.Sprintf("  tokens    %d in · %d out", state.Meta.InputTokens, state.Meta.OutputTokens)),
+		)
+		if events := state.Events; len(events) > 0 {
+			rows = append(rows, "", style.Header.Render("  EVENTS"))
+			rows = append(rows, renderEventTail(events, eventTailRows, width-4)...)
+		}
+	} else {
+		rows = append(rows, "",
+			style.Faint.Render("  (events tail loads when this run has a session on disk)"),
+		)
+	}
 	return strings.Join(rows, "\n")
 }
 
+// renderEventTail renders the most recent n events (newest at top).
+func renderEventTail(events []watch.EventLine, n, width int) []string {
+	if n <= 0 {
+		return nil
+	}
+	start := len(events) - n
+	if start < 0 {
+		start = 0
+	}
+	recent := events[start:]
+	// Reverse so newest is at the top.
+	rows := make([]string, 0, len(recent))
+	for i := len(recent) - 1; i >= 0; i-- {
+		ev := recent[i]
+		ts := ev.Ts.Local().Format("15:04:05")
+		// Pad type to a fixed width for alignment.
+		typ := padType(ev.Type, 12)
+		summary := ev.Summary
+		// Truncate summary to fit terminal width.
+		const tsW, typW, gutterW = 8, 12, 6 // approx columns
+		maxSummary := width - tsW - typW - gutterW
+		if maxSummary > 0 && len(summary) > maxSummary {
+			summary = summary[:maxSummary-1] + "…"
+		}
+		line := fmt.Sprintf("  %s  %s  %s",
+			style.Secondary.Render(ts),
+			style.Hint.Render(typ),
+			style.Body.Render(summary),
+		)
+		rows = append(rows, line)
+	}
+	return rows
+}
+
+func padType(s string, w int) string {
+	if len(s) >= w {
+		return s
+	}
+	return s + strings.Repeat(" ", w-len(s))
+}
+
 func (a App) renderStatus(width int) string {
-	rs, ok := a.selectedRun()
+	run, ok := a.selectedSidebarRun()
 	if !ok {
 		return status.Render(status.Snapshot{State: status.StateIdle, Width: width})
 	}
-	st, label := indicatorFor(rs.run)
-	detail := rs.run.Agent
-	if rs.run.LastEvent != "" {
-		detail += " · " + rs.run.LastEvent
+	st, label := indicatorFor(run)
+	detail := run.Agent
+	if run.LastEvent != "" {
+		detail += " · " + run.LastEvent
 	}
 	return status.Render(status.Snapshot{
 		State:     st,
 		Label:     label,
 		Detail:    detail,
-		Elapsed:   liveElapsed(rs),
+		Elapsed:   run.Elapsed,
 		Frame:     a.frame,
 		Width:     width,
-		Interrupt: rs.run.Alive,
+		Interrupt: run.Alive,
 	})
 }
 
-func (a App) selectedRun() (runStart, bool) {
-	for _, rs := range a.runs {
-		if rs.run.ID == a.selected {
-			return rs, true
+func (a App) selectedSidebarRun() (sidebar.Run, bool) {
+	for _, r := range a.currentRuns() {
+		if r.ID == a.selected {
+			return r, true
 		}
 	}
-	return runStart{}, false
+	return sidebar.Run{}, false
+}
+
+func (a App) tailerStateFor(sessionID string) (watch.State, bool) {
+	for _, t := range a.tailers {
+		if t.SessionID() == sessionID {
+			return t.State(), true
+		}
+	}
+	return watch.State{}, false
+}
+
+// runFromTailer converts a tailer's current state into a sidebar row.
+// Elapsed is computed live for alive sessions, frozen otherwise.
+func runFromTailer(t *watch.Tailer) sidebar.Run {
+	s := t.State()
+	meta := s.Meta
+	state, alive := stateFromMeta(meta.Status)
+	elapsed := time.Duration(0)
+	if alive && !meta.Created.IsZero() {
+		elapsed = time.Since(meta.Created)
+	} else if !meta.Created.IsZero() && !meta.Updated.IsZero() {
+		elapsed = meta.Updated.Sub(meta.Created)
+	}
+	agent := meta.Agent
+	if agent == "" {
+		agent = filepath.Base(t.Dir())
+	}
+	return sidebar.Run{
+		ID:        t.SessionID(),
+		Agent:     agent,
+		State:     state,
+		Alive:     alive,
+		Elapsed:   elapsed,
+		LastEvent: s.LastTool,
+	}
+}
+
+// stateFromMeta maps meta.Status to a sidebar State + alive flag. Empty
+// status (meta.json not yet written) is treated as Connecting.
+func stateFromMeta(status string) (sidebar.State, bool) {
+	switch status {
+	case session.StatusRunning:
+		return sidebar.StateWorking, true
+	case session.StatusCompleted:
+		return sidebar.StateCompleted, false
+	case session.StatusError:
+		return sidebar.StateFailed, false
+	case session.StatusBudget:
+		return sidebar.StateBudget, false
+	case "":
+		return sidebar.StateConnecting, true
+	default:
+		return sidebar.StateCompleted, false
+	}
 }
 
 // indicatorFor maps a sidebar.Run state to a status.State + label.
@@ -284,13 +407,6 @@ func stateLabel(r sidebar.Run) string {
 		return label + " (exited)"
 	}
 	return label
-}
-
-func liveElapsed(rs runStart) time.Duration {
-	if rs.run.Alive {
-		return time.Since(rs.startAt)
-	}
-	return rs.run.Elapsed
 }
 
 func formatHMS(d time.Duration) string {

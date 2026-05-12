@@ -92,12 +92,12 @@ func TestTabAdvancesSelection(t *testing.T) {
 
 func TestSelectedRunReflectsState(t *testing.T) {
 	a := makeApp()
-	rs, ok := a.selectedRun()
+	r, ok := a.selectedSidebarRun()
 	if !ok {
-		t.Fatal("selectedRun should find the first run")
+		t.Fatal("selectedSidebarRun should find the first run")
 	}
-	if rs.run.Agent != "alpha" {
-		t.Errorf("selected agent: got %q, want %q", rs.run.Agent, "alpha")
+	if r.Agent != "alpha" {
+		t.Errorf("selected agent: got %q, want %q", r.Agent, "alpha")
 	}
 }
 
