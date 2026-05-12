@@ -1,0 +1,14 @@
+WORKING (3)
+  ▶ go-review                      8m24s
+  ▶ python-review                  3m11s
+  ▶ bug-hunt:fix-bug              14m42s
+
+NEEDS INPUT (1)
+  ◇ infra-up: confirm $$             42s
+
+RECENT (5)
+  ∙ go-review-prev                 9m42s
+  ∙ azure-prov-test                3m11s
+  ∙ infra-up                         42s
+  ∙ mcp-docs                       1m08s
+  ∙ agents-doc                       35s
