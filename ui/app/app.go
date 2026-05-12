@@ -57,6 +57,12 @@ type App struct {
 	toast      string // transient message ("Launched ..."), cleared after toastUntil
 	toastUntil time.Time
 
+	// launchPairs maps session ID → registry Launch ID. Filled when
+	// rediscover() sees a new session dir following a recent launch
+	// (FIFO pairing). Used by /cancel and k to signal the correct child.
+	launchPairs     map[string]string
+	pendingLaunches []string // launch IDs awaiting their session dir
+
 	selected string // session ID of currently-selected sidebar row
 	pane     pane.View
 
@@ -84,10 +90,11 @@ func New(runs []sidebar.Run) App {
 		selected = runs[0].ID
 	}
 	return App{
-		static:   runs,
-		selected: selected,
-		pane:     pane.NewComposer(),
-		registry: registry.New(),
+		static:      runs,
+		selected:    selected,
+		pane:        pane.NewComposer(),
+		registry:    registry.New(),
+		launchPairs: map[string]string{},
 	}
 }
 
@@ -117,6 +124,7 @@ func NewWithSessions(sessionsRoot, workingDir string) (App, error) {
 		selected:     selected,
 		pane:         pane.NewComposer(),
 		registry:     registry.New(),
+		launchPairs:  map[string]string{},
 	}, nil
 }
 
@@ -156,6 +164,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case "shift+tab", "up", "ctrl+p":
 			a.cycleSelection(-1)
+			return a, nil
+		case "ctrl+k":
+			// ctrl+k cancels the focused run's subprocess. Bare "k"
+			// would conflict with composer typing; ctrl+k is global.
+			a.cancelFocused()
 			return a, nil
 		}
 		var cmd tea.Cmd
@@ -251,6 +264,15 @@ func (a *App) rediscover() {
 		_, _ = t.Refresh()
 		a.tailers = append([]*watch.Tailer{t}, a.tailers...) // prepend (newest first)
 		a.knownDirs[t.Dir()] = true
+		// FIFO-pair this new session with the oldest pending launch.
+		// Imperfect (race against a manual `squad run` happening at the
+		// same moment), but covers the common case of "I just launched
+		// from the form and the dir just appeared".
+		if len(a.pendingLaunches) > 0 {
+			launchID := a.pendingLaunches[0]
+			a.pendingLaunches = a.pendingLaunches[1:]
+			a.launchPairs[t.SessionID()] = launchID
+		}
 		// If nothing was selected before, focus the new session.
 		if a.selected == "" {
 			a.selected = t.SessionID()
@@ -289,6 +311,27 @@ func (a *App) handleCommand(text string) {
 	default:
 		a.setToast(style.Faint.Render(fmt.Sprintf("unknown command: /%s", parts[0])))
 	}
+}
+
+// cancelFocused sends SIGTERM to the subprocess associated with the
+// currently-selected sidebar row. No-op (with explanatory toast) when
+// the row is an external session not launched by this TUI, or when the
+// subprocess has already exited.
+func (a *App) cancelFocused() {
+	if a.selected == "" {
+		a.setToast(style.Faint.Render("no run selected"))
+		return
+	}
+	launchID, ok := a.launchPairs[a.selected]
+	if !ok {
+		a.setToast(style.Faint.Render("only runs launched from this TUI can be cancelled"))
+		return
+	}
+	if err := a.registry.Stop(launchID); err != nil {
+		a.setToast(style.Error.Render("cancel failed: " + err.Error()))
+		return
+	}
+	a.setToast(style.Success.Render(fmt.Sprintf("Cancellation signal sent to %s", launchID)))
 }
 
 // openLaunchForm swaps the bottom pane to a Launch view. The composer
@@ -347,6 +390,7 @@ func (a *App) launch(agent, prompt, workingDir string, maxCost float64, mode str
 		a.setToast(style.Error.Render("launch failed: " + err.Error()))
 		return
 	}
+	a.pendingLaunches = append(a.pendingLaunches, lr.ID)
 	a.setToast(style.Success.Render(fmt.Sprintf("Launched %s (%s)", agent, lr.ID)))
 	// Force a discovery on the next tick so the new session shows up promptly.
 	a.lastDiscovery = time.Time{}

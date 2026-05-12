@@ -162,6 +162,32 @@ func contains(s, substr string) bool {
 	return false
 }
 
+func TestCancelFocusedNoSelection(t *testing.T) {
+	a := New(nil)
+	a.cancelFocused()
+	if a.currentToast() == "" {
+		t.Error("cancel with no selection should toast")
+	}
+}
+
+func TestCancelFocusedUnpairedSession(t *testing.T) {
+	a := makeApp()
+	// makeApp's runs aren't paired with any launch — should toast.
+	a.cancelFocused()
+	if a.currentToast() == "" {
+		t.Error("cancel of unpaired session should toast about external runs")
+	}
+}
+
+func TestCancelFocusedUnknownLaunchID(t *testing.T) {
+	a := makeApp()
+	a.launchPairs[a.Selected()] = "L9999" // pair the selected to a nonexistent launch
+	a.cancelFocused()
+	if a.currentToast() == "" {
+		t.Error("cancel of unknown launch should toast an error")
+	}
+}
+
 func TestToastExpires(t *testing.T) {
 	a := makeApp()
 	a.setToast("hello")
