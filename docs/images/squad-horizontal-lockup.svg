@@ -1,29 +1,36 @@
-<svg width="1200" height="260" viewBox="0 0 1200 260" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="1200" height="260" fill="#000000"/>
-  <!-- Orange -->
-  <g transform="translate(40,60)">
-    <path d="M20 0H60V10H70V20H80V120H55V95H25V120H0V20H10V10H20V0Z" fill="#FF5A1F"/>
-    <rect x="18" y="40" width="12" height="12" fill="#000"/>
-    <rect x="42" y="40" width="12" height="12" fill="#000"/>
+<svg width="1400" height="320" viewBox="0 0 1400 320" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1400" height="320" fill="#000000"/>
+  <!-- orange -->
+  <g transform="translate(70 80)">
+    <path fill="#FF5A1F" d="M20 0H60V10H70V20H80V120H55V88H25V120H0V20H10V10H20Z"/>
+    <rect x="18" y="42" width="10" height="10" fill="#000"/>
+    <rect x="42" y="42" width="10" height="10" fill="#000"/>
   </g>
-  <!-- Green -->
-  <g transform="translate(170,60)">
-    <path d="M20 0H60V10H70V20H80V120H55V95H25V120H0V20H10V10H20V0Z" fill="#8CFF00"/>
-    <rect x="15" y="42" width="50" height="10" fill="#000"/>
+  <!-- green -->
+  <g transform="translate(210 80)">
+    <path fill="#8CFF00" d="M20 0H60V10H70V20H80V120H55V88H25V120H0V20H10V10H20Z"/>
+    <rect x="14" y="42" width="52" height="10" fill="#000"/>
   </g>
-  <!-- Blue -->
-  <g transform="translate(300,60)">
-    <path d="M20 0H60V10H70V20H80V120H55V95H25V120H0V20H10V10H20V0Z" fill="#14C8FF"/>
-    <rect x="18" y="40" width="12" height="12" fill="#000"/>
-    <rect x="42" y="40" width="12" height="12" fill="#000"/>
-    <path d="M45 78H60V88H70V68H60V78H45Z" fill="#000"/>
+  <!-- blue -->
+  <g transform="translate(350 80)">
+    <path fill="#14C8FF" d="M20 0H60V10H70V20H80V120H55V88H25V120H0V20H10V10H20Z"/>
+    <rect x="18" y="42" width="10" height="10" fill="#000"/>
+    <rect x="42" y="42" width="10" height="10" fill="#000"/>
+    <path fill="#000" d="M44 82H58V92H68V68H58V82H44Z"/>
   </g>
-  <!-- Purple -->
-  <g transform="translate(430,60)">
-    <path d="M20 0H60V10H70V20H80V120H55V95H25V120H0V20H10V10H20V0Z" fill="#7B3CFF"/>
+  <!-- purple -->
+  <g transform="translate(490 80)">
+    <path fill="#7B3CFF" d="M20 0H60V10H70V20H80V120H55V88H25V120H0V20H10V10H20Z"/>
     <rect x="18" y="42" width="44" height="10" fill="#000"/>
-    <rect x="28" y="45" width="24" height="4" fill="#7B3CFF"/>
+    <rect x="30" y="45" width="20" height="4" fill="#7B3CFF"/>
   </g>
-  <rect x="560" y="40" width="2" height="160" fill="#444"/>
-  <text x="610" y="155" fill="#FF5A1F" font-size="140" font-family="Inter, Arial, sans-serif" font-weight="700">squad</text>
+  <rect x="650" y="55" width="3" height="190" fill="#2E2E2E"/>
+  <text x="720" y="195"
+        fill="#FF5A1F"
+        font-family="Inter, Arial, sans-serif"
+        font-size="150"
+        font-weight="800"
+        letter-spacing="-6">
+    squad
+  </text>
 </svg>
