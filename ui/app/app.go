@@ -216,15 +216,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		// Route submits and launch requests BEFORE forwarding to the
 		// pane so the pane can also clear its buffer in the same tick.
+		var quitCmd tea.Cmd
 		if sub, ok := pane.AsSubmitted(msg); ok {
-			a.handleSubmit(sub)
+			quitCmd = a.handleSubmit(sub)
 		}
 		if req, ok := pane.AsLaunchRequest(msg); ok {
 			a.launch(req)
 		}
 		var cmd tea.Cmd
 		a.pane, cmd = a.pane.Update(msg)
-		return a, cmd
+		return a, tea.Batch(quitCmd, cmd)
 	}
 }
 
@@ -475,10 +476,10 @@ func (a *App) rediscover() {
 // handleSubmit dispatches a pane.Submitted into the right action.
 // Commands route through handleCommand; other kinds toast a not-yet-
 // wired hint so the user sees feedback.
-func (a *App) handleSubmit(sub pane.Submitted) {
+func (a *App) handleSubmit(sub pane.Submitted) tea.Cmd {
 	switch sub.Kind {
 	case pane.KindCommand:
-		a.handleCommand(sub.Text)
+		return a.handleCommand(sub.Text)
 	case pane.KindShell:
 		a.setToast(style.Faint.Render("shell pass-through is not yet wired"))
 	case pane.KindFile:
@@ -486,12 +487,13 @@ func (a *App) handleSubmit(sub pane.Submitted) {
 	default:
 		a.setToast(style.Faint.Render("bare prompts need an agent — try /run <agent> <prompt>"))
 	}
+	return nil
 }
 
-func (a *App) handleCommand(text string) {
+func (a *App) handleCommand(text string) tea.Cmd {
 	parts := strings.Fields(text)
 	if len(parts) == 0 {
-		return
+		return nil
 	}
 	switch parts[0] {
 	case "run":
@@ -502,9 +504,11 @@ func (a *App) handleCommand(text string) {
 		a.cmdHelp()
 	case "quit", "exit":
 		a.quitting = true
+		return tea.Quit
 	default:
 		a.setToast(style.Faint.Render(fmt.Sprintf("unknown command: /%s — try /help", parts[0])))
 	}
+	return nil
 }
 
 // cmdHelp toasts the available slash commands and global keys.
