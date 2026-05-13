@@ -614,6 +614,26 @@ func TestButtonHelperBranches(t *testing.T) {
 	}
 }
 
+func TestFieldOwnsHorizontalKeys(t *testing.T) {
+	parent := stubView{name: "parent"}
+	cases := []struct {
+		focus int
+		want  bool
+	}{
+		{fldAgent, true},
+		{fldPrompt, true},
+		{fldLaunch, false},
+		{fldCancel, false},
+	}
+	for _, c := range cases {
+		l := NewLaunch(parent, LaunchDefaults{})
+		l.focus = c.focus
+		if got := l.fieldOwnsHorizontalKeys(); got != c.want {
+			t.Errorf("focus=%v: got %v, want %v", c.focus, got, c.want)
+		}
+	}
+}
+
 func TestLabelWPadsToWidth(t *testing.T) {
 	// labelW pads with trailing spaces up to the requested width. When the
 	// label is wider than w, no padding is added (pad becomes 0).
