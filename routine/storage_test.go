@@ -254,6 +254,23 @@ func TestResolveDirsInvalidScope(t *testing.T) {
 	}
 }
 
+func TestStoreLoadAllPropagatesLoadRootsError(t *testing.T) {
+	setupTempXDG(t)
+	path, err := RootsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := makeDir(filepath.Dir(path)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(path, []byte(":\n  - garbage")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore().LoadAll(); err == nil {
+		t.Error("LoadAll should surface LoadRoots failure on corrupt registry")
+	}
+}
+
 func TestStoreLoadAllSkipsInvalidManifest(t *testing.T) {
 	setupTempXDG(t)
 	dir, err := GlobalRoutinesDir()

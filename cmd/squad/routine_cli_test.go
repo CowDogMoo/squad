@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cowdogmoo/squad/routine"
 	"github.com/spf13/cobra"
 )
 
@@ -751,3 +752,198 @@ func TestRoutineCreateAutoCreatesRepoRoot(t *testing.T) {
 // helper guard so unused-import warnings don't trip in environments where
 // cobra isn't transitively needed.
 var _ = (*cobra.Command)(nil)
+
+func writeGlobalState(t *testing.T, id string, body string) {
+	t.Helper()
+	stateDir, err := routine.GlobalStateDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(stateDir, routine.StateFileName(id))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRoutineListRendersStateAndDisabled(t *testing.T) {
+	setupXDG(t)
+	if _, err := runRoutineCmd(t,
+		"create", "withstate",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", t.TempDir(),
+		"--disabled",
+	); err != nil {
+		t.Fatal(err)
+	}
+	writeGlobalState(t, "withstate", `{"last_status":"ok","last_run":"2026-05-12T02:00:00Z","last_session_id":"S1"}`)
+	out, err := runRoutineCmd(t, "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The disabled `no` and status `ok` columns prove both non-default
+	// branches in newRoutineListCmd fired.
+	if !strings.Contains(out, "withstate") || !strings.Contains(out, "no") || !strings.Contains(out, "ok") {
+		t.Errorf("expected disabled=no and status=ok in list output:\n%s", out)
+	}
+}
+
+func TestRoutineShowRendersStateWithError(t *testing.T) {
+	setupXDG(t)
+	if _, err := runRoutineCmd(t,
+		"create", "errored",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", t.TempDir(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	writeGlobalState(t, "errored", `{"last_status":"failed","last_run":"2026-05-12T02:00:00Z","last_error":"kaboom","last_session_id":"S-9","last_duration_ms":1234}`)
+	out, err := runRoutineCmd(t, "show", "errored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Last run:", "kaboom", "Last session:  S-9", "Last duration: 1234ms"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("show output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRoutineHistoryFlagsLastRecordedFire(t *testing.T) {
+	setupXDG(t)
+	wd := t.TempDir()
+	sd := filepath.Join(wd, ".squad", "sessions")
+	if err := os.MkdirAll(filepath.Join(sd, "S-LAST"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	meta := `{"session_id":"S-LAST","agent":"go-review","routine_id":"global:hist2","created":"2026-05-12T02:00:00Z","status":"completed","cost":0.5,"iterations":3}`
+	if err := os.WriteFile(filepath.Join(sd, "S-LAST", "meta.json"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runRoutineCmd(t,
+		"create", "hist2",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", wd,
+	); err != nil {
+		t.Fatal(err)
+	}
+	writeGlobalState(t, "hist2", `{"last_status":"ok","last_run":"2026-05-12T02:00:00Z","last_session_id":"S-LAST"}`)
+	out, err := runRoutineCmd(t, "history", "hist2")
+	if err != nil {
+		t.Fatalf("history: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "(last recorded fire)") {
+		t.Errorf("expected last-recorded marker:\n%s", out)
+	}
+}
+
+func TestRoutineHistorySkipsBadMetaAndNonDirs(t *testing.T) {
+	setupXDG(t)
+	wd := t.TempDir()
+	sd := filepath.Join(wd, ".squad", "sessions")
+	if err := os.MkdirAll(sd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Non-directory entry — listSessionsForRoutine should skip it.
+	if err := os.WriteFile(filepath.Join(sd, "stray.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Directory with malformed meta.json — readSessionMeta returns ok=false.
+	if err := os.MkdirAll(filepath.Join(sd, "S-BAD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sd, "S-BAD", "meta.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Directory with no meta.json at all — ReadFile error branch.
+	if err := os.MkdirAll(filepath.Join(sd, "S-NOMETA"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runRoutineCmd(t,
+		"create", "skiphist",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", wd,
+	); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runRoutineCmd(t, "history", "skiphist")
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if !strings.Contains(out, "No sessions found") {
+		t.Errorf("expected empty marker after filtering noise:\n%s", out)
+	}
+}
+
+func TestRoutineHistoryRepoUsesRootWhenNoWorkingDir(t *testing.T) {
+	setupXDG(t)
+	repo := t.TempDir()
+	t.Chdir(repo)
+	// Create a repo-scoped routine without --working-dir — history must fall
+	// back to ref.Root for the sessions dir lookup.
+	if _, err := runRoutineCmd(t,
+		"create", "rooted",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--scope", "repo",
+	); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runRoutineCmd(t, "history", "rooted")
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if !strings.Contains(out, repo) {
+		t.Errorf("expected sessions dir under repo root:\n%s", out)
+	}
+}
+
+func TestRoutineHistoryGlobalWithoutWorkingDirErrors(t *testing.T) {
+	setupXDG(t)
+	// Manually write a global manifest with empty working_dir; the CLI's
+	// create path always sets one, so we bypass it.
+	dir, err := routine.GlobalRoutinesDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := []byte(`id: nowd
+agent: go-review
+schedule: '@daily'
+enabled: true
+`)
+	if err := os.WriteFile(filepath.Join(dir, "nowd.yaml"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runRoutineCmd(t, "history", "nowd"); err == nil {
+		t.Error("expected error for routine with no working_dir")
+	}
+}
+
+func TestRoutineCreateExplicitGlobalScope(t *testing.T) {
+	setupXDG(t)
+	// --scope=global overrides the inferred default even when cwd has .squad/.
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".squad", "routines"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(repo)
+	out, err := runRoutineCmd(t,
+		"create", "forced",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", t.TempDir(),
+		"--scope", "global",
+	)
+	if err != nil {
+		t.Fatalf("create: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "global:forced") {
+		t.Errorf("expected global qualifier:\n%s", out)
+	}
+}

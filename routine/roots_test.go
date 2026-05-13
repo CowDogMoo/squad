@@ -186,6 +186,40 @@ func TestGlobalStateDirXDGMkdirFails(t *testing.T) {
 	}
 }
 
+func TestAddRootSurvivesCorruptRegistry(t *testing.T) {
+	setupTempXDG(t)
+	path, err := RootsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := makeDir(filepath.Dir(path)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(path, []byte(":\n  - garbage")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := AddRoot(t.TempDir()); err == nil {
+		t.Error("AddRoot should propagate LoadRoots failure on corrupt registry")
+	}
+}
+
+func TestRemoveRootSurvivesCorruptRegistry(t *testing.T) {
+	setupTempXDG(t)
+	path, err := RootsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := makeDir(filepath.Dir(path)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(path, []byte(":\n  - garbage")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RemoveRoot(t.TempDir()); err == nil {
+		t.Error("RemoveRoot should propagate LoadRoots failure on corrupt registry")
+	}
+}
+
 func TestGlobalStateDirHomeMkdirFails(t *testing.T) {
 	// With XDG_STATE_HOME unset, GlobalStateDir falls back to $HOME. Point
 	// HOME at a regular file so the MkdirAll under it fails.
