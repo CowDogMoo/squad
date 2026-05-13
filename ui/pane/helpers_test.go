@@ -595,3 +595,40 @@ func TestLaunchAcceptKeyOnBudgetRejectsSecondDot(t *testing.T) {
 		t.Errorf("second dot should be rejected, got %q", l.budget.Value())
 	}
 }
+
+func TestButtonHelperBranches(t *testing.T) {
+	// button() takes a Render-able style; reuse package style.Header which
+	// both branches share. The focused branch prepends a "›" marker, the
+	// unfocused branch indents with two spaces — assert both contain the
+	// label and only the focused output carries the marker.
+	focused := button("OK", true, headerStyle{})
+	unfocused := button("OK", false, headerStyle{})
+	if !strings.Contains(focused, "OK") || !strings.Contains(unfocused, "OK") {
+		t.Errorf("button output missing label; focused=%q unfocused=%q", focused, unfocused)
+	}
+	if !strings.Contains(focused, "›") {
+		t.Errorf("focused button missing marker: %q", focused)
+	}
+	if strings.Contains(unfocused, "›") {
+		t.Errorf("unfocused button should not have marker: %q", unfocused)
+	}
+}
+
+func TestLabelWPadsToWidth(t *testing.T) {
+	// labelW pads with trailing spaces up to the requested width. When the
+	// label is wider than w, no padding is added (pad becomes 0).
+	short := labelW("ab", 6)
+	if !strings.HasSuffix(short, "    ") {
+		t.Errorf("expected 4-space pad after 2-char label, got %q", short)
+	}
+	long := labelW("verylonglabel", 3)
+	if strings.HasSuffix(long, " ") {
+		t.Errorf("label wider than w should not pad, got %q", long)
+	}
+}
+
+// headerStyle is a minimal stand-in for lipgloss styles that satisfies the
+// `Render(strs ...string) string` interface button() takes.
+type headerStyle struct{}
+
+func (headerStyle) Render(strs ...string) string { return strings.Join(strs, "") }
