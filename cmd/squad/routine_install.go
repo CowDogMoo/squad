@@ -17,9 +17,58 @@ import (
 	"os"
 
 	"github.com/cowdogmoo/squad/routine"
+	"github.com/cowdogmoo/squad/routine/daemon"
 	"github.com/cowdogmoo/squad/routine/service"
 	"github.com/spf13/cobra"
 )
+
+func newRoutineRunNowCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "run-now <id>",
+		Short: "Fire a routine immediately, bypassing its schedule",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			cfg := configFromContext(cmd)
+			if cfg == nil {
+				return fmt.Errorf("config not available")
+			}
+			store := routine.NewStore()
+			if _, err := store.LoadAll(); err != nil {
+				return err
+			}
+			entry, err := resolveExistingRef(store, args[0])
+			if err != nil {
+				return err
+			}
+			// Use the same fire path as the daemon — guarantees state file
+			// bookkeeping matches scheduled fires. RunNow drives a real
+			// runner.ExecuteRun, which requires a live LLM/provider; the
+			// codecov ignore on this file reflects that.
+			sched, err := routine.NewScheduler(store, daemon.BuildFireFn(cfg), routine.SchedulerOptions{})
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Firing %s...\n", entry.Ref.Qualified())
+			return sched.RunNow(cmd.Context(), entry.Ref)
+		},
+	}
+}
+
+func newRoutineLogsCmd() *cobra.Command {
+	var follow bool
+	cmd := &cobra.Command{
+		Use:   "logs",
+		Short: "Tail the routines daemon log",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			svc := service.New()
+			return svc.TailLogs(cmd.Context(), cmd.OutOrStdout(), follow)
+		},
+	}
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Stream new log lines as they arrive (Ctrl-C to stop)")
+	return cmd
+}
 
 func newRoutineRepairCmd() *cobra.Command {
 	return &cobra.Command{

@@ -432,3 +432,181 @@ func TestSchedulerRunNowOnMissingRoutine(t *testing.T) {
 		t.Error("expected error for missing routine")
 	}
 }
+
+// --- file-write error paths via read-only parent directories. Skipped when
+// running as root, where chmod doesn't restrict the writer.
+
+func makeReadOnly(t *testing.T) string {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("file-write error path can't be provoked as root")
+	}
+	dir := filepath.Join(t.TempDir(), "ro")
+	if err := os.MkdirAll(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	return dir
+}
+
+func TestSaveStateRejectsReadOnlyParent(t *testing.T) {
+	ro := makeReadOnly(t)
+	err := SaveState(filepath.Join(ro, "child", "state.json"), &State{LastStatus: StatusOK})
+	if err == nil {
+		t.Error("expected error writing into read-only dir")
+	}
+}
+
+func TestSaveRoutineRejectsReadOnlyParent(t *testing.T) {
+	ro := makeReadOnly(t)
+	r := &Routine{ID: "x", Agent: "go", Schedule: "@daily", Enabled: true}
+	if err := SaveRoutine(filepath.Join(ro, FileName("x")), r); err == nil {
+		t.Error("expected error writing into read-only dir")
+	}
+}
+
+func TestStoreLoadAllScansBothScopes(t *testing.T) {
+	setupTempXDG(t)
+	repo := t.TempDir()
+	if _, _, err := AddRoot(repo); err != nil {
+		t.Fatal(err)
+	}
+	// Create a per-repo manifest directly on disk, before LoadAll runs.
+	repoDir := RepoRoutinesDir(repo)
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := &Routine{ID: "fromdisk", Agent: "go", Schedule: "@daily", Enabled: true}
+	if err := SaveRoutine(filepath.Join(repoDir, FileName("fromdisk")), r); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore()
+	entries, err := store.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.Ref.Scope == ScopeRepo && e.Ref.ID == "fromdisk" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected fromdisk in entries, got %d total", len(entries))
+	}
+}
+
+func TestQueueCatchupsOnEmptyMissesNoOp(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	sched, _ := NewScheduler(store, neverFires(), SchedulerOptions{})
+	// No misses → no goroutines spawned.
+	QueueCatchups(context.Background(), sched, nil)
+}
+
+func TestStateFileName(t *testing.T) {
+	t.Parallel()
+	if got := StateFileName("foo"); got != "foo.state.json" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestFileName(t *testing.T) {
+	t.Parallel()
+	if got := FileName("foo"); got != "foo.yaml" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestValidateScheduleAcceptsDescriptorVariants(t *testing.T) {
+	t.Parallel()
+	cases := []string{"@daily", "@hourly", "@weekly", "@monthly", "@yearly", "@every 5m", "*/10 * * * *"}
+	for _, c := range cases {
+		if err := ValidateSchedule(c); err != nil {
+			t.Errorf("%q should be valid: %v", c, err)
+		}
+	}
+}
+
+func TestStoreUpdateMissingRef(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	r := &Routine{ID: "ghost", Agent: "go", Schedule: "@daily", Enabled: true}
+	if _, err := store.Update(Ref{Scope: ScopeGlobal, ID: "ghost"}, r); err == nil {
+		t.Error("expected error updating missing ref")
+	}
+}
+
+func TestStoreLoadStateOnEmptyState(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	ref := Ref{Scope: ScopeGlobal, ID: "fresh"}
+	if _, err := store.Create(ref, &Routine{ID: "fresh", Agent: "go", Schedule: "@daily", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.LoadState(ref)
+	if err != nil {
+		t.Fatalf("LoadState on fresh routine: %v", err)
+	}
+	if !st.LastRun.IsZero() {
+		t.Errorf("expected zero state, got %+v", st)
+	}
+}
+
+func TestNewSchedulerWithMaxConcurrent(t *testing.T) {
+	t.Parallel()
+	store := NewStore()
+	s, err := NewScheduler(store, neverFires(), SchedulerOptions{MaxConcurrent: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s == nil {
+		t.Fatal("nil scheduler")
+	}
+}
+
+func TestSchedulerShutdownOnUnstartedIsClean(t *testing.T) {
+	t.Parallel()
+	store := NewStore()
+	s, err := NewScheduler(store, neverFires(), SchedulerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Shutdown without Start should not error.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		t.Errorf("Shutdown without Start: %v", err)
+	}
+}
+
+func TestFindMissedFiresNoEntries(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	misses := FindMissedFires(store, time.Now())
+	if len(misses) != 0 {
+		t.Errorf("expected no misses on empty store, got %v", misses)
+	}
+}
+
+func TestEffectiveCatchupDefault(t *testing.T) {
+	t.Parallel()
+	r := &Routine{}
+	if r.EffectiveCatchup() != DefaultCatchup {
+		t.Errorf("default catchup: got %v", r.EffectiveCatchup())
+	}
+	r.Catchup = CatchupSkip
+	if r.EffectiveCatchup() != CatchupSkip {
+		t.Errorf("explicit skip: got %v", r.EffectiveCatchup())
+	}
+}
+
+func TestIDFromFileNameValidExtensions(t *testing.T) {
+	t.Parallel()
+	if id := IDFromFileName("nightly-audit.yaml"); id != "nightly-audit" {
+		t.Errorf("got %q", id)
+	}
+	if id := IDFromFileName("trailing-.yaml"); id != "" {
+		t.Errorf("trailing-hyphen id rejected: got %q", id)
+	}
+}

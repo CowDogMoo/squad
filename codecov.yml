@@ -33,3 +33,8 @@ ignore:
   # entryKey / sendOrDrop) live in storage.go and ARE unit-tested. The
   # whole loop is exercised end-to-end by `squad routined` manifest churn.
   - "routine/storage_watch.go"
+  # daemon_run.go is the daemon's blocking lifecycle wrapper (signal
+  # handling + watch goroutine + sched.Start/Shutdown loop). Same rationale
+  # as storage_watch.go: unit tests can only assert it doesn't deadlock,
+  # which is covered by Run's higher-level tests.
+  - "routine/daemon/daemon_run.go"

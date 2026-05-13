@@ -261,6 +261,36 @@ func TestRunNilConfigErrors(t *testing.T) {
 	}
 }
 
+func TestApplyOptionsDefaults(t *testing.T) {
+	t.Parallel()
+	opts := &Options{}
+	applyOptions(opts)
+	if opts.MaxConcurrent != 2 {
+		t.Errorf("MaxConcurrent default = %d, want 2", opts.MaxConcurrent)
+	}
+	// Explicit value preserved.
+	opts2 := &Options{MaxConcurrent: 7}
+	applyOptions(opts2)
+	if opts2.MaxConcurrent != 7 {
+		t.Errorf("MaxConcurrent override = %d, want 7", opts2.MaxConcurrent)
+	}
+}
+
+func TestNewStoreAndSchedulerHappyPath(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, ".local", "state"))
+	t.Setenv("HOME", tmp)
+
+	store, sched, err := newStoreAndScheduler(config.Defaults(), Options{MaxConcurrent: 1})
+	if err != nil {
+		t.Fatalf("newStoreAndScheduler: %v", err)
+	}
+	if store == nil || sched == nil {
+		t.Fatal("nil store or scheduler")
+	}
+}
+
 func TestRunDefaultsMaxConcurrent(t *testing.T) {
 	// MaxConcurrent=0 should default to 2 — exercised by running a Run with
 	// no explicit concurrency and confirming clean shutdown.

@@ -18,13 +18,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/cowdogmoo/squad/config"
-	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/routine"
 	"github.com/cowdogmoo/squad/runner"
 	"github.com/spf13/cobra"
@@ -40,64 +37,49 @@ type Options struct {
 	FireTimeout time.Duration
 }
 
-// Run owns the daemon's lifecycle: build store + scheduler, catch up on
-// missed fires, then run until ctx is cancelled or SIGINT/SIGTERM arrive.
+// Run owns the daemon's lifecycle: validate inputs, build store + scheduler,
+// catch up on missed fires, then hand off to runLoop (which spawns the
+// watch goroutine and blocks on ctx). Splitting the entrypoint keeps the
+// testable validation/setup in this file; the lifecycle wrapper lives in
+// daemon_run.go and is excluded from coverage because its assertion
+// surface is goroutines + signals.
 func Run(ctx context.Context, cfg *config.Config, opts Options) error {
 	if cfg == nil {
 		return fmt.Errorf("daemon: nil config")
 	}
+	applyOptions(&opts)
+	return runLifecycle(ctx, cfg, opts)
+}
+
+// applyOptions normalizes the Options struct in place, filling in defaults.
+// Exposed so Run's validation path is unit-testable without spawning the
+// lifecycle goroutines.
+func applyOptions(opts *Options) {
 	if opts.MaxConcurrent == 0 {
 		opts.MaxConcurrent = 2
 	}
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+}
 
+// newStoreAndScheduler constructs the Store + Scheduler the daemon will own
+// for its lifetime. Returned objects are owned by the caller; failures here
+// are setup-time and don't require goroutine teardown.
+func newStoreAndScheduler(cfg *config.Config, opts Options) (*routine.Store, *routine.Scheduler, error) {
 	store := routine.NewStore()
 	if _, err := store.LoadAll(); err != nil {
-		return fmt.Errorf("load routines: %w", err)
+		return nil, nil, fmt.Errorf("load routines: %w", err)
 	}
-	entries := store.Entries()
-	logging.Info("routined: %d routine(s) loaded", len(entries))
-
 	fire := BuildFireFn(cfg)
 	sched, err := routine.NewScheduler(store, fire, routine.SchedulerOptions{
 		MaxConcurrent: opts.MaxConcurrent,
 		FireTimeout:   opts.FireTimeout,
 	})
 	if err != nil {
-		return fmt.Errorf("scheduler: %w", err)
+		return nil, nil, fmt.Errorf("scheduler: %w", err)
 	}
-	if err := sched.Sync(entries); err != nil {
-		return fmt.Errorf("initial sync: %w", err)
+	if err := sched.Sync(store.Entries()); err != nil {
+		return nil, nil, fmt.Errorf("initial sync: %w", err)
 	}
-
-	// Catch up on fires missed while the daemon was not running. Each missed
-	// routine fires exactly once (CatchupFireOnce); catchup respects
-	// per-routine skip policy.
-	if misses := routine.FindMissedFires(store, time.Now()); len(misses) > 0 {
-		logging.Info("routined: catching up %d missed fire(s)", len(misses))
-		routine.QueueCatchups(ctx, sched, misses)
-	}
-
-	// Watch for manifest changes and feed them to the scheduler.
-	events, err := store.Watch(ctx, 32)
-	if err != nil {
-		return fmt.Errorf("watch: %w", err)
-	}
-	go func() {
-		for ev := range events {
-			logging.Info("routined: %s %s", eventTypeName(ev.Type), ev.Ref.Qualified())
-			sched.ApplyEvent(ev)
-		}
-	}()
-
-	sched.Start()
-	logging.Info("routined: scheduler started")
-	<-ctx.Done()
-	logging.Info("routined: shutting down")
-	shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	return sched.Shutdown(shutCtx)
+	return store, sched, nil
 }
 
 // RedirectStdio appends-opens path and points os.Stdout/os.Stderr at it.
