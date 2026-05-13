@@ -789,7 +789,14 @@ func newRoutineRepairCmd() *cobra.Command {
 // The returned string is a user-facing message to print on changes (empty
 // when nothing was done); errors come back as the error value so callers
 // can downgrade to a warning.
+//
+// Set SQUAD_SKIP_SERVICE_INSTALL=1 to skip the install path entirely. This
+// is intended for tests and CI runners that should not register a real
+// LaunchAgent / systemd unit / Task Scheduler entry on the host.
 func ensureServiceInstalled(store *routine.Store) (string, error) {
+	if os.Getenv("SQUAD_SKIP_SERVICE_INSTALL") != "" {
+		return "", nil
+	}
 	svc := service.New()
 	st, err := svc.Status()
 	if err != nil {
