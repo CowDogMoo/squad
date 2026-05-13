@@ -963,6 +963,23 @@ func TestStoreUpdateChangesManifestOnDisk(t *testing.T) {
 	}
 }
 
+func TestLoadRootsReadFileError(t *testing.T) {
+	setupTempXDG(t)
+	path, err := RootsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Replace the would-be file with a directory of the same name so
+	// os.ReadFile returns "is a directory", exercising the non-NotExist
+	// error branch in LoadRoots.
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRoots(); err == nil {
+		t.Error("expected error reading dir-as-file")
+	}
+}
+
 func TestLoadStateOnUnreadableFile(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("chmod-based fault injection skipped as root")
