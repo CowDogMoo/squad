@@ -373,3 +373,47 @@ func TestAppendAfterCloseIsNoop(t *testing.T) {
 		t.Fatalf("Append after Close: %v", err)
 	}
 }
+
+func TestSetRoutineIDPersistsToMeta(t *testing.T) {
+	l, wd := newTestLogger(t)
+	defer func() { _ = l.Close() }()
+	l.SetRoutineID("global:nightly")
+
+	data, err := os.ReadFile(filepath.Join(wd, SessionsRoot, l.SessionID(), "meta.json"))
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	var m struct {
+		RoutineID string `json:"routine_id"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if m.RoutineID != "global:nightly" {
+		t.Errorf("routine_id: got %q want %q", m.RoutineID, "global:nightly")
+	}
+}
+
+func TestSetRoutineIDIgnoresEmptyAndNil(t *testing.T) {
+	l, wd := newTestLogger(t)
+	defer func() { _ = l.Close() }()
+	l.SetRoutineID("global:first")
+	l.SetRoutineID("") // no-op, doesn't overwrite
+
+	data, err := os.ReadFile(filepath.Join(wd, SessionsRoot, l.SessionID(), "meta.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		RoutineID string `json:"routine_id"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.RoutineID != "global:first" {
+		t.Errorf("empty SetRoutineID should not overwrite, got %q", m.RoutineID)
+	}
+	// Nil receiver must be a safe no-op (no panic).
+	var nilLogger *Logger
+	nilLogger.SetRoutineID("anything")
+}

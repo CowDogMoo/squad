@@ -60,11 +60,14 @@ type Meta struct {
 	WorkingDir     string    `json:"working_dir"`
 	Prompt         string    `json:"prompt"`
 	LastResponseID string    `json:"last_response_id,omitempty"`
-	Status         string    `json:"status"`
-	InputTokens    int64     `json:"input_tokens"`
-	OutputTokens   int64     `json:"output_tokens"`
-	Cost           float64   `json:"cost"`
-	Iterations     int       `json:"iterations"`
+	// RoutineID identifies the routine that produced this session (qualified
+	// form: "global:nightly" / "repo:audit"). Empty for non-routine runs.
+	RoutineID    string  `json:"routine_id,omitempty"`
+	Status       string  `json:"status"`
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
+	Cost         float64 `json:"cost"`
+	Iterations   int     `json:"iterations"`
 }
 
 // Event is one append-only record written to events.jsonl.
@@ -221,6 +224,20 @@ func (l *Logger) SetLastResponseID(id string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.meta.LastResponseID = id
+	l.meta.Updated = time.Now().UTC()
+	_ = l.writeMeta()
+}
+
+// SetRoutineID stamps the meta.json with the qualified routine id that owns
+// this session. Called by the routines daemon's fire handler before invoking
+// the agent so `squad routine history` can filter by exact provenance.
+func (l *Logger) SetRoutineID(id string) {
+	if l == nil || id == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.meta.RoutineID = id
 	l.meta.Updated = time.Now().UTC()
 	_ = l.writeMeta()
 }
