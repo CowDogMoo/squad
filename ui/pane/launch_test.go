@@ -145,8 +145,17 @@ func TestLaunchSubmitEmitsRequest(t *testing.T) {
 	})
 	// Type into agent.
 	v := typeAll(t, form, "go-review")
-	// Tab to prompt (skip workingDir/budget/mode/iter/provider/model/isolate).
-	for i := 0; i < fldPrompt-fldAgent; i++ {
+	// Tab to prompt. Tab on workingDir may be consumed by shell-style
+	// prefix completion (filesystem-dependent), so loop until focus
+	// lands on fldPrompt instead of tabbing a fixed count.
+	for {
+		l, ok := AsLaunchView(v)
+		if !ok {
+			t.Fatal("unexpected view")
+		}
+		if l.focus == fldPrompt {
+			break
+		}
 		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
 	}
 	// Type prompt.
