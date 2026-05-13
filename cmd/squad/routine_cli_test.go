@@ -482,6 +482,58 @@ func TestRoutineShowQualifiedNotFound(t *testing.T) {
 	}
 }
 
+func TestRoutineDeletePropagatesStoreError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based fault injection skipped as root")
+	}
+	dir := setupXDG(t)
+	if _, err := runRoutineCmd(t,
+		"create", "todelete",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", t.TempDir(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// Make the manifest parent dir read-only so os.Remove fails inside Delete.
+	manifestDir := filepath.Join(dir, ".config", "squad", "routines")
+	if err := os.Chmod(manifestDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(manifestDir, 0o755) })
+
+	if _, err := runRoutineCmd(t, "delete", "todelete"); err == nil {
+		t.Error("expected error when manifest dir is read-only")
+	}
+}
+
+func TestRoutineCreateRejectsDuplicateOnDisk(t *testing.T) {
+	dir := setupXDG(t)
+	wd := t.TempDir()
+	if _, err := runRoutineCmd(t,
+		"create", "dupedisk",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", wd,
+	); err != nil {
+		t.Fatal(err)
+	}
+	// Manifest exists; second create with same id must error.
+	manifestPath := filepath.Join(dir, ".config", "squad", "routines", "dupedisk.yaml")
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Fatalf("manifest missing: %v", err)
+	}
+	_, err := runRoutineCmd(t,
+		"create", "dupedisk",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", wd,
+	)
+	if err == nil {
+		t.Error("expected error on second create with same id")
+	}
+}
+
 func TestRoutineHistoryQualified(t *testing.T) {
 	setupXDG(t)
 	if _, err := runRoutineCmd(t,

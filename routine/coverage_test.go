@@ -857,6 +857,68 @@ func TestStoreDeleteRoutineRemovesStateFile(t *testing.T) {
 	}
 }
 
+func TestStoreLoadAllScanDirSurvivesInvalidManifests(t *testing.T) {
+	setupTempXDG(t)
+	dir, err := GlobalRoutinesDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mix of: valid manifest, invalid YAML, non-yaml file, and a subdirectory.
+	if err := SaveRoutine(filepath.Join(dir, FileName("ok")), &Routine{
+		ID: "ok", Agent: "go", Schedule: "@daily", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte(":: bad :::"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("ignored"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore()
+	entries, err := store.LoadAll()
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Ref.ID != "ok" {
+		t.Errorf("expected only [ok], got %v", entries)
+	}
+}
+
+func TestStoreCreateMkdirAlreadyExists(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	repo := t.TempDir()
+	// Pre-create the .squad/routines dir.
+	if err := os.MkdirAll(RepoRoutinesDir(repo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ref := Ref{Scope: ScopeRepo, Root: repo, ID: "preexist"}
+	if _, err := store.Create(ref, &Routine{
+		ID: "preexist", Agent: "go", Schedule: "@daily", Enabled: true,
+	}); err != nil {
+		t.Errorf("Create over existing dir: %v", err)
+	}
+}
+
+func TestStoreDeleteIdempotentOnMissingState(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	ref := Ref{Scope: ScopeGlobal, ID: "nostate"}
+	if _, err := store.Create(ref, &Routine{
+		ID: "nostate", Agent: "go", Schedule: "@daily", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// No state file written. Delete should still succeed.
+	if err := store.Delete(ref); err != nil {
+		t.Errorf("Delete without state: %v", err)
+	}
+}
+
 func TestStoreUpdateChangesManifestOnDisk(t *testing.T) {
 	setupTempXDG(t)
 	store := NewStore()
