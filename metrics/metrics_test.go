@@ -450,6 +450,48 @@ func TestMaxCostValue(t *testing.T) {
 	}
 }
 
+func TestWarmPricingNoOp(t *testing.T) {
+	// WarmPricing kicks off a background goroutine. Calling it twice should
+	// be safe — sync.Once gates the fetch. We don't assert on the outcome
+	// (it depends on network), only that the call is non-blocking.
+	WarmPricing()
+	WarmPricing()
+}
+
+func TestModelsForProviderFallback(t *testing.T) {
+	// With no pricing data loaded yet (or fetch failed), ModelsForProvider
+	// falls through to the embedded fallback list. Known providers should
+	// return at least one model name.
+	for _, provider := range []string{"openai", "anthropic", "gemini"} {
+		got := ModelsForProvider(provider)
+		if len(got) == 0 {
+			t.Errorf("ModelsForProvider(%q) returned empty; expected fallback entries", provider)
+		}
+	}
+}
+
+func TestModelsForProviderEmptyReturnsUnion(t *testing.T) {
+	// Empty provider yields the union across all fallback providers.
+	got := ModelsForProvider("")
+	if len(got) == 0 {
+		t.Error("ModelsForProvider(\"\") should aggregate across all providers")
+	}
+	// Result is sorted; spot-check monotonic ordering.
+	for i := 1; i < len(got); i++ {
+		if got[i-1] > got[i] {
+			t.Errorf("union not sorted: %v", got)
+			break
+		}
+	}
+}
+
+func TestModelsForProviderUnknownReturnsEmpty(t *testing.T) {
+	got := ModelsForProvider("not-a-provider")
+	if len(got) != 0 {
+		t.Errorf("unknown provider should yield empty list, got %v", got)
+	}
+}
+
 func TestBudgetExceeded(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

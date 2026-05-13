@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestNewUICmdFlags(t *testing.T) {
@@ -57,6 +60,56 @@ func TestDiscoverAgentsReturnsSortedNames(t *testing.T) {
 		t.Errorf("expected alpha before zeta in sorted list, got %v", got)
 	}
 }
+
+func TestRunUIExitsOnCancelledContext(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(base, "cache"))
+	t.Setenv("HOME", base)
+
+	cmd := newUICmd()
+	// Pre-cancelled context so tea.NewProgram exits without needing a TTY.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmd.SetContext(ctx)
+	// Mock=true uses hand-crafted runs and avoids the sessions-dir discovery
+	// branch (which would otherwise touch the local filesystem in unexpected
+	// ways).
+	if err := cmd.Flags().Set("mock", "true"); err != nil {
+		t.Fatal(err)
+	}
+	// Working dir explicitly set so the os.Getwd branch is skipped.
+	if err := cmd.Flags().Set("working-dir", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	// runUI returns whatever bubble tea returns when the context is dead;
+	// we only assert it doesn't hang or panic.
+	_ = runUI(cmd, nil)
+}
+
+func TestRunUINonMockMissingDirIsHandled(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(base, "cache"))
+	t.Setenv("HOME", base)
+
+	cmd := newUICmd()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmd.SetContext(ctx)
+	if err := cmd.Flags().Set("sessions-dir", filepath.Join(t.TempDir(), "no-such-dir")); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("working-dir", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	// Result may be an error (missing dir) or a bubble-tea exit; we just want
+	// the early branches in runUI executed without hanging.
+	_ = runUI(cmd, nil)
+}
+
+// guard against unused-import warnings if cobra goes unused.
+var _ = (*cobra.Command)(nil)
 
 func TestDiscoverAgentsEmptyDirReturnsEmpty(t *testing.T) {
 	base := t.TempDir()
