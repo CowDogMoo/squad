@@ -753,6 +753,131 @@ func TestStoreFindByIDEmpty(t *testing.T) {
 	}
 }
 
+func TestLoadRootsHonorsExisting(t *testing.T) {
+	setupTempXDG(t)
+	tmp := t.TempDir()
+	abs, _, err := AddRoot(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadRoots()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != abs {
+		t.Errorf("expected [%s], got %v", abs, got)
+	}
+}
+
+func TestContainingRootReturnsLongestMatch(t *testing.T) {
+	t.Parallel()
+	outer := t.TempDir()
+	inner := filepath.Join(outer, "deep")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ContainingRoot(inner, []string{outer, inner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != inner {
+		t.Errorf("got %q, want %q (longest match wins)", got, inner)
+	}
+}
+
+func TestIsWithinSameDir(t *testing.T) {
+	t.Parallel()
+	if !isWithin("/a/b", "/a/b") {
+		t.Error("identical paths should be within")
+	}
+	if !isWithin("/a/b/c", "/a/b") {
+		t.Error("nested path should be within")
+	}
+	if isWithin("/a", "/a/b") {
+		t.Error("parent should not be within child")
+	}
+	if isWithin("/x", "/y") {
+		t.Error("unrelated paths should not be within")
+	}
+}
+
+func TestNormalizeRootsSkipsEmpty(t *testing.T) {
+	t.Parallel()
+	got, err := normalizeRoots([]string{"", "/tmp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Empty strings should be skipped.
+	for _, r := range got {
+		if r == "" {
+			t.Error("empty root not filtered")
+		}
+	}
+}
+
+func TestRemoveRootRemoves(t *testing.T) {
+	setupTempXDG(t)
+	tmp := t.TempDir()
+	if _, _, err := AddRoot(tmp); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := RemoveRoot(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Error("expected change=true")
+	}
+	roots, _ := LoadRoots()
+	if len(roots) != 0 {
+		t.Errorf("expected empty after remove, got %v", roots)
+	}
+}
+
+func TestStoreDeleteRoutineRemovesStateFile(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	ref := Ref{Scope: ScopeGlobal, ID: "with-state"}
+	entry, err := store.Create(ref, &Routine{ID: "with-state", Agent: "go", Schedule: "@daily", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveState(entry.StatePath, &State{LastStatus: StatusOK, LastRun: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	// Sanity: state file exists.
+	if _, err := os.Stat(entry.StatePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(ref); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(entry.StatePath); err == nil {
+		t.Error("expected state file removed by Delete")
+	}
+}
+
+func TestStoreUpdateChangesManifestOnDisk(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	ref := Ref{Scope: ScopeGlobal, ID: "upd"}
+	if _, err := store.Create(ref, &Routine{ID: "upd", Agent: "go", Schedule: "@daily", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	newR := &Routine{ID: "upd", Agent: "py-review", Schedule: "@hourly", Enabled: false}
+	entry, err := store.Update(ref, newR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	on, err := LoadRoutine(entry.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if on.Agent != "py-review" || on.Schedule != "@hourly" || on.Enabled {
+		t.Errorf("on-disk manifest didn't update: %+v", on)
+	}
+}
+
 func TestStoreEntriesSnapshotIsSorted(t *testing.T) {
 	setupTempXDG(t)
 	store := NewStore()
