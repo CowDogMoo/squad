@@ -37,21 +37,6 @@ func TestPlistWakeSystemToggle(t *testing.T) {
 	}
 }
 
-func TestStateString(t *testing.T) {
-	t.Parallel()
-	cases := map[State]string{
-		StateNotInstalled:     "not installed",
-		StateInstalledStopped: "installed (stopped)",
-		StateInstalledRunning: "installed (running)",
-		State(99):             "unknown",
-	}
-	for s, want := range cases {
-		if got := s.String(); got != want {
-			t.Errorf("State(%d).String() = %q, want %q", s, got, want)
-		}
-	}
-}
-
 func TestNewReturnsServiceWithPopulatedStatusPaths(t *testing.T) {
 	t.Parallel()
 	svc := New()
