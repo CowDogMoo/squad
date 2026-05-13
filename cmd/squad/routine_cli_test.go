@@ -482,6 +482,68 @@ func TestRoutineShowQualifiedNotFound(t *testing.T) {
 	}
 }
 
+// withCorruptManifest creates a routine and then corrupts its on-disk
+// manifest. Returns the manifest path so tests can clean up.
+func withCorruptManifest(t *testing.T, id string) string {
+	t.Helper()
+	dir := setupXDG(t)
+	if _, err := runRoutineCmd(t,
+		"create", id,
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", t.TempDir(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(dir, ".config", "squad", "routines", id+".yaml")
+	if err := os.WriteFile(manifest, []byte("not\nvalid: yaml :: ::"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
+
+func TestRoutineCommandsTolerateCorruptManifest(t *testing.T) {
+	// list/show/etc should gracefully skip the bad manifest and not crash.
+	withCorruptManifest(t, "corrupt")
+
+	out, err := runRoutineCmd(t, "list")
+	if err != nil {
+		t.Fatalf("list with corrupt manifest: %v", err)
+	}
+	// The bad manifest gets skipped silently — list shows zero entries.
+	if !strings.Contains(out, "No routines") {
+		t.Errorf("expected empty list (corrupt manifest skipped):\n%s", out)
+	}
+
+	// show on the corrupt id should return a not-found error because
+	// LoadAll skipped it.
+	if _, err := runRoutineCmd(t, "show", "corrupt"); err == nil {
+		t.Error("expected show to fail when manifest is corrupt (skipped at load)")
+	}
+}
+
+func TestRoutineEnableNonexistent(t *testing.T) {
+	setupXDG(t)
+	if _, err := runRoutineCmd(t, "enable", "wat"); err == nil {
+		t.Error("expected error enabling nonexistent routine")
+	}
+}
+
+func TestRoutineUnwatchAcceptsExactPath(t *testing.T) {
+	setupXDG(t)
+	repo := t.TempDir()
+	if _, err := runRoutineCmd(t, "watch", repo); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runRoutineCmd(t, "unwatch", repo)
+	if err != nil {
+		t.Fatalf("unwatch: %v", err)
+	}
+	if !strings.Contains(out, "Unwatched") {
+		t.Errorf("expected unwatch confirmation, got:\n%s", out)
+	}
+}
+
 func TestRoutineDeletePropagatesStoreError(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("chmod-based fault injection skipped as root")

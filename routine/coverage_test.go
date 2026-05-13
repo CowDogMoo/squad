@@ -857,6 +857,29 @@ func TestStoreDeleteRoutineRemovesStateFile(t *testing.T) {
 	}
 }
 
+func TestScanDirIgnoresSubdirsAndNonYAML(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRoutine(filepath.Join(dir, FileName("good")), &Routine{
+		ID: "good", Agent: "go", Schedule: "@daily", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore()
+	entries := map[string]Entry{}
+	if err := store.scanDir(entries, dir, ScopeGlobal, "", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("expected only [good], got %d entries", len(entries))
+	}
+}
+
 func TestStoreLoadAllScanDirSurvivesInvalidManifests(t *testing.T) {
 	setupTempXDG(t)
 	dir, err := GlobalRoutinesDir()
