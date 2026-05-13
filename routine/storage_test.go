@@ -210,3 +210,70 @@ func waitForEvent(ch <-chan Event, want EventType, id string, timeout time.Durat
 func removeFile(path string) error {
 	return removeOSFile(path)
 }
+
+func TestStoreUpdateNotFound(t *testing.T) {
+	setupTempXDG(t)
+	s := NewStore()
+	if _, err := s.Update(Ref{Scope: ScopeGlobal, ID: "ghost"}, newRoutine("ghost")); err == nil {
+		t.Error("expected error updating non-existent routine")
+	}
+}
+
+func TestStoreUpdateRejectsIDMismatch(t *testing.T) {
+	setupTempXDG(t)
+	s := NewStore()
+	ref := Ref{Scope: ScopeGlobal, ID: "a"}
+	if _, err := s.Create(ref, newRoutine("a")); err != nil {
+		t.Fatal(err)
+	}
+	// Pass a routine whose ID doesn't match the ref's ID — renames forbidden.
+	if _, err := s.Update(ref, newRoutine("b")); err == nil {
+		t.Error("expected error on id-mismatch update")
+	}
+}
+
+func TestStoreCreateRejectsIDMismatch(t *testing.T) {
+	setupTempXDG(t)
+	s := NewStore()
+	if _, err := s.Create(Ref{Scope: ScopeGlobal, ID: "x"}, newRoutine("y")); err == nil {
+		t.Error("expected error: ref id != routine id")
+	}
+}
+
+func TestResolveDirsRepoNeedsRoot(t *testing.T) {
+	setupTempXDG(t)
+	if _, _, err := resolveDirs(Ref{Scope: ScopeRepo, ID: "x"}); err == nil {
+		t.Error("expected error when repo-scoped ref has no Root")
+	}
+}
+
+func TestResolveDirsInvalidScope(t *testing.T) {
+	setupTempXDG(t)
+	if _, _, err := resolveDirs(Ref{Scope: Scope("bogus"), ID: "x"}); err == nil {
+		t.Error("expected error for invalid scope")
+	}
+}
+
+func TestStoreLoadAllSkipsInvalidManifest(t *testing.T) {
+	setupTempXDG(t)
+	dir, err := GlobalRoutinesDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Drop a manifest-named file containing garbage so scanDir's LoadRoutine
+	// branch errors and we exercise the warn-and-skip path.
+	if err := writeFile(filepath.Join(dir, "bad.yaml"), []byte("::: not yaml :::")); err != nil {
+		t.Fatal(err)
+	}
+	// Also a valid routine alongside so we know loading didn't stop.
+	if _, err := NewStore().Create(Ref{Scope: ScopeGlobal, ID: "good"}, newRoutine("good")); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := NewStore().LoadAll()
+	if err != nil {
+		t.Fatalf("LoadAll should not error on invalid manifest: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Ref.ID != "good" {
+		t.Errorf("expected only the valid routine, got %v", entries)
+	}
+}

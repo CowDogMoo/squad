@@ -215,3 +215,67 @@ func neverFires() FireFn {
 		return "", errors.New("should not fire in this test")
 	}
 }
+
+func TestNewSchedulerRejectsNilStore(t *testing.T) {
+	t.Parallel()
+	if _, err := NewScheduler(nil, neverFires(), SchedulerOptions{}); err == nil {
+		t.Error("expected error for nil store")
+	}
+}
+
+func TestNewSchedulerRejectsNilFire(t *testing.T) {
+	setupTempXDG(t)
+	if _, err := NewScheduler(NewStore(), nil, SchedulerOptions{}); err == nil {
+		t.Error("expected error for nil fire fn")
+	}
+}
+
+func TestSchedulerApplyEventAddedTriggersSync(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	sched, err := NewScheduler(store, neverFires(), SchedulerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No jobs scheduled yet.
+	if len(sched.JobIDs()) != 0 {
+		t.Fatal("expected no initial jobs")
+	}
+	ref := Ref{Scope: ScopeGlobal, ID: "addsync"}
+	if _, err := store.Create(ref, &Routine{ID: "addsync", Agent: "go", Schedule: "@daily", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	sched.ApplyEvent(Event{Type: EventAdded, Ref: ref})
+	if _, has := sched.JobIDs()[entryKey(ref)]; !has {
+		t.Error("EventAdded should trigger Sync and schedule the new job")
+	}
+}
+
+func TestSchedulerStateSinkErrorsDoNotMaskFire(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	ref := Ref{Scope: ScopeGlobal, ID: "sinkfail"}
+	if _, err := store.Create(ref, &Routine{ID: "sinkfail", Agent: "go", Schedule: "@daily", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	fireCount := 0
+	fire := func(_ context.Context, _ Entry) (string, error) {
+		fireCount++
+		return "s1", nil
+	}
+	sched, err := NewScheduler(store, fire, SchedulerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Swap in a stateSink that always errors so both Warn branches in runFire
+	// execute (the pre-fire "running" save and the post-fire final save).
+	sched.stateSink = func(_ Ref, _ *State) error {
+		return errors.New("disk full")
+	}
+	if err := sched.RunNow(context.Background(), ref); err != nil {
+		t.Fatalf("RunNow returned error despite sink-only failure: %v", err)
+	}
+	if fireCount != 1 {
+		t.Errorf("expected fire to run once, got %d", fireCount)
+	}
+}

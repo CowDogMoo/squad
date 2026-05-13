@@ -153,3 +153,50 @@ func TestGlobalDirs(t *testing.T) {
 		t.Errorf("global state dir not created: %s", stateDir)
 	}
 }
+
+func TestLoadRootsParseError(t *testing.T) {
+	setupTempXDG(t)
+	path, err := RootsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := makeDir(filepath.Dir(path)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(path, []byte(":\n  - not: [valid")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRoots(); err == nil {
+		t.Error("expected parse error for malformed YAML")
+	}
+}
+
+func TestGlobalStateDirXDGMkdirFails(t *testing.T) {
+	// Point XDG_STATE_HOME at a regular file so MkdirAll's "not a directory"
+	// branch fires when GlobalStateDir tries to materialize squad/routines/
+	// beneath it.
+	base := t.TempDir()
+	asFile := filepath.Join(base, "blocker")
+	if err := writeFile(asFile, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_STATE_HOME", asFile)
+	if _, err := GlobalStateDir(); err == nil {
+		t.Error("expected error when XDG_STATE_HOME points at a file")
+	}
+}
+
+func TestGlobalStateDirHomeMkdirFails(t *testing.T) {
+	// With XDG_STATE_HOME unset, GlobalStateDir falls back to $HOME. Point
+	// HOME at a regular file so the MkdirAll under it fails.
+	base := t.TempDir()
+	asFile := filepath.Join(base, "fakehome")
+	if err := writeFile(asFile, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("HOME", asFile)
+	if _, err := GlobalStateDir(); err == nil {
+		t.Error("expected error when HOME is a file")
+	}
+}

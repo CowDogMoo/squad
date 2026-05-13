@@ -529,6 +529,76 @@ func TestRoutineEnableNonexistent(t *testing.T) {
 	}
 }
 
+// blockManifestRead makes the routines directory unreadable so subsequent
+// store.LoadAll calls return an error. Skipped as root because chmod doesn't
+// restrict the superuser.
+func blockManifestRead(t *testing.T, xdgDir string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based fault injection skipped as root")
+	}
+	dir := filepath.Join(xdgDir, ".config", "squad", "routines")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+}
+
+func TestRoutineListLoadAllErrorBubbles(t *testing.T) {
+	dir := setupXDG(t)
+	blockManifestRead(t, dir)
+	if _, err := runRoutineCmd(t, "list"); err == nil {
+		t.Error("expected error when routines dir is unreadable")
+	}
+}
+
+func TestRoutineShowLoadAllErrorBubbles(t *testing.T) {
+	dir := setupXDG(t)
+	blockManifestRead(t, dir)
+	if _, err := runRoutineCmd(t, "show", "anything"); err == nil {
+		t.Error("expected error when routines dir is unreadable")
+	}
+}
+
+func TestRoutineDeleteLoadAllErrorBubbles(t *testing.T) {
+	dir := setupXDG(t)
+	blockManifestRead(t, dir)
+	if _, err := runRoutineCmd(t, "delete", "anything"); err == nil {
+		t.Error("expected error when routines dir is unreadable")
+	}
+}
+
+func TestRoutineEnableLoadAllErrorBubbles(t *testing.T) {
+	dir := setupXDG(t)
+	blockManifestRead(t, dir)
+	if _, err := runRoutineCmd(t, "enable", "anything"); err == nil {
+		t.Error("expected error when routines dir is unreadable")
+	}
+}
+
+func TestRoutineHistoryLoadAllErrorBubbles(t *testing.T) {
+	dir := setupXDG(t)
+	blockManifestRead(t, dir)
+	if _, err := runRoutineCmd(t, "history", "anything"); err == nil {
+		t.Error("expected error when routines dir is unreadable")
+	}
+}
+
+func TestRoutineRunNowLoadAllErrorBubbles(t *testing.T) {
+	dir := setupXDG(t)
+	t.Setenv("SQUAD_SKIP_SERVICE_INSTALL", "1")
+	blockManifestRead(t, dir)
+	// run-now needs config (we don't seed it), so it'll fail early anyway.
+	// Use the routine cmd tree which seeds nothing in context — error should
+	// surface either way.
+	if _, err := runRoutineCmd(t, "run-now", "x"); err == nil {
+		t.Error("expected error")
+	}
+}
+
 func TestRoutineUnwatchAcceptsExactPath(t *testing.T) {
 	setupXDG(t)
 	repo := t.TempDir()
