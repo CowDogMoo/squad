@@ -34,6 +34,7 @@ import (
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/mcp"
+	"github.com/cowdogmoo/squad/metrics"
 	pl "github.com/cowdogmoo/squad/pipeline"
 	"github.com/cowdogmoo/squad/runner"
 	"github.com/spf13/cobra"
@@ -287,7 +288,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	_ = cmd.RegisterFlagCompletionFunc("agent", completeAgentNames)
 	// Static completions for --provider.
 	_ = cmd.RegisterFlagCompletionFunc("provider", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-		return []string{"openai", "openai-responses", "anthropic", "ollama", "gemini", "nvidia", "databricks"}, cobra.ShellCompDirectiveNoFileComp
+		return metrics.SupportedProviders, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = cmd.RegisterFlagCompletionFunc("api-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"openai", "azure"}, cobra.ShellCompDirectiveNoFileComp

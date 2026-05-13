@@ -47,7 +47,7 @@ type Launch struct {
 // "use the default" — the agent manifest decides when no value is given.
 var (
 	modeOptions     = []string{"edit", "plan"}
-	providerOptions = []string{"openai", "openai-responses", "anthropic", "gemini", "ollama"}
+	providerOptions = metrics.SupportedProviders
 	isolateOptions  = []string{"", "worktree", "branch", "commit", "staged", "unstaged", "none"}
 )
 
@@ -512,7 +512,7 @@ func (l Launch) contextualHint() string {
 	case fldIters:
 		hint = "max LLM round trips before the agent stops"
 	case fldProvider:
-		hint = "(default): use config.yaml · openai/openai-responses/anthropic/gemini/ollama: override"
+		hint = "(default): use config.yaml · " + strings.Join(metrics.SupportedProviders, "/") + ": override"
 	case fldModel:
 		hint = "↑/↓ pick · enter commit · type to filter · provider-specific; empty = manifest default"
 	case fldIsolate:

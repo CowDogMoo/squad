@@ -250,6 +250,19 @@ var (
 	pricingFetchOnce sync.Once
 )
 
+// SupportedProviders is the canonical, ordered list of provider names
+// squad recognizes for the --provider flag and the TUI launch form.
+// Keep this in sync with the provider dispatch in runner/model.go.
+var SupportedProviders = []string{
+	"openai",
+	"openai-responses",
+	"anthropic",
+	"gemini",
+	"ollama",
+	"nvidia",
+	"databricks",
+}
+
 // providerMappings maps a squad provider name to the LiteLLM
 // `litellm_provider` keys that supply its models. The first entry is
 // treated as the canonical source when building model lists.
