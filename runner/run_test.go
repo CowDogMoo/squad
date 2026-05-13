@@ -384,6 +384,34 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 		}
 		runAndAssertBundle(t, opts, "cli-model", "cli-provider")
 	})
+
+	t.Run("config default not in manifest emits warning to stderr", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := writeTestAgentWithModels(t, "warn-fallback", "manifest-model", "manifest-provider")
+		opts := &RunOptions{
+			Agent:          "warn-fallback",
+			AgentsDir:      agentsDir,
+			ConfigModel:    "other-model",
+			ConfigProvider: "other-provider",
+			DryRun:         true,
+			PrintBundle:    true,
+			BundleOut:      filepath.Join(t.TempDir(), "bundle.txt"),
+		}
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		var stdout, stderr bytes.Buffer
+		cmd.SetOut(&stdout)
+		cmd.SetErr(&stderr)
+		if _, err := prepareBundle(cmd, opts, "prompt", t.TempDir()); err != nil {
+			t.Fatalf("prepareBundle() error = %v", err)
+		}
+		if opts.Model != "manifest-model" || opts.Provider != "manifest-provider" {
+			t.Fatalf("expected fallback to manifest, got Model=%q Provider=%q", opts.Model, opts.Provider)
+		}
+		if !strings.Contains(stderr.String(), "not listed in the agent manifest") {
+			t.Fatalf("expected warning on stderr, got %q", stderr.String())
+		}
+	})
 }
 
 func TestInvokeModelMissingAPIKey(t *testing.T) {

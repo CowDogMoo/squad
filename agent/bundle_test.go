@@ -1223,3 +1223,58 @@ models:
 		t.Fatalf("Models[2].Model = %q, want claude-sonnet-4-6", bundle.Models[2].Model)
 	}
 }
+
+func TestBundle_FindModel(t *testing.T) {
+	t.Parallel()
+	b := &Bundle{
+		Models: []ModelPreference{
+			{Model: "gemini-2.5-flash", Provider: "google"},
+			{Model: "gpt-4.1-mini", Provider: "openai"},
+			{Model: "claude-sonnet-4-6", Provider: "anthropic"},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		wantNil  bool
+	}{
+		{"match first entry", "google", "gemini-2.5-flash", false},
+		{"match middle entry", "openai", "gpt-4.1-mini", false},
+		{"match last entry", "anthropic", "claude-sonnet-4-6", false},
+		{"unknown provider", "azure", "gpt-4.1-mini", true},
+		{"unknown model for known provider", "openai", "gpt-5", true},
+		{"empty provider", "", "gpt-4.1-mini", true},
+		{"empty model", "openai", "", true},
+		{"both empty", "", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := b.FindModel(tt.provider, tt.model)
+			if tt.wantNil {
+				if got != nil {
+					t.Fatalf("FindModel(%q, %q) = %+v, want nil", tt.provider, tt.model, got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("FindModel(%q, %q) = nil, want match", tt.provider, tt.model)
+			}
+			if got.Provider != tt.provider || got.Model != tt.model {
+				t.Fatalf("FindModel(%q, %q) = {%q, %q}, want {%q, %q}",
+					tt.provider, tt.model, got.Provider, got.Model, tt.provider, tt.model)
+			}
+		})
+	}
+}
+
+func TestBundle_FindModel_EmptyModelsList(t *testing.T) {
+	t.Parallel()
+	b := &Bundle{}
+	if got := b.FindModel("openai", "gpt-5"); got != nil {
+		t.Fatalf("FindModel on empty bundle = %+v, want nil", got)
+	}
+}

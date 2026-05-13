@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -566,6 +567,53 @@ func TestBuildRunAgentFunc_ManifestModelProvider(t *testing.T) {
 			t.Fatalf("agent resolution failed: %v", err)
 		}
 	})
+}
+
+// TestBuildRunAgentFunc_ConfigDefaultNotInManifestWarns asserts that when the
+// config default model/provider is not listed in the agent manifest, the
+// fallback warning is emitted on stderr.
+func TestBuildRunAgentFunc_ConfigDefaultNotInManifestWarns(t *testing.T) {
+	// Redirects os.Stderr; cannot run in parallel with other os.Stderr users.
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, "warn-leaf")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "name: warn-leaf\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\nmodels:\n  - model: manifest-model\n    provider: manifest-provider\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("sys"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrap"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = origStderr })
+
+	opts := &runner.RunOptions{
+		ConfigModel:    "other-model",
+		ConfigProvider: "other-provider",
+	}
+	pRunner := &pl.Runner{InlineAgents: make(map[string]*pl.InlineConfig)}
+
+	fn := buildRunAgentFunc(opts, agentsDir, "", &config.Config{}, nil, pRunner)
+	_, _, runErr := fn(context.Background(), "warn-leaf", "prompt", t.TempDir(), "edit", nil)
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	if runErr == nil {
+		t.Fatal("expected error from InvokeModel")
+	}
+	if !strings.Contains(string(out), "not listed in the agent manifest") {
+		t.Fatalf("expected warning on stderr, got %q", string(out))
+	}
 }
 
 func TestBuildRunAgentFunc_BudgetPropagation(t *testing.T) {
