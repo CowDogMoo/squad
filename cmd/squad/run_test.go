@@ -33,6 +33,7 @@ import (
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/runner"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -511,6 +512,27 @@ func TestCompleteAgentNames(t *testing.T) {
 	}
 	if len(names) != 1 || names[0] != "go-tests" {
 		t.Fatalf("names = %v, want [go-tests]", names)
+	}
+}
+
+func TestCompleteProviderNames(t *testing.T) {
+	names, directive := completeProviderNames(nil, nil, "")
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("directive = %v, want no file comp", directive)
+	}
+	if len(names) != len(metrics.SupportedProviders) {
+		t.Fatalf("names len = %d, want %d", len(names), len(metrics.SupportedProviders))
+	}
+	want := map[string]bool{"nvidia": false, "databricks": false}
+	for _, n := range names {
+		if _, ok := want[n]; ok {
+			want[n] = true
+		}
+	}
+	for n, found := range want {
+		if !found {
+			t.Errorf("provider %q missing from completion list", n)
+		}
 	}
 }
 
