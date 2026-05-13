@@ -93,6 +93,24 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 	}
 
 	cfg := configFromContext(cmd)
+
+	// Split provider/model into explicit (CLI flag) vs config-default
+	// buckets so manifest preferences can win over config defaults but
+	// still yield to an explicit --provider / --model.
+	providerVal := v.GetString("provider.default")
+	modelVal := v.GetString("model.default")
+	var explicitProvider, configProvider, explicitModel, configModel string
+	if cmd.Flags().Changed("provider") {
+		explicitProvider = providerVal
+	} else {
+		configProvider = providerVal
+	}
+	if cmd.Flags().Changed("model") {
+		explicitModel = modelVal
+	} else {
+		configModel = modelVal
+	}
+
 	return &runner.RunOptions{
 		Agent:              agent,
 		AgentsDir:          agentsDir,
@@ -104,8 +122,10 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		APIVersion:         v.GetString("provider.api_version"),
 		APIType:            v.GetString("provider.api_type"),
 		OpenAICompatMax:    v.GetBool("provider.openai_compat_max_tokens"),
-		Provider:           v.GetString("provider.default"),
-		Model:              v.GetString("model.default"),
+		Provider:           explicitProvider,
+		Model:              explicitModel,
+		ConfigProvider:     configProvider,
+		ConfigModel:        configModel,
 		Temperature:        v.GetFloat64("model.temperature"),
 		MaxTokens:          v.GetInt("model.max_tokens"),
 		System:             system,

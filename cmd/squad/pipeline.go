@@ -88,13 +88,7 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 		agentOpts.Findings = pipelineRunner.Findings
 		agentOpts.AgentName = agentName
 
-		// Apply manifest model/provider when not explicitly set via CLI flags.
-		if agentOpts.Model == "" && bundle.Model != "" {
-			agentOpts.Model = bundle.Model
-		}
-		if agentOpts.Provider == "" && bundle.Provider != "" {
-			agentOpts.Provider = bundle.Provider
-		}
+		runner.ResolveModelPrecedence(ctx, &agentOpts, bundle)
 
 		// Apply effective budget cap propagated from the pipeline runner.
 		// This accounts for both remaining pipeline budget and per-stage caps.
@@ -150,8 +144,24 @@ func outputReport(cmd *cobra.Command, p *pl.Pipeline, pipelineRunner *pl.Runner,
 func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOptions {
 	v := viperFromContext(cmd)
 
-	provider := flagOrViper(cmd, "provider", v, "provider.default")
-	model := flagOrViper(cmd, "model", v, "model.default")
+	// Split provider/model into explicit (CLI) vs config-default buckets
+	// so manifest preferences can win over config defaults.
+	var providerVal, modelVal string
+	if v != nil {
+		providerVal = v.GetString("provider.default")
+		modelVal = v.GetString("model.default")
+	}
+	var explicitProvider, configProvider, explicitModel, configModel string
+	if cmd.Flags().Changed("provider") {
+		explicitProvider, _ = cmd.Flags().GetString("provider")
+	} else {
+		configProvider = providerVal
+	}
+	if cmd.Flags().Changed("model") {
+		explicitModel, _ = cmd.Flags().GetString("model")
+	} else {
+		configModel = modelVal
+	}
 	apiKey := flagOrViper(cmd, "api-key", v, "provider.token")
 	baseURL := flagOrViper(cmd, "base-url", v, "provider.base_url")
 	org := flagOrViper(cmd, "organization", v, "provider.organization")
@@ -182,8 +192,10 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 		APIVersion:      apiVersion,
 		APIType:         apiType,
 		OpenAICompatMax: openAICompatMax,
-		Provider:        provider,
-		Model:           model,
+		Provider:        explicitProvider,
+		Model:           explicitModel,
+		ConfigProvider:  configProvider,
+		ConfigModel:     configModel,
 		Temperature:     temp,
 		MaxTokens:       maxTokens,
 		NumCtx:          numCtx,

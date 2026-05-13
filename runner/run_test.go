@@ -304,6 +304,62 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 		}
 	})
 
+	t.Run("manifest wins over config defaults", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := writeTestAgentWithModels(t, "manifest-vs-config", "manifest-model", "manifest-provider")
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		opts := &RunOptions{
+			Agent:          "manifest-vs-config",
+			AgentsDir:      agentsDir,
+			ConfigModel:    "config-model",
+			ConfigProvider: "config-provider",
+			DryRun:         true,
+			PrintBundle:    true,
+			BundleOut:      filepath.Join(t.TempDir(), "bundle.txt"),
+		}
+		_, err := prepareBundle(cmd, opts, "prompt", t.TempDir())
+		if err != nil {
+			t.Fatalf("prepareBundle() error = %v", err)
+		}
+		if opts.Model != "manifest-model" {
+			t.Fatalf("expected Model=%q (manifest wins over config), got %q", "manifest-model", opts.Model)
+		}
+		if opts.Provider != "manifest-provider" {
+			t.Fatalf("expected Provider=%q (manifest wins over config), got %q", "manifest-provider", opts.Provider)
+		}
+	})
+
+	t.Run("config defaults fill in when manifest is silent", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := writeTestAgentNoModels(t, "config-fallback")
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		opts := &RunOptions{
+			Agent:          "config-fallback",
+			AgentsDir:      agentsDir,
+			ConfigModel:    "config-model",
+			ConfigProvider: "config-provider",
+			DryRun:         true,
+			PrintBundle:    true,
+			BundleOut:      filepath.Join(t.TempDir(), "bundle.txt"),
+		}
+		_, err := prepareBundle(cmd, opts, "prompt", t.TempDir())
+		if err != nil {
+			t.Fatalf("prepareBundle() error = %v", err)
+		}
+		if opts.Model != "config-model" {
+			t.Fatalf("expected Model=%q from config fallback, got %q", "config-model", opts.Model)
+		}
+		if opts.Provider != "config-provider" {
+			t.Fatalf("expected Provider=%q from config fallback, got %q", "config-provider", opts.Provider)
+		}
+	})
+
 	t.Run("CLI flags take precedence over manifest", func(t *testing.T) {
 		t.Parallel()
 		agentsDir := writeTestAgentWithModels(t, "cli-agent", "manifest-model", "manifest-provider")
@@ -587,6 +643,26 @@ func TestWriteResponsePrintAndFile(t *testing.T) {
 }
 
 func writeTestAgent(t *testing.T, agentName string) string {
+	t.Helper()
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, agentName)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := fmt.Sprintf("name: %s\nversion: 0.0.0\nentrypoint: system.md\nwrapper: wrapper.md\n", agentName)
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile agent.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("System prompt."), 0o644); err != nil {
+		t.Fatalf("WriteFile system.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "wrapper.md"), []byte("Wrapper prompt."), 0o644); err != nil {
+		t.Fatalf("WriteFile wrapper.md: %v", err)
+	}
+	return agentsDir
+}
+
+func writeTestAgentNoModels(t *testing.T, agentName string) string {
 	t.Helper()
 	agentsDir := t.TempDir()
 	agentDir := filepath.Join(agentsDir, agentName)

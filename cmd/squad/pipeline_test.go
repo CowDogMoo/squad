@@ -157,6 +157,59 @@ func TestBuildComposedRunOpts(t *testing.T) {
 			t.Fatalf("expected MaxTokens=2048, got %d", opts.MaxTokens)
 		}
 	})
+
+}
+
+// TestBuildComposedRunOptsExplicitFlagBucket asserts that explicit
+// --provider/--model CLI flags populate Model/Provider and leave
+// ConfigModel/ConfigProvider empty, so the manifest precedence logic
+// treats them as user-explicit (highest precedence).
+func TestBuildComposedRunOptsExplicitFlagBucket(t *testing.T) {
+	t.Parallel()
+	cmd := newTestRunCmdWithContext(nil)
+	_ = cmd.Flags().Set("provider", "openai")
+	_ = cmd.Flags().Set("model", "gpt-4")
+	opts := buildComposedRunOpts(cmd, nil)
+	if opts.Provider != "openai" {
+		t.Fatalf("Provider=%q, want openai", opts.Provider)
+	}
+	if opts.Model != "gpt-4" {
+		t.Fatalf("Model=%q, want gpt-4", opts.Model)
+	}
+	if opts.ConfigProvider != "" {
+		t.Fatalf("explicit flag should not populate ConfigProvider, got %q", opts.ConfigProvider)
+	}
+	if opts.ConfigModel != "" {
+		t.Fatalf("explicit flag should not populate ConfigModel, got %q", opts.ConfigModel)
+	}
+}
+
+// TestBuildComposedRunOptsConfigDefaultsBucket asserts that config-file
+// defaults route into ConfigModel/ConfigProvider rather than the explicit
+// Model/Provider fields. If they collapsed into Model/Provider, the agent
+// manifest's model preference would be silently overridden.
+func TestBuildComposedRunOptsConfigDefaultsBucket(t *testing.T) {
+	t.Parallel()
+	cmd := newRunCmd()
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("provider.default", "nvidia")
+	v.Set("model.default", "qwen/qwen3-coder")
+	ctx = withViper(ctx, v)
+	cmd.SetContext(ctx)
+	opts := buildComposedRunOpts(cmd, nil)
+	if opts.Provider != "" {
+		t.Fatalf("config default leaked into explicit Provider: %q", opts.Provider)
+	}
+	if opts.Model != "" {
+		t.Fatalf("config default leaked into explicit Model: %q", opts.Model)
+	}
+	if opts.ConfigProvider != "nvidia" {
+		t.Fatalf("ConfigProvider=%q, want nvidia", opts.ConfigProvider)
+	}
+	if opts.ConfigModel != "qwen/qwen3-coder" {
+		t.Fatalf("ConfigModel=%q, want qwen/qwen3-coder", opts.ConfigModel)
+	}
 }
 
 func TestOutputReport(t *testing.T) {
