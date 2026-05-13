@@ -279,7 +279,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Int("max-concurrent-tasks", 0, "Max concurrent background child tasks (default: 4)")
 	cmd.Flags().Bool("json", false, "Force JSON output format (composed agents only)")
 	cmd.Flags().String("resume", "", "Resume a prior session by id (see ./.squad/sessions/)")
-	cmd.Flags().String("isolate", "", "Run agent in an isolated git worktree: 'worktree' or 'none' (default: from manifest/config)")
+	cmd.Flags().String("isolate", "", "Isolation mode: 'worktree' (separate dir + branch), 'branch' (new branch in-place), 'commit' (snapshot dirty tree), 'staged' (commit index, stash rest), 'unstaged' (work as-is), or 'none' (default: from manifest/config)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 
@@ -296,7 +296,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = cmd.RegisterFlagCompletionFunc("isolate", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-		return []string{"none", "worktree"}, cobra.ShellCompDirectiveNoFileComp
+		return []string{"none", "worktree", "branch", "commit", "staged", "unstaged"}, cobra.ShellCompDirectiveNoFileComp
 	})
 
 	return cmd

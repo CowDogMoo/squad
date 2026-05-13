@@ -438,6 +438,60 @@ func TestSetMaxCost(t *testing.T) {
 	}
 }
 
+func TestMaxCostValue(t *testing.T) {
+	t.Parallel()
+	m := New("openai", "gpt-4o")
+	if got := m.MaxCostValue(); got != 0 {
+		t.Errorf("MaxCostValue = %v, want 0", got)
+	}
+	m.SetMaxCost(2.75)
+	if got := m.MaxCostValue(); got != 2.75 {
+		t.Errorf("MaxCostValue = %v, want 2.75", got)
+	}
+}
+
+func TestWarmPricingNoOp(t *testing.T) {
+	// WarmPricing kicks off a background goroutine. Calling it twice should
+	// be safe — sync.Once gates the fetch. We don't assert on the outcome
+	// (it depends on network), only that the call is non-blocking.
+	WarmPricing()
+	WarmPricing()
+}
+
+func TestModelsForProviderFallback(t *testing.T) {
+	// With no pricing data loaded yet (or fetch failed), ModelsForProvider
+	// falls through to the embedded fallback list. Known providers should
+	// return at least one model name.
+	for _, provider := range []string{"openai", "anthropic", "gemini"} {
+		got := ModelsForProvider(provider)
+		if len(got) == 0 {
+			t.Errorf("ModelsForProvider(%q) returned empty; expected fallback entries", provider)
+		}
+	}
+}
+
+func TestModelsForProviderEmptyReturnsUnion(t *testing.T) {
+	// Empty provider yields the union across all fallback providers.
+	got := ModelsForProvider("")
+	if len(got) == 0 {
+		t.Error("ModelsForProvider(\"\") should aggregate across all providers")
+	}
+	// Result is sorted; spot-check monotonic ordering.
+	for i := 1; i < len(got); i++ {
+		if got[i-1] > got[i] {
+			t.Errorf("union not sorted: %v", got)
+			break
+		}
+	}
+}
+
+func TestModelsForProviderUnknownReturnsEmpty(t *testing.T) {
+	got := ModelsForProvider("not-a-provider")
+	if len(got) != 0 {
+		t.Errorf("unknown provider should yield empty list, got %v", got)
+	}
+}
+
 func TestBudgetExceeded(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -921,4 +975,82 @@ func TestBudgetUsedPctExceeded(t *testing.T) {
 	if pct != 1.0 {
 		t.Fatalf("BudgetUsedPct() = %v, want 1.0 when budget exceeded", pct)
 	}
+}
+
+func TestLiveModelsForProviderFiltersByMode(t *testing.T) {
+	t.Parallel()
+	cache := map[string]liteLLMModel{
+		"openai/gpt-4o":           {LiteLLMProvider: "openai", Mode: "chat"},
+		"openai/gpt-4o-mini":      {LiteLLMProvider: "openai", Mode: "chat"},
+		"openai/text-embedding-3": {LiteLLMProvider: "openai", Mode: "embedding"},
+		"openai/dall-e-3":         {LiteLLMProvider: "openai", Mode: "image_generation"},
+		"claude-3-5-sonnet":       {LiteLLMProvider: "anthropic", Mode: "chat"},
+		"gpt-legacy":              {LiteLLMProvider: "openai"}, // empty mode counts as chat
+	}
+
+	got := liveModelsForProvider(cache, "openai")
+	want := []string{"gpt-4o", "gpt-4o-mini", "gpt-legacy"}
+	if !equalStringSlices(got, want) {
+		t.Errorf("openai models: got %v, want %v", got, want)
+	}
+
+	got = liveModelsForProvider(cache, "anthropic")
+	if !equalStringSlices(got, []string{"claude-3-5-sonnet"}) {
+		t.Errorf("anthropic models: got %v, want [claude-3-5-sonnet]", got)
+	}
+}
+
+func TestLiveModelsForProviderUnknownProviderReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	cache := map[string]liteLLMModel{
+		"openai/gpt-4o": {LiteLLMProvider: "openai", Mode: "chat"},
+	}
+	got := liveModelsForProvider(cache, "no-such-provider")
+	if len(got) != 0 {
+		t.Errorf("unknown provider should return empty list, got %v", got)
+	}
+}
+
+func TestModelsForProviderFallbackParses(t *testing.T) {
+	t.Parallel()
+	// The embedded fallback must parse and surface a few canonical
+	// entries — these are the suggestions users see on cold start
+	// before the LiteLLM fetch completes.
+	fallbackOnce.Do(loadFallbackModels)
+	if fallbackParseErr != nil {
+		t.Fatalf("fallback YAML parse error: %v", fallbackParseErr)
+	}
+
+	checks := map[string]string{
+		"openai":    "gpt-4o",
+		"anthropic": "claude-sonnet-4-6",
+		"gemini":    "gemini-2.5-pro",
+	}
+	for provider, want := range checks {
+		models := fallbackModels[provider]
+		if !containsString(models, want) {
+			t.Errorf("fallback %s: expected to contain %q, got %v", provider, want, models)
+		}
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
