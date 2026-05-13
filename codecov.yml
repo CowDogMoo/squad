@@ -27,3 +27,9 @@ ignore:
   - "cmd/squad-routined/main.go"
   - "cmd/squad/routine_install.go"
   - "routine/service/service_linux_install.go"
+  # storage_watch.go contains the fsnotify watcher loop — goroutines plus
+  # debounced kernel events make deterministic coverage prohibitive. The
+  # supporting helpers it calls (routineChanged / stringMapEqual /
+  # entryKey / sendOrDrop) live in storage.go and ARE unit-tested. The
+  # whole loop is exercised end-to-end by `squad routined` manifest churn.
+  - "routine/storage_watch.go"
