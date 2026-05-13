@@ -364,6 +364,129 @@ func formatFloat(v float64) string {
 	return fmt.Sprintf("%f", v)
 }
 
+func TestRoutineCreateDuplicateErrors(t *testing.T) {
+	setupXDG(t)
+	wd := t.TempDir()
+	if _, err := runRoutineCmd(t,
+		"create", "dup",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", wd,
+	); err != nil {
+		t.Fatal(err)
+	}
+	// Second create with same id must fail.
+	if _, err := runRoutineCmd(t,
+		"create", "dup",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", wd,
+	); err == nil {
+		t.Error("expected error on duplicate create")
+	}
+}
+
+func TestRoutineDisableUnknownErrors(t *testing.T) {
+	setupXDG(t)
+	if _, err := runRoutineCmd(t, "disable", "ghost"); err == nil {
+		t.Error("expected error disabling non-existent routine")
+	}
+}
+
+func TestRoutineHistoryWorkingDirMissing(t *testing.T) {
+	setupXDG(t)
+	// Create a global routine but with a working_dir that has no sessions
+	// subdir. History should produce the "no sessions" path, not an error.
+	if _, err := runRoutineCmd(t,
+		"create", "empty",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", t.TempDir(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runRoutineCmd(t, "history", "empty")
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if !strings.Contains(out, "No sessions found") {
+		t.Errorf("expected empty marker:\n%s", out)
+	}
+}
+
+func TestRoutineCreateScopeRepoWithoutCwdInSquadDir(t *testing.T) {
+	setupXDG(t)
+	repo := t.TempDir()
+	// --scope=repo with explicit --repo path even when cwd has no .squad.
+	out, err := runRoutineCmd(t,
+		"create", "explicit",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--scope", "repo",
+		"--repo", repo,
+	)
+	if err != nil {
+		t.Fatalf("create: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "repo:explicit") {
+		t.Errorf("expected repo qualifier:\n%s", out)
+	}
+}
+
+func TestRoutineShowDisplaysAllOptionalFields(t *testing.T) {
+	setupXDG(t)
+	if _, err := runRoutineCmd(t,
+		"create", "full",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", t.TempDir(),
+		"--prompt", "audit",
+		"--provider", "openai",
+		"--model", "gpt-5",
+		"--max-cost", "3.50",
+		"--max-iterations", "30",
+		"--var", "k=v",
+		"--wake-system",
+	); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runRoutineCmd(t, "show", "full")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Prompt:", "Provider:    openai", "Model:       gpt-5",
+		"Max cost:    $3.50", "Max iter:    30", "Vars:", "k=v", "Wake system: yes"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("show output missing %q\n%s", want, out)
+		}
+	}
+}
+
+func TestRoutineCreateAutoCreatesRepoRoot(t *testing.T) {
+	setupXDG(t)
+	// When --repo points at a path that didn't exist, Create's MkdirAll
+	// materializes the .squad/routines/ tree under it. The subsequent
+	// AddRoot then succeeds because the directory is now on disk.
+	target := filepath.Join(t.TempDir(), "fresh-repo")
+	out, err := runRoutineCmd(t,
+		"create", "freshrepo",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--scope", "repo",
+		"--repo", target,
+	)
+	if err != nil {
+		t.Fatalf("create: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "repo:freshrepo") {
+		t.Errorf("expected repo qualifier:\n%s", out)
+	}
+	// Path should now exist with the manifest dir created.
+	if _, err := os.Stat(filepath.Join(target, ".squad", "routines")); err != nil {
+		t.Errorf("expected .squad/routines created: %v", err)
+	}
+}
+
 // helper guard so unused-import warnings don't trip in environments where
 // cobra isn't transitively needed.
 var _ = (*cobra.Command)(nil)
