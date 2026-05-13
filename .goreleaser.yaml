@@ -43,3 +43,28 @@ builds:
 
     hooks:
       pre: go mod tidy
+
+  # Windows-only GUI-subsystem build of the routines daemon. -H=windowsgui
+  # marks the PE file as a GUI subsystem program so Task Scheduler can
+  # restart the daemon without flashing a console window. On other
+  # platforms the daemon runs from the main squad binary via `squad routined`,
+  # so this build entry is intentionally Windows-only.
+  - id: "squad-routined"
+
+    binary: squad-routined
+
+    main: ./cmd/squad-routined
+
+    ldflags:
+      - -s -w
+      - -H=windowsgui
+      - -X main.version={{.Summary}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+    goos:
+      - windows
+
+    goarch:
+      - amd64
+      - arm64
