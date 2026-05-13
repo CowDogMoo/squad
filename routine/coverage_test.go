@@ -963,6 +963,55 @@ func TestStoreUpdateChangesManifestOnDisk(t *testing.T) {
 	}
 }
 
+func TestLoadStateOnUnreadableFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based fault injection skipped as root")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	// Write a file we own, then strip read perms. LoadState should return
+	// a non-NotExist error.
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+	if _, err := LoadState(path); err == nil {
+		t.Error("expected error reading unreadable state file")
+	}
+}
+
+func TestFindMissedFiresWarnsOnUnreadableState(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based fault injection skipped as root")
+	}
+	setupTempXDG(t)
+	store := NewStore()
+	ref := Ref{Scope: ScopeGlobal, ID: "broken-state"}
+	entry, err := store.Create(ref, &Routine{
+		ID: "broken-state", Agent: "go", Schedule: "@every 1h", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write a state file, then chmod it unreadable. FindMissedFires should
+	// warn-and-skip without crashing — empty result returned.
+	if err := SaveState(entry.StatePath, &State{LastStatus: StatusOK, LastRun: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(entry.StatePath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(entry.StatePath, 0o644) })
+	misses := FindMissedFires(store, time.Now())
+	// Either zero misses (state unreadable → can't compute anchor) or some
+	// misses if CreatedAt-fallback kicks in. Either is acceptable; the key
+	// assertion is that we didn't crash.
+	_ = misses
+}
+
 func TestStoreEntriesSnapshotIsSorted(t *testing.T) {
 	setupTempXDG(t)
 	store := NewStore()

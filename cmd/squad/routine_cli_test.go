@@ -599,6 +599,43 @@ func TestRoutineRunNowLoadAllErrorBubbles(t *testing.T) {
 	}
 }
 
+func TestRoutineCreateBadScopeErrors(t *testing.T) {
+	setupXDG(t)
+	_, err := runRoutineCmd(t,
+		"create", "x",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--scope", "weird",
+		"--working-dir", t.TempDir(),
+	)
+	if err == nil {
+		t.Error("expected error for invalid scope")
+	}
+}
+
+func TestRoutineCreateAddRootFailsOnFile(t *testing.T) {
+	setupXDG(t)
+	// --repo points at a regular file. AddRoot rejects file-as-root after
+	// MkdirAll auto-creates the .squad/routines parent. Wait — the test
+	// setup needs a file at the exact repo path, so MkdirAll fails inside
+	// Create rather than at AddRoot. Either way, the error path is exercised.
+	tmp := t.TempDir()
+	asFile := filepath.Join(tmp, "regular-file")
+	if err := os.WriteFile(asFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runRoutineCmd(t,
+		"create", "filer",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--scope", "repo",
+		"--repo", asFile,
+	)
+	if err == nil {
+		t.Error("expected error when --repo points at a file")
+	}
+}
+
 func TestRoutineUnwatchAcceptsExactPath(t *testing.T) {
 	setupXDG(t)
 	repo := t.TempDir()

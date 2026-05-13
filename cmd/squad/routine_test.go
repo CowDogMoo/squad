@@ -447,6 +447,40 @@ func TestPrintRoutineStateRendersLastRun(t *testing.T) {
 	}
 }
 
+func TestPrintRoutineStateRendersLastError(t *testing.T) {
+	t.Parallel()
+	buf := &bytes.Buffer{}
+	printRoutineState(buf, &routine.State{
+		LastRun:    time.Now(),
+		LastStatus: routine.StatusFailed,
+		LastError:  "model timeout after 3 retries",
+	})
+	if !bytes.Contains(buf.Bytes(), []byte("Last error:")) {
+		t.Errorf("missing last error line:\n%s", buf.String())
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("model timeout")) {
+		t.Errorf("missing error detail:\n%s", buf.String())
+	}
+}
+
+func TestResolveExistingRefQualifiedNotFound(t *testing.T) {
+	setupXDG(t)
+	store := routine.NewStore()
+	if _, err := resolveExistingRef(store, "global:ghost"); err == nil {
+		t.Error("expected error for qualified id not in store")
+	}
+	if _, err := resolveExistingRef(store, "repo:ghost"); err == nil {
+		t.Error("expected error for qualified id not in store")
+	}
+}
+
+func TestReadSessionMetaMissingFile(t *testing.T) {
+	t.Parallel()
+	if _, ok := readSessionMeta(filepath.Join(t.TempDir(), "absent.json")); ok {
+		t.Error("expected ok=false for missing file")
+	}
+}
+
 func TestPrintNextFireSkipsInvalidSchedule(t *testing.T) {
 	t.Parallel()
 	buf := &bytes.Buffer{}
