@@ -60,58 +60,72 @@ func modelsForProvider(p string) []string {
 	return metrics.ModelsForProvider(p)
 }
 
-// workingDirSuggestions returns the immediate subdirectories of the
-// parent of `path`, formatted as full paths with a trailing slash so
-// the typeahead's prefix filter picks them up as the user types. Leaf
-// segments are matched case-insensitively. Returns nil if the parent
-// can't be read (permission denied, missing). The typeahead is the
-// host for prefix-narrowing — this helper only chooses the directory
-// to read.
+// workingDirSuggestions returns subdirectory completions for the
+// user's current input. Output paths use the same prefix style as the
+// input (~/foo, /abs/foo, or bare relative) so the typeahead's prefix
+// filter narrows correctly as the user keeps typing. Dotfiles and
+// regular files are excluded; the field is for directories.
 func workingDirSuggestions(path string) []string {
-	dir := dirForCompletion(path)
-	if dir == "" {
+	realDir, displayPrefix := completionContext(path)
+	if realDir == "" {
 		return nil
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(realDir)
 	if err != nil {
 		return nil
 	}
+	sep := string(filepath.Separator)
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		if strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		out = append(out, filepath.Join(dir, e.Name())+string(filepath.Separator))
+		out = append(out, displayPrefix+e.Name()+sep)
 	}
 	sort.Strings(out)
 	return out
 }
 
-// dirForCompletion picks the directory whose entries should populate
-// the working-dir typeahead given the user's current input. Trailing
-// separators expand into the named directory; bare segments expand
-// into the parent. Empty input falls back to the current working
-// directory.
-func dirForCompletion(path string) string {
+// completionContext splits the user's input into the directory to
+// read on disk (`realDir`) and the prefix to put on each suggestion
+// (`displayPrefix`). Keeping the prefix in the user's style — tilde,
+// absolute, or relative — is what lets the typeahead's prefix filter
+// match the suggestions against the buffer.
+func completionContext(path string) (realDir, displayPrefix string) {
+	sep := string(filepath.Separator)
 	if path == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
-			return ""
+			return "", ""
 		}
-		return cwd
+		return cwd, ""
 	}
-	if strings.HasPrefix(path, "~") {
+	// displayPrefix is the input up through the last separator. With
+	// no separator the user typed a bare segment to be matched under
+	// cwd, so the prefix is empty.
+	if i := strings.LastIndex(path, sep); i >= 0 {
+		displayPrefix = path[:i+1]
+	}
+	// realDir is displayPrefix with `~` and `$VAR` / `${VAR}` env
+	// references expanded, plus a fallback to cwd when the user
+	// hasn't typed a separator yet. Display prefix stays in the
+	// user's original style so suggestions keep matching the buffer
+	// (e.g. "$HOME/Downloads/" instead of "/Users/me/Downloads/").
+	realDir = displayPrefix
+	if strings.HasPrefix(realDir, "~") {
 		if home, err := os.UserHomeDir(); err == nil {
-			path = filepath.Join(home, strings.TrimPrefix(path, "~"))
+			realDir = home + strings.TrimPrefix(realDir, "~")
 		}
 	}
-	if strings.HasSuffix(path, string(filepath.Separator)) {
-		return strings.TrimRight(path, string(filepath.Separator))
+	realDir = os.ExpandEnv(realDir)
+	if realDir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", ""
+		}
+		realDir = cwd
 	}
-	return filepath.Dir(path)
+	return realDir, displayPrefix
 }
 
 // Field indices for cycling focus. Order chosen to read left-to-right,

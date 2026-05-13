@@ -224,8 +224,11 @@ func TestLaunchArrowsNavigateFieldsOnSingleLineInputs(t *testing.T) {
 	}
 }
 
-func TestWorkingDirSuggestions(t *testing.T) {
-	// Build a small tree: <tmp>/{alpha, beta, .hidden, file.txt}.
+// suggestionsFixture builds <tmp>/{alpha, beta, .hidden, file.txt} and
+// returns the root. The visible directories are alpha and beta; the
+// dotfile and regular file must never appear in suggestions.
+func suggestionsFixture(t *testing.T) string {
+	t.Helper()
 	root := t.TempDir()
 	for _, name := range []string{"alpha", "beta", ".hidden"} {
 		if err := os.Mkdir(filepath.Join(root, name), 0o755); err != nil {
@@ -235,13 +238,14 @@ func TestWorkingDirSuggestions(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "file.txt"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return root
+}
 
-	// Trailing separator → list root's children.
-	got := workingDirSuggestions(root + string(filepath.Separator))
-	want := []string{
-		filepath.Join(root, "alpha") + string(filepath.Separator),
-		filepath.Join(root, "beta") + string(filepath.Separator),
-	}
+func TestWorkingDirSuggestionsTrailingSeparator(t *testing.T) {
+	root := suggestionsFixture(t)
+	sep := string(filepath.Separator)
+	got := workingDirSuggestions(root + sep)
+	want := []string{root + sep + "alpha" + sep, root + sep + "beta" + sep}
 	if len(got) != len(want) {
 		t.Fatalf("got %d suggestions, want %d: %v", len(got), len(want), got)
 	}
@@ -250,21 +254,61 @@ func TestWorkingDirSuggestions(t *testing.T) {
 			t.Errorf("[%d]: got %q, want %q", i, got[i], w)
 		}
 	}
+}
 
-	// Bare segment under root → also lists root's children (typeahead
-	// does the prefix narrowing in filtered()).
-	got = workingDirSuggestions(filepath.Join(root, "a"))
-	if len(got) != 2 {
-		t.Errorf("bare segment: got %d suggestions, want 2: %v", len(got), got)
-	}
-
-	// Files and dotfiles must not appear.
-	for _, s := range got {
-		if strings.HasSuffix(strings.TrimRight(s, string(filepath.Separator)), "file.txt") {
-			t.Errorf("file.txt should not appear in suggestions: %v", got)
+func TestWorkingDirSuggestionsFiltersDotfilesAndFiles(t *testing.T) {
+	root := suggestionsFixture(t)
+	sep := string(filepath.Separator)
+	for _, s := range workingDirSuggestions(root + sep) {
+		base := filepath.Base(strings.TrimRight(s, sep))
+		if base == "file.txt" || strings.HasPrefix(base, ".") {
+			t.Errorf("filtered entry appeared: %q", s)
 		}
-		if strings.Contains(s, ".hidden") {
-			t.Errorf(".hidden should not appear in suggestions: %v", got)
+	}
+}
+
+func TestWorkingDirSuggestionsPartialSegment(t *testing.T) {
+	root := suggestionsFixture(t)
+	sep := string(filepath.Separator)
+	// Partial segments come back unnarrowed — the typeahead's filtered()
+	// is responsible for the prefix match against the buffer.
+	got := workingDirSuggestions(root + sep + "a")
+	if len(got) != 2 {
+		t.Errorf("partial segment: got %d suggestions, want 2: %v", len(got), got)
+	}
+}
+
+func TestWorkingDirSuggestionsTildePrefix(t *testing.T) {
+	sep := string(filepath.Separator)
+	if _, err := os.UserHomeDir(); err != nil {
+		t.Skip("no home dir")
+	}
+	for _, s := range workingDirSuggestions("~" + sep) {
+		if !strings.HasPrefix(s, "~"+sep) {
+			t.Errorf("tilde suggestion lost prefix: %q", s)
+		}
+	}
+}
+
+func TestWorkingDirSuggestionsEnvVarPrefix(t *testing.T) {
+	root := suggestionsFixture(t)
+	sep := string(filepath.Separator)
+	t.Setenv("SQUAD_TEST_ROOT", root)
+	cases := []struct {
+		input, prefix string
+	}{
+		{"$SQUAD_TEST_ROOT" + sep, "$SQUAD_TEST_ROOT" + sep},
+		{"${SQUAD_TEST_ROOT}" + sep, "${SQUAD_TEST_ROOT}" + sep},
+	}
+	for _, tc := range cases {
+		got := workingDirSuggestions(tc.input)
+		if len(got) != 2 {
+			t.Errorf("%s: got %d suggestions, want 2: %v", tc.input, len(got), got)
+		}
+		for _, s := range got {
+			if !strings.HasPrefix(s, tc.prefix) {
+				t.Errorf("%s: suggestion lost prefix: %q", tc.input, s)
+			}
 		}
 	}
 }
