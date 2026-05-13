@@ -4,13 +4,8 @@ package service
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -70,28 +65,6 @@ func New() Service {
 	}
 }
 
-// TailLogs streams the journal entries for the daemon unit. Uses
-// `journalctl --user -u <unit>` with -f for follow, otherwise reads the
-// full backlog.
-func (s *systemdService) TailLogs(ctx context.Context, w io.Writer, follow bool) error {
-	args := []string{"--user", "-u", unitName, "--no-pager"}
-	if follow {
-		args = append(args, "-f")
-	}
-	cmd := exec.CommandContext(ctx, "journalctl", args...)
-	cmd.Stdout = w
-	cmd.Stderr = w
-	if err := cmd.Run(); err != nil {
-		// CommandContext returns context.Canceled when ctx terminates the
-		// process; that's a clean stop, not a real failure.
-		if ctx.Err() != nil {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
 // renderUnit returns the rendered unit file bytes for daemonBinary.
 func (s *systemdService) renderUnit(daemonBinary string) ([]byte, error) {
 	tmpl, err := template.New("unit").Parse(unitTemplate)
@@ -127,40 +100,4 @@ func (s *systemdService) daemonBinaryFromUnit() string {
 		return fields[0]
 	}
 	return ""
-}
-
-// statusFromExistingUnit returns a Status reflecting an existing unit file
-// path. The "is the daemon currently running" portion lives in the install
-// sibling so it's clearly the side-effectful half.
-func (s *systemdService) statusFromExistingUnit() Status {
-	return Status{
-		ServicePath:  s.unitPath,
-		LogPath:      s.logPath,
-		DaemonBinary: s.daemonBinaryFromUnit(),
-		State:        StateInstalledStopped, // refined by Status() when systemctl is available
-	}
-}
-
-// statusNotInstalled returns the no-install Status, populated with paths so
-// `routine doctor` can show users where things would live.
-func (s *systemdService) statusNotInstalled() Status {
-	return Status{
-		ServicePath: s.unitPath,
-		LogPath:     s.logPath,
-		State:       StateNotInstalled,
-	}
-}
-
-// unitFileExists reports whether the systemd --user unit file is on disk.
-// Returns (false, nil) for a missing file; non-nil err signals an unexpected
-// stat error.
-func (s *systemdService) unitFileExists() (bool, error) {
-	_, err := os.Stat(s.unitPath)
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
 }

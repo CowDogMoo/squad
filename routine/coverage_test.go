@@ -274,3 +274,161 @@ func TestResolveDirsRejectsRepoWithoutRoot(t *testing.T) {
 		t.Error("expected error for unknown scope")
 	}
 }
+
+func TestSaveStateRejectsUnwriteablePath(t *testing.T) {
+	t.Parallel()
+	// /proc on Linux and / on macOS are both unwriteable; SaveState's
+	// MkdirAll should fail and the error must propagate.
+	err := SaveState("/proc/cannot/exist/state.json", &State{LastStatus: StatusOK})
+	if err == nil {
+		t.Error("expected error writing to an unwriteable location")
+	}
+}
+
+func TestLoadStateRejectsCorruptJSON(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "broken.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadState(path); err == nil {
+		t.Error("expected parse error")
+	}
+}
+
+func TestStoreCreateMismatchedID(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	_, err := store.Create(
+		Ref{Scope: ScopeGlobal, ID: "ref-id"},
+		&Routine{ID: "different", Agent: "go", Schedule: "@daily", Enabled: true},
+	)
+	if err == nil {
+		t.Error("expected error when ref.ID != routine.ID")
+	}
+}
+
+func TestStoreCreateRepoRequiresRoot(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	_, err := store.Create(
+		Ref{Scope: ScopeRepo, ID: "audit"}, // no Root
+		&Routine{ID: "audit", Agent: "go", Schedule: "@daily", Enabled: true},
+	)
+	if err == nil {
+		t.Error("expected error for repo ref without Root")
+	}
+}
+
+func TestStoreDeleteMissingRoutine(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	if err := store.Delete(Ref{Scope: ScopeGlobal, ID: "ghost"}); err == nil {
+		t.Error("expected error deleting non-existent routine")
+	}
+}
+
+func TestStoreUpdateRejectsRename(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	ref := Ref{Scope: ScopeGlobal, ID: "stable"}
+	if _, err := store.Create(ref, &Routine{ID: "stable", Agent: "go", Schedule: "@daily", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Mismatched id should error.
+	_, err := store.Update(ref, &Routine{ID: "renamed", Agent: "go", Schedule: "@daily", Enabled: true})
+	if err == nil {
+		t.Error("expected error when Update routine id differs from ref id")
+	}
+	// Missing routine should error.
+	_, err = store.Update(Ref{Scope: ScopeGlobal, ID: "ghost"}, &Routine{ID: "ghost", Agent: "go", Schedule: "@daily", Enabled: true})
+	if err == nil {
+		t.Error("expected error updating missing routine")
+	}
+}
+
+func TestSaveRoutineAtomicCleansTmpOnError(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Removing read+exec permission on the parent makes the rename fail.
+	// (Skipped if we're running as root.)
+	if os.Geteuid() == 0 {
+		t.Skip("rename-error path can't be provoked as root")
+	}
+	readOnly := filepath.Join(dir, "ro")
+	if err := os.MkdirAll(readOnly, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(readOnly, FileName("x"))
+	err := SaveRoutine(path, &Routine{ID: "x", Agent: "go", Schedule: "@daily", Enabled: true})
+	if err == nil {
+		t.Error("expected error writing into read-only dir")
+	}
+}
+
+func TestAddRootResolvesAndRejectsNonDirs(t *testing.T) {
+	setupTempXDG(t)
+	missing := filepath.Join(t.TempDir(), "ghost")
+	if _, _, err := AddRoot(missing); err == nil {
+		t.Error("expected stat error for missing dir")
+	}
+	// File-as-root should error.
+	file := filepath.Join(t.TempDir(), "f.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := AddRoot(file); err == nil {
+		t.Error("expected error for file-as-root")
+	}
+}
+
+func TestRemoveRootUnknownNoop(t *testing.T) {
+	setupTempXDG(t)
+	changed, err := RemoveRoot(filepath.Join(t.TempDir(), "not-watched"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Error("expected changed=false when removing unknown root")
+	}
+}
+
+func TestNormalizeRootsDeduplicates(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Pass the same root twice plus an absolute equivalent.
+	got, err := normalizeRoots([]string{dir, dir, dir + string(os.PathSeparator)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected 1 deduped entry, got %v", got)
+	}
+}
+
+func TestIsManifestFile(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{
+		"foo.yaml":     true,
+		"foo-bar.yaml": true,
+		"":             false,
+		"foo.yml":      false,
+		"BadCase.yaml": false,
+		".yaml":        false,
+		"foo.txt":      false,
+	}
+	for name, want := range cases {
+		if got := isManifestFile(name); got != want {
+			t.Errorf("isManifestFile(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestSchedulerRunNowOnMissingRoutine(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	sched, _ := NewScheduler(store, neverFires(), SchedulerOptions{})
+	if err := sched.RunNow(context.Background(), Ref{Scope: ScopeGlobal, ID: "ghost"}); err == nil {
+		t.Error("expected error for missing routine")
+	}
+}

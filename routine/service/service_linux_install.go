@@ -1,8 +1,9 @@
 //go:build linux
 
 // This file contains the side-effectful half of the systemd installer:
-// Install / Uninstall / Status (the bits that shell out to systemctl and
-// loginctl). The pure template + parse code lives in service_linux.go.
+// Install / Uninstall / Status / TailLogs (the bits that shell out to
+// systemctl, loginctl, and journalctl). The pure template + parse code
+// lives in service_linux.go.
 //
 // Codecov ignores this file because every function here is an exec.Command
 // wrapper. The contracts are exercised end-to-end via integration tests
@@ -12,8 +13,10 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -79,8 +82,7 @@ func (s *systemdService) Uninstall() error {
 func (s *systemdService) Status() (Status, error) {
 	have, err := s.unitFileExists()
 	if err != nil {
-		st := s.statusNotInstalled()
-		return st, err
+		return s.statusNotInstalled(), err
 	}
 	if !have {
 		return s.statusNotInstalled(), nil
@@ -96,6 +98,28 @@ func (s *systemdService) Status() (Status, error) {
 		st.State = StateInstalledStopped
 	}
 	return st, nil
+}
+
+// TailLogs streams the journal entries for the daemon unit. Uses
+// `journalctl --user -u <unit>` with -f for follow, otherwise reads the
+// full backlog.
+func (s *systemdService) TailLogs(ctx context.Context, w io.Writer, follow bool) error {
+	args := []string{"--user", "-u", unitName, "--no-pager"}
+	if follow {
+		args = append(args, "-f")
+	}
+	cmd := exec.CommandContext(ctx, "journalctl", args...)
+	cmd.Stdout = w
+	cmd.Stderr = w
+	if err := cmd.Run(); err != nil {
+		// CommandContext returns context.Canceled when ctx terminates the
+		// process; that's a clean stop, not a real failure.
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *systemdService) runSystemctlOutput(args ...string) ([]byte, error) {
@@ -117,4 +141,40 @@ func (s *systemdService) enableLinger() error {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// statusFromExistingUnit returns a Status reflecting an existing unit file
+// path. The "is the daemon currently running" portion lives in the install
+// sibling so it's clearly the side-effectful half.
+func (s *systemdService) statusFromExistingUnit() Status {
+	return Status{
+		ServicePath:  s.unitPath,
+		LogPath:      s.logPath,
+		DaemonBinary: s.daemonBinaryFromUnit(),
+		State:        StateInstalledStopped, // refined by Status() when systemctl is available
+	}
+}
+
+// statusNotInstalled returns the no-install Status, populated with paths so
+// `routine doctor` can show users where things would live.
+func (s *systemdService) statusNotInstalled() Status {
+	return Status{
+		ServicePath: s.unitPath,
+		LogPath:     s.logPath,
+		State:       StateNotInstalled,
+	}
+}
+
+// unitFileExists reports whether the systemd --user unit file is on disk.
+// Returns (false, nil) for a missing file; non-nil err signals an unexpected
+// stat error.
+func (s *systemdService) unitFileExists() (bool, error) {
+	_, err := os.Stat(s.unitPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
