@@ -1,7 +1,13 @@
 package daemon
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/routine"
@@ -181,5 +187,91 @@ func TestBuildFireFnNotNil(t *testing.T) {
 	fire := BuildFireFn(cfg)
 	if fire == nil {
 		t.Fatal("BuildFireFn returned nil")
+	}
+}
+
+func TestRedirectStdioCreatesLogFile(t *testing.T) {
+	// Not parallel: we mutate os.Stdout/os.Stderr.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subdir", "routined.log")
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+	t.Cleanup(func() {
+		os.Stdout = origStdout
+		os.Stderr = origStderr
+	})
+
+	if err := RedirectStdio(path); err != nil {
+		t.Fatalf("RedirectStdio: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("log file not created: %v", err)
+	}
+	// Writes via os.Stdout should land in the file.
+	_, _ = fmt.Fprintln(os.Stdout, "hello-from-redirect")
+	// Close + flush.
+	_ = os.Stdout.Close()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "hello-from-redirect") {
+		t.Errorf("log file does not contain redirected line: %q", string(data))
+	}
+}
+
+func TestRedirectStdioEmptyPathIsNoOp(t *testing.T) {
+	t.Parallel()
+	if err := RedirectStdio(""); err != nil {
+		t.Errorf("empty path should be a no-op, got %v", err)
+	}
+}
+
+func TestRunReturnsCleanlyWithNoRoutines(t *testing.T) {
+	// The daemon should load zero routines from a clean XDG home, start the
+	// scheduler, then shut down cleanly when its context is cancelled.
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, ".local", "state"))
+	t.Setenv("HOME", tmp)
+
+	cfg := config.Defaults()
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, cfg, Options{MaxConcurrent: 1})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run returned: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return within 5s after ctx cancel")
+	}
+}
+
+func TestRunNilConfigErrors(t *testing.T) {
+	t.Parallel()
+	err := Run(context.Background(), nil, Options{})
+	if err == nil {
+		t.Error("expected error for nil config")
+	}
+}
+
+func TestRunDefaultsMaxConcurrent(t *testing.T) {
+	// MaxConcurrent=0 should default to 2 — exercised by running a Run with
+	// no explicit concurrency and confirming clean shutdown.
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, ".local", "state"))
+	t.Setenv("HOME", tmp)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	if err := Run(ctx, config.Defaults(), Options{}); err != nil {
+		t.Errorf("Run with defaults: %v", err)
 	}
 }

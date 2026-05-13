@@ -6,3 +6,24 @@ coverage:
         target: auto
         threshold: 0%
         base: auto
+    patch:
+      default:
+        target: 90%
+        threshold: 0%
+
+# Files excluded from coverage. The two cases here are:
+#
+# 1. Tests themselves — coverage of test code is not meaningful.
+# 2. Pure exec-wrappers / main entrypoints — these functions are thin
+#    wrappers around exec.Command (launchctl / systemctl / loginctl /
+#    powershell.exe) or os.Exit-based main loops, neither of which can be
+#    meaningfully unit-tested without mocking the host's service manager.
+#    Their value is exercised end-to-end via `squad routine repair` against
+#    a real OS service. The testable halves of each installer (template
+#    rendering, file parsing, status decoding) live in their non-_install.go
+#    siblings and ARE covered.
+ignore:
+  - "**/*_test.go"
+  - "cmd/squad-routined/main.go"
+  - "cmd/squad/routine_install.go"
+  - "routine/service/service_linux_install.go"

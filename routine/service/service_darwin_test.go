@@ -37,6 +37,88 @@ func TestPlistWakeSystemToggle(t *testing.T) {
 	}
 }
 
+func TestStateString(t *testing.T) {
+	t.Parallel()
+	cases := map[State]string{
+		StateNotInstalled:     "not installed",
+		StateInstalledStopped: "installed (stopped)",
+		StateInstalledRunning: "installed (running)",
+		State(99):             "unknown",
+	}
+	for s, want := range cases {
+		if got := s.String(); got != want {
+			t.Errorf("State(%d).String() = %q, want %q", s, got, want)
+		}
+	}
+}
+
+func TestNewReturnsServiceWithPopulatedStatusPaths(t *testing.T) {
+	t.Parallel()
+	svc := New()
+	if svc == nil {
+		t.Fatal("New() returned nil")
+	}
+	st, err := svc.Status()
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.ServicePath == "" || st.LogPath == "" {
+		t.Errorf("paths not populated: %+v", st)
+	}
+}
+
+func TestTargetDomainEmbedsUIDAndLabel(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	if got := s.targetSystem(); got == "" {
+		t.Error("targetSystem empty")
+	}
+	got := s.targetDomain()
+	if !strings.Contains(got, launchdLabel) {
+		t.Errorf("targetDomain missing label: %q", got)
+	}
+}
+
+func TestLaunchdTailLogsReadsExistingFile(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	if err := os.MkdirAll(filepath.Dir(s.logPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.logPath, []byte("first-line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buf := &strings.Builder{}
+	if err := s.TailLogs(t.Context(), buf, false); err != nil {
+		t.Fatalf("TailLogs: %v", err)
+	}
+	if !strings.Contains(buf.String(), "first-line") {
+		t.Errorf("got %q", buf.String())
+	}
+}
+
+func TestLaunchdStatusReturnsStoppedForInstalledPlist(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	binary := mockBinary(t)
+	// Pre-render the plist on disk without invoking launchctl.
+	if err := writePlist(s.plistPath, binary, s.logPath, s.home, false); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Status()
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	// The plist file exists; launchctl print will likely not find a loaded
+	// service for our test label, so we expect StateInstalledStopped.
+	if st.State == StateNotInstalled {
+		t.Errorf("expected stopped/installed, got %v", st.State)
+	}
+	if st.DaemonBinary != binary {
+		t.Errorf("daemon binary parsed: got %q want %q", st.DaemonBinary, binary)
+	}
+}
+
 func TestLaunchdStatusReflectsMissingPlist(t *testing.T) {
 	t.Parallel()
 	s := newTestService(t)
