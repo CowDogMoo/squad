@@ -313,6 +313,58 @@ func TestWorkingDirSuggestionsEnvVarPrefix(t *testing.T) {
 	}
 }
 
+func TestLaunchWorkingDirTabCompletes(t *testing.T) {
+	// Single directory under tmp → Tab from "<tmp>/cow" should extend
+	// to "<tmp>/cowdogmoo/" and stay on the field.
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "cowdogmoo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sep := string(filepath.Separator)
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x", WorkingDir: root + sep + "cow"})
+	form.workingDir.SetOptions(workingDirSuggestions(root + sep + "cow"))
+	v := View(form)
+	// First Tab moves agent → workingDir.
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	l, _ := AsLaunchView(v)
+	if l.focus != fldWorkingDir {
+		t.Fatalf("expected focus on workingDir, got %d", l.focus)
+	}
+	// Second Tab should complete the unique match, not advance focus.
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	l, _ = AsLaunchView(v)
+	if l.focus != fldWorkingDir {
+		t.Errorf("Tab with completable match should stay on workingDir, got focus=%d", l.focus)
+	}
+	want := root + sep + "cowdogmoo" + sep
+	if got := l.workingDir.Value(); got != want {
+		t.Errorf("Tab should have completed to %q, got %q", want, got)
+	}
+}
+
+func TestLaunchWorkingDirTabAdvancesWhenAtLCP(t *testing.T) {
+	// Two siblings sharing the user's prefix exactly — Tab can't
+	// extend, so it falls through to focus advance (standard form-nav).
+	root := t.TempDir()
+	for _, name := range []string{"cowdogmoo", "cowboys"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sep := string(filepath.Separator)
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x", WorkingDir: root + sep + "cow"})
+	form.workingDir.SetOptions(workingDirSuggestions(root + sep + "cow"))
+	v := View(form)
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab}) // → workingDir
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab}) // can't complete
+	l, _ := AsLaunchView(v)
+	if l.focus != fldBudget {
+		t.Errorf("Tab at LCP should advance focus to budget (%d), got %d", fldBudget, l.focus)
+	}
+}
+
 func TestLaunchWorkingDirDropdownOwnsVerticalKeys(t *testing.T) {
 	// workingDir now exposes a filesystem typeahead — ↓ must stay on the
 	// field to navigate the dropdown, not advance focus to budget.

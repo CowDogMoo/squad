@@ -258,9 +258,7 @@ func (l Launch) handleKey(km tea.KeyMsg) (View, tea.Cmd, bool) {
 	case "esc":
 		return l.parent, nil, true
 	case "tab":
-		l.focus = (l.focus + 1) % fldCount
-		l.applyFocus()
-		return l, nil, true
+		return l.handleTab()
 	case "shift+tab":
 		l.focus = (l.focus - 1 + fldCount) % fldCount
 		l.applyFocus()
@@ -300,6 +298,19 @@ func (l Launch) handleKey(km tea.KeyMsg) (View, tea.Cmd, bool) {
 		return v, c, true
 	}
 	return l, nil, false
+}
+
+// handleTab dispatches the Tab key. On the workingDir field it first
+// attempts shell-style longest-common-prefix completion; only when no
+// extension is possible does Tab fall through to focus advance.
+func (l Launch) handleTab() (View, tea.Cmd, bool) {
+	if l.focus == fldWorkingDir && l.workingDir.CompletePrefix() {
+		l.workingDir.SetOptions(workingDirSuggestions(l.workingDir.Value()))
+		return l, nil, true
+	}
+	l.focus = (l.focus + 1) % fldCount
+	l.applyFocus()
+	return l, nil, true
 }
 
 // fieldOwnsVerticalKeys reports whether the currently focused field

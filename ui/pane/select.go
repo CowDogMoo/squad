@@ -52,6 +52,45 @@ func (t *typeahead) SetOptions(options []string) {
 	t.cursor = 0
 }
 
+// CompletePrefix replaces the buffer with the longest common prefix
+// of currently-filtered options whenever that prefix is longer than
+// the buffer. Returns true when the buffer was actually extended —
+// shell-style Tab completion. Case-insensitive matches are tolerated
+// (e.g. `/use` → `/Users/`) by aligning to the option's casing.
+func (t *typeahead) CompletePrefix() bool {
+	matches := t.filtered()
+	if len(matches) == 0 {
+		return false
+	}
+	lcp := matches[0]
+	for _, m := range matches[1:] {
+		lcp = commonPrefix(lcp, m)
+		if lcp == "" {
+			break
+		}
+	}
+	current := t.input.Value()
+	if len(lcp) <= len(current) {
+		return false
+	}
+	t.input.SetValue(lcp)
+	t.input.CursorEnd()
+	t.cursor = 0
+	return true
+}
+
+func commonPrefix(a, b string) string {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	i := 0
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return a[:i]
+}
+
 // filtered returns options whose name contains the current input as a
 // substring (case-insensitive). Exact-prefix matches are ranked first.
 func (t typeahead) filtered() []string {
