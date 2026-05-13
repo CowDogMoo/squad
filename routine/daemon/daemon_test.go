@@ -269,6 +269,36 @@ func TestRedirectStdioEmptyPathIsNoOp(t *testing.T) {
 	}
 }
 
+func TestRedirectStdioMkdirFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("mkdir under read-only dir skipped as root")
+	}
+	// Parent of `path` is a regular file, so MkdirAll inside RedirectStdio
+	// fails with "not a directory".
+	base := t.TempDir()
+	asFile := filepath.Join(base, "blocker")
+	if err := os.WriteFile(asFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RedirectStdio(filepath.Join(asFile, "child", "log.txt")); err == nil {
+		t.Error("expected error when parent path is a file")
+	}
+}
+
+func TestRedirectStdioOpenFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("read-only chmod ineffective as root")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := RedirectStdio(filepath.Join(dir, "log.txt")); err == nil {
+		t.Error("expected open error in read-only dir")
+	}
+}
+
 func TestRunReturnsCleanlyWithNoRoutines(t *testing.T) {
 	// The daemon should load zero routines from a clean XDG home, start the
 	// scheduler, then shut down cleanly when its context is cancelled.
