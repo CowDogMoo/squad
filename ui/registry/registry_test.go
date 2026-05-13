@@ -86,3 +86,81 @@ func TestStatusString(t *testing.T) {
 		}
 	}
 }
+
+func TestStopRunningProcess(t *testing.T) {
+	r := New()
+	// `sleep 60` will be running long enough for Stop to land.
+	lr, err := r.Launch(t.TempDir(), []string{"/bin/sleep", "60"})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if err := r.Stop(lr.ID); err != nil {
+		t.Errorf("Stop running process: got %v", err)
+	}
+	// Confirm reaper records the failed/exited transition.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := r.Get(lr.ID)
+		if got.Status == StatusExited || got.Status == StatusFailed {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("stopped subprocess never recorded exit")
+}
+
+func TestStopAfterExitIsNoOp(t *testing.T) {
+	r := New()
+	lr, err := r.Launch(t.TempDir(), []string{"/usr/bin/true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wait for it to exit.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := r.Get(lr.ID)
+		if got.Status != StatusRunning {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := r.Stop(lr.ID); err != nil {
+		t.Errorf("Stop on already-exited launch should be no-op, got %v", err)
+	}
+}
+
+func TestGetUnknown(t *testing.T) {
+	r := New()
+	if _, ok := r.Get("L9999"); ok {
+		t.Error("Get(unknown) should return false")
+	}
+}
+
+func TestReapFailedProcessMarksFailed(t *testing.T) {
+	r := New()
+	// `false` exits with status 1.
+	bin := "/usr/bin/false"
+	lr, err := r.Launch(t.TempDir(), []string{bin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := r.Get(lr.ID)
+		if got.Status == StatusFailed {
+			if got.ExitErr == nil {
+				t.Error("StatusFailed should record ExitErr")
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("expected StatusFailed for exit-1 process")
+}
+
+func TestSquadBinary(t *testing.T) {
+	got := SquadBinary()
+	if got == "" {
+		t.Error("SquadBinary should never return empty")
+	}
+}

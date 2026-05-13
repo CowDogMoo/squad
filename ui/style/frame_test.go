@@ -80,3 +80,67 @@ func TestPanelNoTitle(t *testing.T) {
 		t.Errorf("titleless top row should be all border: %q", top)
 	}
 }
+
+func TestPanelTinyWidthClamps(t *testing.T) {
+	// width=3 → innerWidth would be -1; Panel clamps to 1.
+	out := stripANSI(Panel("T", "x", 3))
+	if !strings.Contains(out, "╭") || !strings.Contains(out, "╮") {
+		t.Errorf("tiny width should still render chrome: %q", out)
+	}
+}
+
+func TestPanelLongTitleClampsTrailingDashes(t *testing.T) {
+	// Title longer than inner width forces trailDashes to clamp at 1.
+	out := stripANSI(Panel("VERY-LONG-TITLE", "body", 12))
+	top := strings.Split(out, "\n")[0]
+	if !strings.HasSuffix(top, "╮") {
+		t.Errorf("top still ends with corner even when title overflows: %q", top)
+	}
+}
+
+func TestPanelFixedPadsBlankLines(t *testing.T) {
+	out := stripANSI(PanelFixed("T", "a", 30, 6))
+	lines := strings.Split(out, "\n")
+	if len(lines) != 6 {
+		t.Errorf("PanelFixed should produce exactly 6 lines, got %d", len(lines))
+	}
+}
+
+func TestPanelFixedLeavesLargeBodyAlone(t *testing.T) {
+	body := "a\nb\nc\nd"
+	out := stripANSI(PanelFixed("T", body, 30, 3))
+	lines := strings.Split(out, "\n")
+	// Body has 4 lines, height=3 → needed=1, so no padding added.
+	if len(lines) < 6 {
+		t.Errorf("PanelFixed should not truncate body below natural size, got %d lines", len(lines))
+	}
+}
+
+func TestTruncateVisibleStripsANSI(t *testing.T) {
+	// Crafted styled string. 5 visible chars, with a CSI sequence in the middle.
+	styled := "\x1b[31mHELLO\x1b[0m world"
+	out := truncateVisible(styled, 6)
+	// stripped output should contain ellipsis and at most 6 visible chars.
+	plain := stripANSI(out)
+	if !strings.Contains(plain, "…") {
+		t.Errorf("expected ellipsis in truncated output: %q (plain=%q)", out, plain)
+	}
+	if w := len([]rune(plain)); w > 6 {
+		t.Errorf("truncateVisible exceeded width: visible=%d, want ≤6 (%q)", w, plain)
+	}
+}
+
+func TestTruncateVisibleZeroAndOneWidth(t *testing.T) {
+	if got := truncateVisible("hello", 1); got != "…" {
+		t.Errorf("width=1 should yield bare ellipsis, got %q", got)
+	}
+	if got := truncateVisible("hello", 0); got != "…" {
+		t.Errorf("width=0 should yield bare ellipsis, got %q", got)
+	}
+}
+
+func TestTruncateVisibleNoChange(t *testing.T) {
+	if got := truncateVisible("abc", 10); got != "abc" {
+		t.Errorf("under-width should pass through, got %q", got)
+	}
+}

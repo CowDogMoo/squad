@@ -131,3 +131,64 @@ func TestSaveAtomic(t *testing.T) {
 		t.Errorf("tmp file should not linger after save, stat err = %v", err)
 	}
 }
+
+func TestDefaultPathFallsBackToHome(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	p, err := DefaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".config", "squad", "presets.yaml")
+	if p != want {
+		t.Errorf("DefaultPath() = %q, want %q", p, want)
+	}
+}
+
+func TestPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "presets.yaml")
+	s, _ := Load(path)
+	if s.Path() != path {
+		t.Errorf("Path() = %q, want %q", s.Path(), path)
+	}
+}
+
+func TestNamesSorted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "presets.yaml")
+	s, _ := Load(path)
+	for _, n := range []string{"charlie", "alpha", "bravo"} {
+		_ = s.Set(Preset{Name: n, Agent: "x"})
+	}
+	got := s.Names()
+	want := []string{"alpha", "bravo", "charlie"}
+	if len(got) != len(want) {
+		t.Fatalf("Names(): got %d, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("Names()[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+}
+
+func TestLoadRejectsMalformedYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "presets.yaml")
+	if err := os.WriteFile(path, []byte("not: [valid yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Error("malformed yaml should error")
+	}
+}
+
+func TestSaveCreatesMissingDir(t *testing.T) {
+	// Use a nested path whose parent dir doesn't exist yet.
+	path := filepath.Join(t.TempDir(), "deep", "nested", "presets.yaml")
+	s, _ := Load(path)
+	if err := s.Set(Preset{Name: "x", Agent: "y"}); err != nil {
+		t.Fatalf("Set should create parent dirs, got %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("presets file should exist after Set, stat err = %v", err)
+	}
+}
