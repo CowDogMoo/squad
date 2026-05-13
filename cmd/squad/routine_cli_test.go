@@ -462,6 +462,46 @@ func TestRoutineShowDisplaysAllOptionalFields(t *testing.T) {
 	}
 }
 
+func TestRoutineWatchNoArgsUsesCwd(t *testing.T) {
+	setupXDG(t)
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	out, err := runRoutineCmd(t, "watch")
+	if err != nil {
+		t.Fatalf("watch (no args): %v\n%s", err, out)
+	}
+	if !strings.Contains(out, cwd) {
+		t.Errorf("expected cwd in output, got:\n%s", out)
+	}
+}
+
+func TestRoutineShowQualifiedNotFound(t *testing.T) {
+	setupXDG(t)
+	if _, err := runRoutineCmd(t, "show", "global:ghost"); err == nil {
+		t.Error("expected error for qualified-but-not-found")
+	}
+}
+
+func TestRoutineHistoryQualified(t *testing.T) {
+	setupXDG(t)
+	if _, err := runRoutineCmd(t,
+		"create", "qual",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", t.TempDir(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// History via qualified id should resolve the same routine.
+	out, err := runRoutineCmd(t, "history", "global:qual")
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if !strings.Contains(out, "No sessions found") {
+		t.Errorf("expected empty history marker:\n%s", out)
+	}
+}
+
 func TestRoutineCreateAutoCreatesRepoRoot(t *testing.T) {
 	setupXDG(t)
 	// When --repo points at a path that didn't exist, Create's MkdirAll
