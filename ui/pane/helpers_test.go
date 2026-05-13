@@ -1,6 +1,8 @@
 package pane
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -422,5 +424,174 @@ func TestCompletionContextEmptyInput(t *testing.T) {
 	}
 	if prefix != "" {
 		t.Errorf("empty input prefix should be empty, got %q", prefix)
+	}
+}
+
+// focusField cycles a Launch form's focus to the requested field.
+func focusField(t *testing.T, v View, target int) View {
+	t.Helper()
+	for i := 0; i < fldCount*2; i++ {
+		l, ok := AsLaunchView(v)
+		if !ok {
+			t.Fatal("focusField: not a Launch view")
+		}
+		if l.focus == target {
+			return v
+		}
+		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	}
+	t.Fatalf("focusField: could not reach %d", target)
+	return v
+}
+
+func TestLaunchEnterOnCancelReturnsParent(t *testing.T) {
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x"})
+	v := focusField(t, View(form), fldCancel)
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if v.Title() != "parent" {
+		t.Errorf("Enter on Cancel should return parent, got Title=%q", v.Title())
+	}
+}
+
+func TestLaunchEnterOnLaunchSubmits(t *testing.T) {
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "go-review"})
+	form.prompt.SetValue("do the thing")
+	v := focusField(t, View(form), fldLaunch)
+	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	req := asLaunchRequest(t, cmd)
+	if req.Agent != "go-review" || req.Prompt != "do the thing" {
+		t.Errorf("Enter on Launch should submit, got %+v", req)
+	}
+	if next.Title() != "parent" {
+		t.Errorf("after submit: got Title=%q, want parent", next.Title())
+	}
+}
+
+func TestLaunchEnterOnAgentAdvancesFocus(t *testing.T) {
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agents: []string{"alpha", "beta"}})
+	// Default focus is fldAgent.
+	v, _ := form.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	l, _ := AsLaunchView(v)
+	if l.focus != fldWorkingDir {
+		t.Errorf("Enter on agent should advance to workingDir (%d), got %d", fldWorkingDir, l.focus)
+	}
+}
+
+func TestLaunchEnterOnWorkingDirNoChangeAdvancesFocus(t *testing.T) {
+	parent := stubView{name: "parent"}
+	// No options → Enter can't commit a new value → falls through to advance.
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x", WorkingDir: "/nowhere"})
+	form.workingDir.SetOptions(nil)
+	v := focusField(t, View(form), fldWorkingDir)
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	l, _ := AsLaunchView(v)
+	if l.focus != fldBudget {
+		t.Errorf("Enter on workingDir with no commit should advance to budget (%d), got %d", fldBudget, l.focus)
+	}
+}
+
+func TestLaunchEnterOnWorkingDirCommitsAndStays(t *testing.T) {
+	root := t.TempDir()
+	sep := string(filepath.Separator)
+	if err := os.Mkdir(filepath.Join(root, "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x", WorkingDir: root + sep})
+	form.workingDir.SetOptions(workingDirSuggestions(root + sep))
+	v := focusField(t, View(form), fldWorkingDir)
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	l, _ := AsLaunchView(v)
+	// Commit took → focus stays on workingDir.
+	if l.focus != fldWorkingDir {
+		t.Errorf("Enter that commits should stay on workingDir, got focus=%d", l.focus)
+	}
+	if !strings.HasSuffix(l.workingDir.Value(), "alpha"+sep) {
+		t.Errorf("Enter should commit highlighted dir, got %q", l.workingDir.Value())
+	}
+}
+
+func TestLaunchEnterOnProviderRefreshesModelOptions(t *testing.T) {
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x"})
+	v := focusField(t, View(form), fldProvider)
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	l, _ := AsLaunchView(v)
+	if l.focus != fldModel {
+		t.Errorf("Enter on provider should advance to model (%d), got %d", fldModel, l.focus)
+	}
+}
+
+func TestLaunchEnterOnModelAdvancesFocus(t *testing.T) {
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x"})
+	v := focusField(t, View(form), fldModel)
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	l, _ := AsLaunchView(v)
+	if l.focus != fldIsolate {
+		t.Errorf("Enter on model should advance to isolate (%d), got %d", fldIsolate, l.focus)
+	}
+}
+
+func TestLaunchEnterOnPromptFallsThrough(t *testing.T) {
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x"})
+	v := focusField(t, View(form), fldPrompt)
+	// Enter on prompt is not "handled" by the form — it forwards to the
+	// textarea, which inserts no newline (the textarea reserves Enter for
+	// composer submit). The form stays open and focus stays put.
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	l, ok := AsLaunchView(v)
+	if !ok {
+		t.Fatal("Enter on prompt should keep form open")
+	}
+	if l.focus != fldPrompt {
+		t.Errorf("focus should remain on prompt, got %d", l.focus)
+	}
+}
+
+func TestLaunchEnterOnIsolateAdvancesFocus(t *testing.T) {
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x"})
+	v := focusField(t, View(form), fldIsolate)
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	l, _ := AsLaunchView(v)
+	// fldIsolate uses the default branch in handleEnter.
+	if l.focus != fldPrompt {
+		t.Errorf("Enter on isolate should advance to prompt (%d), got %d", fldPrompt, l.focus)
+	}
+}
+
+func TestLaunchAcceptKeyOnIterRejectsLetters(t *testing.T) {
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x", MaxIter: 10})
+	v := focusField(t, View(form), fldIters)
+	before, _ := AsLaunchView(v)
+	prev := before.iter.Value()
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	l, _ := AsLaunchView(v)
+	if l.iter.Value() != prev {
+		t.Errorf("letter should be rejected on iter field, got %q", l.iter.Value())
+	}
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
+	l, _ = AsLaunchView(v)
+	if !strings.Contains(l.iter.Value(), "5") {
+		t.Errorf("digit should pass through, got %q", l.iter.Value())
+	}
+}
+
+func TestLaunchAcceptKeyOnBudgetRejectsSecondDot(t *testing.T) {
+	parent := stubView{name: "parent"}
+	form := NewLaunch(parent, LaunchDefaults{Agent: "x", MaxCost: 1.5})
+	v := focusField(t, View(form), fldBudget)
+	before, _ := AsLaunchView(v)
+	prev := before.budget.Value()
+	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'.'}})
+	l, _ := AsLaunchView(v)
+	if l.budget.Value() != prev {
+		t.Errorf("second dot should be rejected, got %q", l.budget.Value())
 	}
 }

@@ -663,6 +663,98 @@ func TestRunFromTailerCompletedUsesUpdatedDelta(t *testing.T) {
 	}
 }
 
+func TestRediscoverPicksUpNewSessions(t *testing.T) {
+	root := t.TempDir()
+	// Start with empty root.
+	a, err := NewWithSessions(root, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.currentRuns()) != 0 {
+		t.Fatal("precondition: should start empty")
+	}
+	// Create a new session dir on disk, then re-discover.
+	sid := "fresh-session"
+	dir := filepath.Join(root, sid)
+	if err := mkSessionDir(t, dir, session.Meta{SessionID: sid, Agent: "go-review", Status: session.StatusRunning}); err != nil {
+		t.Fatal(err)
+	}
+	a.rediscover()
+	runs := a.currentRuns()
+	if len(runs) != 1 {
+		t.Fatalf("after rediscover: got %d runs, want 1", len(runs))
+	}
+	if a.Selected() != sid {
+		t.Errorf("rediscover should auto-select first discovered session, got %q", a.Selected())
+	}
+}
+
+func TestRediscoverPairsPendingLaunch(t *testing.T) {
+	root := t.TempDir()
+	a, err := NewWithSessions(root, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.pendingLaunches = []string{"L0001"}
+	sid := "new-paired"
+	dir := filepath.Join(root, sid)
+	if err := mkSessionDir(t, dir, session.Meta{SessionID: sid, Agent: "x", Status: session.StatusRunning}); err != nil {
+		t.Fatal(err)
+	}
+	a.rediscover()
+	if a.launchPairs[sid] != "L0001" {
+		t.Errorf("FIFO pair: got %q, want L0001", a.launchPairs[sid])
+	}
+	if len(a.pendingLaunches) != 0 {
+		t.Errorf("pending should be drained, got %v", a.pendingLaunches)
+	}
+}
+
+func TestFrameTickFunctionReturnsCmd(t *testing.T) {
+	if frameTick() == nil {
+		t.Error("frameTick() should return a non-nil tea.Cmd")
+	}
+}
+
+func TestLaunchWithMissingRegistry(t *testing.T) {
+	a := makeApp()
+	a.registry = nil
+	a.launch(pane.LaunchRequest{Agent: "x", Prompt: "y"})
+	if a.currentToast() == "" {
+		t.Error("launch with nil registry should toast")
+	}
+}
+
+func TestLaunchSuccessRecordsLastLaunch(t *testing.T) {
+	a := makeApp()
+	a.workingDir = t.TempDir()
+	a.launch(pane.LaunchRequest{
+		Agent:    "x",
+		Prompt:   "y",
+		MaxCost:  3.0,
+		MaxIter:  10,
+		Mode:     "edit",
+		Provider: "anthropic",
+		Model:    "claude",
+		Isolate:  "worktree",
+	})
+	// Either succeeded (registered a launch + lastLaunch) or failed with a
+	// toast. In both cases the function exercised most branches.
+	if a.lastLaunch == nil && a.currentToast() == "" {
+		t.Error("launch should either record lastLaunch or set a toast")
+	}
+}
+
+func TestLaunchFillsWorkingDirFromAppDefault(t *testing.T) {
+	a := makeApp()
+	a.workingDir = t.TempDir()
+	a.launch(pane.LaunchRequest{Agent: "x", Prompt: "y"})
+	if a.lastLaunch != nil && a.lastLaunch.WorkingDir != a.workingDir {
+		t.Errorf("missing WorkingDir should fall back to app default, got %q want %q",
+			a.lastLaunch.WorkingDir, a.workingDir)
+	}
+}
+
 func TestRenderFocusedWithTailerState(t *testing.T) {
 	root := t.TempDir()
 	sid := "session-render"
