@@ -108,6 +108,49 @@ func TestRunUINonMockMissingDirIsHandled(t *testing.T) {
 	_ = runUI(cmd, nil)
 }
 
+func TestRunUIDefaultsWorkingDirAndSessionsDir(t *testing.T) {
+	// Exercise the "no --working-dir" branch (which calls os.Getwd) AND the
+	// "no --sessions-dir" branch (which derives one under workingDir). Both
+	// flags are left unset.
+	base := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(base, "cache"))
+	t.Setenv("HOME", base)
+
+	// Run from a sessions-aware dir so NewWithSessions doesn't error.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	cmd := newUICmd()
+	// Pre-cancel so tea returns instantly without a TTY.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmd.SetContext(ctx)
+	// Set the agents-dir flag to exercise the WithAgents branch when at
+	// least one agent is discovered.
+	agentsDir := t.TempDir()
+	for _, name := range []string{"alpha"} {
+		dir := filepath.Join(agentsDir, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "agent.yaml"), []byte("version: v1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatal(err)
+	}
+	_ = runUI(cmd, nil)
+}
+
 // guard against unused-import warnings if cobra goes unused.
 var _ = (*cobra.Command)(nil)
 
