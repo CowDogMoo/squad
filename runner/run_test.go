@@ -275,6 +275,21 @@ func TestPrepareBundle(t *testing.T) {
 	}
 }
 
+func TestResolveModelPrecedenceNilGuard(t *testing.T) {
+	t.Parallel()
+	// Calling with either argument nil must be a no-op rather than a panic;
+	// pipeline code passes a bundle that may be nil on early-exit paths.
+	ResolveModelPrecedence(context.Background(), nil, nil)
+	ResolveModelPrecedence(context.Background(), &RunOptions{}, nil)
+	ResolveModelPrecedence(context.Background(), nil, &agent.Bundle{})
+
+	opts := &RunOptions{Model: "preset", Provider: "preset"}
+	ResolveModelPrecedence(context.Background(), opts, &agent.Bundle{Model: "manifest", Provider: "manifest"})
+	if opts.Model != "preset" || opts.Provider != "preset" {
+		t.Fatalf("explicit values must win over manifest: Model=%q Provider=%q", opts.Model, opts.Provider)
+	}
+}
+
 func TestPrepareBundleManifestModelProvider(t *testing.T) {
 	t.Parallel()
 
