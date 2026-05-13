@@ -438,6 +438,18 @@ func TestSetMaxCost(t *testing.T) {
 	}
 }
 
+func TestMaxCostValue(t *testing.T) {
+	t.Parallel()
+	m := New("openai", "gpt-4o")
+	if got := m.MaxCostValue(); got != 0 {
+		t.Errorf("MaxCostValue = %v, want 0", got)
+	}
+	m.SetMaxCost(2.75)
+	if got := m.MaxCostValue(); got != 2.75 {
+		t.Errorf("MaxCostValue = %v, want 2.75", got)
+	}
+}
+
 func TestBudgetExceeded(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

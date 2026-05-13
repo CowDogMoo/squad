@@ -212,6 +212,53 @@ func TestResetClearsState(t *testing.T) {
 	}
 }
 
+func TestTailerSessionIDPrefersMeta(t *testing.T) {
+	dir := writeSession(t, session.Meta{SessionID: "S-meta"}, nil)
+	tt := NewTailer(dir)
+	if _, err := tt.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if got := tt.SessionID(); got != "S-meta" {
+		t.Errorf("SessionID = %q, want %q", got, "S-meta")
+	}
+}
+
+func TestTailerSessionIDFallsBackToDir(t *testing.T) {
+	tt := NewTailer("/some/path/S-dir")
+	if got := tt.SessionID(); got != "S-dir" {
+		t.Errorf("SessionID fallback = %q, want %q", got, "S-dir")
+	}
+}
+
+func TestTailerStateReturnsZeroBeforeRefresh(t *testing.T) {
+	tt := NewTailer(t.TempDir())
+	s := tt.State()
+	if s.Meta.SessionID != "" || s.Counts.Iterations != 0 {
+		t.Errorf("expected zero State before Refresh, got %+v", s)
+	}
+}
+
+func TestTailerRefreshAfterAppend(t *testing.T) {
+	dir := writeSession(t, session.Meta{SessionID: "S"}, []session.Event{
+		event(time.Now(), session.EventIteration, map[string]any{"index": 1}),
+	})
+	tt := NewTailer(dir)
+	if _, err := tt.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	// Append more events and re-refresh.
+	writeEvents(t, dir, []session.Event{
+		event(time.Now(), session.EventIteration, map[string]any{"index": 2}),
+	})
+	s, err := tt.Refresh()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Counts.Iterations < 2 {
+		t.Errorf("expected at least 2 iterations after append, got %d", s.Counts.Iterations)
+	}
+}
+
 func TestSummarize(t *testing.T) {
 	now := time.Now().UTC()
 	cases := []struct {

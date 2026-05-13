@@ -169,6 +169,41 @@ func TestModelTickAdvancesFrame(t *testing.T) {
 	}
 }
 
+func TestModelInitReturnsTick(t *testing.T) {
+	m := New()
+	if cmd := m.Init(); cmd == nil {
+		t.Error("Init should return a tick command")
+	}
+}
+
+func TestModelViewMatchesRender(t *testing.T) {
+	m := New()
+	m.SetState(StateWorking)
+	m.SetLabel("Crunching")
+	m.SetDetail("step 3/10")
+	m.SetWidth(80)
+	m.SetInterrupt(true)
+	snap := m.Snapshot()
+	if snap.Label != "Crunching" || snap.Detail != "step 3/10" || snap.Width != 80 || !snap.Interrupt {
+		t.Errorf("setters did not update snapshot: %+v", snap)
+	}
+	if m.View() != Render(snap) {
+		t.Error("View should equal Render(Snapshot)")
+	}
+}
+
+func TestModelUpdateIgnoresUnknownMsg(t *testing.T) {
+	m := New()
+	startFrame := m.Snapshot().Frame
+	m, cmd := m.Update("not-a-tick-msg")
+	if m.Snapshot().Frame != startFrame {
+		t.Errorf("non-tick msg should not advance frame")
+	}
+	if cmd != nil {
+		t.Errorf("non-tick msg should not schedule a tick")
+	}
+}
+
 func compareGolden(t *testing.T, name, got string) {
 	t.Helper()
 	path := filepath.Join("testdata", name)
