@@ -610,3 +610,168 @@ func TestIDFromFileNameValidExtensions(t *testing.T) {
 		t.Errorf("trailing-hyphen id rejected: got %q", id)
 	}
 }
+
+// More targeted error-path coverage for routine/roots.go and storage.go.
+
+func TestLoadRoutineMissingFile(t *testing.T) {
+	t.Parallel()
+	if _, err := LoadRoutine(filepath.Join(t.TempDir(), "nope.yaml")); err == nil {
+		t.Error("expected error reading missing routine")
+	}
+}
+
+func TestLoadRootsCorruptYAML(t *testing.T) {
+	setupTempXDG(t)
+	path, err := RootsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(":not\nvalid: ::: yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRoots(); err == nil {
+		t.Error("expected parse error from corrupt roots yaml")
+	}
+}
+
+func TestStoreCreateInUnwriteableScope(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("cannot provoke ENOENT/EACCES write failure as root")
+	}
+	setupTempXDG(t)
+	ro := makeReadOnly(t)
+	store := NewStore()
+	_, err := store.Create(
+		Ref{Scope: ScopeRepo, Root: filepath.Join(ro, "absent-repo"), ID: "rep"},
+		&Routine{ID: "rep", Agent: "go", Schedule: "@daily", Enabled: true},
+	)
+	if err == nil {
+		t.Error("expected error creating manifest in unwriteable repo root")
+	}
+}
+
+func TestSchedulerSyncEmptySliceIsCleanWipe(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	ref := Ref{Scope: ScopeGlobal, ID: "wipe"}
+	if _, err := store.Create(ref, &Routine{ID: "wipe", Agent: "go", Schedule: "@daily", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	sched, _ := NewScheduler(store, neverFires(), SchedulerOptions{})
+	_ = sched.Sync(store.Entries())
+	if len(sched.JobIDs()) != 1 {
+		t.Fatal("setup")
+	}
+	// Empty entries → all jobs removed.
+	if err := sched.Sync(nil); err != nil {
+		t.Fatalf("Sync nil: %v", err)
+	}
+	if len(sched.JobIDs()) != 0 {
+		t.Errorf("expected no jobs, got %v", sched.JobIDs())
+	}
+}
+
+func TestSchedulerSyncBadScheduleSkipsButNoError(t *testing.T) {
+	// A routine with a corrupted schedule should be skipped by gocron's
+	// addJob, but Sync itself returns nil so other routines still install.
+	setupTempXDG(t)
+	store := NewStore()
+	// Force the invalid schedule into the store directly, bypassing
+	// SaveRoutine validation.
+	ref := Ref{Scope: ScopeGlobal, ID: "bad"}
+	if _, err := store.Create(ref, &Routine{ID: "bad", Agent: "go", Schedule: "@daily", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Mutate in-memory after Create so validation passes once.
+	entries := store.Entries()
+	if len(entries) != 1 {
+		t.Fatal("setup")
+	}
+	entries[0].Routine.Schedule = "this is not a schedule"
+	sched, _ := NewScheduler(store, neverFires(), SchedulerOptions{})
+	if err := sched.Sync(entries); err != nil {
+		t.Errorf("Sync should swallow bad-schedule errors, got %v", err)
+	}
+	if _, ok := sched.JobIDs()[entryKey(ref)]; ok {
+		t.Error("invalid-schedule job should not be in the map")
+	}
+}
+
+func TestSchedulerApplyEventNoOpOnMissing(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	sched, _ := NewScheduler(store, neverFires(), SchedulerOptions{})
+	// EventRemoved for a routine that was never scheduled — should not panic.
+	sched.ApplyEvent(Event{Type: EventRemoved, Ref: Ref{Scope: ScopeGlobal, ID: "ghost"}})
+	if len(sched.JobIDs()) != 0 {
+		t.Errorf("expected empty after removing ghost, got %v", sched.JobIDs())
+	}
+}
+
+func TestFindMissedFiresIgnoresInvalidSchedule(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	ref := Ref{Scope: ScopeGlobal, ID: "garbage"}
+	if _, err := store.Create(ref, &Routine{ID: "garbage", Agent: "go", Schedule: "@daily", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Stomp the schedule in-memory to something NextFire can't parse.
+	for _, e := range store.Entries() {
+		e.Routine.Schedule = "not a schedule"
+	}
+	if got := FindMissedFires(store, time.Now()); len(got) != 0 {
+		t.Errorf("expected zero misses for invalid schedule, got %v", got)
+	}
+}
+
+func TestRoutineEffectiveCatchupHonorsExplicit(t *testing.T) {
+	t.Parallel()
+	for _, p := range []CatchupPolicy{CatchupFireOnce, CatchupSkip} {
+		r := &Routine{Catchup: p}
+		if r.EffectiveCatchup() != p {
+			t.Errorf("expected %s, got %s", p, r.EffectiveCatchup())
+		}
+	}
+}
+
+func TestStoreFindMissingRef(t *testing.T) {
+	t.Parallel()
+	store := NewStore()
+	if _, ok := store.Find(Ref{Scope: ScopeGlobal, ID: "ghost"}); ok {
+		t.Error("expected not found")
+	}
+}
+
+func TestStoreFindByIDEmpty(t *testing.T) {
+	t.Parallel()
+	store := NewStore()
+	if got := store.FindByID("nope"); len(got) != 0 {
+		t.Errorf("expected empty, got %v", got)
+	}
+}
+
+func TestStoreEntriesSnapshotIsSorted(t *testing.T) {
+	setupTempXDG(t)
+	store := NewStore()
+	for _, id := range []string{"c", "a", "b"} {
+		if _, err := store.Create(
+			Ref{Scope: ScopeGlobal, ID: id},
+			&Routine{ID: id, Agent: "go", Schedule: "@daily", Enabled: true},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries := store.Entries()
+	if len(entries) != 3 {
+		t.Fatal("setup")
+	}
+	for i := 1; i < len(entries); i++ {
+		if entries[i-1].Ref.ID > entries[i].Ref.ID {
+			t.Errorf("entries not sorted: %v", entries)
+			break
+		}
+	}
+}

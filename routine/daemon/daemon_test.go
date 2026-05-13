@@ -190,6 +190,48 @@ func TestBuildFireFnNotNil(t *testing.T) {
 	}
 }
 
+func TestBuildFireFnInvocationReachesRunnerWithMissingAgent(t *testing.T) {
+	// Invoke the returned FireFn. It will fail inside runner.ExecuteRun when
+	// the agent can't be found — that's fine; we're exercising the fire
+	// wiring (working dir resolution, RunOptions construction), not the
+	// full agent execution path.
+	tmp := t.TempDir()
+	cfg := config.Defaults()
+	cfg.Agents.LocalPaths = []string{tmp} // no real agents -> guaranteed lookup failure
+	fire := BuildFireFn(cfg)
+
+	entry := routine.Entry{
+		Ref: routine.Ref{Scope: routine.ScopeGlobal, ID: "x"},
+		Routine: &routine.Routine{
+			ID:         "x",
+			Agent:      "definitely-missing-agent",
+			Schedule:   "@daily",
+			WorkingDir: tmp,
+			Enabled:    true,
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := fire(ctx, entry)
+	if err == nil {
+		t.Error("expected error when agent doesn't exist")
+	}
+}
+
+func TestNewStoreAndSchedulerErrorBubbles(t *testing.T) {
+	// Point XDG at an unwriteable area so LoadAll fails — exercises the
+	// error path in newStoreAndScheduler.
+	if os.Geteuid() == 0 {
+		t.Skip("can't make /proc-style unwriteable as root")
+	}
+	t.Setenv("XDG_CONFIG_HOME", "/proc/cannot")
+	t.Setenv("XDG_STATE_HOME", "/proc/cannot")
+	t.Setenv("HOME", "/proc/cannot")
+	if _, _, err := newStoreAndScheduler(config.Defaults(), Options{MaxConcurrent: 1}); err == nil {
+		t.Error("expected error when XDG dirs are unwriteable")
+	}
+}
+
 func TestRedirectStdioCreatesLogFile(t *testing.T) {
 	// Not parallel: we mutate os.Stdout/os.Stderr.
 	dir := t.TempDir()
