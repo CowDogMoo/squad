@@ -287,9 +287,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	// Dynamic completions for --agent (scan agents directories).
 	_ = cmd.RegisterFlagCompletionFunc("agent", completeAgentNames)
 	// Static completions for --provider.
-	_ = cmd.RegisterFlagCompletionFunc("provider", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-		return metrics.SupportedProviders, cobra.ShellCompDirectiveNoFileComp
-	})
+	_ = cmd.RegisterFlagCompletionFunc("provider", completeProviderNames)
 	_ = cmd.RegisterFlagCompletionFunc("api-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"openai", "azure"}, cobra.ShellCompDirectiveNoFileComp
 	})
@@ -315,6 +313,10 @@ func hasPipedInput(r io.Reader) bool {
 		return b.Len() > 0
 	}
 	return false
+}
+
+func completeProviderNames(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	return metrics.SupportedProviders, cobra.ShellCompDirectiveNoFileComp
 }
 
 func completeAgentNames(_ *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
