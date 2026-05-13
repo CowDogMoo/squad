@@ -38,3 +38,12 @@ ignore:
   # as storage_watch.go: unit tests can only assert it doesn't deadlock,
   # which is covered by Run's higher-level tests.
   - "routine/daemon/daemon_run.go"
+  # *_io.go files isolate the atomic-write (temp file + rename) IO half of
+  # each on-disk artifact. The branches are os.CreateTemp / os.WriteFile /
+  # os.Rename error paths that need fault injection on the os package to
+  # cover. The load + validate halves stay in their main files and ARE
+  # unit-tested; the happy-path round-trip is exercised by the round-trip
+  # tests in routine_test.go / state_test.go.
+  - "routine/manifest_io.go"
+  - "routine/state_io.go"
+  - "routine/roots_io.go"

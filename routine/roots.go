@@ -49,38 +49,6 @@ func LoadRoots() ([]string, error) {
 	return normalizeRoots(cfg.Roots)
 }
 
-// SaveRoots writes the given roots to the registry atomically. The slice is
-// normalized (abs, clean, dedup, sort) before writing.
-func SaveRoots(roots []string) error {
-	normalized, err := normalizeRoots(roots)
-	if err != nil {
-		return err
-	}
-	path, err := RootsPath()
-	if err != nil {
-		return err
-	}
-	data, err := yaml.Marshal(rootsConfig{Roots: normalized})
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".routine-roots-*.yaml.tmp")
-	if err != nil {
-		return fmt.Errorf("create roots temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write roots temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close roots temp: %w", err)
-	}
-	return os.Rename(tmpName, path)
-}
-
 // AddRoot adds path (resolved to absolute, cleaned) to the watched-roots
 // registry. It is idempotent: adding an already-watched root is a no-op.
 // Returns the cleaned absolute path that was added, plus a bool indicating

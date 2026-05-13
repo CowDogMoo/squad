@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -59,36 +58,6 @@ func LoadState(path string) (*State, error) {
 		return nil, fmt.Errorf("parse state %s: %w", path, err)
 	}
 	return s, nil
-}
-
-// SaveState writes the state JSON to path atomically. The parent directory is
-// created if missing (state directories are daemon-owned, not user-curated).
-func SaveState(path string, s *State) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create state dir for %s: %w", path, err)
-	}
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal state: %w", err)
-	}
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".state-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("create state temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write state temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close state temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename state temp: %w", err)
-	}
-	return nil
 }
 
 // StateFileName returns the standard filename for the state companion of a
