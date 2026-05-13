@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,6 +241,127 @@ func TestRoutineRunNowMissingRoutine(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for missing routine")
 	}
+}
+
+func TestRoutineHistoryWithSessions(t *testing.T) {
+	setupXDG(t)
+	workDir := t.TempDir()
+	sd := filepath.Join(workDir, ".squad", "sessions")
+	if err := os.MkdirAll(filepath.Join(sd, "S1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(sd, "S2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mkMeta := func(id, agent, routineID string, cost float64) {
+		t.Helper()
+		body := `{"session_id":"` + id + `","agent":"` + agent + `","routine_id":"` + routineID + `","created":"2026-05-12T02:00:00Z","status":"completed","cost":` + fmtFloat(cost) + `,"iterations":2}`
+		if err := os.WriteFile(filepath.Join(sd, id, "meta.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mkMeta("S1", "go-review", "global:hist", 0.123)
+	mkMeta("S2", "go-review", "global:other", 0.456)
+
+	if _, err := runRoutineCmd(t,
+		"create", "hist",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", workDir,
+	); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runRoutineCmd(t, "history", "hist")
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if !strings.Contains(out, "S1") {
+		t.Errorf("missing S1 in history (matched on routine_id):\n%s", out)
+	}
+	if strings.Contains(out, "S2") {
+		t.Errorf("S2 should be excluded (different routine_id):\n%s", out)
+	}
+}
+
+func TestRoutineRunNowNeedsConfig(t *testing.T) {
+	setupXDG(t)
+	if _, err := runRoutineCmd(t,
+		"create", "noconfig",
+		"--agent", "go-review",
+		"--schedule", "@daily",
+		"--working-dir", t.TempDir(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// runRoutineCmd doesn't seed config, so run-now should fail at the
+	// configFromContext guard before any service call.
+	out, err := runRoutineCmd(t, "run-now", "noconfig")
+	if err == nil {
+		t.Errorf("expected error from missing config; got: %s", out)
+	}
+}
+
+func TestRoutineWatchNonexistentPathErrors(t *testing.T) {
+	setupXDG(t)
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	if _, err := runRoutineCmd(t, "watch", missing); err == nil {
+		t.Error("expected error watching a non-existent path")
+	}
+}
+
+func TestRoutineUnwatchUnknownPathNoOp(t *testing.T) {
+	setupXDG(t)
+	out, err := runRoutineCmd(t, "unwatch", filepath.Join(t.TempDir(), "never-watched"))
+	if err != nil {
+		t.Errorf("unwatching an unknown path should be a no-op, got: %v", err)
+	}
+	if !strings.Contains(out, "was not in the registry") {
+		t.Errorf("expected no-op message, got:\n%s", out)
+	}
+}
+
+func TestRoutineRootsEmptyMessage(t *testing.T) {
+	setupXDG(t)
+	out, err := runRoutineCmd(t, "roots")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "(none)") {
+		t.Errorf("expected (none) for empty roots, got:\n%s", out)
+	}
+}
+
+func TestRoutineDeleteUnknownErrors(t *testing.T) {
+	setupXDG(t)
+	if _, err := runRoutineCmd(t, "delete", "ghost"); err == nil {
+		t.Error("expected error deleting non-existent routine")
+	}
+}
+
+func TestRoutineEnableUnknownErrors(t *testing.T) {
+	setupXDG(t)
+	if _, err := runRoutineCmd(t, "enable", "ghost"); err == nil {
+		t.Error("expected error enabling non-existent routine")
+	}
+}
+
+func TestRoutineShowMissingErrors(t *testing.T) {
+	setupXDG(t)
+	if _, err := runRoutineCmd(t, "show", "ghost"); err == nil {
+		t.Error("expected error showing non-existent routine")
+	}
+}
+
+// fmtFloat formats a float without trailing zeros, suitable for embedding
+// in test JSON literals.
+func fmtFloat(v float64) string {
+	return strings.TrimRight(strings.TrimRight(formatFloat(v), "0"), ".")
+}
+
+func formatFloat(v float64) string {
+	// strconv would be more correct but adds an import only this helper uses.
+	// fmt.Sprintf is fine here.
+	return fmt.Sprintf("%f", v)
 }
 
 // helper guard so unused-import warnings don't trip in environments where
