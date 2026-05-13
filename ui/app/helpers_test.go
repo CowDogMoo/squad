@@ -755,6 +755,52 @@ func TestLaunchFillsWorkingDirFromAppDefault(t *testing.T) {
 	}
 }
 
+func TestHandleCommandPresetListEmpty(t *testing.T) {
+	store, _ := presets.Load(filepath.Join(t.TempDir(), "p.yaml"))
+	a := makeApp().WithPresets(store)
+	a.handleCommand("preset list")
+	if !strings.Contains(a.currentToast(), "no presets") {
+		t.Errorf("empty store should toast 'no presets', got %q", a.currentToast())
+	}
+}
+
+func TestHandleCommandPresetListWithItems(t *testing.T) {
+	store, _ := presets.Load(filepath.Join(t.TempDir(), "p.yaml"))
+	if err := store.Set(presets.Preset{Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(presets.Preset{Name: "beta"}); err != nil {
+		t.Fatal(err)
+	}
+	a := makeApp().WithPresets(store)
+	a.handleCommand("preset list")
+	out := a.currentToast()
+	if !strings.Contains(out, "alpha") || !strings.Contains(out, "beta") {
+		t.Errorf("list toast should include both names, got %q", out)
+	}
+}
+
+func TestHandleCommandPresetDeleteUnknown(t *testing.T) {
+	store, _ := presets.Load(filepath.Join(t.TempDir(), "p.yaml"))
+	a := makeApp().WithPresets(store)
+	a.handleCommand("preset delete nonesuch")
+	if !strings.Contains(a.currentToast(), "not found") {
+		t.Errorf("unknown delete should toast 'not found', got %q", a.currentToast())
+	}
+}
+
+func TestHandleCommandPresetDeleteSucceeds(t *testing.T) {
+	store, _ := presets.Load(filepath.Join(t.TempDir(), "p.yaml"))
+	if err := store.Set(presets.Preset{Name: "victim"}); err != nil {
+		t.Fatal(err)
+	}
+	a := makeApp().WithPresets(store)
+	a.handleCommand("preset delete victim")
+	if !strings.Contains(a.currentToast(), "Deleted") {
+		t.Errorf("delete should toast 'Deleted', got %q", a.currentToast())
+	}
+}
+
 func TestRenderFocusedWithTailerState(t *testing.T) {
 	root := t.TempDir()
 	sid := "session-render"
