@@ -290,16 +290,30 @@ func TestResolveModelPrecedenceNilGuard(t *testing.T) {
 	}
 }
 
+func runAndAssertBundle(t *testing.T, opts *RunOptions, wantModel, wantProvider string) {
+	t.Helper()
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	_, err := prepareBundle(cmd, opts, "prompt", t.TempDir())
+	if err != nil {
+		t.Fatalf("prepareBundle() error = %v", err)
+	}
+	if opts.Model != wantModel {
+		t.Fatalf("expected Model=%q, got %q", wantModel, opts.Model)
+	}
+	if opts.Provider != wantProvider {
+		t.Fatalf("expected Provider=%q, got %q", wantProvider, opts.Provider)
+	}
+}
+
 func TestPrepareBundleManifestModelProvider(t *testing.T) {
 	t.Parallel()
 
 	t.Run("manifest model and provider applied when opts empty", func(t *testing.T) {
 		t.Parallel()
 		agentsDir := writeTestAgentWithModels(t, "model-agent", "manifest-model", "manifest-provider")
-		cmd := &cobra.Command{}
-		cmd.SetContext(context.Background())
-		var buf bytes.Buffer
-		cmd.SetOut(&buf)
 		opts := &RunOptions{
 			Agent:       "model-agent",
 			AgentsDir:   agentsDir,
@@ -307,25 +321,12 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 			PrintBundle: true,
 			BundleOut:   filepath.Join(t.TempDir(), "bundle.txt"),
 		}
-		_, err := prepareBundle(cmd, opts, "prompt", t.TempDir())
-		if err != nil {
-			t.Fatalf("prepareBundle() error = %v", err)
-		}
-		if opts.Model != "manifest-model" {
-			t.Fatalf("expected Model=%q, got %q", "manifest-model", opts.Model)
-		}
-		if opts.Provider != "manifest-provider" {
-			t.Fatalf("expected Provider=%q, got %q", "manifest-provider", opts.Provider)
-		}
+		runAndAssertBundle(t, opts, "manifest-model", "manifest-provider")
 	})
 
 	t.Run("manifest wins over config defaults", func(t *testing.T) {
 		t.Parallel()
 		agentsDir := writeTestAgentWithModels(t, "manifest-vs-config", "manifest-model", "manifest-provider")
-		cmd := &cobra.Command{}
-		cmd.SetContext(context.Background())
-		var buf bytes.Buffer
-		cmd.SetOut(&buf)
 		opts := &RunOptions{
 			Agent:          "manifest-vs-config",
 			AgentsDir:      agentsDir,
@@ -335,25 +336,12 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 			PrintBundle:    true,
 			BundleOut:      filepath.Join(t.TempDir(), "bundle.txt"),
 		}
-		_, err := prepareBundle(cmd, opts, "prompt", t.TempDir())
-		if err != nil {
-			t.Fatalf("prepareBundle() error = %v", err)
-		}
-		if opts.Model != "manifest-model" {
-			t.Fatalf("expected Model=%q (manifest wins over config), got %q", "manifest-model", opts.Model)
-		}
-		if opts.Provider != "manifest-provider" {
-			t.Fatalf("expected Provider=%q (manifest wins over config), got %q", "manifest-provider", opts.Provider)
-		}
+		runAndAssertBundle(t, opts, "manifest-model", "manifest-provider")
 	})
 
 	t.Run("config defaults fill in when manifest is silent", func(t *testing.T) {
 		t.Parallel()
 		agentsDir := writeTestAgentNoModels(t, "config-fallback")
-		cmd := &cobra.Command{}
-		cmd.SetContext(context.Background())
-		var buf bytes.Buffer
-		cmd.SetOut(&buf)
 		opts := &RunOptions{
 			Agent:          "config-fallback",
 			AgentsDir:      agentsDir,
@@ -363,25 +351,28 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 			PrintBundle:    true,
 			BundleOut:      filepath.Join(t.TempDir(), "bundle.txt"),
 		}
-		_, err := prepareBundle(cmd, opts, "prompt", t.TempDir())
-		if err != nil {
-			t.Fatalf("prepareBundle() error = %v", err)
+		runAndAssertBundle(t, opts, "config-model", "config-provider")
+	})
+
+	t.Run("config default wins when it is listed in manifest", func(t *testing.T) {
+		t.Parallel()
+		// Agent manifest lists exactly the config default model/provider.
+		agentsDir := writeTestAgentWithModels(t, "config-in-manifest", "config-model", "config-provider")
+		opts := &RunOptions{
+			Agent:          "config-in-manifest",
+			AgentsDir:      agentsDir,
+			ConfigModel:    "config-model",
+			ConfigProvider: "config-provider",
+			DryRun:         true,
+			PrintBundle:    true,
+			BundleOut:      filepath.Join(t.TempDir(), "bundle.txt"),
 		}
-		if opts.Model != "config-model" {
-			t.Fatalf("expected Model=%q from config fallback, got %q", "config-model", opts.Model)
-		}
-		if opts.Provider != "config-provider" {
-			t.Fatalf("expected Provider=%q from config fallback, got %q", "config-provider", opts.Provider)
-		}
+		runAndAssertBundle(t, opts, "config-model", "config-provider")
 	})
 
 	t.Run("CLI flags take precedence over manifest", func(t *testing.T) {
 		t.Parallel()
 		agentsDir := writeTestAgentWithModels(t, "cli-agent", "manifest-model", "manifest-provider")
-		cmd := &cobra.Command{}
-		cmd.SetContext(context.Background())
-		var buf bytes.Buffer
-		cmd.SetOut(&buf)
 		opts := &RunOptions{
 			Agent:       "cli-agent",
 			AgentsDir:   agentsDir,
@@ -391,16 +382,7 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 			PrintBundle: true,
 			BundleOut:   filepath.Join(t.TempDir(), "bundle.txt"),
 		}
-		_, err := prepareBundle(cmd, opts, "prompt", t.TempDir())
-		if err != nil {
-			t.Fatalf("prepareBundle() error = %v", err)
-		}
-		if opts.Model != "cli-model" {
-			t.Fatalf("expected Model=%q, got %q", "cli-model", opts.Model)
-		}
-		if opts.Provider != "cli-provider" {
-			t.Fatalf("expected Provider=%q, got %q", "cli-provider", opts.Provider)
-		}
+		runAndAssertBundle(t, opts, "cli-model", "cli-provider")
 	})
 }
 

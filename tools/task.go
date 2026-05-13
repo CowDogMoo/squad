@@ -179,6 +179,9 @@ type ChildMaxCostFunc func(agentName string) float64
 // Returns 0 if no dedicated cap is configured (inherit parent's cap).
 type ChildMaxIterFunc func(agentName string) int
 
+// TaskConfig holds the configuration needed to spawn child agent runs
+// from within the Task tool. It is created once per parent run and shared
+// across all Task tool invocations in that run.
 type TaskConfig struct {
 	AgentsDir     string
 	WorkingDir    string

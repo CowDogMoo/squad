@@ -25,6 +25,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// MaxToolIterations is the default cap on tool-calling iterations per run
+// when no explicit --max-iterations flag is provided.
 const MaxToolIterations = 100
 const maxToolOutput = 64 * 1024
 const maxSameToolRepeat = 10
@@ -97,23 +99,27 @@ func sanitizeRegex(pattern string) string {
 	})
 }
 
+// InitEdits attaches an edits-applied flag to ctx, defaulting to false.
 func InitEdits(ctx context.Context) context.Context {
 	b := false
 	return context.WithValue(ctx, editsKeyType{}, &b)
 }
 
+// ResetEditsApplied resets the edits-applied flag to false on ctx.
 func ResetEditsApplied(ctx context.Context) {
 	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
 		*b = false
 	}
 }
 
+// MarkEditsApplied sets the edits-applied flag to true on ctx.
 func MarkEditsApplied(ctx context.Context) {
 	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
 		*b = true
 	}
 }
 
+// EditsApplied reports whether any file edits have been applied in this run.
 func EditsApplied(ctx context.Context) bool {
 	if b, ok := ctx.Value(editsKeyType{}).(*bool); ok {
 		return *b
@@ -142,17 +148,24 @@ func EditDeadlineReached(ctx context.Context) bool {
 	return false
 }
 
+// Handler pairs a tool definition with its implementation function.
+// Extra tools (e.g., from MCP servers) are registered as Handlers so they
+// participate in the same dispatch path as built-in tools.
 type Handler struct {
 	Def  llms.Tool
 	Call func(ctx context.Context, rawArgs []byte) (string, error)
 }
 
+// RepeatTracker detects when the model calls the same tool with identical
+// arguments multiple times in a row so the loop can be interrupted.
 type RepeatTracker struct {
 	lastSignature string
 	LastName      string
 	Count         int
 }
 
+// Update records the current batch of tool calls and increments the repeat
+// counter when the call signature is identical to the previous batch.
 func (t *RepeatTracker) Update(calls []llms.ToolCall) {
 	signature := ""
 	name := ""
@@ -169,6 +182,7 @@ func (t *RepeatTracker) Update(calls []llms.ToolCall) {
 	}
 }
 
+// Exceeded reports whether the repeat limit for the last tool has been reached.
 func (t *RepeatTracker) Exceeded() bool {
 	limit := maxSameToolRepeat
 	if highRepeatTools[t.LastName] {
@@ -292,6 +306,10 @@ func (e *EditEnforcer) ConfirmEdit(toolCalls []llms.ToolCall, results map[string
 	}
 }
 
+// RunWithTools drives the tool-calling loop for a LangChain-compatible LLM.
+// It initialises the read cache, file tracker, and enforcer machinery, then
+// iterates between model calls and tool executions until the model stops
+// calling tools, the iteration cap is hit, or a budget/loop error is raised.
 func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations, editDeadline int, taskCfg *TaskConfig, m *metrics.Metrics, ex executor.Executor, callOpts ...llms.CallOption) (string, error) {
 	ctx, span := telemetry.Tracer().Start(ctx, "tool.loop",
 		trace.WithAttributes(
@@ -1071,6 +1089,11 @@ func toolArgsSummaryComplex(toolName string, args map[string]interface{}) string
 	return ""
 }
 
+// BuildHandlers returns a map of tool-name → Handler and a sorted list of tool
+// definitions to be passed to the LLM. When taskCfg is non-nil the Task and
+// TaskResult tools are registered; when taskCfg.Findings is set the
+// ReportFinding tool is also registered. MCP tools from taskCfg.ExtraTools
+// are appended last.
 func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor) (map[string]Handler, []llms.Tool) {
 	handlers := map[string]Handler{}
 
@@ -1929,6 +1952,8 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent, m *met
 	return compacted
 }
 
+// TruncateToolOutputHeadTail trims tool output that exceeds maxBytes, keeping
+// 75% from the head and 25% from the tail with an omission notice in between.
 func TruncateToolOutputHeadTail(output string, maxBytes int) string {
 	if len(output) <= maxBytes {
 		return output
@@ -1986,6 +2011,8 @@ func (b *FlexBool) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// ResolvePath resolves input against workingDir and verifies the result is
+// inside the working directory, rejecting path-traversal attempts.
 func ResolvePath(workingDir, input string) (string, error) {
 	if strings.TrimSpace(input) == "" {
 		return "", fmt.Errorf("path is required")
@@ -2067,6 +2094,8 @@ func globToRegex(pattern string) (string, error) {
 	return buf.String(), nil
 }
 
+// TruncateString truncates s to maxLen bytes, appending "..." when truncation
+// occurs.
 func TruncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

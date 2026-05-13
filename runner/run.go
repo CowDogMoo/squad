@@ -226,24 +226,49 @@ func printMetrics(cmd *cobra.Command, m *metrics.Metrics) error {
 }
 
 // ResolveModelPrecedence fills opts.Model and opts.Provider using the
-// precedence: explicit (CLI flag / routine field) > agent manifest >
-// config default. Already-set fields are preserved; empty fields are
-// populated from the bundle's manifest preference and, failing that,
-// from opts.ConfigModel / opts.ConfigProvider.
-func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) {
+// precedence: explicit (CLI flag / routine field) > config default (when
+// supported by the manifest) > manifest first model > config default.
+// Already-set fields are preserved. Returns a non-empty warning string when
+// the config default is set but not listed in the agent manifest; callers
+// should display this to the user on stderr.
+func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) string {
 	if opts == nil || bundle == nil {
-		return
+		return ""
 	}
+
+	var warn string
 	if opts.Model == "" {
+		configMatch := bundle.FindModel(opts.ConfigProvider, opts.ConfigModel)
+
 		switch {
+		case configMatch != nil:
+			// Config default is supported by this agent — use it; provider is also set.
+			opts.Model = configMatch.Model
+			opts.Provider = configMatch.Provider
+			logging.InfoContext(ctx, "using config default model: %s (%s)", opts.Model, opts.Provider)
+			return ""
+
+		case opts.ConfigModel != "" && bundle.Model != "":
+			// Config default exists but is not in the manifest — warn and fall back.
+			warn = fmt.Sprintf(
+				"⚠  Config default model %q (%s) is not listed in the agent manifest.\n"+
+					"   Add it to the agent's models: list to avoid this fallback.\n"+
+					"   Falling back to manifest model %q (%s).",
+				opts.ConfigModel, opts.ConfigProvider, bundle.Model, bundle.Provider)
+			logging.WarnContext(ctx, "config default model %q (%s) is not listed in agent manifest; falling back to manifest model %q (%s)",
+				opts.ConfigModel, opts.ConfigProvider, bundle.Model, bundle.Provider)
+			opts.Model = bundle.Model
+
 		case bundle.Model != "":
 			opts.Model = bundle.Model
 			logging.InfoContext(ctx, "using manifest model: %s", bundle.Model)
+
 		case opts.ConfigModel != "":
 			opts.Model = opts.ConfigModel
 			logging.InfoContext(ctx, "using config model: %s", opts.ConfigModel)
 		}
 	}
+
 	if opts.Provider == "" {
 		switch {
 		case bundle.Provider != "":
@@ -254,6 +279,7 @@ func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent
 			logging.InfoContext(ctx, "using config provider: %s", opts.ConfigProvider)
 		}
 	}
+	return warn
 }
 
 // prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
@@ -271,7 +297,11 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 		return nil, err
 	}
 
-	ResolveModelPrecedence(cmd.Context(), opts, bundle)
+	if warn := ResolveModelPrecedence(cmd.Context(), opts, bundle); warn != "" {
+		if _, fmtErr := fmt.Fprintln(cmd.ErrOrStderr(), warn); fmtErr != nil {
+			logging.Warn("failed to write model warning: %v", fmtErr)
+		}
+	}
 
 	logging.InfoContext(cmd.Context(), "agent bundle ready (agent=%s provider=%s model=%s)", opts.Agent, opts.Provider, opts.Model)
 

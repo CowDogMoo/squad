@@ -88,7 +88,9 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 		agentOpts.Findings = pipelineRunner.Findings
 		agentOpts.AgentName = agentName
 
-		runner.ResolveModelPrecedence(ctx, &agentOpts, bundle)
+		if warn := runner.ResolveModelPrecedence(ctx, &agentOpts, bundle); warn != "" {
+			fmt.Fprintln(os.Stderr, warn)
+		}
 
 		// Apply effective budget cap propagated from the pipeline runner.
 		// This accounts for both remaining pipeline budget and per-stage caps.
