@@ -15,6 +15,8 @@ import (
 
 type readCacheKeyType struct{}
 
+// ReadCacheEntry records metadata about a file that has already been read
+// during the current tool-loop session.
 type ReadCacheEntry struct {
 	ContentHash     string // SHA-256 of file content
 	Lines           int    // number of lines
@@ -37,14 +39,17 @@ type ReadCache struct {
 	compactionEpoch int // incremented each time context compaction occurs
 }
 
+// NewReadCache creates an empty ReadCache.
 func NewReadCache() *ReadCache {
 	return &ReadCache{entries: csync.NewMap[string, ReadCacheEntry]()}
 }
 
+// InitReadCache attaches a new ReadCache to ctx for the duration of a run.
 func InitReadCache(ctx context.Context) context.Context {
 	return context.WithValue(ctx, readCacheKeyType{}, NewReadCache())
 }
 
+// GetReadCache retrieves the ReadCache from ctx, or nil if not set.
 func GetReadCache(ctx context.Context) *ReadCache {
 	if rc, ok := ctx.Value(readCacheKeyType{}).(*ReadCache); ok {
 		return rc
@@ -52,6 +57,7 @@ func GetReadCache(ctx context.Context) *ReadCache {
 	return nil
 }
 
+// HashContent returns a hex-encoded SHA-256 hash of data.
 func HashContent(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
@@ -69,6 +75,7 @@ func (rc *ReadCache) BumpCompactionEpoch() {
 	rc.mu.Unlock()
 }
 
+// CompactionEpoch returns the current compaction epoch for the cache.
 func (rc *ReadCache) CompactionEpoch() int {
 	if rc == nil {
 		return 0
@@ -134,6 +141,7 @@ func (rc *ReadCache) Store(path, contentHash string, lines, bytes, iteration int
 	})
 }
 
+// IncrementStreak increments and returns the consecutive cache-hit streak counter.
 func (rc *ReadCache) IncrementStreak() int {
 	if rc == nil {
 		return 0
@@ -144,6 +152,7 @@ func (rc *ReadCache) IncrementStreak() int {
 	return rc.cacheStreak
 }
 
+// ResetStreak resets the consecutive cache-hit streak counter to zero.
 func (rc *ReadCache) ResetStreak() {
 	if rc == nil {
 		return
@@ -171,6 +180,7 @@ func (rc *ReadCache) Summaries() map[string]string {
 	return result
 }
 
+// Len returns the number of files currently tracked in the read cache.
 func (rc *ReadCache) Len() int {
 	if rc == nil {
 		return 0
@@ -180,17 +190,20 @@ func (rc *ReadCache) Len() int {
 
 type iterationKeyType struct{}
 
+// InitIterationCounter attaches an iteration counter (starting at 0) to ctx.
 func InitIterationCounter(ctx context.Context) context.Context {
 	counter := 0
 	return context.WithValue(ctx, iterationKeyType{}, &counter)
 }
 
+// SetIteration updates the current iteration index stored on ctx.
 func SetIteration(ctx context.Context, i int) {
 	if p, ok := ctx.Value(iterationKeyType{}).(*int); ok {
 		*p = i
 	}
 }
 
+// GetIteration returns the current iteration index from ctx, or 0 if not set.
 func GetIteration(ctx context.Context) int {
 	if p, ok := ctx.Value(iterationKeyType{}).(*int); ok {
 		return *p
@@ -200,10 +213,12 @@ func GetIteration(ctx context.Context) int {
 
 type phaseEnforcerKeyType struct{}
 
+// SetPhaseEnforcer stores pe on ctx so tool handlers can retrieve it.
 func SetPhaseEnforcer(ctx context.Context, pe *PhaseEnforcer) context.Context {
 	return context.WithValue(ctx, phaseEnforcerKeyType{}, pe)
 }
 
+// GetPhaseEnforcer retrieves the PhaseEnforcer from ctx, or nil if not set.
 func GetPhaseEnforcer(ctx context.Context) *PhaseEnforcer {
 	if pe, ok := ctx.Value(phaseEnforcerKeyType{}).(*PhaseEnforcer); ok {
 		return pe
@@ -225,6 +240,7 @@ type PhaseEnforcer struct {
 	editSeen      bool
 }
 
+// NudgesSent returns the number of nudge messages sent so far.
 func (pe *PhaseEnforcer) NudgesSent() int {
 	if pe == nil {
 		return 0

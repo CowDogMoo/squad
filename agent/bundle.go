@@ -90,6 +90,20 @@ type ChildBudget struct {
 	MaxIterations int     `yaml:"max_iterations,omitempty"` // iteration cap for child (0 = inherit parent's cap)
 }
 
+// FindModel returns the ModelPreference matching the given provider and model,
+// or nil if not found. An empty provider or model never matches.
+func (b *Bundle) FindModel(provider, model string) *ModelPreference {
+	if provider == "" || model == "" {
+		return nil
+	}
+	for i := range b.Models {
+		if b.Models[i].Provider == provider && b.Models[i].Model == model {
+			return &b.Models[i]
+		}
+	}
+	return nil
+}
+
 // ChildNames returns the list of child agent names.
 func (b *BudgetConfig) ChildNames() []string {
 	if b == nil {

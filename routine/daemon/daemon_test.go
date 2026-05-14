@@ -140,8 +140,11 @@ func TestNewRunOptionsAppliesRoutineFields(t *testing.T) {
 	if opts.Provider != "openai" {
 		t.Errorf("provider override not applied: %q", opts.Provider)
 	}
-	if opts.Model != "claude-sonnet-4-6" {
-		t.Errorf("model from config not inherited: %q", opts.Model)
+	if opts.Model != "" {
+		t.Errorf("unset routine model should not populate opts.Model: %q", opts.Model)
+	}
+	if opts.ConfigModel != "claude-sonnet-4-6" {
+		t.Errorf("config model not threaded into ConfigModel fallback: %q", opts.ConfigModel)
 	}
 	if opts.MaxCost != 3.0 {
 		t.Errorf("max_cost: %v", opts.MaxCost)
@@ -167,8 +170,11 @@ func TestNewRunOptionsAppliesDefaultsForUnsetFields(t *testing.T) {
 		Routine: &routine.Routine{Agent: "any"},
 	}
 	opts := newRunOptions(entry, cfg, "/tmp")
-	if opts.Provider != "ollama" {
-		t.Errorf("provider default not applied: %q", opts.Provider)
+	if opts.Provider != "" {
+		t.Errorf("unset routine provider should not populate opts.Provider: %q", opts.Provider)
+	}
+	if opts.ConfigProvider != "ollama" {
+		t.Errorf("config provider not threaded into ConfigProvider fallback: %q", opts.ConfigProvider)
 	}
 	if opts.MaxIterations != 100 {
 		t.Errorf("max_iter default: %d", opts.MaxIterations)

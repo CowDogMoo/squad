@@ -415,6 +415,70 @@ func TestBindRunFlags(t *testing.T) {
 	}
 }
 
+func TestNewRunOptionsProviderModelPrecedence(t *testing.T) {
+	t.Run("changed flags route to explicit fields", func(t *testing.T) {
+		cmd := newRunCmd()
+		v := viper.New()
+		if err := bindRunFlags(cmd, v); err != nil {
+			t.Fatalf("bindRunFlags: %v", err)
+		}
+		// Setting the flag propagates through BindPFlag into viper; no v.Set
+		// here so we don't override the flag value with viper's own store.
+		if err := cmd.Flags().Set("provider", "cli-provider"); err != nil {
+			t.Fatalf("Set provider: %v", err)
+		}
+		if err := cmd.Flags().Set("model", "cli-model"); err != nil {
+			t.Fatalf("Set model: %v", err)
+		}
+
+		ctx := withViper(context.Background(), v)
+		ctx = withConfig(ctx, config.Defaults())
+		cmd.SetContext(ctx)
+
+		opts := newRunOptions(cmd)
+		if opts.Provider != "cli-provider" {
+			t.Fatalf("Provider = %q, want cli-provider", opts.Provider)
+		}
+		if opts.Model != "cli-model" {
+			t.Fatalf("Model = %q, want cli-model", opts.Model)
+		}
+		if opts.ConfigProvider != "" {
+			t.Fatalf("ConfigProvider = %q, want empty when flag is set", opts.ConfigProvider)
+		}
+		if opts.ConfigModel != "" {
+			t.Fatalf("ConfigModel = %q, want empty when flag is set", opts.ConfigModel)
+		}
+	})
+
+	t.Run("unchanged flags route to config fields", func(t *testing.T) {
+		cmd := newRunCmd()
+		v := viper.New()
+		if err := bindRunFlags(cmd, v); err != nil {
+			t.Fatalf("bindRunFlags: %v", err)
+		}
+		v.Set("provider.default", "config-provider")
+		v.Set("model.default", "config-model")
+
+		ctx := withViper(context.Background(), v)
+		ctx = withConfig(ctx, config.Defaults())
+		cmd.SetContext(ctx)
+
+		opts := newRunOptions(cmd)
+		if opts.Provider != "" {
+			t.Fatalf("Provider = %q, want empty when flag unchanged", opts.Provider)
+		}
+		if opts.Model != "" {
+			t.Fatalf("Model = %q, want empty when flag unchanged", opts.Model)
+		}
+		if opts.ConfigProvider != "config-provider" {
+			t.Fatalf("ConfigProvider = %q, want config-provider", opts.ConfigProvider)
+		}
+		if opts.ConfigModel != "config-model" {
+			t.Fatalf("ConfigModel = %q, want config-model", opts.ConfigModel)
+		}
+	})
+}
+
 func TestBindRunFlagsMissingFlag(t *testing.T) {
 	cmd := &cobra.Command{}
 	v := viper.New()

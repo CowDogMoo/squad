@@ -133,8 +133,10 @@ func newRunOptions(entry routine.Entry, cfg *config.Config, workingDir string) *
 	return &runner.RunOptions{
 		Agent:           r.Agent,
 		WorkingDir:      workingDir,
-		Provider:        firstNonEmpty(r.Provider, cfg.Provider.Default),
-		Model:           firstNonEmpty(r.Model, cfg.Model.Default),
+		Provider:        r.Provider,
+		Model:           r.Model,
+		ConfigProvider:  cfg.Provider.Default,
+		ConfigModel:     cfg.Model.Default,
 		Temperature:     cfg.Model.Temperature,
 		MaxTokens:       cfg.Model.MaxTokens,
 		NumCtx:          cfg.Provider.NumCtx,
