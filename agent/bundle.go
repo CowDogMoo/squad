@@ -24,6 +24,7 @@ import (
 type ModelPreference struct {
 	Model    string `yaml:"model"`
 	Provider string `yaml:"provider"`
+	BaseURL  string `yaml:"base_url,omitempty"`
 }
 
 // Manifest represents the structure of an agent's manifest file.
@@ -163,6 +164,7 @@ type Bundle struct {
 	WorkDir       string
 	Model         string             // primary model override (first from models list or single model field)
 	Provider      string             // primary provider override (first from models list or single provider field)
+	BaseURL       string             // primary model's base URL override (for openai-compat)
 	Models        []ModelPreference  // ranked model preferences from manifest
 	Budget        *BudgetConfig      // budget configuration from manifest
 	Environment   *executor.Config   // execution environment from agent manifest
@@ -660,10 +662,11 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		return nil, err
 	}
 
-	var primaryModel, primaryProvider string
+	var primaryModel, primaryProvider, primaryBaseURL string
 	if len(manifest.Models) > 0 {
 		primaryModel = manifest.Models[0].Model
 		primaryProvider = manifest.Models[0].Provider
+		primaryBaseURL = manifest.Models[0].BaseURL
 	}
 
 	return &Bundle{
@@ -673,6 +676,7 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		WorkDir:       workingDir,
 		Model:         primaryModel,
 		Provider:      primaryProvider,
+		BaseURL:       primaryBaseURL,
 		Models:        manifest.Models,
 		Budget:        manifest.Budget,
 		Environment:   manifest.Environment,
@@ -756,10 +760,11 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 	combined.WriteString(userMessage)
 	combined.WriteString("\n")
 
-	var primaryModel, primaryProvider string
+	var primaryModel, primaryProvider, primaryBaseURL string
 	if len(manifest.Models) > 0 {
 		primaryModel = manifest.Models[0].Model
 		primaryProvider = manifest.Models[0].Provider
+		primaryBaseURL = manifest.Models[0].BaseURL
 	}
 
 	return &Bundle{
@@ -769,6 +774,7 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 		WorkDir:  workingDir,
 		Model:    primaryModel,
 		Provider: primaryProvider,
+		BaseURL:  primaryBaseURL,
 		Models:   manifest.Models,
 	}, nil
 }

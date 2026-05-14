@@ -259,8 +259,7 @@ var SupportedProviders = []string{
 	"anthropic",
 	"gemini",
 	"ollama",
-	"nvidia",
-	"databricks",
+	"openai-compat",
 }
 
 // providerMappings maps a squad provider name to the LiteLLM
@@ -271,8 +270,7 @@ var providerMappings = map[string][]string{
 	"openai-responses": {"openai", "azure"},
 	"anthropic":        {"anthropic", "bedrock", "vertex_ai"},
 	"gemini":           {"gemini", "vertex_ai", "vertex_ai-language-models"},
-	"nvidia":           {"nvidia"},
-	"databricks":       {"databricks"},
+	"openai-compat":    {"openai"},
 }
 
 func fetchPricing() {
@@ -387,8 +385,6 @@ var modelListingProviders = map[string]string{
 	"openai-responses": "openai",
 	"anthropic":        "anthropic",
 	"gemini":           "gemini",
-	"nvidia":           "nvidia",
-	"databricks":       "databricks",
 	"ollama":           "ollama_chat",
 }
 

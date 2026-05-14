@@ -55,8 +55,9 @@ func TestIsOpenAICompatProvider(t *testing.T) {
 		{"openai", "openai", true},
 		{"ollama", "ollama", false},
 		{"anthropic", "anthropic", false},
-		{"nvidia", "nvidia", true},
-		{"databricks", "databricks", true},
+		{"openai-compat", "openai-compat", true},
+		{"nvidia returns false", "nvidia", false},
+		{"databricks returns false", "databricks", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -87,6 +88,8 @@ func TestBuildCallOpts(t *testing.T) {
 		{"anthropic no max tokens", &RunOptions{}, "anthropic", 0.5, 0, 2},
 		{"streaming adds func", &RunOptions{Stream: true}, "openai", 0.3, 0, 2},
 		{"streaming with anthropic", &RunOptions{Stream: true}, "anthropic", 0.5, 2048, 4},
+		// openai-compat uses the legacy max_tokens field (useLegacy=true because provider!="openai")
+		{"openai-compat with max tokens", &RunOptions{}, "openai-compat", 0.3, 200, 3},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -113,32 +116,25 @@ func TestBuildLLMVariants(t *testing.T) {
 		{"openai", "openai", "gpt-4o", &RunOptions{APIKey: "token"}, "*openai.LLM", false},
 		{"anthropic", "anthropic", "claude-3", &RunOptions{APIKey: "token"}, "*anthropic.LLM", false},
 		{"gemini", "gemini", "gemini-2.0-flash", &RunOptions{APIKey: "token"}, "*googleai.GoogleAI", false},
-		{"nvidia provider", "nvidia", "meta/llama-3.1-8b-instruct", &RunOptions{APIKey: "nvapi-test-key"}, "*openai.LLM", false},
 		{"unknown provider", "unknown", "model", &RunOptions{}, "", true},
+		{"nvidia returns error", "nvidia", "meta/llama-3.1-8b-instruct", &RunOptions{APIKey: "nvapi-test-key"}, "", true},
+		{"databricks returns error", "databricks", "databricks-gpt-5-5-pro", &RunOptions{APIKey: "dapi-test-token", BaseURL: "https://example.com"}, "", true},
 		{
-			"databricks provider",
-			"databricks",
-			"databricks-gpt-5-5-pro",
+			"openai-compat/deepinfra",
+			"openai-compat",
+			"meta-llama/Meta-Llama-3-70B-Instruct",
 			&RunOptions{
-				APIKey:  "dapi-test-token",
-				BaseURL: "https://7474657828785521.ai-gateway.cloud.databricks.com/mlflow/v1",
+				APIKey:  "di_abc123",
+				BaseURL: "https://api.deepinfra.com/v1/openai",
 			},
 			"*openai.LLM",
 			false,
 		},
 		{
-			"databricks provider missing base URL",
-			"databricks",
-			"databricks-gpt-5-5-pro",
-			&RunOptions{APIKey: "dapi-test-token"},
-			"",
-			true,
-		},
-		{
-			"databricks provider missing api key",
-			"databricks",
-			"databricks-gpt-5-5-pro",
-			&RunOptions{BaseURL: "https://7474657828785521.ai-gateway.cloud.databricks.com/mlflow/v1"},
+			"openai-compat/missing base-url",
+			"openai-compat",
+			"meta-llama/Meta-Llama-3-70B-Instruct",
+			&RunOptions{APIKey: "somekey"},
 			"",
 			true,
 		},
@@ -1069,6 +1065,34 @@ func TestBuildTaskConfigChildModelOverride(t *testing.T) {
 	if !strings.Contains(err.Error(), "API key") && !strings.Contains(err.Error(), "failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestApplyChildModelOverridesBaseURL(t *testing.T) {
+	t.Parallel()
+	bundle := &agent.Bundle{
+		Provider: "openai-compat",
+		Model:    "meta-llama/Meta-Llama-3-70B-Instruct",
+		BaseURL:  "https://api.deepinfra.com/v1/openai",
+	}
+
+	t.Run("propagates BaseURL when child opts is empty", func(t *testing.T) {
+		t.Parallel()
+		childOpts := &RunOptions{}
+		applyChildModelOverrides(context.Background(), childOpts, bundle, "child")
+		if childOpts.BaseURL != bundle.BaseURL {
+			t.Fatalf("BaseURL = %q, want %q", childOpts.BaseURL, bundle.BaseURL)
+		}
+	})
+
+	t.Run("does not overwrite explicit parent BaseURL", func(t *testing.T) {
+		t.Parallel()
+		parentURL := "https://parent-endpoint.example.com/v1"
+		childOpts := &RunOptions{BaseURL: parentURL}
+		applyChildModelOverrides(context.Background(), childOpts, bundle, "child")
+		if childOpts.BaseURL != parentURL {
+			t.Fatalf("BaseURL = %q, want parent URL %q", childOpts.BaseURL, parentURL)
+		}
+	})
 }
 
 func TestBuildTaskConfigChildBudgetDedicated(t *testing.T) {

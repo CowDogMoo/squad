@@ -4,11 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
-
-	"io"
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
@@ -282,10 +281,11 @@ func buildLLM(ctx context.Context, opts *RunOptions, provider, model string) (ll
 		return buildAnthropicLLM(opts, model)
 	case "gemini":
 		return buildGeminiLLM(ctx, opts, model)
-	case "nvidia":
-		return buildNvidiaLLM(opts, model)
-	case "databricks":
-		return buildDatabricksLLM(opts, model)
+	case "openai-compat":
+		if opts.BaseURL == "" {
+			return nil, fmt.Errorf("openai-compat provider requires --base-url (e.g. https://api.deepinfra.com/v1/openai)")
+		}
+		return buildOpenAICompatLLM(opts, "openai-compat", model)
 	default:
 		return nil, fmt.Errorf("provider not implemented: %s", provider)
 	}
@@ -354,44 +354,6 @@ func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
 }
 
-func buildNvidiaLLM(opts *RunOptions, model string) (llms.Model, error) {
-	oaiOpts := []openai.Option{}
-	if model != "" {
-		oaiOpts = append(oaiOpts, openai.WithModel(model))
-	}
-	baseURL := opts.BaseURL
-	if baseURL == "" {
-		baseURL = "https://integrate.api.nvidia.com/v1"
-	}
-	oaiOpts = append(oaiOpts, openai.WithBaseURL(baseURL))
-	if opts.APIKey != "" {
-		oaiOpts = append(oaiOpts, openai.WithToken(opts.APIKey))
-	}
-	return openai.New(oaiOpts...)
-}
-
-func buildDatabricksLLM(opts *RunOptions, model string) (llms.Model, error) {
-	if opts.BaseURL == "" {
-		return nil, fmt.Errorf(
-			"databricks provider requires --base-url " +
-				"(e.g. https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1)",
-		)
-	}
-	if opts.APIKey == "" {
-		return nil, fmt.Errorf(
-			"databricks provider requires --api-key (Databricks PAT, prefix dapi-)",
-		)
-	}
-	oaiOpts := []openai.Option{
-		openai.WithBaseURL(opts.BaseURL),
-		openai.WithToken(opts.APIKey),
-	}
-	if model != "" {
-		oaiOpts = append(oaiOpts, openai.WithModel(model))
-	}
-	return openai.New(oaiOpts...)
-}
-
 func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 	baseURL := opts.BaseURL
 	if baseURL == "" {
@@ -405,7 +367,7 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 }
 
 func isOpenAICompatProvider(provider string) bool {
-	return provider == "" || provider == "openai" || provider == "nvidia" || provider == "databricks"
+	return provider == "" || provider == "openai" || provider == "openai-compat"
 }
 
 // reasoningPrefixes returns the configured reasoning model prefixes,
@@ -432,8 +394,13 @@ func applyChildIterationCap(ctx context.Context, childOpts *RunOptions, cfg *too
 	}
 }
 
-// applyChildModelOverrides applies model and provider overrides from the
-// child agent's manifest to the child options.
+// applyChildModelOverrides applies model, provider, and base URL overrides
+// from the child agent's manifest to the child options.
+//
+// BaseURL must be propagated here because child agents are dispatched via
+// InvokeModel directly (not ExecuteRun), so ResolveModelPrecedence is never
+// called on the child path — without this, openai-compat child agents would
+// always fail with "openai-compat provider requires --base-url".
 func applyChildModelOverrides(ctx context.Context, childOpts *RunOptions, childBundle *agent.Bundle, agentName string) {
 	if childBundle.Model != "" {
 		childOpts.Model = childBundle.Model
@@ -442,6 +409,10 @@ func applyChildModelOverrides(ctx context.Context, childOpts *RunOptions, childB
 	if childBundle.Provider != "" {
 		childOpts.Provider = childBundle.Provider
 		logging.InfoContext(ctx, "child agent %s using manifest provider override: %s", agentName, childBundle.Provider)
+	}
+	if childBundle.BaseURL != "" && childOpts.BaseURL == "" {
+		childOpts.BaseURL = childBundle.BaseURL
+		logging.InfoContext(ctx, "child agent %s using manifest base URL override", agentName)
 	}
 	if len(childBundle.Models) > 1 {
 		altModels := make([]string, 0, len(childBundle.Models)-1)
