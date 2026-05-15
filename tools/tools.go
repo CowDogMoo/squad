@@ -306,11 +306,26 @@ func (e *EditEnforcer) ConfirmEdit(toolCalls []llms.ToolCall, results map[string
 	}
 }
 
+// RunWithToolsConfig holds the configuration options for RunWithTools.
+type RunWithToolsConfig struct {
+	MaxIterations   int
+	EditDeadline    int
+	TaskCfg         *TaskConfig
+	Metrics         *metrics.Metrics
+	Executor        executor.Executor
+	UseCacheControl bool
+	// ForceFirstToolCall, when true, appends tool_choice:"required" to the
+	// call options for the first iteration only. Use this for openai-compat
+	// providers where the model defaults to skipping tool calls.
+	ForceFirstToolCall bool
+}
+
 // RunWithTools drives the tool-calling loop for a LangChain-compatible LLM.
 // It initialises the read cache, file tracker, and enforcer machinery, then
 // iterates between model calls and tool executions until the model stops
 // calling tools, the iteration cap is hit, or a budget/loop error is raised.
-func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, maxIterations, editDeadline int, taskCfg *TaskConfig, m *metrics.Metrics, ex executor.Executor, callOpts ...llms.CallOption) (string, error) {
+func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt, workingDir string, cfg RunWithToolsConfig, callOpts ...llms.CallOption) (string, error) {
+	maxIterations := cfg.MaxIterations
 	ctx, span := telemetry.Tracer().Start(ctx, "tool.loop",
 		trace.WithAttributes(
 			attribute.Int("squad.tool_loop.max_iterations", maxIterations),
@@ -325,15 +340,15 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	ctx = InitFileTracker(ctx)
 	ctx = InitBgCommandRegistry(ctx)
 
-	handlers, toolDefs := BuildHandlers(workingDir, taskCfg, ex)
+	handlers, toolDefs := BuildHandlers(workingDir, cfg.TaskCfg, cfg.Executor)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
 	if maxIterations <= 0 {
 		maxIterations = MaxToolIterations
 	}
 
-	messages := buildInitialMessages(systemPrompt, userPrompt)
-	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, maxIterations, editDeadline, m, callOpts)
+	messages := buildInitialMessages(systemPrompt, userPrompt, cfg.UseCacheControl)
+	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, maxIterations, cfg.EditDeadline, cfg.Metrics, callOpts, cfg.ForceFirstToolCall)
 	if done {
 		return lastContent, nil
 	}
@@ -346,7 +361,7 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 		return lastContent, loopErr
 	}
 
-	return finishToolLoop(ctx, llm, messages, lastContent, maxIterations, m, callOpts)
+	return finishToolLoop(ctx, llm, messages, lastContent, maxIterations, cfg.Metrics, callOpts)
 }
 
 // logIterationStart logs the current iteration number with cost/token info if metrics are available.
@@ -617,7 +632,7 @@ func trackPostExecution(ctx context.Context, messages []llms.MessageContent, mer
 	return postExecutionResult{newFilesRead: newFilesRead, stuck: loopDetector.Stuck()}
 }
 
-func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter, editDeadline int, m *metrics.Metrics, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
+func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter, editDeadline int, m *metrics.Metrics, callOpts []llms.CallOption, forceFirst bool) (string, []llms.MessageContent, error, bool) {
 	var lastContent string
 	var repeat RepeatTracker
 	var loopDetector LoopDetector
@@ -629,7 +644,11 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		SetIteration(ctx, i)
 		logIterationStart(ctx, i, maxIter, m)
 		iterStart := time.Now()
-		response, err := retryGenerateContent(ctx, llm, messages, callOpts)
+		iterOpts := callOpts
+		if forceFirst && i == 0 {
+			iterOpts = append(append([]llms.CallOption{}, callOpts...), llms.WithToolChoice("required"))
+		}
+		response, err := retryGenerateContent(ctx, llm, messages, iterOpts)
 		iterDuration := time.Since(iterStart)
 		if err := validateResponse(ctx, response, err, iterDuration); err != nil {
 			return lastContent, messages, err, false
@@ -715,8 +734,16 @@ func validateResponse(ctx context.Context, resp *llms.ContentResponse, err error
 		return fmt.Errorf("GenerateContent failed: %w", err)
 	}
 	if isEmptyResponse(resp) {
-		logging.InfoContext(ctx, "model returned empty response in %s", duration.Round(time.Millisecond))
-		return fmt.Errorf("model returned empty response")
+		reason := ""
+		if resp != nil && len(resp.Choices) > 0 {
+			if gi := resp.Choices[0].GenerationInfo; gi != nil {
+				if r, ok := gi["finish_reason"]; ok {
+					reason = fmt.Sprintf(" (finish_reason=%v)", r)
+				}
+			}
+		}
+		logging.InfoContext(ctx, "model returned empty response in %s%s", duration.Round(time.Millisecond), reason)
+		return fmt.Errorf("model returned empty response%s", reason)
 	}
 	return nil
 }
@@ -868,34 +895,23 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 	return "", fmt.Errorf("tool loop ended after %d iterations with no usable response", maxIter)
 }
 
-func buildInitialMessages(systemPrompt, userPrompt string) []llms.MessageContent {
+func buildInitialMessages(systemPrompt, userPrompt string, useCacheControl bool) []llms.MessageContent {
 	messages := []llms.MessageContent{}
+	wrap := func(p llms.ContentPart) llms.ContentPart {
+		if useCacheControl {
+			return llms.WithCacheControl(p, &llms.CacheControl{Type: "ephemeral"})
+		}
+		return p
+	}
 	if systemPrompt != "" {
-		// Mark the system prompt for caching.  Note: langchaingo v0.1.14's
-		// Anthropic provider serializes the system field as a plain string
-		// and silently drops cache_control.  We set it anyway so it takes
-		// effect once upstream is fixed.
 		messages = append(messages, llms.MessageContent{
-			Role: llms.ChatMessageTypeSystem,
-			Parts: []llms.ContentPart{
-				llms.WithCacheControl(
-					llms.TextPart(systemPrompt),
-					&llms.CacheControl{Type: "ephemeral"},
-				),
-			},
+			Role:  llms.ChatMessageTypeSystem,
+			Parts: []llms.ContentPart{wrap(llms.TextPart(systemPrompt))},
 		})
 	}
-	// Wrap the user prompt with cache_control as well.  The Anthropic
-	// provider correctly propagates CachedContent on human messages, so
-	// this is the path that actually enables prompt caching today.
 	messages = append(messages, llms.MessageContent{
-		Role: llms.ChatMessageTypeHuman,
-		Parts: []llms.ContentPart{
-			llms.WithCacheControl(
-				llms.TextPart(userPrompt),
-				&llms.CacheControl{Type: "ephemeral"},
-			),
-		},
+		Role:  llms.ChatMessageTypeHuman,
+		Parts: []llms.ContentPart{wrap(llms.TextPart(userPrompt))},
 	})
 	return messages
 }

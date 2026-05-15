@@ -24,7 +24,7 @@ import (
 type ModelPreference struct {
 	Model    string `yaml:"model"`
 	Provider string `yaml:"provider"`
-	BaseURL  string `yaml:"base_url,omitempty"`
+	BaseURL  string `yaml:"base_url,omitempty"` // optional endpoint override; required when Provider is "openai-compat"
 }
 
 // Manifest represents the structure of an agent's manifest file.
@@ -627,7 +627,7 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		displayMode = "edit"
 	}
 
-	data := TemplateData{Mode: mode, Vars: vars}
+	data := TemplateData{Mode: displayMode, Vars: vars}
 	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(agentPath, agentsDir, manifest, data)
 	if err != nil {
 		return nil, err
@@ -731,7 +731,7 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 		displayMode = "edit"
 	}
 
-	data := TemplateData{Mode: mode, Vars: vars}
+	data := TemplateData{Mode: displayMode, Vars: vars}
 	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(promptDir, baseDir, manifest, data)
 	if err != nil {
 		return nil, err

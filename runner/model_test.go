@@ -56,8 +56,8 @@ func TestIsOpenAICompatProvider(t *testing.T) {
 		{"ollama", "ollama", false},
 		{"anthropic", "anthropic", false},
 		{"openai-compat", "openai-compat", true},
-		{"nvidia returns false", "nvidia", false},
-		{"databricks returns false", "databricks", false},
+		{"nvidia", "nvidia", true},
+		{"databricks", "databricks", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -117,8 +117,9 @@ func TestBuildLLMVariants(t *testing.T) {
 		{"anthropic", "anthropic", "claude-3", &RunOptions{APIKey: "token"}, "*anthropic.LLM", false},
 		{"gemini", "gemini", "gemini-2.0-flash", &RunOptions{APIKey: "token"}, "*googleai.GoogleAI", false},
 		{"unknown provider", "unknown", "model", &RunOptions{}, "", true},
-		{"nvidia returns error", "nvidia", "meta/llama-3.1-8b-instruct", &RunOptions{APIKey: "nvapi-test-key"}, "", true},
-		{"databricks returns error", "databricks", "databricks-gpt-5-5-pro", &RunOptions{APIKey: "dapi-test-token", BaseURL: "https://example.com"}, "", true},
+		// nvidia/databricks are deprecated shims that redirect to openai-compat with a warning
+		{"nvidia deprecated shim", "nvidia", "meta/llama-3.1-8b-instruct", &RunOptions{APIKey: "nvapi-test-key"}, "*openai.LLM", false},
+		{"databricks deprecated shim", "databricks", "databricks-gpt-5-5-pro", &RunOptions{APIKey: "dapi-test-token", BaseURL: "https://example.com"}, "*openai.LLM", false},
 		{
 			"openai-compat/deepinfra",
 			"openai-compat",
@@ -129,6 +130,28 @@ func TestBuildLLMVariants(t *testing.T) {
 			},
 			"*openai.LLM",
 			false,
+		},
+		{
+			"openai-compat/nvidia-nim",
+			"openai-compat",
+			"nvidia/llama-3.1-nemotron-70b-instruct",
+			&RunOptions{
+				APIKey:  "nvapi-test-key",
+				BaseURL: "https://integrate.api.nvidia.com/v1",
+			},
+			"*openai.LLM",
+			false,
+		},
+		{
+			// langchaingo validates key presence at construction; users of keyless
+			// endpoints (e.g. local vLLM) must set OPENAI_COMPAT_API_KEY or OPENAI_API_KEY
+			// to a dummy value. The error is caught here, not at HTTP call time.
+			"openai-compat/no-api-key fails at construction",
+			"openai-compat",
+			"some-model",
+			&RunOptions{BaseURL: "http://localhost:8000/v1"},
+			"",
+			true,
 		},
 		{
 			"openai-compat/missing base-url",
@@ -168,6 +191,29 @@ func TestBuildOpenAICompatLLM(t *testing.T) {
 	if err != nil || model == nil {
 		t.Fatalf("buildOpenAICompatLLM() error = %v", err)
 	}
+}
+
+func TestBuildOpenAICompatLLMEnvFallback(t *testing.T) {
+	t.Setenv("OPENAI_COMPAT_API_KEY", "compat-key-from-env")
+
+	t.Run("openai-compat picks up env var when no explicit key", func(t *testing.T) {
+		opts := &RunOptions{BaseURL: "https://integrate.api.nvidia.com/v1"}
+		model, err := buildOpenAICompatLLM(opts, "openai-compat", "nvidia/llama-3.1-nemotron-70b-instruct")
+		if err != nil || model == nil {
+			t.Fatalf("buildOpenAICompatLLM() error = %v", err)
+		}
+	})
+
+	t.Run("openai provider does not consume OPENAI_COMPAT_API_KEY", func(t *testing.T) {
+		// With OPENAI_COMPAT_API_KEY set but OPENAI_API_KEY absent, the openai
+		// provider must error — proving it does not fall back to the compat key.
+		t.Setenv("OPENAI_API_KEY", "")
+		opts := &RunOptions{BaseURL: "https://example.com"}
+		_, err := buildOpenAICompatLLM(opts, "openai", "gpt-4o")
+		if err == nil {
+			t.Fatal("expected error: openai provider should not consume OPENAI_COMPAT_API_KEY")
+		}
+	})
 }
 
 func TestBuildAnthropicLLM(t *testing.T) {
@@ -264,6 +310,115 @@ func TestCallLangChainLLMWithOllama(t *testing.T) {
 	}
 	if response != "hello" {
 		t.Fatalf("response = %q, want hello", response)
+	}
+}
+
+// TestCallLangChainLLMOpenAICompat verifies that callLangChainLLM with the
+// openai-compat provider sends non-empty system and user prompts to the API.
+// This is a regression guard for the CachedContent bug: before the fix,
+// langchaingo's OpenAI provider silently dropped CachedContent parts, causing
+// both prompts to arrive as empty strings at the backend.
+func TestCallLangChainLLMOpenAICompat(t *testing.T) {
+	t.Parallel()
+
+	type msgEntry struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	type reqPayload struct {
+		Messages []msgEntry `json:"messages"`
+	}
+
+	var captured reqPayload
+	reqErr := make(chan error, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "chat/completions") {
+			reqErr <- fmt.Errorf("unexpected path: %s", r.URL.Path)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			reqErr <- fmt.Errorf("decode request: %w", err)
+			return
+		}
+		reqErr <- nil
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":      "chatcmpl-test",
+			"object":  "chat.completion",
+			"created": 1234567890,
+			"model":   "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo",
+			"choices": []map[string]any{
+				{
+					"index":         0,
+					"message":       map[string]any{"role": "assistant", "content": "code looks fine"},
+					"finish_reason": "stop",
+				},
+			},
+			"usage": map[string]any{
+				"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
+			},
+		})
+	}))
+	defer server.Close()
+
+	opts := &RunOptions{
+		Provider:      "openai-compat",
+		APIKey:        "di_test_key",
+		BaseURL:       server.URL,
+		MaxIterations: 1,
+	}
+	bundle := &agent.Bundle{
+		System:  "You are a code reviewer.",
+		User:    "Review this Go project.",
+		WorkDir: t.TempDir(),
+	}
+	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
+	m := metrics.New("openai-compat", "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo")
+
+	response, err := callLangChainLLM(
+		context.Background(),
+		opts,
+		"openai-compat",
+		"Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo",
+		bundle.System,
+		bundle,
+		0.4,
+		0,
+		nil,
+		ex,
+		m,
+	)
+	if err != nil {
+		t.Fatalf("callLangChainLLM() error = %v", err)
+	}
+	if err := <-reqErr; err != nil {
+		t.Fatalf("request handler error: %v", err)
+	}
+	if response != "code looks fine" {
+		t.Fatalf("response = %q, want %q", response, "code looks fine")
+	}
+
+	// Verify the system and user prompts arrived as non-empty strings.
+	// With CachedContent wrapping (the bug), both would be empty ("").
+	var sysMsg, userMsg *msgEntry
+	for i := range captured.Messages {
+		switch captured.Messages[i].Role {
+		case "system":
+			sysMsg = &captured.Messages[i]
+		case "user":
+			userMsg = &captured.Messages[i]
+		}
+	}
+	emptyContent := func(raw json.RawMessage) bool {
+		s := strings.TrimSpace(string(raw))
+		return s == "" || s == `""` || s == "null"
+	}
+	if sysMsg == nil || emptyContent(sysMsg.Content) {
+		t.Fatalf("system message missing or empty in HTTP request body — CachedContent regression? got: %v", sysMsg)
+	}
+	if userMsg == nil || emptyContent(userMsg.Content) {
+		t.Fatalf("user message missing or empty in HTTP request body — CachedContent regression? got: %v", userMsg)
 	}
 }
 

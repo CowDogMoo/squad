@@ -226,8 +226,23 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	if taskCfg != nil {
 		taskCfg.ParentMetrics = m
 	}
+	// Only the LangChain Anthropic provider handles CachedContent; all other
+	// LangChain providers (openai, openai-compat, gemini, ollama) silently drop it.
+	useCacheControl := provider == "anthropic"
+	// openai-compat endpoints default to tool_choice:"auto", allowing the model
+	// to respond without calling any tools. Force the first iteration to use
+	// tool_choice:"required" so the model must explore before answering.
+	forceFirstTool := provider == "openai-compat" || provider == "openai"
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
-	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, opts.MaxIterations, bundle.EditDeadline, taskCfg, m, ex, callOpts...)
+	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, tools.RunWithToolsConfig{
+		MaxIterations:      opts.MaxIterations,
+		EditDeadline:       bundle.EditDeadline,
+		TaskCfg:            taskCfg,
+		Metrics:            m,
+		Executor:           ex,
+		UseCacheControl:    useCacheControl,
+		ForceFirstToolCall: forceFirstTool,
+	}, callOpts...)
 	m.Finish()
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
@@ -282,16 +297,33 @@ func buildLLM(ctx context.Context, opts *RunOptions, provider, model string) (ll
 	case "gemini":
 		return buildGeminiLLM(ctx, opts, model)
 	case "openai-compat":
+		return buildOpenAICompatLLM(opts, "openai-compat", model)
+	case "nvidia":
+		// Deprecated: use provider: openai-compat with base_url: https://integrate.api.nvidia.com/v1
+		logging.Warn("provider 'nvidia' is deprecated; use 'openai-compat' with base_url: https://integrate.api.nvidia.com/v1")
 		if opts.BaseURL == "" {
-			return nil, fmt.Errorf("openai-compat provider requires --base-url (e.g. https://api.deepinfra.com/v1/openai)")
+			opts.BaseURL = "https://integrate.api.nvidia.com/v1"
 		}
+		return buildOpenAICompatLLM(opts, "openai-compat", model)
+	case "databricks":
+		// Deprecated: use provider: openai-compat with base_url pointing to your Databricks AI Gateway
+		logging.Warn("provider 'databricks' is deprecated; use 'openai-compat' with base_url and api_key set")
 		return buildOpenAICompatLLM(opts, "openai-compat", model)
 	default:
 		return nil, fmt.Errorf("provider not implemented: %s", provider)
 	}
 }
 
+// buildOpenAICompatLLM constructs an OpenAI-compatible LangChain LLM for any
+// provider that speaks the OpenAI chat-completions API (openai, openai-compat,
+// and the legacy Azure path). When provider is "openai" or empty, organization
+// and API-version headers are applied; otherwise only base URL and token are
+// set, making it suitable for third-party endpoints like DeepInfra or vLLM.
 func buildOpenAICompatLLM(opts *RunOptions, provider, model string) (llms.Model, error) {
+	if provider == "openai-compat" && opts.BaseURL == "" {
+		return nil, fmt.Errorf("openai-compat provider requires --base-url (e.g. https://api.deepinfra.com/v1/openai)")
+	}
+
 	oaiOpts := []openai.Option{}
 	if model != "" {
 		oaiOpts = append(oaiOpts, openai.WithModel(model))
@@ -301,8 +333,15 @@ func buildOpenAICompatLLM(opts *RunOptions, provider, model string) (llms.Model,
 		oaiOpts = append(oaiOpts, openai.WithBaseURL(opts.BaseURL))
 	}
 
-	if opts.APIKey != "" {
-		oaiOpts = append(oaiOpts, openai.WithToken(opts.APIKey))
+	apiKey := opts.APIKey
+	if apiKey == "" && provider == "openai-compat" {
+		apiKey = os.Getenv("OPENAI_COMPAT_API_KEY")
+	}
+	if apiKey == "" && provider == "openai-compat" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+	if apiKey != "" {
+		oaiOpts = append(oaiOpts, openai.WithToken(apiKey))
 	}
 
 	if provider == "openai" || provider == "" {
@@ -367,7 +406,8 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 }
 
 func isOpenAICompatProvider(provider string) bool {
-	return provider == "" || provider == "openai" || provider == "openai-compat"
+	return provider == "" || provider == "openai" || provider == "openai-compat" ||
+		provider == "nvidia" || provider == "databricks"
 }
 
 // reasoningPrefixes returns the configured reasoning model prefixes,

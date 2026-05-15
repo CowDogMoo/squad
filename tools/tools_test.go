@@ -1111,7 +1111,10 @@ func TestRunWithToolsLoop(t *testing.T) {
 		},
 	}}
 
-	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, 0, nil, nil, &executor.LocalExecutor{WorkingDir: dir})
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, RunWithToolsConfig{
+		MaxIterations: 2,
+		Executor:      &executor.LocalExecutor{WorkingDir: dir},
+	})
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
 	}
@@ -1153,7 +1156,10 @@ func TestRunWithToolsErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			td := t.TempDir()
-			_, err := RunWithTools(context.Background(), tt.llm, "", "user", td, 1, 0, nil, nil, &executor.LocalExecutor{WorkingDir: td})
+			_, err := RunWithTools(context.Background(), tt.llm, "", "user", td, RunWithToolsConfig{
+				MaxIterations: 1,
+				Executor:      &executor.LocalExecutor{WorkingDir: td},
+			})
 			if err == nil {
 				t.Fatalf("expected error")
 			}
@@ -1669,7 +1675,11 @@ func TestRunWithToolsWithMetrics(t *testing.T) {
 	}}
 
 	m := metrics.New("openai", "gpt-4o")
-	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 2, 0, nil, m, &executor.LocalExecutor{WorkingDir: dir})
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, RunWithToolsConfig{
+		MaxIterations: 2,
+		Metrics:       m,
+		Executor:      &executor.LocalExecutor{WorkingDir: dir},
+	})
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
 	}
@@ -1728,7 +1738,11 @@ func TestToolLoopBudgetExceeded(t *testing.T) {
 	// Pre-load tokens so budget is exceeded after the first tool call
 	m.AddTokens(1_000_000, 1_000_000)
 
-	out, err := RunWithTools(context.Background(), llm, "", "user", dir, 10, 0, nil, m, &executor.LocalExecutor{WorkingDir: dir})
+	out, err := RunWithTools(context.Background(), llm, "", "user", dir, RunWithToolsConfig{
+		MaxIterations: 10,
+		Metrics:       m,
+		Executor:      &executor.LocalExecutor{WorkingDir: dir},
+	})
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
@@ -2414,7 +2428,7 @@ func TestToolLoopBudgetWarnings(t *testing.T) {
 
 	handlers, _ := BuildHandlers(dir, nil, &executor.LocalExecutor{WorkingDir: dir})
 
-	_, _, loopErr, _ := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user"), handlers, 10, 0, m, nil)
+	_, _, loopErr, _ := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user", false), handlers, 10, 0, m, nil, false)
 	// Budget may be exceeded after iter 2 — that's fine, we just care that
 	// warnings were injected before that happened.
 	if loopErr != nil && !errors.Is(loopErr, metrics.ErrBudgetExceeded) {
@@ -2476,7 +2490,7 @@ func TestToolLoopNoBudgetWarningsWithoutMaxCost(t *testing.T) {
 
 	handlers, _ := BuildHandlers(dir, nil, &executor.LocalExecutor{WorkingDir: dir})
 
-	_, _, loopErr, done := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user"), handlers, 10, 0, m, nil)
+	_, _, loopErr, done := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user", false), handlers, 10, 0, m, nil, false)
 	if loopErr != nil {
 		t.Fatalf("unexpected error: %v", loopErr)
 	}
@@ -3168,5 +3182,102 @@ func TestCompactMessagesPreservesEditRelatedMessages(t *testing.T) {
 	tokens := estimateTokens(msgs)
 	if tokens >= contextTokenThreshold && !foundCompactedUnrelated {
 		t.Log("conversation was large enough for compaction but unrelated result was not compacted — semantic scoring may have kept it")
+	}
+}
+
+func TestBuildInitialMessagesCacheControl(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name            string
+		useCacheControl bool
+		wantCached      bool
+	}{
+		{"cache_off", false, false},
+		{"cache_on", true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			msgs := buildInitialMessages("sys", "user", tt.useCacheControl)
+			for _, msg := range msgs {
+				for _, part := range msg.Parts {
+					_, isCached := part.(llms.CachedContent)
+					if isCached != tt.wantCached {
+						t.Errorf("part type cached=%v, want %v (useCacheControl=%v)",
+							isCached, tt.wantCached, tt.useCacheControl)
+					}
+				}
+			}
+		})
+	}
+}
+
+// recordingLLM captures the resolved CallOptions for each GenerateContent call.
+type recordingLLM struct {
+	responses []*llms.ContentResponse
+	calls     int
+	opts      []llms.CallOptions
+}
+
+func (r *recordingLLM) GenerateContent(_ context.Context, _ []llms.MessageContent, callOpts ...llms.CallOption) (*llms.ContentResponse, error) {
+	var o llms.CallOptions
+	for _, opt := range callOpts {
+		opt(&o)
+	}
+	r.opts = append(r.opts, o)
+	if r.calls >= len(r.responses) {
+		return &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "done"}}}, nil
+	}
+	resp := r.responses[r.calls]
+	r.calls++
+	return resp, nil
+}
+
+func (r *recordingLLM) Call(context.Context, string, ...llms.CallOption) (string, error) {
+	return "", nil
+}
+
+func TestForceFirstToolCallOption(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	llm := &recordingLLM{
+		responses: []*llms.ContentResponse{
+			// Iteration 0: one tool call to force the loop to continue.
+			{Choices: []*llms.ContentChoice{{
+				ToolCalls: []llms.ToolCall{{
+					ID:   "tc1",
+					Type: "function",
+					FunctionCall: &llms.FunctionCall{
+						Name:      "Glob",
+						Arguments: `{"pattern":"**/*.go"}`,
+					},
+				}},
+			}}},
+			// Iteration 1: no tool calls → loop ends normally.
+			{Choices: []*llms.ContentChoice{{Content: "done"}}},
+		},
+	}
+
+	cfg := RunWithToolsConfig{
+		MaxIterations:      5,
+		ForceFirstToolCall: true,
+	}
+	_, err := RunWithTools(context.Background(), llm, "sys", "user", dir, cfg)
+	if err != nil {
+		t.Fatalf("RunWithTools: %v", err)
+	}
+
+	if len(llm.opts) < 2 {
+		t.Fatalf("expected at least 2 GenerateContent calls, got %d", len(llm.opts))
+	}
+
+	// First iteration must carry tool_choice = "required".
+	if llm.opts[0].ToolChoice != "required" {
+		t.Errorf("iteration 0: want ToolChoice=%q, got %v", "required", llm.opts[0].ToolChoice)
+	}
+	// Subsequent iterations must NOT carry tool_choice = "required".
+	if llm.opts[1].ToolChoice == "required" {
+		t.Errorf("iteration 1: ToolChoice should not be %q", "required")
 	}
 }
