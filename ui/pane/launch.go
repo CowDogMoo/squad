@@ -38,8 +38,9 @@ type Launch struct {
 	isolate    selectField
 	prompt     textarea.Model
 
-	focus int
-	err   string
+	providerToken string
+	focus         int
+	err           string
 }
 
 // modeOptions, providerOptions, isolateOptions are the closed sets
@@ -160,6 +161,10 @@ type LaunchDefaults struct {
 	Provider string
 	Model    string
 	Isolate  string
+	// ProviderToken is the resolved config provider.token value. It is
+	// intentionally separate from provider selection so the form can mirror
+	// runner credential precedence without importing config.
+	ProviderToken string
 
 	Agents []string
 }
@@ -205,17 +210,18 @@ func NewLaunch(parent View, defaults LaunchDefaults) Launch {
 	prompt.Prompt = "  "
 
 	f := Launch{
-		parent:     parent,
-		agent:      agentInput,
-		workingDir: workingDir,
-		budget:     budget,
-		mode:       mode,
-		iter:       iter,
-		provider:   provider,
-		model:      model,
-		isolate:    isolate,
-		prompt:     prompt,
-		focus:      fldAgent,
+		parent:        parent,
+		agent:         agentInput,
+		workingDir:    workingDir,
+		budget:        budget,
+		mode:          mode,
+		iter:          iter,
+		provider:      provider,
+		model:         model,
+		isolate:       isolate,
+		prompt:        prompt,
+		providerToken: defaults.ProviderToken,
+		focus:         fldAgent,
 	}
 	f.applyFocus()
 	return f
@@ -589,6 +595,13 @@ func (l Launch) submit() (View, tea.Cmd) {
 		l.applyFocus()
 		return l, nil
 	}
+	key := metrics.KeyStatus(l.provider.Value(), l.providerToken)
+	if key.State == metrics.APIKeyMissing {
+		l.err = fmt.Sprintf("%s not set — export it (or set provider.token in config) before launching", key.EnvVar)
+		l.focus = fldProvider
+		l.applyFocus()
+		return l, nil
+	}
 	// isolate is a closed-set selectField — no validation needed.
 	req := LaunchRequest{
 		Agent:      agent,
@@ -602,6 +615,20 @@ func (l Launch) submit() (View, tea.Cmd) {
 		Isolate:    l.isolate.Value(),
 	}
 	return l.parent, func() tea.Msg { return req }
+}
+
+func (l Launch) keyStatusView() string {
+	status := metrics.KeyStatus(l.provider.Value(), l.providerToken)
+	switch status.State {
+	case metrics.APIKeyOK:
+		return style.Success.Render("key: ✓ " + status.EnvVar)
+	case metrics.APIKeyMissing:
+		return style.Error.Render("key: ✗ " + status.EnvVar + " missing")
+	case metrics.APIKeyNotNeeded:
+		return style.Faint.Render("key: —")
+	default:
+		return ""
+	}
 }
 
 // View renders the form. Width is supplied by the host; when ≤ 0 the
@@ -645,9 +672,10 @@ func (l Launch) View(width, height int) string {
 		labelW("mode", 6), l.mode.View(9),
 		labelW("iter", 6), boxed(l.iter.View(), l.focus == fldIters),
 	)
-	row3 := style.Faint.Render("advanced  ") + fmt.Sprintf("%s  %s    %s  %s    %s  %s",
+	row3 := style.Faint.Render("advanced  ") + fmt.Sprintf("%s  %s    %s  %s  %s    %s  %s",
 		labelW("provider", 9), boxed(l.provider.View(), l.focus == fldProvider),
 		labelW("model", 6), boxed(l.model.View(), l.focus == fldModel),
+		l.keyStatusView(),
 		labelW("isolate", 8), l.isolate.View(10),
 	)
 	var providerDropdown string
