@@ -72,6 +72,10 @@ func runUI(cmd *cobra.Command, _ []string) error {
 		}
 		workingDir = cwd
 	}
+	providerToken := ""
+	if cfg, _, err := config.Load(); err == nil && cfg != nil {
+		providerToken = cfg.Provider.Token
+	}
 
 	// Kick the LiteLLM pricing fetch off in the background so the launch
 	// form's model typeahead has the live registry ready to suggest from.
@@ -79,14 +83,14 @@ func runUI(cmd *cobra.Command, _ []string) error {
 
 	var model app.App
 	if useMock {
-		model = app.New(app.MockRuns())
+		model = app.New(app.MockRuns()).WithProviderToken(providerToken)
 	} else {
 		root := sessionsDir
 		if root == "" {
 			root = filepath.Join(workingDir, session.SessionsRoot)
 		}
 		var err error
-		model, err = app.NewWithSessions(root, workingDir)
+		model, err = app.NewWithSessions(root, workingDir, providerToken)
 		if err != nil {
 			return fmt.Errorf("discover sessions: %w", err)
 		}

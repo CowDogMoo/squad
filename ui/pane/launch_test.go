@@ -126,6 +126,15 @@ func TestLaunchViewRendersFields(t *testing.T) {
 	}
 }
 
+func TestLaunchViewRendersKeyIndicator(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	form := NewLaunch(stubView{name: "parent"}, LaunchDefaults{Provider: "openai"})
+	out := form.View(120, 0)
+	if !strings.Contains(out, "✓ OPENAI_API_KEY") {
+		t.Fatalf("View missing API key indicator: %s", out)
+	}
+}
+
 func contains(s, substr string) bool {
 	for i := 0; i+len(substr) <= len(s); i++ {
 		if s[i:i+len(substr)] == substr {
@@ -136,6 +145,7 @@ func contains(s, substr string) bool {
 }
 
 func TestLaunchSubmitEmitsRequest(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
 	parent := stubView{name: "parent"}
 	form := NewLaunch(parent, LaunchDefaults{
 		WorkingDir: "/tmp",
@@ -176,6 +186,7 @@ func TestLaunchSubmitEmitsRequest(t *testing.T) {
 }
 
 func TestLaunchSubmitIncludesAdvanced(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	parent := stubView{name: "parent"}
 	form := NewLaunch(parent, LaunchDefaults{
 		Agent:    "go-review",
@@ -472,6 +483,53 @@ func TestLaunchModelOptionsFollowProvider(t *testing.T) {
 		if !contains(opt, "gemini") {
 			t.Errorf("gemini provider showed non-Gemini model %q", opt)
 		}
+	}
+}
+
+func TestLaunchSubmitBlocksMissingProviderKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	form := NewLaunch(stubView{name: "parent"}, LaunchDefaults{
+		Agent:    "go-review",
+		Provider: "openai",
+		MaxIter:  10,
+	})
+	form.prompt.SetValue("do the thing")
+
+	v, cmd := form.submit()
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			t.Fatalf("missing key should not emit a command, got %T", msg)
+		}
+	}
+	l, ok := AsLaunchView(v)
+	if !ok {
+		t.Fatalf("missing key should keep form open, got %T", v)
+	}
+	want := "OPENAI_API_KEY not set — export it (or set provider.token in config) before launching"
+	if l.err != want {
+		t.Fatalf("err = %q, want %q", l.err, want)
+	}
+	if l.focus != fldProvider {
+		t.Fatalf("focus = %d, want provider %d", l.focus, fldProvider)
+	}
+}
+
+func TestLaunchSubmitAllowsProviderKeyFromEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	form := NewLaunch(stubView{name: "parent"}, LaunchDefaults{
+		Agent:    "go-review",
+		Provider: "openai",
+		MaxIter:  10,
+	})
+	form.prompt.SetValue("do the thing")
+
+	next, cmd := form.submit()
+	req := asLaunchRequest(t, cmd)
+	if req.Provider != "openai" || req.Agent != "go-review" {
+		t.Fatalf("request = %+v", req)
+	}
+	if next.Title() != "parent" {
+		t.Fatalf("after submit Title=%q, want parent", next.Title())
 	}
 }
 

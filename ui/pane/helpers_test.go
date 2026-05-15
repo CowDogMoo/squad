@@ -455,6 +455,7 @@ func TestLaunchEnterOnCancelReturnsParent(t *testing.T) {
 }
 
 func TestLaunchEnterOnLaunchSubmits(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
 	parent := stubView{name: "parent"}
 	form := NewLaunch(parent, LaunchDefaults{Agent: "go-review"})
 	form.prompt.SetValue("do the thing")
