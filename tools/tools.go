@@ -308,15 +308,30 @@ func (e *EditEnforcer) ConfirmEdit(toolCalls []llms.ToolCall, results map[string
 
 // RunWithToolsConfig holds the configuration options for RunWithTools.
 type RunWithToolsConfig struct {
-	MaxIterations   int
-	EditDeadline    int
-	TaskCfg         *TaskConfig
-	Metrics         *metrics.Metrics
-	Executor        executor.Executor
+	// MaxIterations caps the number of model+tool-call cycles. Zero means
+	// the package default [MaxToolIterations] is used.
+	MaxIterations int
+	// EditDeadline is the iteration number after which read-only tools are
+	// blocked to force the model to commit pending edits. Zero disables the
+	// deadline.
+	EditDeadline int
+	// TaskCfg wires in the Task/TaskResult tools and child-agent dispatch.
+	// Nil disables the Task tool entirely.
+	TaskCfg *TaskConfig
+	// Metrics accumulates token counts and cost across all iterations.
+	// Nil is allowed; cost tracking and budget enforcement are skipped.
+	Metrics *metrics.Metrics
+	// Executor runs shell commands issued by the agent (Bash, Write, etc.).
+	Executor executor.Executor
+	// UseCacheControl wraps the system and user prompts with Anthropic's
+	// cache_control hint. Set this only for the Anthropic provider; other
+	// LangChain providers silently drop the wrapper.
 	UseCacheControl bool
 	// ForceFirstToolCall, when true, appends tool_choice:"required" to the
-	// call options for the first iteration only. Use this for openai-compat
-	// providers where the model defaults to skipping tool calls.
+	// call options for the first iteration only. Intended for openai-compat
+	// endpoints whose default tool_choice:"auto" lets the model skip tools and
+	// answer immediately. Not set for the regular openai provider, which relies
+	// on auto behavior.
 	ForceFirstToolCall bool
 }
 
@@ -348,7 +363,7 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	}
 
 	messages := buildInitialMessages(systemPrompt, userPrompt, cfg.UseCacheControl)
-	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, maxIterations, cfg.EditDeadline, cfg.Metrics, callOpts, cfg.ForceFirstToolCall)
+	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, maxIterations, cfg, callOpts)
 	if done {
 		return lastContent, nil
 	}
@@ -632,11 +647,12 @@ func trackPostExecution(ctx context.Context, messages []llms.MessageContent, mer
 	return postExecutionResult{newFilesRead: newFilesRead, stuck: loopDetector.Stuck()}
 }
 
-func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter, editDeadline int, m *metrics.Metrics, callOpts []llms.CallOption, forceFirst bool) (string, []llms.MessageContent, error, bool) {
+func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter int, cfg RunWithToolsConfig, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
+	m := cfg.Metrics
 	var lastContent string
 	var repeat RepeatTracker
 	var loopDetector LoopDetector
-	ctx, editEnforcer, phaseEnforcer := initToolLoopEnforcers(ctx, editDeadline)
+	ctx, editEnforcer, phaseEnforcer := initToolLoopEnforcers(ctx, cfg.EditDeadline)
 	budgetWarned := make([]bool, len(budgetWarningThresholds))
 	var grace graceState
 	ctx = setGraceState(ctx, &grace)
@@ -644,11 +660,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		SetIteration(ctx, i)
 		logIterationStart(ctx, i, maxIter, m)
 		iterStart := time.Now()
-		iterOpts := callOpts
-		if forceFirst && i == 0 {
-			iterOpts = append(append([]llms.CallOption{}, callOpts...), llms.WithToolChoice("required"))
-		}
-		response, err := retryGenerateContent(ctx, llm, messages, iterOpts)
+		response, err := retryGenerateContent(ctx, llm, messages, resolveIterOpts(callOpts, cfg.ForceFirstToolCall, i))
 		iterDuration := time.Since(iterStart)
 		if err := validateResponse(ctx, response, err, iterDuration); err != nil {
 			return lastContent, messages, err, false
@@ -690,10 +702,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		messages = appendToolCallMessage(messages, mergedContent, mergedToolCalls, ctx)
 
 		// Snapshot cache size before execution to detect new file reads.
-		cacheSizeBefore := 0
-		if rc := GetReadCache(ctx); rc != nil {
-			cacheSizeBefore = rc.Len()
-		}
+		cacheSizeBefore := readCacheSize(ctx)
 
 		messages = executeToolCalls(ctx, messages, mergedToolCalls, handlers)
 
@@ -893,6 +902,24 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 		return "", metrics.ErrBudgetExceeded
 	}
 	return "", fmt.Errorf("tool loop ended after %d iterations with no usable response", maxIter)
+}
+
+// resolveIterOpts returns the call options for iteration i, inserting
+// tool_choice:"required" on the first iteration when forceFirst is set.
+func resolveIterOpts(base []llms.CallOption, forceFirst bool, i int) []llms.CallOption {
+	if forceFirst && i == 0 {
+		return append(append([]llms.CallOption{}, base...), llms.WithToolChoice("required"))
+	}
+	return base
+}
+
+// readCacheSize returns the current number of entries in the read cache
+// stored on ctx, or 0 if no cache is present.
+func readCacheSize(ctx context.Context) int {
+	if rc := GetReadCache(ctx); rc != nil {
+		return rc.Len()
+	}
+	return 0
 }
 
 func buildInitialMessages(systemPrompt, userPrompt string, useCacheControl bool) []llms.MessageContent {

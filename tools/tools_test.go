@@ -2428,7 +2428,7 @@ func TestToolLoopBudgetWarnings(t *testing.T) {
 
 	handlers, _ := BuildHandlers(dir, nil, &executor.LocalExecutor{WorkingDir: dir})
 
-	_, _, loopErr, _ := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user", false), handlers, 10, 0, m, nil, false)
+	_, _, loopErr, _ := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user", false), handlers, 10, RunWithToolsConfig{Metrics: m}, nil)
 	// Budget may be exceeded after iter 2 — that's fine, we just care that
 	// warnings were injected before that happened.
 	if loopErr != nil && !errors.Is(loopErr, metrics.ErrBudgetExceeded) {
@@ -2490,7 +2490,7 @@ func TestToolLoopNoBudgetWarningsWithoutMaxCost(t *testing.T) {
 
 	handlers, _ := BuildHandlers(dir, nil, &executor.LocalExecutor{WorkingDir: dir})
 
-	_, _, loopErr, done := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user", false), handlers, 10, 0, m, nil, false)
+	_, _, loopErr, done := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user", false), handlers, 10, RunWithToolsConfig{Metrics: m}, nil)
 	if loopErr != nil {
 		t.Fatalf("unexpected error: %v", loopErr)
 	}
@@ -3280,4 +3280,88 @@ func TestForceFirstToolCallOption(t *testing.T) {
 	if llm.opts[1].ToolChoice == "required" {
 		t.Errorf("iteration 1: ToolChoice should not be %q", "required")
 	}
+}
+
+// applyCallOpts resolves a slice of CallOption into a CallOptions struct.
+func applyCallOpts(opts []llms.CallOption) llms.CallOptions {
+	var o llms.CallOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
+// TestResolveIterOpts verifies resolveIterOpts inserts tool_choice:"required"
+// only on the first iteration when forceFirst is true, and never mutates the
+// base slice.
+func TestResolveIterOpts(t *testing.T) {
+	t.Parallel()
+	base := []llms.CallOption{llms.WithTemperature(0.5)}
+
+	tests := []struct {
+		name         string
+		forceFirst   bool
+		i            int
+		wantRequired bool
+	}{
+		{"force=false i=0", false, 0, false},
+		{"force=false i=1", false, 1, false},
+		{"force=true i=0", true, 0, true},
+		{"force=true i=1", true, 1, false},
+		{"force=true i=5", true, 5, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveIterOpts(base, tt.forceFirst, tt.i)
+			o := applyCallOpts(got)
+			if (o.ToolChoice == "required") != tt.wantRequired {
+				t.Errorf("ToolChoice required = %v, want %v (ToolChoice=%q)",
+					o.ToolChoice == "required", tt.wantRequired, o.ToolChoice)
+			}
+			// base options must always be preserved in the result
+			if o.Temperature != 0.5 {
+				t.Errorf("Temperature = %v, want 0.5 (base option lost)", o.Temperature)
+			}
+		})
+	}
+
+	// Verify the base slice itself is not mutated.
+	_ = resolveIterOpts(base, true, 0)
+	if len(base) != 1 {
+		t.Errorf("base slice mutated: len = %d, want 1", len(base))
+	}
+}
+
+// TestReadCacheSize verifies readCacheSize returns the ReadCache entry count
+// from ctx, or 0 when no cache is attached.
+func TestReadCacheSize(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no cache in context", func(t *testing.T) {
+		t.Parallel()
+		if got := readCacheSize(context.Background()); got != 0 {
+			t.Errorf("readCacheSize = %d, want 0", got)
+		}
+	})
+
+	t.Run("empty cache", func(t *testing.T) {
+		t.Parallel()
+		ctx := InitReadCache(context.Background())
+		if got := readCacheSize(ctx); got != 0 {
+			t.Errorf("readCacheSize = %d, want 0", got)
+		}
+	})
+
+	t.Run("three entries", func(t *testing.T) {
+		t.Parallel()
+		ctx := InitReadCache(context.Background())
+		rc := GetReadCache(ctx)
+		rc.Store("a.go", "h1", 10, 200, 0, "")
+		rc.Store("b.go", "h2", 20, 400, 1, "")
+		rc.Store("c.go", "h3", 30, 600, 2, "")
+		if got := readCacheSize(ctx); got != 3 {
+			t.Errorf("readCacheSize = %d, want 3", got)
+		}
+	})
 }

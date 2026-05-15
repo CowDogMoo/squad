@@ -232,7 +232,8 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	// openai-compat endpoints default to tool_choice:"auto", allowing the model
 	// to respond without calling any tools. Force the first iteration to use
 	// tool_choice:"required" so the model must explore before answering.
-	forceFirstTool := provider == "openai-compat" || provider == "openai"
+	// Regular openai users rely on the auto behavior; only restrict compat endpoints.
+	forceFirstTool := provider == "openai-compat"
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
 	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, tools.RunWithToolsConfig{
 		MaxIterations:      opts.MaxIterations,
@@ -300,14 +301,20 @@ func buildLLM(ctx context.Context, opts *RunOptions, provider, model string) (ll
 		return buildOpenAICompatLLM(opts, "openai-compat", model)
 	case "nvidia":
 		// Deprecated: use provider: openai-compat with base_url: https://integrate.api.nvidia.com/v1
-		logging.Warn("provider 'nvidia' is deprecated; use 'openai-compat' with base_url: https://integrate.api.nvidia.com/v1")
+		logging.WarnContext(ctx, "provider 'nvidia' is deprecated; use 'openai-compat' with base_url: https://integrate.api.nvidia.com/v1")
 		if opts.BaseURL == "" {
 			opts.BaseURL = "https://integrate.api.nvidia.com/v1"
 		}
 		return buildOpenAICompatLLM(opts, "openai-compat", model)
 	case "databricks":
 		// Deprecated: use provider: openai-compat with base_url pointing to your Databricks AI Gateway
-		logging.Warn("provider 'databricks' is deprecated; use 'openai-compat' with base_url and api_key set")
+		logging.WarnContext(ctx, "provider 'databricks' is deprecated; use 'openai-compat' with base_url and api_key set")
+		if opts.BaseURL == "" {
+			return nil, fmt.Errorf(
+				"databricks provider requires --base-url " +
+					"(e.g. https://<workspace>.ai-gateway.cloud.databricks.com/mlflow/v1)",
+			)
+		}
 		return buildOpenAICompatLLM(opts, "openai-compat", model)
 	default:
 		return nil, fmt.Errorf("provider not implemented: %s", provider)
@@ -335,10 +342,11 @@ func buildOpenAICompatLLM(opts *RunOptions, provider, model string) (llms.Model,
 
 	apiKey := opts.APIKey
 	if apiKey == "" && provider == "openai-compat" {
-		apiKey = os.Getenv("OPENAI_COMPAT_API_KEY")
-	}
-	if apiKey == "" && provider == "openai-compat" {
-		apiKey = os.Getenv("OPENAI_API_KEY")
+		if v := os.Getenv("OPENAI_COMPAT_API_KEY"); v != "" {
+			apiKey = v
+		} else {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
 	}
 	if apiKey != "" {
 		oaiOpts = append(oaiOpts, openai.WithToken(apiKey))

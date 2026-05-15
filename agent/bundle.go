@@ -22,8 +22,8 @@ import (
 // ModelPreference represents a ranked model recommendation for an agent.
 // The first entry in a models list is the primary (preferred) model.
 type ModelPreference struct {
-	Model    string `yaml:"model"`
-	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`    // model identifier (e.g. "claude-sonnet-4-6")
+	Provider string `yaml:"provider"` // squad provider name (e.g. "anthropic", "openai-compat")
 	BaseURL  string `yaml:"base_url,omitempty"` // optional endpoint override; required when Provider is "openai-compat"
 }
 

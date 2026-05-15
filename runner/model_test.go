@@ -194,6 +194,9 @@ func TestBuildOpenAICompatLLM(t *testing.T) {
 }
 
 func TestBuildOpenAICompatLLMEnvFallback(t *testing.T) {
+	// t.Setenv must run before any subtests — the outer test is intentionally
+	// sequential, and subtests must NOT call t.Parallel() here, as that would
+	// race with the env var set by the parent.
 	t.Setenv("OPENAI_COMPAT_API_KEY", "compat-key-from-env")
 
 	t.Run("openai-compat picks up env var when no explicit key", func(t *testing.T) {

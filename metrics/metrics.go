@@ -253,6 +253,10 @@ var (
 // SupportedProviders is the canonical, ordered list of provider names
 // squad recognizes for the --provider flag and the TUI launch form.
 // Keep this in sync with the provider dispatch in runner/model.go.
+//
+// Note: "nvidia" and "databricks" are still accepted by the runner as
+// deprecated shims that redirect to "openai-compat". They are intentionally
+// omitted here so completion and UI forms guide users toward the replacement.
 var SupportedProviders = []string{
 	"openai",
 	"openai-responses",
@@ -380,6 +384,10 @@ func ModelsForProvider(provider string) []string {
 // under "anthropic". Ollama maps to LiteLLM's "ollama_chat" key; users
 // still need the model pulled locally, but at least the typeahead
 // hints at popular options instead of going blank.
+//
+// "openai-compat" is intentionally absent: it targets arbitrary third-party
+// endpoints (DeepInfra, vLLM, NIM, etc.) that have no shared model catalog,
+// so dynamic listing is not supported.
 var modelListingProviders = map[string]string{
 	"openai":           "openai",
 	"openai-responses": "openai",
