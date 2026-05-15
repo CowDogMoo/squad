@@ -3201,7 +3201,7 @@ func TestBuildInitialMessagesCacheControl(t *testing.T) {
 			msgs := buildInitialMessages("sys", "user", tt.useCacheControl)
 			for _, msg := range msgs {
 				for _, part := range msg.Parts {
-					_, isCached := part.(llms.CachedContent)
+					isCached := fmt.Sprintf("%T", part) == "llms.CachedContent"
 					if isCached != tt.wantCached {
 						t.Errorf("part type cached=%v, want %v (useCacheControl=%v)",
 							isCached, tt.wantCached, tt.useCacheControl)
