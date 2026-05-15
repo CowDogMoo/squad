@@ -45,3 +45,10 @@ func TestKeyStatusOllamaNotNeeded(t *testing.T) {
 		t.Fatalf("ollama status = %+v, want not-needed/no env", got)
 	}
 }
+
+func TestKeyStatusUnknownProviderNotNeeded(t *testing.T) {
+	got := KeyStatus("not-a-real-provider", "")
+	if got.State != APIKeyNotNeeded || got.EnvVar != "" || got.Source != APIKeySourceNone {
+		t.Fatalf("unknown provider status = %+v, want not-needed/no env", got)
+	}
+}

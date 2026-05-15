@@ -135,6 +135,23 @@ func TestLaunchViewRendersKeyIndicator(t *testing.T) {
 	}
 }
 
+func TestLaunchViewKeyIndicatorMissing(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	form := NewLaunch(stubView{name: "parent"}, LaunchDefaults{Provider: "openai"})
+	out := form.View(120, 0)
+	if !strings.Contains(out, "✗ OPENAI_API_KEY missing") {
+		t.Fatalf("View missing API key 'missing' indicator: %s", out)
+	}
+}
+
+func TestLaunchViewKeyIndicatorNotNeededForOllama(t *testing.T) {
+	form := NewLaunch(stubView{name: "parent"}, LaunchDefaults{Provider: "ollama"})
+	out := form.View(120, 0)
+	if !strings.Contains(out, "key: —") {
+		t.Fatalf("View should render not-needed key indicator for ollama: %s", out)
+	}
+}
+
 func contains(s, substr string) bool {
 	for i := 0; i+len(substr) <= len(s); i++ {
 		if s[i:i+len(substr)] == substr {

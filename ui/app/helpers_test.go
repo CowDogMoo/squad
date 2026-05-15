@@ -29,6 +29,13 @@ func TestWithAgents(t *testing.T) {
 	}
 }
 
+func TestWithProviderToken(t *testing.T) {
+	a := makeApp().WithProviderToken("cfg-token")
+	if a.providerToken != "cfg-token" {
+		t.Errorf("providerToken: got %q, want %q", a.providerToken, "cfg-token")
+	}
+}
+
 func TestInit(t *testing.T) {
 	a := makeApp()
 	if a.Init() == nil {
