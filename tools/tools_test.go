@@ -2428,7 +2428,7 @@ func TestToolLoopBudgetWarnings(t *testing.T) {
 
 	handlers, _ := BuildHandlers(dir, nil, &executor.LocalExecutor{WorkingDir: dir})
 
-	_, _, loopErr, _ := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user", false), handlers, 10, RunWithToolsConfig{Metrics: m}, nil)
+	_, _, loopErr := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user", false), handlers, 10, RunWithToolsConfig{Metrics: m}, nil)
 	// Budget may be exceeded after iter 2 — that's fine, we just care that
 	// warnings were injected before that happened.
 	if loopErr != nil && !errors.Is(loopErr, metrics.ErrBudgetExceeded) {
@@ -2490,12 +2490,9 @@ func TestToolLoopNoBudgetWarningsWithoutMaxCost(t *testing.T) {
 
 	handlers, _ := BuildHandlers(dir, nil, &executor.LocalExecutor{WorkingDir: dir})
 
-	_, _, loopErr, done := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user", false), handlers, 10, RunWithToolsConfig{Metrics: m}, nil)
+	_, _, loopErr := toolLoop(context.Background(), llm, buildInitialMessages("sys", "user", false), handlers, 10, RunWithToolsConfig{Metrics: m}, nil)
 	if loopErr != nil {
 		t.Fatalf("unexpected error: %v", loopErr)
-	}
-	if !done {
-		t.Fatal("expected done=true")
 	}
 
 	for _, msgs := range llm.captured {

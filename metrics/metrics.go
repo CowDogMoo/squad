@@ -67,24 +67,33 @@ func (m *Metrics) SetMaxCost(maxCost float64) {
 	m.MaxCost = maxCost
 }
 
+// totalCostWithChildrenLocked returns total cost including child runs; caller must hold m.mu.
+func (m *Metrics) totalCostWithChildrenLocked() float64 {
+	total := m.costLocked()
+	for _, c := range m.Children {
+		pricing := GetPricing(c.Provider, c.Model)
+		total += float64(c.InputTokens)/1_000_000*pricing.InputPerMillion +
+			float64(c.OutputTokens)/1_000_000*pricing.OutputPerMillion
+	}
+	return total
+}
+
 // BudgetExceeded reports whether the total run cost has reached MaxCost.
 func (m *Metrics) BudgetExceeded() bool {
 	m.mu.Lock()
-	maxCost := m.MaxCost
-	m.mu.Unlock()
-	return maxCost > 0 && m.TotalCostWithChildren() >= maxCost
+	defer m.mu.Unlock()
+	return m.MaxCost > 0 && m.totalCostWithChildrenLocked() >= m.MaxCost
 }
 
 // BudgetUsedPct returns the fraction of the cost budget consumed (0.0–1.0).
 // Returns 0 when no budget is set.
 func (m *Metrics) BudgetUsedPct() float64 {
 	m.mu.Lock()
-	maxCost := m.MaxCost
-	m.mu.Unlock()
-	if maxCost <= 0 {
+	defer m.mu.Unlock()
+	if m.MaxCost <= 0 {
 		return 0
 	}
-	pct := m.TotalCostWithChildren() / maxCost
+	pct := m.totalCostWithChildrenLocked() / m.MaxCost
 	if pct > 1 {
 		return 1
 	}
@@ -94,12 +103,11 @@ func (m *Metrics) BudgetUsedPct() float64 {
 // RemainingBudget returns the remaining cost budget in USD.
 func (m *Metrics) RemainingBudget() float64 {
 	m.mu.Lock()
-	maxCost := m.MaxCost
-	m.mu.Unlock()
-	if maxCost <= 0 {
+	defer m.mu.Unlock()
+	if m.MaxCost <= 0 {
 		return 0
 	}
-	remaining := maxCost - m.TotalCostWithChildren()
+	remaining := m.MaxCost - m.totalCostWithChildrenLocked()
 	if remaining < 0 {
 		return 0
 	}
@@ -169,14 +177,7 @@ func (m *Metrics) AddChild(agent string, child *Metrics) {
 func (m *Metrics) TotalCostWithChildren() float64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	total := m.costLocked()
-	for _, c := range m.Children {
-		pricing := GetPricing(c.Provider, c.Model)
-		inputCost := float64(c.InputTokens) / 1_000_000 * pricing.InputPerMillion
-		outputCost := float64(c.OutputTokens) / 1_000_000 * pricing.OutputPerMillion
-		total += inputCost + outputCost
-	}
-	return total
+	return m.totalCostWithChildrenLocked()
 }
 
 // TotalTokensWithChildren returns total tokens for the run and child runs.

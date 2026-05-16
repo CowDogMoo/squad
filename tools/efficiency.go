@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -468,27 +469,40 @@ func CompactionSummary(messages []llms.MessageContent, rc *ReadCache) string {
 	return sb.String()
 }
 
-// extractJSONField does a quick, non-strict extraction of a string field from JSON.
-// This avoids the overhead of full JSON parsing for simple cases.
+// extractJSONField does a quick extraction of a string field from JSON,
+// correctly handling backslash-escaped characters inside the value.
 func extractJSONField(jsonStr, field string) string {
-	// Look for "field":"value" or "field": "value"
 	key := fmt.Sprintf(`"%s"`, field)
 	idx := strings.Index(jsonStr, key)
 	if idx < 0 {
 		return ""
 	}
 	rest := jsonStr[idx+len(key):]
-	// Skip : and whitespace
 	rest = strings.TrimLeft(rest, ": \t\n")
 	if len(rest) == 0 || rest[0] != '"' {
 		return ""
 	}
-	rest = rest[1:]
-	end := strings.IndexByte(rest, '"')
-	if end < 0 {
-		return ""
+	// Scan forward, skipping backslash-escaped bytes, to find the closing quote.
+	i := 1
+	for i < len(rest) {
+		if rest[i] == '\\' {
+			i += 2 // skip escaped character
+			continue
+		}
+		if rest[i] == '"' {
+			break
+		}
+		i++
 	}
-	return rest[:end]
+	if i >= len(rest) {
+		return "" // no closing quote found
+	}
+	// Use encoding/json to properly decode escape sequences (e.g. \n, \uXXXX).
+	var s string
+	if err := json.Unmarshal([]byte(rest[:i+1]), &s); err != nil {
+		return rest[1:i] // fall back to raw slice if decode fails
+	}
+	return s
 }
 
 // sortedKeys returns map keys sorted alphabetically.

@@ -13,27 +13,6 @@ import (
 	"github.com/cowdogmoo/squad/routine"
 )
 
-func TestFirstNonEmpty(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		in   []string
-		want string
-	}{
-		{"first wins", []string{"a", "b"}, "a"},
-		{"skip empties", []string{"", "", "c"}, "c"},
-		{"all empty", []string{"", ""}, ""},
-		{"no values", nil, ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := firstNonEmpty(c.in...); got != c.want {
-				t.Errorf("firstNonEmpty(%v) = %q, want %q", c.in, got, c.want)
-			}
-		})
-	}
-}
-
 func TestFirstNonZeroInt(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

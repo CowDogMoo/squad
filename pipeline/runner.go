@@ -78,6 +78,7 @@ type Runner struct {
 	InlineAgents map[string]*InlineConfig // inline agent configs keyed by stage name
 	ComposedDir  string                   // directory of the composed agent (for resolving inline prompt files)
 	spent        *csync.Value[float64]
+	spentOnce    sync.Once
 	sumCache     *summaryCache
 }
 
@@ -364,11 +365,9 @@ func (r *Runner) RemainingBudget() float64 {
 	return remaining
 }
 
-// getSpent lazily initializes and returns the spent value.
+// getSpent lazily initializes and returns the spent value. Safe for concurrent use.
 func (r *Runner) getSpent() *csync.Value[float64] {
-	if r.spent == nil {
-		r.spent = csync.NewValue(0.0)
-	}
+	r.spentOnce.Do(func() { r.spent = csync.NewValue(0.0) })
 	return r.spent
 }
 

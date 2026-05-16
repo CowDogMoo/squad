@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -45,7 +46,10 @@ func runLifecycle(ctx context.Context, cfg *config.Config, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("watch: %w", err)
 	}
+	var watcherDone sync.WaitGroup
+	watcherDone.Add(1)
 	go func() {
+		defer watcherDone.Done()
 		for ev := range events {
 			logging.Info("routined: %s %s", eventTypeName(ev.Type), ev.Ref.Qualified())
 			sched.ApplyEvent(ev)
@@ -56,6 +60,9 @@ func runLifecycle(ctx context.Context, cfg *config.Config, opts Options) error {
 	logging.Info("routined: scheduler started")
 	<-ctx.Done()
 	logging.Info("routined: shutting down")
+	// Wait for the event-watcher goroutine to drain before shutting down the
+	// scheduler, so no ApplyEvent call races against a stopped gocron instance.
+	watcherDone.Wait()
 	shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return sched.Shutdown(shutCtx)

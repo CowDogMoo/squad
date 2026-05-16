@@ -161,15 +161,6 @@ func resolveWorkingDir(entry routine.Entry) string {
 	return ""
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func firstNonZeroInt(values ...int) int {
 	for _, v := range values {
 		if v != 0 {

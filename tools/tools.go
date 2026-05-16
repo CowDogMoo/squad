@@ -363,11 +363,11 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	}
 
 	messages := buildInitialMessages(systemPrompt, userPrompt, cfg.UseCacheControl)
-	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, maxIterations, cfg, callOpts)
-	if done {
+	lastContent, messages, loopErr := toolLoop(ctx, llm, messages, handlers, maxIterations, cfg, callOpts)
+	if loopErr == nil {
 		return lastContent, nil
 	}
-	if loopErr != nil && !errors.Is(loopErr, metrics.ErrBudgetExceeded) &&
+	if !errors.Is(loopErr, metrics.ErrBudgetExceeded) &&
 		!errors.Is(loopErr, ErrIterationLimitReached) &&
 		!errors.Is(loopErr, ErrLoopDetected) &&
 		!errors.Is(loopErr, ErrEditDeadlineReached) {
@@ -647,7 +647,7 @@ func trackPostExecution(ctx context.Context, messages []llms.MessageContent, mer
 	return postExecutionResult{newFilesRead: newFilesRead, stuck: loopDetector.Stuck()}
 }
 
-func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter int, cfg RunWithToolsConfig, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
+func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter int, cfg RunWithToolsConfig, callOpts []llms.CallOption) (string, []llms.MessageContent, error) {
 	m := cfg.Metrics
 	var lastContent string
 	var repeat RepeatTracker
@@ -663,7 +663,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		response, err := retryGenerateContent(ctx, llm, messages, resolveIterOpts(callOpts, cfg.ForceFirstToolCall, i))
 		iterDuration := time.Since(iterStart)
 		if err := validateResponse(ctx, response, err, iterDuration); err != nil {
-			return lastContent, messages, err, false
+			return lastContent, messages, err
 		}
 
 		if m != nil {
@@ -676,7 +676,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		}
 		if len(mergedToolCalls) == 0 {
 			logging.InfoContext(ctx, "model returned final response in %s (no tool calls)", iterDuration.Round(time.Millisecond))
-			return mergedContent, messages, nil, true
+			return mergedContent, messages, nil
 		}
 		if mergedContent != "" {
 			logging.InfoContext(ctx, "model: %s", TruncateString(strings.ReplaceAll(mergedContent, "\n", " "), 200))
@@ -695,7 +695,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 			stop, updated := grace.handleEditDeadline(ctx, messages)
 			messages = updated
 			if stop {
-				return lastContent, messages, ErrEditDeadlineReached, false
+				return lastContent, messages, ErrEditDeadlineReached
 			}
 		}
 
@@ -709,12 +709,12 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		postResult := trackPostExecution(ctx, messages, mergedToolCalls, editEnforcer, phaseEnforcer, &loopDetector, &grace, cacheSizeBefore)
 		if postResult.stuck {
 			logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results, stopping")
-			return lastContent, messages, ErrLoopDetected, false
+			return lastContent, messages, ErrLoopDetected
 		}
 
 		if m != nil && m.BudgetExceeded() {
 			logging.InfoContext(ctx, "budget exceeded ($%.4f >= $%.4f max), stopping tool loop", m.TotalCostWithChildren(), m.MaxCost)
-			return lastContent, messages, metrics.ErrBudgetExceeded, false
+			return lastContent, messages, metrics.ErrBudgetExceeded
 		}
 
 		toolNames := extractToolNames(mergedToolCalls)
@@ -727,7 +727,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		messages = rollingCompact(ctx, messages, i)
 		messages = compactMessages(ctx, messages, m)
 	}
-	return lastContent, messages, ErrIterationLimitReached, false
+	return lastContent, messages, ErrIterationLimitReached
 }
 
 // isEmptyResponse reports whether the model returned no usable content.
