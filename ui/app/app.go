@@ -53,10 +53,11 @@ type App struct {
 	knownDirs     map[string]bool
 	lastDiscovery time.Time
 
-	registry   *registry.Registry
-	workingDir string // for launched subprocesses
-	toast      string // transient message ("Launched ..."), cleared after toastUntil
-	toastUntil time.Time
+	registry      *registry.Registry
+	workingDir    string // for launched subprocesses
+	providerToken string // resolved config provider.token for launch-form key checks
+	toast         string // transient message ("Launched ..."), cleared after toastUntil
+	toastUntil    time.Time
 
 	// launchPairs maps session ID → registry Launch ID. Filled when
 	// rediscover() sees a new session dir following a recent launch
@@ -140,11 +141,18 @@ func (a App) WithAgents(names []string) App {
 	return a
 }
 
+// WithProviderToken seeds the resolved config provider.token used by the
+// launch form's API-key readiness check.
+func (a App) WithProviderToken(token string) App {
+	a.providerToken = token
+	return a
+}
+
 // NewWithSessions returns an App that auto-discovers + tails the session
 // directories under sessionsRoot (typically ".squad/sessions"). Missing
 // root is not an error — the app renders empty until sessions appear.
 // workingDir is the directory in which launched subprocesses are spawned.
-func NewWithSessions(sessionsRoot, workingDir string) (App, error) {
+func NewWithSessions(sessionsRoot, workingDir, providerToken string) (App, error) {
 	tailers, err := watch.Discover(sessionsRoot)
 	if err != nil {
 		return App{}, err
@@ -163,6 +171,7 @@ func NewWithSessions(sessionsRoot, workingDir string) (App, error) {
 		knownDirs:     known,
 		sessionsRoot:  sessionsRoot,
 		workingDir:    workingDir,
+		providerToken: providerToken,
 		selected:      selected,
 		pane:          pane.NewComposer(),
 		registry:      registry.New(),
@@ -585,15 +594,16 @@ func (a *App) cmdPresetLoad(args []string) {
 	}
 	// Open the form with the preset's values pre-populated.
 	form := pane.NewLaunch(a.pane, pane.LaunchDefaults{
-		Agent:      p.Agent,
-		WorkingDir: presetOrDefault(p.WorkingDir, a.workingDir),
-		MaxCost:    p.MaxCost,
-		Mode:       p.Mode,
-		MaxIter:    p.MaxIter,
-		Provider:   p.Provider,
-		Model:      p.Model,
-		Isolate:    p.Isolate,
-		Agents:     a.agents,
+		Agent:         p.Agent,
+		WorkingDir:    presetOrDefault(p.WorkingDir, a.workingDir),
+		MaxCost:       p.MaxCost,
+		Mode:          p.Mode,
+		MaxIter:       p.MaxIter,
+		Provider:      p.Provider,
+		Model:         p.Model,
+		Isolate:       p.Isolate,
+		ProviderToken: a.providerToken,
+		Agents:        a.agents,
 	})
 	form.SetSize(a.width, a.height)
 	// If the preset has a prompt, seed the textarea.
@@ -769,8 +779,9 @@ func (a *App) cancelFocused() {
 // is preserved as the form's parent so Esc / submit returns to it.
 func (a *App) openLaunchForm() {
 	form := pane.NewLaunch(a.pane, pane.LaunchDefaults{
-		WorkingDir: a.workingDir,
-		Agents:     a.agents,
+		WorkingDir:    a.workingDir,
+		ProviderToken: a.providerToken,
+		Agents:        a.agents,
 	})
 	form.SetSize(a.width, a.height)
 	a.pane = form

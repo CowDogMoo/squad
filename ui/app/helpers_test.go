@@ -29,6 +29,13 @@ func TestWithAgents(t *testing.T) {
 	}
 }
 
+func TestWithProviderToken(t *testing.T) {
+	a := makeApp().WithProviderToken("cfg-token")
+	if a.providerToken != "cfg-token" {
+		t.Errorf("providerToken: got %q, want %q", a.providerToken, "cfg-token")
+	}
+}
+
 func TestInit(t *testing.T) {
 	a := makeApp()
 	if a.Init() == nil {
@@ -37,7 +44,7 @@ func TestInit(t *testing.T) {
 }
 
 func TestNewWithSessionsEmpty(t *testing.T) {
-	a, err := NewWithSessions(t.TempDir(), t.TempDir())
+	a, err := NewWithSessions(t.TempDir(), t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("NewWithSessions on empty dir should not error, got %v", err)
 	}
@@ -53,7 +60,7 @@ func TestNewWithSessionsWithSession(t *testing.T) {
 	if err := mkSessionDir(t, dir, session.Meta{SessionID: sid, Agent: "go-review", Status: session.StatusRunning}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := NewWithSessions(root, t.TempDir())
+	a, err := NewWithSessions(root, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +295,7 @@ func TestCurrentRunsFromTailers(t *testing.T) {
 	if err := mkSessionDir(t, dir, session.Meta{SessionID: sid, Agent: "go-review", Status: session.StatusRunning}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := NewWithSessions(root, t.TempDir())
+	a, err := NewWithSessions(root, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +309,7 @@ func TestCurrentRunsFromTailers(t *testing.T) {
 }
 
 func TestTailerStateForUnknown(t *testing.T) {
-	a, _ := NewWithSessions(t.TempDir(), t.TempDir())
+	a, _ := NewWithSessions(t.TempDir(), t.TempDir(), "")
 	if _, ok := a.tailerStateFor("nope"); ok {
 		t.Error("unknown session should return false")
 	}
@@ -542,7 +549,7 @@ func TestUpdateFrameTickRefreshesTailers(t *testing.T) {
 	if err := mkSessionDir(t, dir, session.Meta{SessionID: sid, Agent: "x", Status: session.StatusRunning}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := NewWithSessions(root, t.TempDir())
+	a, err := NewWithSessions(root, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,7 +627,7 @@ func TestRunFromTailerWithCreatedTime(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a, err := NewWithSessions(root, t.TempDir())
+	a, err := NewWithSessions(root, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +653,7 @@ func TestRunFromTailerCompletedUsesUpdatedDelta(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a, err := NewWithSessions(root, t.TempDir())
+	a, err := NewWithSessions(root, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -666,7 +673,7 @@ func TestRunFromTailerCompletedUsesUpdatedDelta(t *testing.T) {
 func TestRediscoverPicksUpNewSessions(t *testing.T) {
 	root := t.TempDir()
 	// Start with empty root.
-	a, err := NewWithSessions(root, t.TempDir())
+	a, err := NewWithSessions(root, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -691,7 +698,7 @@ func TestRediscoverPicksUpNewSessions(t *testing.T) {
 
 func TestRediscoverPairsPendingLaunch(t *testing.T) {
 	root := t.TempDir()
-	a, err := NewWithSessions(root, t.TempDir())
+	a, err := NewWithSessions(root, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -812,7 +819,7 @@ func TestRenderFocusedWithTailerState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a, err := NewWithSessions(root, t.TempDir())
+	a, err := NewWithSessions(root, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
