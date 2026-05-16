@@ -436,6 +436,12 @@ func TestExtractJSONField(t *testing.T) {
 		{`{"path": 123}`, "path", ""},    // non-string value
 		{`{"other": "val"}`, "path", ""}, // field not present
 		{`not json`, "path", ""},         // invalid json
+		// Escape sequence handling.
+		{`{"path": "foo\nbar"}`, "path", "foo\nbar"},     // \n → newline
+		{`{"path": "a\tb"}`, "path", "a\tb"},             // \t → tab
+		{`{"path": "foo\"bar"}`, "path", `foo"bar`},      // \" → "
+		{`{"path": "A"}`, "path", "A"}, // JSON A → A
+		{`{"path": "back\\slash"}`, "path", `back\slash`}, // \\ → backslash
 	}
 	for _, tt := range tests {
 		got := extractJSONField(tt.json, tt.field)

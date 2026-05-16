@@ -611,7 +611,7 @@ func TestBuildRunAgentFunc_ConfigDefaultNotInManifestWarns(t *testing.T) {
 	if runErr == nil {
 		t.Fatal("expected error from InvokeModel")
 	}
-	if !strings.Contains(string(out), "not listed in the agent manifest") {
+	if !strings.Contains(string(out), "not a preferred model for this agent") {
 		t.Fatalf("expected warning on stderr, got %q", string(out))
 	}
 }
