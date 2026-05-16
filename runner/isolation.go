@@ -117,6 +117,9 @@ func PrepareIsolation(ctx context.Context, originalDir string, mode IsolationMod
 	}
 }
 
+// prepareWorktree creates a git worktree for the agent run. When the working
+// directory is not a git repository it logs a warning and downgrades to
+// IsolationNone rather than failing.
 func prepareWorktree(ctx context.Context, iso *Isolation, agentName string) (*Isolation, error) {
 	if !isGitRepo(ctx, iso.Original) {
 		logging.Warn("isolation=worktree requested but %s is not a git repository — running in place", iso.Original)
@@ -147,6 +150,8 @@ func prepareWorktree(ctx context.Context, iso *Isolation, agentName string) (*Is
 	return iso, nil
 }
 
+// prepareBranch checks out a new branch `squad-<id>` in the original
+// directory, carrying any uncommitted changes to the new branch.
 func prepareBranch(ctx context.Context, iso *Isolation, agentName string) (*Isolation, error) {
 	if err := requireGitRepo(ctx, iso.Original, IsolationBranch); err != nil {
 		return nil, err
@@ -161,6 +166,8 @@ func prepareBranch(ctx context.Context, iso *Isolation, agentName string) (*Isol
 	return iso, nil
 }
 
+// prepareCommit stages and commits all working-tree changes as a snapshot
+// commit before the run. It is a no-op when the working tree is already clean.
 func prepareCommit(ctx context.Context, iso *Isolation, agentName string) (*Isolation, error) {
 	if err := requireGitRepo(ctx, iso.Original, IsolationCommit); err != nil {
 		return nil, err
@@ -184,6 +191,9 @@ func prepareCommit(ctx context.Context, iso *Isolation, agentName string) (*Isol
 	return iso, nil
 }
 
+// prepareStaged stashes any unstaged changes (preserving the index via
+// --keep-index), commits the staged snapshot, and records the stash ref for
+// restoration in [Isolation.Teardown]. It is a no-op when nothing is staged.
 func prepareStaged(ctx context.Context, iso *Isolation, agentName string) (*Isolation, error) {
 	if err := requireGitRepo(ctx, iso.Original, IsolationStaged); err != nil {
 		return nil, err
@@ -248,6 +258,8 @@ func (i *Isolation) Teardown(ctx context.Context) (kept bool, path string) {
 	return false, ""
 }
 
+// teardownWorktree removes the worktree and its branch when the agent
+// produced no changes; otherwise it retains both for the caller to review.
 func (i *Isolation) teardownWorktree(ctx context.Context) (kept bool, path string) {
 	if worktreeHasChanges(ctx, i.Effective) {
 		logging.Info("isolation: worktree retained at %s (branch %s) — agent produced changes", i.Effective, i.Branch)
@@ -264,6 +276,9 @@ func (i *Isolation) teardownWorktree(ctx context.Context) (kept bool, path strin
 	return false, ""
 }
 
+// teardownStaged pops the stash created by prepareStaged, restoring unstaged
+// changes to the working tree. It runs even when the agent failed so the
+// user's in-progress work is never silently discarded.
 func (i *Isolation) teardownStaged(ctx context.Context) {
 	if i.stashRef == "" {
 		return
@@ -288,6 +303,8 @@ func newIsolationID(agentName string) string {
 	return fmt.Sprintf("%s-%s", slug, stamp)
 }
 
+// requireGitRepo returns an error when dir is not inside a git repository,
+// providing a user-friendly message that names the failing isolation mode.
 func requireGitRepo(ctx context.Context, dir string, mode IsolationMode) error {
 	if !isGitRepo(ctx, dir) {
 		return fmt.Errorf("isolation=%s requires a git repository (run from inside one): %s", mode, dir)
@@ -295,12 +312,15 @@ func requireGitRepo(ctx context.Context, dir string, mode IsolationMode) error {
 	return nil
 }
 
+// isGitRepo reports whether dir is inside a git working tree.
 func isGitRepo(ctx context.Context, dir string) bool {
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--is-inside-work-tree")
 	cmd.Dir = dir
 	return cmd.Run() == nil
 }
 
+// gitRepoRoot returns the absolute path of the top-level git repository
+// containing dir.
 func gitRepoRoot(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
 	cmd.Dir = dir
@@ -311,6 +331,9 @@ func gitRepoRoot(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// worktreeHasChanges reports whether dir has any uncommitted changes
+// (tracked or untracked). On git command failure it returns true to avoid
+// discarding a worktree that may contain agent output.
 func worktreeHasChanges(ctx context.Context, dir string) bool {
 	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	cmd.Dir = dir
@@ -321,6 +344,8 @@ func worktreeHasChanges(ctx context.Context, dir string) bool {
 	return strings.TrimSpace(string(out)) != ""
 }
 
+// workingTreeDirty reports whether the working tree in dir has any uncommitted
+// changes according to git status --porcelain.
 func workingTreeDirty(ctx context.Context, dir string) (bool, error) {
 	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	cmd.Dir = dir
@@ -331,6 +356,7 @@ func workingTreeDirty(ctx context.Context, dir string) (bool, error) {
 	return strings.TrimSpace(string(out)) != "", nil
 }
 
+// hasStagedChanges reports whether the index in dir differs from HEAD.
 func hasStagedChanges(ctx context.Context, dir string) (bool, error) {
 	// `git diff --cached --quiet` exits 0 when index matches HEAD, 1 when not.
 	cmd := exec.CommandContext(ctx, "git", "diff", "--cached", "--quiet")
@@ -345,6 +371,8 @@ func hasStagedChanges(ctx context.Context, dir string) (bool, error) {
 	return false, err
 }
 
+// hasUnstagedChanges reports whether dir has tracked modifications or untracked
+// files that would be picked up by `git stash push -u`.
 func hasUnstagedChanges(ctx context.Context, dir string) (bool, error) {
 	// Tracked-file changes:
 	tracked := exec.CommandContext(ctx, "git", "diff", "--quiet")
@@ -377,6 +405,10 @@ func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSpace(out.String()), err
 }
 
+// sanitizeForBranch converts s to a string safe for use in a git branch name:
+// letters and digits are kept, uppercase is lowercased, hyphens and underscores
+// are kept, and all other characters are replaced with hyphens. Leading and
+// trailing hyphens are stripped.
 func sanitizeForBranch(s string) string {
 	var sb strings.Builder
 	for _, r := range s {

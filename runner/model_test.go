@@ -143,17 +143,6 @@ func TestBuildLLMVariants(t *testing.T) {
 			false,
 		},
 		{
-			// langchaingo validates key presence at construction; users of keyless
-			// endpoints (e.g. local vLLM) must set OPENAI_COMPAT_API_KEY or OPENAI_API_KEY
-			// to a dummy value. The error is caught here, not at HTTP call time.
-			"openai-compat/no-api-key fails at construction",
-			"openai-compat",
-			"some-model",
-			&RunOptions{BaseURL: "http://localhost:8000/v1"},
-			"",
-			true,
-		},
-		{
 			"openai-compat/missing base-url",
 			"openai-compat",
 			"meta-llama/Meta-Llama-3-70B-Instruct",
@@ -175,6 +164,16 @@ func TestBuildLLMVariants(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBuildLLMOpenAICompatNoAPIKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_COMPAT_API_KEY", "")
+	opts := &RunOptions{BaseURL: "http://localhost:8000/v1"}
+	_, err := buildLLM(context.Background(), opts, "openai-compat", "some-model")
+	if err == nil {
+		t.Fatal("expected error when no API key is provided for openai-compat")
 	}
 }
 
@@ -633,6 +632,7 @@ func TestCallModelRoutes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			server := tt.setup(t)
 			defer server.Close()
 
@@ -691,7 +691,7 @@ func TestInvokeModel_ExecutorError(t *testing.T) {
 }
 
 func TestInvokeModel_SystemOverride(t *testing.T) {
-	t.Parallel()
+	t.Setenv("OPENAI_API_KEY", "")
 	// This tests the system override path in InvokeModel.
 	// It will fail on API call but exercises the system override code path.
 	bundle := &agent.Bundle{
@@ -717,6 +717,7 @@ func TestInvokeModel_SystemOverride(t *testing.T) {
 }
 
 func TestCallLangChainLLMUnknownProvider(t *testing.T) {
+	t.Parallel()
 	bundle := &agent.Bundle{System: "system", User: "user", WorkDir: t.TempDir()}
 	opts := &RunOptions{Provider: "unknown"}
 	ex := &executor.LocalExecutor{WorkingDir: bundle.WorkDir}
@@ -1440,6 +1441,70 @@ func TestConnectMCPServers(t *testing.T) {
 				t.Fatalf("expected 0 clients, got %d", len(clients))
 			}
 			closeMCPClients(clients)
+		})
+	}
+}
+
+// TestApplyChildIterationCap verifies that applyChildIterationCap honours
+// the three-layer precedence: parent ChildMaxIter → manifest MaxIterations.
+func TestApplyChildIterationCap(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		childMaxIter  tools.ChildMaxIterFunc
+		bundleMaxIter int
+		initialIter   int
+		wantIter      int
+	}{
+		{
+			name:        "no limits leaves MaxIterations unchanged",
+			initialIter: 5,
+			wantIter:    5,
+		},
+		{
+			name:         "parent ChildMaxIter applies cap",
+			childMaxIter: func(string) int { return 3 },
+			wantIter:     3,
+		},
+		{
+			name:         "parent ChildMaxIter of zero is ignored",
+			childMaxIter: func(string) int { return 0 },
+			initialIter:  5,
+			wantIter:     5,
+		},
+		{
+			name:          "manifest cap applied when no parent cap",
+			bundleMaxIter: 4,
+			wantIter:      4,
+		},
+		{
+			name:          "manifest cap lowers parent cap",
+			childMaxIter:  func(string) int { return 10 },
+			bundleMaxIter: 3,
+			wantIter:      3,
+		},
+		{
+			name:          "manifest higher than parent cap keeps parent cap",
+			childMaxIter:  func(string) int { return 2 },
+			bundleMaxIter: 10,
+			wantIter:      2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			childOpts := &RunOptions{MaxIterations: tt.initialIter}
+			cfg := &tools.TaskConfig{ChildMaxIter: tt.childMaxIter}
+			bundle := &agent.Bundle{MaxIterations: tt.bundleMaxIter}
+			applyChildIterationCap(
+				context.Background(), childOpts, cfg, bundle, "child",
+			)
+			if childOpts.MaxIterations != tt.wantIter {
+				t.Fatalf(
+					"MaxIterations = %d, want %d",
+					childOpts.MaxIterations, tt.wantIter,
+				)
+			}
 		})
 	}
 }

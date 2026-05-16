@@ -1,12 +1,15 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestResolveIsolationMode(t *testing.T) {
@@ -291,6 +294,104 @@ func TestPrepareIsolationStagedNoUnstagedChanges(t *testing.T) {
 		t.Errorf("stash count should be 0, got %d", n)
 	}
 	iso.Teardown(context.Background())
+}
+
+// TestSanitizeForBranch verifies that sanitizeForBranch produces
+// branch-name-safe strings across a range of inputs.
+func TestSanitizeForBranch(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"lowercase letters and hyphens kept", "go-review", "go-review"},
+		{"uppercase letters lowercased", "GoReview", "goreview"},
+		{"digits kept", "agent123", "agent123"},
+		{"underscores kept", "my_agent", "my_agent"},
+		{"slash becomes hyphen", "my/agent", "my-agent"},
+		{"space becomes hyphen", "my agent", "my-agent"},
+		{"leading trailing hyphens stripped", "---agent---", "agent"},
+		{"empty string", "", ""},
+		{"all special chars produces empty", "!!!", ""},
+		{"slash padding stripped", "/agent/", "agent"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := sanitizeForBranch(tt.input); got != tt.want {
+				t.Fatalf(
+					"sanitizeForBranch(%q) = %q, want %q",
+					tt.input, got, tt.want,
+				)
+			}
+		})
+	}
+}
+
+// TestReportIsolationTeardown verifies that reportIsolationTeardown writes a
+// retention notice to stderr only when the worktree was kept.
+func TestReportIsolationTeardown(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil iso produces no output", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		var errBuf bytes.Buffer
+		cmd.SetErr(&errBuf)
+		reportIsolationTeardown(cmd, nil)
+		if errBuf.Len() != 0 {
+			t.Fatalf("expected no output for nil iso, got %q", errBuf.String())
+		}
+	})
+
+	t.Run("IsolationNone teardown produces no output", func(t *testing.T) {
+		t.Parallel()
+		iso, err := PrepareIsolation(
+			context.Background(), t.TempDir(), IsolationNone, "agent",
+		)
+		if err != nil {
+			t.Fatalf("PrepareIsolation: %v", err)
+		}
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		var errBuf bytes.Buffer
+		cmd.SetErr(&errBuf)
+		reportIsolationTeardown(cmd, iso)
+		if errBuf.Len() != 0 {
+			t.Fatalf("expected no output for IsolationNone, got %q", errBuf.String())
+		}
+	})
+
+	t.Run("retained worktree prints branch notice to stderr", func(t *testing.T) {
+		t.Parallel()
+		dir := initGitRepo(t)
+		iso, err := PrepareIsolation(
+			context.Background(), dir, IsolationWorktree, "test-agent",
+		)
+		if err != nil {
+			t.Fatalf("PrepareIsolation: %v", err)
+		}
+		// Write a file so the worktree has changes and is retained.
+		if writeErr := os.WriteFile(
+			filepath.Join(iso.Effective, "change.txt"), []byte("x"), 0o644,
+		); writeErr != nil {
+			t.Fatalf("write: %v", writeErr)
+		}
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		var errBuf bytes.Buffer
+		cmd.SetErr(&errBuf)
+		reportIsolationTeardown(cmd, iso)
+		out := errBuf.String()
+		if !strings.Contains(out, "Worktree retained") {
+			t.Fatalf("expected retention notice, got %q", out)
+		}
+		if !strings.Contains(out, iso.Branch) {
+			t.Fatalf("expected branch name %q in notice, got %q", iso.Branch, out)
+		}
+	})
 }
 
 // --- test helpers ---

@@ -369,6 +369,8 @@ func buildOpenAICompatLLM(opts *RunOptions, provider, model string) (llms.Model,
 	return openai.New(oaiOpts...)
 }
 
+// buildAnthropicLLM constructs an Anthropic LangChain LLM using the model,
+// API key, and optional base URL from opts.
 func buildAnthropicLLM(opts *RunOptions, model string) (llms.Model, error) {
 	aOpts := []anthropic.Option{}
 	if model != "" {
@@ -386,6 +388,8 @@ func buildAnthropicLLM(opts *RunOptions, model string) (llms.Model, error) {
 	return anthropic.New(aOpts...)
 }
 
+// buildGeminiLLM constructs a Google AI (Gemini) LangChain LLM using the
+// model and API key from opts.
 func buildGeminiLLM(ctx context.Context, opts *RunOptions, model string) (llms.Model, error) {
 	gOpts := []googleai.Option{}
 	if model != "" {
@@ -397,10 +401,14 @@ func buildGeminiLLM(ctx context.Context, opts *RunOptions, model string) (llms.M
 	return googleai.New(ctx, gOpts...)
 }
 
+// normalizeProvider returns provider lowercased and stripped of whitespace.
 func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
 }
 
+// buildNativeOllamaLLM constructs an Ollama LLM using the base URL and
+// context-window size from opts, defaulting to localhost:11434 and 32 768
+// tokens respectively.
 func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 	baseURL := opts.BaseURL
 	if baseURL == "" {
@@ -413,6 +421,8 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 	return ollama.New(baseURL, model, numCtx)
 }
 
+// isOpenAICompatProvider reports whether provider speaks the OpenAI
+// chat-completions API (including the legacy nvidia and databricks shims).
 func isOpenAICompatProvider(provider string) bool {
 	return provider == "" || provider == "openai" || provider == "openai-compat" ||
 		provider == "nvidia" || provider == "databricks"

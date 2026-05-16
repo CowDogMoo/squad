@@ -10,8 +10,9 @@ import (
 	"github.com/cowdogmoo/squad/tools"
 )
 
-// applyResponseDiff extracts and applies a unified diff from the model response.
-
+// applyResponseDiff extracts and applies a unified diff from the model
+// response. It is a no-op when the response contains no diff block and either
+// indicates no changes or tools have already applied edits directly.
 func applyResponseDiff(ctx context.Context, response, workingDir string, fallback bool) error {
 	diff, err := extractUnifiedDiff(response)
 	if err != nil {
@@ -37,6 +38,10 @@ func applyResponseDiff(ctx context.Context, response, workingDir string, fallbac
 	return nil
 }
 
+// validateActionableResponse reports an error when the response is not
+// actionable: it contains no unified diff, no "files touched" marker, and no
+// "no changes" declaration, and the context tools have not already applied any
+// edits directly.
 func validateActionableResponse(ctx context.Context, response string) error {
 	if tools.EditsApplied(ctx) {
 		return nil
@@ -54,10 +59,15 @@ func validateActionableResponse(ctx context.Context, response string) error {
 	return fmt.Errorf("response is not actionable: missing diff, files touched, or no changes section (disable with --require-actionable=false)")
 }
 
+// responseIndicatesNoChanges reports whether the response contains a "no
+// changes" phrase, used to distinguish a legitimate no-op from a missing diff.
 func responseIndicatesNoChanges(response string) bool {
 	return strings.Contains(strings.ToLower(response), "no changes")
 }
 
+// extractUnifiedDiff scans response for fenced diff blocks (```diff or
+// ```patch), joins them into a single unified diff string, and returns an
+// error when no valid diff block is found.
 func extractUnifiedDiff(response string) (string, error) {
 	const fence = "```diff"
 	const altFence = "```patch"
@@ -98,6 +108,9 @@ func extractUnifiedDiff(response string) (string, error) {
 	return diff, nil
 }
 
+// applyUnifiedDiff applies diff to the files under workingDir, trying
+// git apply first. When applyFallback is true and git apply fails it retries
+// with the system patch utility; otherwise the git error is returned directly.
 func applyUnifiedDiff(ctx context.Context, workingDir, diff string, applyFallback bool) error {
 	if strings.TrimSpace(diff) == "" {
 		return fmt.Errorf("diff content is empty")
@@ -120,6 +133,8 @@ func applyUnifiedDiff(ctx context.Context, workingDir, diff string, applyFallbac
 	return fmt.Errorf("failed to apply diff with git or patch: %v; %v", gitErr, patchErr)
 }
 
+// looksLikeDiff reports whether diff contains recognisable unified-diff
+// headers ("diff --git" or "--- a/ … +++ b/").
 func looksLikeDiff(diff string) bool {
 	if strings.Contains(diff, "diff --git ") {
 		return true
@@ -130,6 +145,8 @@ func looksLikeDiff(diff string) bool {
 	return false
 }
 
+// applyWithGit applies diff via `git apply` in workingDir, returning any error
+// combined with the command output for diagnosis.
 func applyWithGit(ctx context.Context, workingDir, diff string) error {
 	cmd := exec.CommandContext(ctx, "git", "apply", "--whitespace=nowarn", "--recount", "-")
 	cmd.Dir = workingDir
@@ -141,6 +158,8 @@ func applyWithGit(ctx context.Context, workingDir, diff string) error {
 	return nil
 }
 
+// applyWithPatch applies diff via the system `patch -p1` command in workingDir,
+// used as a fallback when git apply is unavailable or rejects the diff.
 func applyWithPatch(ctx context.Context, workingDir, diff string) error {
 	cmd := exec.CommandContext(ctx, "patch", "-p1")
 	cmd.Dir = workingDir

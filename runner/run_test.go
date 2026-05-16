@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -53,36 +54,28 @@ func TestReadPrompt(t *testing.T) {
 
 func TestResolveWorkingDir(t *testing.T) {
 	t.Parallel()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd() error = %v", err)
+	}
+	tmp := t.TempDir()
 	tests := []struct {
-		name    string
-		dir     string
-		wantCwd bool
-		wantErr bool
+		name string
+		dir  string
+		want string
 	}{
-		{"empty returns cwd", "", true, false},
-		{"explicit path", "", false, false},
+		{"empty returns cwd", "", cwd},
+		{"explicit path", tmp, tmp},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if tt.wantCwd {
-				cwd, _ := os.Getwd()
-				resolved, err := resolveWorkingDir("")
-				if err != nil {
-					t.Fatalf("resolveWorkingDir() error = %v", err)
-				}
-				if resolved != cwd {
-					t.Fatalf("resolveWorkingDir() = %q, want cwd %q", resolved, cwd)
-				}
-			} else {
-				tmp := t.TempDir()
-				resolved, err := resolveWorkingDir(tmp)
-				if err != nil {
-					t.Fatalf("resolveWorkingDir() error = %v", err)
-				}
-				if resolved != tmp {
-					t.Fatalf("resolveWorkingDir() = %q, want %q", resolved, tmp)
-				}
+			resolved, err := resolveWorkingDir(tt.dir)
+			if err != nil {
+				t.Fatalf("resolveWorkingDir(%q) error = %v", tt.dir, err)
+			}
+			if resolved != tt.want {
+				t.Fatalf("resolveWorkingDir(%q) = %q, want %q", tt.dir, resolved, tt.want)
 			}
 		})
 	}
@@ -284,9 +277,9 @@ func TestResolveModelPrecedenceNilGuard(t *testing.T) {
 	ResolveModelPrecedence(context.Background(), nil, &agent.Bundle{})
 
 	opts := &RunOptions{Model: "preset", Provider: "preset"}
-	ResolveModelPrecedence(context.Background(), opts, &agent.Bundle{Model: "manifest", Provider: "manifest"})
-	if opts.Model != "preset" || opts.Provider != "preset" {
-		t.Fatalf("explicit values must win over manifest: Model=%q Provider=%q", opts.Model, opts.Provider)
+	res := ResolveModelPrecedence(context.Background(), opts, &agent.Bundle{Model: "manifest", Provider: "manifest"})
+	if res.Model != "preset" || res.Provider != "preset" {
+		t.Fatalf("explicit values must win over manifest: Model=%q Provider=%q", res.Model, res.Provider)
 	}
 }
 
@@ -305,9 +298,9 @@ func TestResolveModelPrecedenceBaseURL(t *testing.T) {
 			Provider: "openai-compat",
 			BaseURL:  compatURL,
 		}
-		ResolveModelPrecedence(context.Background(), opts, bundle)
-		if opts.BaseURL != compatURL {
-			t.Fatalf("BaseURL = %q, want %q", opts.BaseURL, compatURL)
+		res := ResolveModelPrecedence(context.Background(), opts, bundle)
+		if res.BaseURL != compatURL {
+			t.Fatalf("BaseURL = %q, want %q", res.BaseURL, compatURL)
 		}
 	})
 
@@ -320,9 +313,9 @@ func TestResolveModelPrecedenceBaseURL(t *testing.T) {
 			Provider: "openai-compat",
 			BaseURL:  compatURL,
 		}
-		ResolveModelPrecedence(context.Background(), opts, bundle)
-		if opts.BaseURL != explicit {
-			t.Fatalf("BaseURL = %q, want explicit %q", opts.BaseURL, explicit)
+		res := ResolveModelPrecedence(context.Background(), opts, bundle)
+		if res.BaseURL != explicit {
+			t.Fatalf("BaseURL = %q, want explicit %q", res.BaseURL, explicit)
 		}
 	})
 
@@ -341,12 +334,12 @@ func TestResolveModelPrecedenceBaseURL(t *testing.T) {
 				},
 			},
 		}
-		ResolveModelPrecedence(context.Background(), opts, bundle)
-		if opts.BaseURL != compatURL {
-			t.Fatalf("BaseURL = %q, want %q", opts.BaseURL, compatURL)
+		res := ResolveModelPrecedence(context.Background(), opts, bundle)
+		if res.BaseURL != compatURL {
+			t.Fatalf("BaseURL = %q, want %q", res.BaseURL, compatURL)
 		}
-		if opts.Provider != "openai-compat" {
-			t.Fatalf("Provider = %q, want openai-compat", opts.Provider)
+		if res.Provider != "openai-compat" {
+			t.Fatalf("Provider = %q, want openai-compat", res.Provider)
 		}
 	})
 }
@@ -385,7 +378,7 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 		runAndAssertBundle(t, opts, "manifest-model", "manifest-provider")
 	})
 
-	t.Run("manifest wins over config defaults", func(t *testing.T) {
+	t.Run("config default wins over manifest even when not listed", func(t *testing.T) {
 		t.Parallel()
 		agentsDir := writeTestAgentWithModels(t, "manifest-vs-config", "manifest-model", "manifest-provider")
 		opts := &RunOptions{
@@ -397,7 +390,7 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 			PrintBundle:    true,
 			BundleOut:      filepath.Join(t.TempDir(), "bundle.txt"),
 		}
-		runAndAssertBundle(t, opts, "manifest-model", "manifest-provider")
+		runAndAssertBundle(t, opts, "config-model", "config-provider")
 	})
 
 	t.Run("config defaults fill in when manifest is silent", func(t *testing.T) {
@@ -431,6 +424,26 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 		runAndAssertBundle(t, opts, "config-model", "config-provider")
 	})
 
+	t.Run("config default wins when listed as non-first model", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := writeTestAgentWithMultiModels(t, "multi-model-agent",
+			[]struct{ model, provider string }{
+				{"claude-sonnet-4-6", "anthropic"},
+				{"qwen3-coder-480b", "nvidia"},
+			},
+		)
+		opts := &RunOptions{
+			Agent:          "multi-model-agent",
+			AgentsDir:      agentsDir,
+			ConfigModel:    "qwen3-coder-480b",
+			ConfigProvider: "nvidia",
+			DryRun:         true,
+			PrintBundle:    true,
+			BundleOut:      filepath.Join(t.TempDir(), "bundle.txt"),
+		}
+		runAndAssertBundle(t, opts, "qwen3-coder-480b", "nvidia")
+	})
+
 	t.Run("CLI flags take precedence over manifest", func(t *testing.T) {
 		t.Parallel()
 		agentsDir := writeTestAgentWithModels(t, "cli-agent", "manifest-model", "manifest-provider")
@@ -446,7 +459,7 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 		runAndAssertBundle(t, opts, "cli-model", "cli-provider")
 	})
 
-	t.Run("config default not in manifest emits warning to stderr", func(t *testing.T) {
+	t.Run("config default not in manifest emits warning but still runs with config default", func(t *testing.T) {
 		t.Parallel()
 		agentsDir := writeTestAgentWithModels(t, "warn-fallback", "manifest-model", "manifest-provider")
 		opts := &RunOptions{
@@ -466,10 +479,10 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 		if _, err := prepareBundle(cmd, opts, "prompt", t.TempDir()); err != nil {
 			t.Fatalf("prepareBundle() error = %v", err)
 		}
-		if opts.Model != "manifest-model" || opts.Provider != "manifest-provider" {
-			t.Fatalf("expected fallback to manifest, got Model=%q Provider=%q", opts.Model, opts.Provider)
+		if opts.Model != "other-model" || opts.Provider != "other-provider" {
+			t.Fatalf("expected config default to be used, got Model=%q Provider=%q", opts.Model, opts.Provider)
 		}
-		if !strings.Contains(stderr.String(), "not listed in the agent manifest") {
+		if !strings.Contains(stderr.String(), "not a preferred model for this agent") {
 			t.Fatalf("expected warning on stderr, got %q", stderr.String())
 		}
 	})
@@ -560,6 +573,7 @@ func TestExecuteRunInvokeModelError(t *testing.T) {
 }
 
 func TestExecuteRunSuccessOllama(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/chat" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -730,22 +744,7 @@ func TestWriteResponsePrintAndFile(t *testing.T) {
 
 func writeTestAgent(t *testing.T, agentName string) string {
 	t.Helper()
-	agentsDir := t.TempDir()
-	agentDir := filepath.Join(agentsDir, agentName)
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	manifest := fmt.Sprintf("name: %s\nversion: 0.0.0\nentrypoint: system.md\nwrapper: wrapper.md\n", agentName)
-	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
-		t.Fatalf("WriteFile agent.yaml: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("System prompt."), 0o644); err != nil {
-		t.Fatalf("WriteFile system.md: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(agentDir, "wrapper.md"), []byte("Wrapper prompt."), 0o644); err != nil {
-		t.Fatalf("WriteFile wrapper.md: %v", err)
-	}
-	return agentsDir
+	return writeTestAgentNoModels(t, agentName)
 }
 
 func writeTestAgentNoModels(t *testing.T, agentName string) string {
@@ -786,4 +785,164 @@ func writeTestAgentWithModels(t *testing.T, agentName, model, provider string) s
 		t.Fatalf("WriteFile wrapper.md: %v", err)
 	}
 	return agentsDir
+}
+
+func writeTestAgentWithMultiModels(t *testing.T, agentName string, models []struct{ model, provider string }) string {
+	t.Helper()
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, agentName)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	var sb strings.Builder
+	for _, m := range models {
+		fmt.Fprintf(&sb, "  - model: %s\n    provider: %s\n", m.model, m.provider)
+	}
+	modelsYAML := sb.String()
+	manifest := fmt.Sprintf("name: %s\nversion: 0.0.0\nentrypoint: system.md\nwrapper: wrapper.md\nmodels:\n%s", agentName, modelsYAML)
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile agent.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("System prompt."), 0o644); err != nil {
+		t.Fatalf("WriteFile system.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "wrapper.md"), []byte("Wrapper prompt."), 0o644); err != nil {
+		t.Fatalf("WriteFile wrapper.md: %v", err)
+	}
+	return agentsDir
+}
+
+// writeTestAgentWithIsolation creates an agent fixture whose manifest
+// declares the given isolation mode.
+func writeTestAgentWithIsolation(t *testing.T, agentName, isolation string) string {
+	t.Helper()
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, agentName)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := fmt.Sprintf(
+		"name: %s\nversion: 0.0.0\nentrypoint: system.md\n"+
+			"wrapper: wrapper.md\nisolation: %s\n",
+		agentName, isolation,
+	)
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile agent.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("System prompt."), 0o644); err != nil {
+		t.Fatalf("WriteFile system.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "wrapper.md"), []byte("Wrapper prompt."), 0o644); err != nil {
+		t.Fatalf("WriteFile wrapper.md: %v", err)
+	}
+	return agentsDir
+}
+
+// TestHandleBudgetExceeded verifies the three branches inside
+// handleBudgetExceeded: silent no-op, warning-only, and partial apply.
+func TestHandleBudgetExceeded(t *testing.T) {
+	t.Parallel()
+
+	t.Run("non-budget error is a no-op", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		var errBuf bytes.Buffer
+		cmd.SetErr(&errBuf)
+		m := metrics.New("openai", "gpt-4o")
+		m.Finish()
+		handleBudgetExceeded(
+			cmd, &RunOptions{}, m, "", t.TempDir(),
+			errors.New("some other error"),
+		)
+		if errBuf.Len() != 0 {
+			t.Fatalf(
+				"expected no output for non-budget error, got %q",
+				errBuf.String(),
+			)
+		}
+	})
+
+	t.Run("budget exceeded with empty response writes warning only", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		var errBuf bytes.Buffer
+		cmd.SetErr(&errBuf)
+		var stdout bytes.Buffer
+		cmd.SetOut(&stdout)
+		m := metrics.New("openai", "gpt-4o")
+		m.SetMaxCost(0.001)
+		m.Finish()
+		handleBudgetExceeded(
+			cmd, &RunOptions{MaxCost: 0.001}, m, "", t.TempDir(),
+			metrics.ErrBudgetExceeded,
+		)
+		if !strings.Contains(errBuf.String(), "cost budget") {
+			t.Fatalf("expected budget warning, got %q", errBuf.String())
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("expected no stdout for empty response, got %q", stdout.String())
+		}
+	})
+
+	t.Run("budget exceeded with response applies partial output", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		var stdout bytes.Buffer
+		cmd.SetOut(&stdout)
+		m := metrics.New("openai", "gpt-4o")
+		m.Finish()
+		opts := &RunOptions{MaxCost: 0.001, Print: true}
+		handleBudgetExceeded(
+			cmd, opts, m, "partial response", t.TempDir(),
+			metrics.ErrBudgetExceeded,
+		)
+		if !strings.Contains(stdout.String(), "partial response") {
+			t.Fatalf(
+				"expected partial response in stdout, got %q",
+				stdout.String(),
+			)
+		}
+	})
+}
+
+// TestManifestIsolation verifies that manifestIsolation returns the isolation
+// field from an agent manifest, or empty string on any failure.
+func TestManifestIsolation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty agent name returns empty", func(t *testing.T) {
+		t.Parallel()
+		if got := manifestIsolation(&RunOptions{}); got != "" {
+			t.Fatalf("expected empty for empty agent, got %q", got)
+		}
+	})
+
+	t.Run("missing agent directory returns empty", func(t *testing.T) {
+		t.Parallel()
+		opts := &RunOptions{Agent: "nonexistent", AgentsDir: t.TempDir()}
+		if got := manifestIsolation(opts); got != "" {
+			t.Fatalf("expected empty for missing agent, got %q", got)
+		}
+	})
+
+	t.Run("manifest with isolation field returns it", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := writeTestAgentWithIsolation(t, "iso-agent", "worktree")
+		opts := &RunOptions{Agent: "iso-agent", AgentsDir: agentsDir}
+		if got := manifestIsolation(opts); got != "worktree" {
+			t.Fatalf("manifestIsolation() = %q, want worktree", got)
+		}
+	})
+
+	t.Run("manifest without isolation field returns empty", func(t *testing.T) {
+		t.Parallel()
+		agentsDir := writeTestAgentNoModels(t, "no-iso-agent")
+		opts := &RunOptions{Agent: "no-iso-agent", AgentsDir: agentsDir}
+		if got := manifestIsolation(opts); got != "" {
+			t.Fatalf("manifestIsolation() = %q, want empty", got)
+		}
+	})
 }

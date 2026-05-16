@@ -1,4 +1,10 @@
 // Package runner orchestrates agent execution workflows and model calls.
+//
+// The primary entry points are [ExecuteRun] for single-agent invocations and
+// [InvokeModel] for direct model dispatch (used by the pipeline runner and the
+// Task tool). [ResolveModelPrecedence] handles the three-layer model selection
+// hierarchy (CLI flag → config default → agent manifest). [FindAgentDir]
+// locates an agent directory using the configured source manager.
 package runner
 
 import (
@@ -128,8 +134,15 @@ type RunOptions struct {
 	LastSessionID string
 }
 
-// ExecuteRun contains the full run command logic, parameterized by RunOptions.
-func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
+// ExecuteRun runs a single agent invocation end-to-end. It reads the prompt,
+// resolves working directory and isolation, builds the agent bundle, opens a
+// session log, calls the model, and writes the response. Budget-exceeded runs
+// apply any partial response before returning the error.
+//
+// The named return runErr is used so the deferred session-close always records
+// the final error, including failures from post-processing steps like diff
+// application.
+func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) (runErr error) {
 	prompt, err := readPrompt(cmd, args)
 	if err != nil {
 		return err
@@ -177,26 +190,26 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 
 	cmd.SetContext(ctx)
 	tools.ResetEditsApplied(ctx)
-	response, m, err := InvokeModel(ctx, opts, bundle)
+
+	var m *metrics.Metrics
+	var response string
+	response, m, runErr = InvokeModel(ctx, opts, bundle)
 
 	defer func() {
 		logRunHistory(opts, m)
 		if metricsErr := printMetrics(cmd, m); metricsErr != nil {
 			logging.Warn("failed to print metrics: %v", metricsErr)
 		}
-		closeSession(logger, m, err)
+		closeSession(logger, m, runErr)
 	}()
 
-	if err != nil {
-		handleBudgetExceeded(cmd, opts, m, response, workingDir, err)
-		return err
+	if runErr != nil {
+		handleBudgetExceeded(cmd, opts, m, response, workingDir, runErr)
+		return
 	}
 
-	if err := handleResponse(cmd, opts, response, workingDir); err != nil {
-		return err
-	}
-
-	return nil
+	runErr = handleResponse(cmd, opts, response, workingDir)
+	return
 }
 
 // handleBudgetExceeded reports a budget-exceeded run and applies any partial
@@ -225,69 +238,84 @@ func printMetrics(cmd *cobra.Command, m *metrics.Metrics) error {
 	return err
 }
 
-// ResolveModelPrecedence fills opts.Model and opts.Provider using the
-// precedence: explicit (CLI flag / routine field) > config default (when
-// supported by the manifest) > manifest first model > config default.
-// Already-set fields are preserved. Returns a non-empty warning string when
-// the config default is set but not listed in the agent manifest; callers
-// should display this to the user on stderr.
-func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) string {
+// ModelResolution holds the resolved model, provider, base URL, and any
+// advisory warning produced by ResolveModelPrecedence. Callers apply these
+// values back to RunOptions so that the mutation is visible at the call site.
+type ModelResolution struct {
+	Model    string
+	Provider string
+	BaseURL  string
+	// Warning is non-empty when the config default is not listed in the agent
+	// manifest's preferred model list but is used anyway.
+	Warning string
+}
+
+// ResolveModelPrecedence resolves the model, provider, and base URL using the
+// precedence: explicit (CLI flag / routine field) > config default > manifest.
+// It returns a ModelResolution the caller must apply to RunOptions; the opts
+// argument is read-only. Warning is non-empty when the config default is not
+// listed in the manifest's preferred models but is used anyway.
+func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) ModelResolution {
 	if opts == nil || bundle == nil {
-		return ""
+		return ModelResolution{}
 	}
 
-	var warn string
-	if opts.Model == "" {
+	res := ModelResolution{
+		Model:    opts.Model,
+		Provider: opts.Provider,
+		BaseURL:  opts.BaseURL,
+	}
+
+	if res.Model == "" {
 		configMatch := bundle.FindModel(opts.ConfigProvider, opts.ConfigModel)
 
 		switch {
 		case configMatch != nil:
-			// Config default is supported by this agent — use it; provider is also set.
-			opts.Model = configMatch.Model
-			opts.Provider = configMatch.Provider
-			if opts.BaseURL == "" {
-				opts.BaseURL = configMatch.BaseURL
+			// Config default is listed in the manifest — use it; provider is also set.
+			res.Model = configMatch.Model
+			res.Provider = configMatch.Provider
+			if res.BaseURL == "" {
+				res.BaseURL = configMatch.BaseURL
 			}
-			logging.InfoContext(ctx, "using config default model: %s (%s)", opts.Model, opts.Provider)
-			return ""
+			logging.InfoContext(ctx, "using config default model: %s (%s)", res.Model, res.Provider)
 
 		case opts.ConfigModel != "" && bundle.Model != "":
-			// Config default exists but is not in the manifest — warn and fall back.
-			warn = fmt.Sprintf(
-				"⚠  Config default model %q (%s) is not listed in the agent manifest.\n"+
-					"   Add it to the agent's models: list to avoid this fallback.\n"+
-					"   Falling back to manifest model %q (%s).",
-				opts.ConfigModel, opts.ConfigProvider, bundle.Model, bundle.Provider)
-			logging.WarnContext(ctx, "config default model %q (%s) is not listed in agent manifest; falling back to manifest model %q (%s)",
-				opts.ConfigModel, opts.ConfigProvider, bundle.Model, bundle.Provider)
-			opts.Model = bundle.Model
+			// Config default not in the manifest's preferred list — warn but still use it.
+			res.Warning = fmt.Sprintf(
+				"⚠  Config default model %q (%s) is not a preferred model for this agent.\n"+
+					"   Running with configured default.",
+				opts.ConfigModel, opts.ConfigProvider)
+			logging.WarnContext(ctx, "config default model %q (%s) is not listed in agent manifest; running with configured default",
+				opts.ConfigModel, opts.ConfigProvider)
+			res.Model = opts.ConfigModel
+			res.Provider = opts.ConfigProvider
 
 		case bundle.Model != "":
-			opts.Model = bundle.Model
+			res.Model = bundle.Model
 			logging.InfoContext(ctx, "using manifest model: %s", bundle.Model)
 
 		case opts.ConfigModel != "":
-			opts.Model = opts.ConfigModel
+			res.Model = opts.ConfigModel
 			logging.InfoContext(ctx, "using config model: %s", opts.ConfigModel)
 		}
 	}
 
-	if opts.Provider == "" {
+	if res.Provider == "" {
 		switch {
 		case bundle.Provider != "":
-			opts.Provider = bundle.Provider
+			res.Provider = bundle.Provider
 			logging.InfoContext(ctx, "using manifest provider: %s", bundle.Provider)
 		case opts.ConfigProvider != "":
-			opts.Provider = opts.ConfigProvider
+			res.Provider = opts.ConfigProvider
 			logging.InfoContext(ctx, "using config provider: %s", opts.ConfigProvider)
 		}
 	}
 
-	if opts.BaseURL == "" && bundle.BaseURL != "" {
-		opts.BaseURL = bundle.BaseURL
+	if res.BaseURL == "" && bundle.BaseURL != "" {
+		res.BaseURL = bundle.BaseURL
 	}
 
-	return warn
+	return res
 }
 
 // prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
@@ -305,8 +333,12 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 		return nil, err
 	}
 
-	if warn := ResolveModelPrecedence(cmd.Context(), opts, bundle); warn != "" {
-		if _, fmtErr := fmt.Fprintln(cmd.ErrOrStderr(), warn); fmtErr != nil {
+	res := ResolveModelPrecedence(cmd.Context(), opts, bundle)
+	opts.Model = res.Model
+	opts.Provider = res.Provider
+	opts.BaseURL = res.BaseURL
+	if res.Warning != "" {
+		if _, fmtErr := fmt.Fprintln(cmd.ErrOrStderr(), res.Warning); fmtErr != nil {
 			logging.Warn("failed to write model warning: %v", fmtErr)
 		}
 	}
@@ -362,6 +394,8 @@ func handleResponse(cmd *cobra.Command, opts *RunOptions, response, workingDir s
 	return writeResponse(cmd, response, opts)
 }
 
+// writeResponse prints response to stdout when Print is set or no output file
+// is configured, and writes it to opts.Output when that path is non-empty.
 func writeResponse(cmd *cobra.Command, response string, opts *RunOptions) error {
 	if opts.Print || opts.Output == "" {
 		if _, err := fmt.Fprintln(cmd.OutOrStdout(), response); err != nil {
@@ -447,6 +481,10 @@ func logRunHistory(opts *RunOptions, m *metrics.Metrics) {
 	metrics.LogRunHistory(cacheDir, opts.Agent, m)
 }
 
+// readPrompt returns the user prompt from positional arguments or, when no
+// arguments are supplied, from piped stdin. It returns an empty string when
+// stdin is a terminal or produces only whitespace; the agent's default
+// user_prompt template will be used in that case.
 func readPrompt(cmd *cobra.Command, args []string) (string, error) {
 	if len(args) > 0 {
 		return strings.Join(args, " "), nil
@@ -469,6 +507,8 @@ func readPrompt(cmd *cobra.Command, args []string) (string, error) {
 	return "", nil
 }
 
+// resolveWorkingDir returns the absolute path of dir, or the current working
+// directory when dir is empty.
 func resolveWorkingDir(dir string) (string, error) {
 	if dir == "" {
 		return os.Getwd()
