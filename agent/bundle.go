@@ -91,6 +91,15 @@ type ChildBudget struct {
 	MaxIterations int     `yaml:"max_iterations,omitempty"` // iteration cap for child (0 = inherit parent's cap)
 }
 
+// PrimaryModel returns the first ranked ModelPreference, or the zero value
+// if no models are declared.
+func (m *Manifest) PrimaryModel() ModelPreference {
+	if len(m.Models) == 0 {
+		return ModelPreference{}
+	}
+	return m.Models[0]
+}
+
 // FindModel returns the ModelPreference matching the given provider and model,
 // or nil if not found. An empty provider or model never matches.
 func (b *Bundle) FindModel(provider, model string) *ModelPreference {
@@ -225,14 +234,20 @@ func makeIncludeFunc(agentsDir string) func(string) (string, error) {
 	}
 }
 
+// resolveDisplayMode returns mode, defaulting to "edit" when empty.
+func resolveDisplayMode(mode string) string {
+	if mode == "" {
+		return "edit"
+	}
+	return mode
+}
+
 // processTemplate executes a Go text/template with the given data.
 // Templates can use {{if eq .Mode "edit"}}...{{end}} conditionals.
 // Templates can use {{include "hard-rules/universal.md"}} to include shared content.
 // Templates can use {{.Var "KEY"}} or {{.Default "KEY" "default"}} for custom variables.
 func processTemplate(name, content, agentsDir string, data TemplateData) (string, error) {
-	if data.Mode == "" {
-		data.Mode = "edit"
-	}
+	data.Mode = resolveDisplayMode(data.Mode)
 
 	funcMap := template.FuncMap{
 		"include": makeIncludeFunc(agentsDir),
@@ -251,7 +266,8 @@ func processTemplate(name, content, agentsDir string, data TemplateData) (string
 	return buf.String(), nil
 }
 
-// loadReferences reads all reference files and returns formatted content.
+// readFileInRoot opens path relative to root using os.OpenInRoot (Go 1.24+)
+// for traversal-resistant reads, then returns the file contents.
 func readFileInRoot(root, path string) (data []byte, retErr error) {
 	f, err := os.OpenInRoot(root, path)
 	if err != nil {
@@ -408,10 +424,6 @@ func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data
 	return system, wrapper, task, nil
 }
 
-// BuildBundle assembles the agent bundle from manifest, system prompt, wrapper, references, and task.
-// The task instructions are included in the system bundle. The CLI prompt becomes the user message.
-// If no CLI prompt is provided, a default user message is used.
-// The vars parameter allows passing custom template variables (e.g., COVERAGE_TARGET=85).
 // toolEfficiencyPrompt is injected into all agent system prompts to encourage
 // batching of tool calls and efficient file reading.
 const toolEfficiencyPrompt = `## Tool Efficiency
@@ -480,9 +492,6 @@ func repoSummaryVisitFile(rel string, d fs.DirEntry, dirs map[string]*dirInfo, t
 	}
 	*totalFiles++
 	dir := filepath.Dir(rel)
-	if dir == "." {
-		dir = "."
-	}
 	if dirs[dir] == nil {
 		dirs[dir] = &dirInfo{exts: make(map[string]int)}
 	}
@@ -622,10 +631,7 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		return nil, err
 	}
 
-	displayMode := mode
-	if displayMode == "" {
-		displayMode = "edit"
-	}
+	displayMode := resolveDisplayMode(mode)
 
 	data := TemplateData{Mode: displayMode, Vars: vars}
 	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(agentPath, agentsDir, manifest, data)
@@ -662,21 +668,16 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		return nil, err
 	}
 
-	var primaryModel, primaryProvider, primaryBaseURL string
-	if len(manifest.Models) > 0 {
-		primaryModel = manifest.Models[0].Model
-		primaryProvider = manifest.Models[0].Provider
-		primaryBaseURL = manifest.Models[0].BaseURL
-	}
+	primary := manifest.PrimaryModel()
 
 	return &Bundle{
 		System:        sys.String(),
 		User:          userMessage,
 		Combined:      combined.Bytes(),
 		WorkDir:       workingDir,
-		Model:         primaryModel,
-		Provider:      primaryProvider,
-		BaseURL:       primaryBaseURL,
+		Model:         primary.Model,
+		Provider:      primary.Provider,
+		BaseURL:       primary.BaseURL,
 		Models:        manifest.Models,
 		Budget:        manifest.Budget,
 		Environment:   manifest.Environment,
@@ -726,10 +727,7 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 		References: cfg.References,
 	}
 
-	displayMode := mode
-	if displayMode == "" {
-		displayMode = "edit"
-	}
+	displayMode := resolveDisplayMode(mode)
 
 	data := TemplateData{Mode: displayMode, Vars: vars}
 	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(promptDir, baseDir, manifest, data)
@@ -760,21 +758,16 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 	combined.WriteString(userMessage)
 	combined.WriteString("\n")
 
-	var primaryModel, primaryProvider, primaryBaseURL string
-	if len(manifest.Models) > 0 {
-		primaryModel = manifest.Models[0].Model
-		primaryProvider = manifest.Models[0].Provider
-		primaryBaseURL = manifest.Models[0].BaseURL
-	}
+	primary := manifest.PrimaryModel()
 
 	return &Bundle{
 		System:   sys.String(),
 		User:     userMessage,
 		Combined: combined.Bytes(),
 		WorkDir:  workingDir,
-		Model:    primaryModel,
-		Provider: primaryProvider,
-		BaseURL:  primaryBaseURL,
+		Model:    primary.Model,
+		Provider: primary.Provider,
+		BaseURL:  primary.BaseURL,
 		Models:   manifest.Models,
 	}, nil
 }
