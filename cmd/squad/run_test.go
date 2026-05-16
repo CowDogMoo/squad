@@ -587,7 +587,7 @@ func TestCompleteProviderNames(t *testing.T) {
 	if len(names) != len(metrics.SupportedProviders) {
 		t.Fatalf("names len = %d, want %d", len(names), len(metrics.SupportedProviders))
 	}
-	want := map[string]bool{"nvidia": false, "databricks": false}
+	want := map[string]bool{"openai-compat": false}
 	for _, n := range names {
 		if _, ok := want[n]; ok {
 			want[n] = true

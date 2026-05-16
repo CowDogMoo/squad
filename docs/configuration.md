@@ -230,8 +230,7 @@ variables, or config file.
 | Anthropic | supported | `https://api.anthropic.com/v1` | required | Claude models via LangChainGo |
 | Google AI | supported | Google AI endpoints | required | Gemini models via LangChainGo |
 | Ollama | supported | `http://localhost:11434/v1` (default) | optional | Local models; use `--num-ctx` for context size |
-| NVIDIA NIM | supported | `https://integrate.api.nvidia.com/v1` (default) | required | OpenAI-compatible; models at build.nvidia.com |
-| Databricks AI Gateway | supported | `https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1` | required | OpenAI-compatible; PAT (`dapi-` prefix) as Bearer token |
+| OpenAI-compatible | supported | provider-specific (required) | optional | Any `/v1/chat/completions` endpoint; use `--base-url` |
 
 ### OpenAI
 
@@ -251,48 +250,83 @@ squad run --agent go-review --provider anthropic --model claude-sonnet-4-2025051
 squad run --agent go-review --provider gemini --model gemini-2.5-flash
 ```
 
-### NVIDIA NIM
+### OpenAI-compatible endpoints
+
+The `openai-compat` provider works with any service that exposes a
+`/v1/chat/completions` API — NVIDIA NIM, Databricks AI Gateway, DeepInfra,
+Together AI, Fireworks, Groq, Perplexity, LM Studio, vLLM, and more. Only
+`--base-url` and (optionally) `--api-key` are required; no per-service provider
+name is needed.
 
 ```bash
-# Using an NVIDIA API key from build.nvidia.com
+# DeepInfra
 squad run --agent go-review \
-  --provider nvidia \
-  --api-key $NVIDIA_API_KEY \
-  --model meta/llama-3.1-8b-instruct
+  --provider openai-compat \
+  --base-url "https://api.deepinfra.com/v1/openai" \
+  --api-key "$DEEPINFRA_API_KEY" \
+  --model "meta-llama/Meta-Llama-3-70B-Instruct"
 
-# Or via config / env vars
-export SQUAD_PROVIDER_DEFAULT=nvidia
-export SQUAD_PROVIDER_TOKEN=$NVIDIA_API_KEY
-export SQUAD_MODEL_DEFAULT=meta/llama-3.1-8b-instruct
-squad run --agent go-review
+# Together AI
+squad run --agent go-review \
+  --provider openai-compat \
+  --base-url "https://api.together.xyz/v1" \
+  --api-key "$TOGETHER_API_KEY" \
+  --model "mistralai/Mixtral-8x7B-Instruct-v0.1"
+
+# LM Studio (local, no auth)
+squad run --agent go-review \
+  --provider openai-compat \
+  --base-url "http://localhost:1234/v1" \
+  --model "lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF"
+
+# vLLM self-hosted
+squad run --agent go-review \
+  --provider openai-compat \
+  --base-url "http://my-vllm-host:8000/v1" \
+  --model "mistral-7b-instruct"
 ```
 
-### Databricks AI Gateway
+#### NVIDIA NIM
+
+```bash
+squad run --agent go-review \
+  --provider openai-compat \
+  --base-url https://integrate.api.nvidia.com/v1 \
+  --api-key $NVIDIA_API_KEY \
+  --model meta/llama-3.1-8b-instruct
+```
+
+#### Databricks AI Gateway
 
 Databricks AI Gateway is an OpenAI-compatible proxy that routes requests to
 foundation models hosted on Databricks. It is currently in **beta** (no charges
 during beta; unavailable on GovCloud/Azure Government).
 
-The base URL uses the `ai-gateway` subdomain, not the workspace URL. The path is always `/mlflow/v1` regardless of which model you target; langchaingo appends `/chat/completions` automatically:
+The base URL uses the `ai-gateway` subdomain, not the workspace URL. The path is
+always `/mlflow/v1` regardless of which model you target; langchaingo appends
+`/chat/completions` automatically:
 
 ```
 https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1
 ```
 
-Send a Databricks PAT (`dapi-` prefix) or OAuth access token via `--api-key` / `SQUAD_PROVIDER_TOKEN`. The token is forwarded as `Authorization: Bearer <token>`. PATs can be scoped to specific API operations for least-privilege access.
+Send a Databricks PAT (`dapi-` prefix) or OAuth access token via `--api-key` /
+`SQUAD_PROVIDER_TOKEN`. The `--model` value is the name of the deployed gateway
+endpoint (e.g. `databricks-gpt-5-5-pro`), not a model family.
 
-The `--model` value is the name of the deployed gateway endpoint (e.g. `databricks-gpt-5-5-pro`), not a model family.
+Rate limiting is configured on the Databricks side per endpoint, per user, and
+per group, not in squad.
 
 ```bash
 # CLI flags
 squad run --agent go-review \
-  --provider databricks \
+  --provider openai-compat \
   --base-url "https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1" \
   --api-key "dapi-your-databricks-token" \
   --model databricks-gpt-5-5-pro
 
 # Environment variables
-export SQUAD_PROVIDER_DEFAULT=databricks
+export SQUAD_PROVIDER_DEFAULT=openai-compat
 export SQUAD_PROVIDER_BASE_URL=https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1
 export SQUAD_PROVIDER_TOKEN=dapi-your-databricks-token
 export SQUAD_MODEL_DEFAULT=databricks-gpt-5-5-pro
@@ -303,29 +337,37 @@ Config file with short-lived OAuth token via shell substitution:
 
 ```yaml
 provider:
-  default: databricks
+  default: openai-compat
   base_url: https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1
   token: $(databricks auth token --host https://<workspace-url> 2>/dev/null | jq -r .access_token)
 model:
   default: databricks-gpt-5-5-pro
 ```
 
-Agent manifest override:
+Example Databricks endpoint names: `databricks-gpt-5-5-pro`,
+`databricks-claude-sonnet-4-5`, `databricks-meta-llama-3-3-70b-instruct`.
+
+#### Agent manifest with base_url
+
+Include `base_url` in the manifest so agents that require a specific endpoint
+are self-contained — no `--base-url` flag needed at runtime:
 
 ```yaml
 models:
-  - model: databricks-gpt-5-5-pro
-    provider: databricks
+  - provider: openai-compat
+    model: meta-llama/Meta-Llama-3-70B-Instruct
+    base_url: https://api.deepinfra.com/v1/openai
 ```
 
-Example endpoint names: `databricks-gpt-5-5-pro`, `databricks-claude-sonnet-4-5`,
-`databricks-meta-llama-3-3-70b-instruct`.
+Only `--api-key` (or the env var) is still required at runtime; keys are never
+stored in manifests.
 
-Rate limiting is configured on the Databricks side per endpoint, per user, and per group, not in squad.
-
-Databricks AI Gateway natively supports Claude Code as a coding agent, so you can route squad's LLM calls through the gateway for enterprise governance.
-
-Known limitation: the `usage_context` map (per-request cost attribution stored as `request_tags` in `system.ai_gateway.usage`) requires `extra_body` support in the OpenAI client, which langchaingo does not currently provide. This is a candidate follow-on item.
+> **Migration from `nvidia` or `databricks` provider**
+>
+> Replace `provider: nvidia` or `provider: databricks` with
+> `provider: openai-compat` and add an explicit `base_url`. For NVIDIA use
+> `https://integrate.api.nvidia.com/v1`; for Databricks use your
+> `https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1` URL.
 
 ### Ollama
 

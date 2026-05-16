@@ -137,7 +137,10 @@ graph LR
     S2["Stage 2: Access Extraction"] --> F2["access-controls.md"]
     S3["Stage 3: Flow Mapping"] --> F3["data-flows.md"]
     S4["Stage 4: Assumption Articulation"] --> F4["assumptions.md"]
-    F1 & F2 & F3 & F4 --> S5["Stage 5: Flaw Probing"]
+    F1 --> S5["Stage 5: Flaw Probing"]
+    F2 --> S5
+    F3 --> S5
+    F4 --> S5
 ```
 
 This is not the same as a bloated context window. Each artifact is structured and signal-rich because a specialist agent wrote it with a single purpose. The accumulation is additive without being noisy.

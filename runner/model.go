@@ -4,11 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
-
-	"io"
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
@@ -227,8 +226,24 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	if taskCfg != nil {
 		taskCfg.ParentMetrics = m
 	}
+	// Only the LangChain Anthropic provider handles CachedContent; all other
+	// LangChain providers (openai, openai-compat, gemini, ollama) silently drop it.
+	useCacheControl := provider == "anthropic"
+	// openai-compat endpoints default to tool_choice:"auto", allowing the model
+	// to respond without calling any tools. Force the first iteration to use
+	// tool_choice:"required" so the model must explore before answering.
+	// Regular openai users rely on the auto behavior; only restrict compat endpoints.
+	forceFirstTool := provider == "openai-compat"
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
-	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, opts.MaxIterations, bundle.EditDeadline, taskCfg, m, ex, callOpts...)
+	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, tools.RunWithToolsConfig{
+		MaxIterations:      opts.MaxIterations,
+		EditDeadline:       bundle.EditDeadline,
+		TaskCfg:            taskCfg,
+		Metrics:            m,
+		Executor:           ex,
+		UseCacheControl:    useCacheControl,
+		ForceFirstToolCall: forceFirstTool,
+	}, callOpts...)
 	m.Finish()
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
@@ -282,16 +297,40 @@ func buildLLM(ctx context.Context, opts *RunOptions, provider, model string) (ll
 		return buildAnthropicLLM(opts, model)
 	case "gemini":
 		return buildGeminiLLM(ctx, opts, model)
+	case "openai-compat":
+		return buildOpenAICompatLLM(opts, "openai-compat", model)
 	case "nvidia":
-		return buildNvidiaLLM(opts, model)
+		// Deprecated: use provider: openai-compat with base_url: https://integrate.api.nvidia.com/v1
+		logging.WarnContext(ctx, "provider 'nvidia' is deprecated; use 'openai-compat' with base_url: https://integrate.api.nvidia.com/v1")
+		if opts.BaseURL == "" {
+			opts.BaseURL = "https://integrate.api.nvidia.com/v1"
+		}
+		return buildOpenAICompatLLM(opts, "openai-compat", model)
 	case "databricks":
-		return buildDatabricksLLM(opts, model)
+		// Deprecated: use provider: openai-compat with base_url pointing to your Databricks AI Gateway
+		logging.WarnContext(ctx, "provider 'databricks' is deprecated; use 'openai-compat' with base_url and api_key set")
+		if opts.BaseURL == "" {
+			return nil, fmt.Errorf(
+				"databricks provider requires --base-url " +
+					"(e.g. https://<workspace>.ai-gateway.cloud.databricks.com/mlflow/v1)",
+			)
+		}
+		return buildOpenAICompatLLM(opts, "openai-compat", model)
 	default:
 		return nil, fmt.Errorf("provider not implemented: %s", provider)
 	}
 }
 
+// buildOpenAICompatLLM constructs an OpenAI-compatible LangChain LLM for any
+// provider that speaks the OpenAI chat-completions API (openai, openai-compat,
+// and the legacy Azure path). When provider is "openai" or empty, organization
+// and API-version headers are applied; otherwise only base URL and token are
+// set, making it suitable for third-party endpoints like DeepInfra or vLLM.
 func buildOpenAICompatLLM(opts *RunOptions, provider, model string) (llms.Model, error) {
+	if provider == "openai-compat" && opts.BaseURL == "" {
+		return nil, fmt.Errorf("openai-compat provider requires --base-url (e.g. https://api.deepinfra.com/v1/openai)")
+	}
+
 	oaiOpts := []openai.Option{}
 	if model != "" {
 		oaiOpts = append(oaiOpts, openai.WithModel(model))
@@ -301,8 +340,16 @@ func buildOpenAICompatLLM(opts *RunOptions, provider, model string) (llms.Model,
 		oaiOpts = append(oaiOpts, openai.WithBaseURL(opts.BaseURL))
 	}
 
-	if opts.APIKey != "" {
-		oaiOpts = append(oaiOpts, openai.WithToken(opts.APIKey))
+	apiKey := opts.APIKey
+	if apiKey == "" && provider == "openai-compat" {
+		if v := os.Getenv("OPENAI_COMPAT_API_KEY"); v != "" {
+			apiKey = v
+		} else {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
+	}
+	if apiKey != "" {
+		oaiOpts = append(oaiOpts, openai.WithToken(apiKey))
 	}
 
 	if provider == "openai" || provider == "" {
@@ -354,44 +401,6 @@ func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
 }
 
-func buildNvidiaLLM(opts *RunOptions, model string) (llms.Model, error) {
-	oaiOpts := []openai.Option{}
-	if model != "" {
-		oaiOpts = append(oaiOpts, openai.WithModel(model))
-	}
-	baseURL := opts.BaseURL
-	if baseURL == "" {
-		baseURL = "https://integrate.api.nvidia.com/v1"
-	}
-	oaiOpts = append(oaiOpts, openai.WithBaseURL(baseURL))
-	if opts.APIKey != "" {
-		oaiOpts = append(oaiOpts, openai.WithToken(opts.APIKey))
-	}
-	return openai.New(oaiOpts...)
-}
-
-func buildDatabricksLLM(opts *RunOptions, model string) (llms.Model, error) {
-	if opts.BaseURL == "" {
-		return nil, fmt.Errorf(
-			"databricks provider requires --base-url " +
-				"(e.g. https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1)",
-		)
-	}
-	if opts.APIKey == "" {
-		return nil, fmt.Errorf(
-			"databricks provider requires --api-key (Databricks PAT, prefix dapi-)",
-		)
-	}
-	oaiOpts := []openai.Option{
-		openai.WithBaseURL(opts.BaseURL),
-		openai.WithToken(opts.APIKey),
-	}
-	if model != "" {
-		oaiOpts = append(oaiOpts, openai.WithModel(model))
-	}
-	return openai.New(oaiOpts...)
-}
-
 func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 	baseURL := opts.BaseURL
 	if baseURL == "" {
@@ -405,7 +414,8 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 }
 
 func isOpenAICompatProvider(provider string) bool {
-	return provider == "" || provider == "openai" || provider == "nvidia" || provider == "databricks"
+	return provider == "" || provider == "openai" || provider == "openai-compat" ||
+		provider == "nvidia" || provider == "databricks"
 }
 
 // reasoningPrefixes returns the configured reasoning model prefixes,
@@ -432,8 +442,13 @@ func applyChildIterationCap(ctx context.Context, childOpts *RunOptions, cfg *too
 	}
 }
 
-// applyChildModelOverrides applies model and provider overrides from the
-// child agent's manifest to the child options.
+// applyChildModelOverrides applies model, provider, and base URL overrides
+// from the child agent's manifest to the child options.
+//
+// BaseURL must be propagated here because child agents are dispatched via
+// InvokeModel directly (not ExecuteRun), so ResolveModelPrecedence is never
+// called on the child path — without this, openai-compat child agents would
+// always fail with "openai-compat provider requires --base-url".
 func applyChildModelOverrides(ctx context.Context, childOpts *RunOptions, childBundle *agent.Bundle, agentName string) {
 	if childBundle.Model != "" {
 		childOpts.Model = childBundle.Model
@@ -442,6 +457,10 @@ func applyChildModelOverrides(ctx context.Context, childOpts *RunOptions, childB
 	if childBundle.Provider != "" {
 		childOpts.Provider = childBundle.Provider
 		logging.InfoContext(ctx, "child agent %s using manifest provider override: %s", agentName, childBundle.Provider)
+	}
+	if childBundle.BaseURL != "" && childOpts.BaseURL == "" {
+		childOpts.BaseURL = childBundle.BaseURL
+		logging.InfoContext(ctx, "child agent %s using manifest base URL override", agentName)
 	}
 	if len(childBundle.Models) > 1 {
 		altModels := make([]string, 0, len(childBundle.Models)-1)

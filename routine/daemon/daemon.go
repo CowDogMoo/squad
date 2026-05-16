@@ -135,6 +135,7 @@ func newRunOptions(entry routine.Entry, cfg *config.Config, workingDir string) *
 		WorkingDir:      workingDir,
 		Provider:        r.Provider,
 		Model:           r.Model,
+		BaseURL:         r.BaseURL,
 		ConfigProvider:  cfg.Provider.Default,
 		ConfigModel:     cfg.Model.Default,
 		Temperature:     cfg.Model.Temperature,

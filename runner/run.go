@@ -245,6 +245,9 @@ func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent
 			// Config default is supported by this agent — use it; provider is also set.
 			opts.Model = configMatch.Model
 			opts.Provider = configMatch.Provider
+			if opts.BaseURL == "" {
+				opts.BaseURL = configMatch.BaseURL
+			}
 			logging.InfoContext(ctx, "using config default model: %s (%s)", opts.Model, opts.Provider)
 			return ""
 
@@ -279,6 +282,11 @@ func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent
 			logging.InfoContext(ctx, "using config provider: %s", opts.ConfigProvider)
 		}
 	}
+
+	if opts.BaseURL == "" && bundle.BaseURL != "" {
+		opts.BaseURL = bundle.BaseURL
+	}
+
 	return warn
 }
 

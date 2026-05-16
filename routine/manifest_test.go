@@ -92,6 +92,11 @@ func TestRoutineValidate(t *testing.T) {
 		{"catchup fire-once ok", func(r *Routine) { r.Catchup = CatchupFireOnce }, false},
 		{"negative max_cost", func(r *Routine) { r.MaxCost = -1 }, true},
 		{"negative max_iterations", func(r *Routine) { r.MaxIterations = -1 }, true},
+		{"openai-compat missing base_url", func(r *Routine) { r.Provider = "openai-compat" }, true},
+		{"openai-compat with base_url ok", func(r *Routine) {
+			r.Provider = "openai-compat"
+			r.BaseURL = "https://api.deepinfra.com/v1/openai"
+		}, false},
 	}
 	for _, c := range cases {
 		r := base

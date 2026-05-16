@@ -61,6 +61,9 @@ type Routine struct {
 	Provider string `yaml:"provider,omitempty"`
 	// Model overrides the default model for this routine.
 	Model string `yaml:"model,omitempty"`
+	// BaseURL overrides the provider's API endpoint for this routine.
+	// Required when Provider is "openai-compat".
+	BaseURL string `yaml:"base_url,omitempty"`
 	// MaxCost caps the total USD spend for one fire (0 = inherit default).
 	MaxCost float64 `yaml:"max_cost,omitempty"`
 	// MaxIterations caps the per-fire tool-call iterations (0 = inherit default).
@@ -148,6 +151,9 @@ func (r *Routine) Validate() error {
 	}
 	if r.MaxIterations < 0 {
 		return fmt.Errorf("max_iterations must not be negative")
+	}
+	if r.Provider == "openai-compat" && r.BaseURL == "" {
+		return errors.New("provider \"openai-compat\" requires base_url")
 	}
 	return nil
 }

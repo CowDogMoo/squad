@@ -290,6 +290,67 @@ func TestResolveModelPrecedenceNilGuard(t *testing.T) {
 	}
 }
 
+// TestResolveModelPrecedenceBaseURL verifies BaseURL propagation for the
+// openai-compat provider path, where a base URL must flow from either the
+// manifest bundle or a config-matched model preference into RunOptions.
+func TestResolveModelPrecedenceBaseURL(t *testing.T) {
+	t.Parallel()
+	const compatURL = "https://api.deepinfra.com/v1/openai"
+
+	t.Run("copies bundle BaseURL when opts has none", func(t *testing.T) {
+		t.Parallel()
+		opts := &RunOptions{}
+		bundle := &agent.Bundle{
+			Model:    "meta-llama/Meta-Llama-3-70B-Instruct",
+			Provider: "openai-compat",
+			BaseURL:  compatURL,
+		}
+		ResolveModelPrecedence(context.Background(), opts, bundle)
+		if opts.BaseURL != compatURL {
+			t.Fatalf("BaseURL = %q, want %q", opts.BaseURL, compatURL)
+		}
+	})
+
+	t.Run("does not overwrite explicit opts BaseURL", func(t *testing.T) {
+		t.Parallel()
+		const explicit = "https://my-endpoint.example.com/v1"
+		opts := &RunOptions{BaseURL: explicit}
+		bundle := &agent.Bundle{
+			Model:    "meta-llama/Meta-Llama-3-70B-Instruct",
+			Provider: "openai-compat",
+			BaseURL:  compatURL,
+		}
+		ResolveModelPrecedence(context.Background(), opts, bundle)
+		if opts.BaseURL != explicit {
+			t.Fatalf("BaseURL = %q, want explicit %q", opts.BaseURL, explicit)
+		}
+	})
+
+	t.Run("propagates BaseURL from config-matched model preference", func(t *testing.T) {
+		t.Parallel()
+		opts := &RunOptions{
+			ConfigProvider: "openai-compat",
+			ConfigModel:    "meta-llama/Meta-Llama-3-70B-Instruct",
+		}
+		bundle := &agent.Bundle{
+			Models: []agent.ModelPreference{
+				{
+					Provider: "openai-compat",
+					Model:    "meta-llama/Meta-Llama-3-70B-Instruct",
+					BaseURL:  compatURL,
+				},
+			},
+		}
+		ResolveModelPrecedence(context.Background(), opts, bundle)
+		if opts.BaseURL != compatURL {
+			t.Fatalf("BaseURL = %q, want %q", opts.BaseURL, compatURL)
+		}
+		if opts.Provider != "openai-compat" {
+			t.Fatalf("Provider = %q, want openai-compat", opts.Provider)
+		}
+	})
+}
+
 func runAndAssertBundle(t *testing.T, opts *RunOptions, wantModel, wantProvider string) {
 	t.Helper()
 	cmd := &cobra.Command{}

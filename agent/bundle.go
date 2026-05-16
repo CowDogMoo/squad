@@ -22,8 +22,9 @@ import (
 // ModelPreference represents a ranked model recommendation for an agent.
 // The first entry in a models list is the primary (preferred) model.
 type ModelPreference struct {
-	Model    string `yaml:"model"`
-	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`              // model identifier (e.g. "claude-sonnet-4-6")
+	Provider string `yaml:"provider"`           // squad provider name (e.g. "anthropic", "openai-compat")
+	BaseURL  string `yaml:"base_url,omitempty"` // optional endpoint override; required when Provider is "openai-compat"
 }
 
 // Manifest represents the structure of an agent's manifest file.
@@ -88,6 +89,15 @@ type ChildBudget struct {
 	Name          string  `yaml:"name"`
 	MaxCost       float64 `yaml:"max_cost,omitempty"`       // dedicated cost cap in USD (0 = use remaining budget)
 	MaxIterations int     `yaml:"max_iterations,omitempty"` // iteration cap for child (0 = inherit parent's cap)
+}
+
+// PrimaryModel returns the first ranked ModelPreference, or the zero value
+// if no models are declared.
+func (m *Manifest) PrimaryModel() ModelPreference {
+	if len(m.Models) == 0 {
+		return ModelPreference{}
+	}
+	return m.Models[0]
 }
 
 // FindModel returns the ModelPreference matching the given provider and model,
@@ -163,6 +173,7 @@ type Bundle struct {
 	WorkDir       string
 	Model         string             // primary model override (first from models list or single model field)
 	Provider      string             // primary provider override (first from models list or single provider field)
+	BaseURL       string             // primary model's base URL override (for openai-compat)
 	Models        []ModelPreference  // ranked model preferences from manifest
 	Budget        *BudgetConfig      // budget configuration from manifest
 	Environment   *executor.Config   // execution environment from agent manifest
@@ -223,14 +234,20 @@ func makeIncludeFunc(agentsDir string) func(string) (string, error) {
 	}
 }
 
+// resolveDisplayMode returns mode, defaulting to "edit" when empty.
+func resolveDisplayMode(mode string) string {
+	if mode == "" {
+		return "edit"
+	}
+	return mode
+}
+
 // processTemplate executes a Go text/template with the given data.
 // Templates can use {{if eq .Mode "edit"}}...{{end}} conditionals.
 // Templates can use {{include "hard-rules/universal.md"}} to include shared content.
 // Templates can use {{.Var "KEY"}} or {{.Default "KEY" "default"}} for custom variables.
 func processTemplate(name, content, agentsDir string, data TemplateData) (string, error) {
-	if data.Mode == "" {
-		data.Mode = "edit"
-	}
+	data.Mode = resolveDisplayMode(data.Mode)
 
 	funcMap := template.FuncMap{
 		"include": makeIncludeFunc(agentsDir),
@@ -249,7 +266,8 @@ func processTemplate(name, content, agentsDir string, data TemplateData) (string
 	return buf.String(), nil
 }
 
-// loadReferences reads all reference files and returns formatted content.
+// readFileInRoot opens path relative to root using os.OpenInRoot (Go 1.24+)
+// for traversal-resistant reads, then returns the file contents.
 func readFileInRoot(root, path string) (data []byte, retErr error) {
 	f, err := os.OpenInRoot(root, path)
 	if err != nil {
@@ -406,10 +424,6 @@ func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data
 	return system, wrapper, task, nil
 }
 
-// BuildBundle assembles the agent bundle from manifest, system prompt, wrapper, references, and task.
-// The task instructions are included in the system bundle. The CLI prompt becomes the user message.
-// If no CLI prompt is provided, a default user message is used.
-// The vars parameter allows passing custom template variables (e.g., COVERAGE_TARGET=85).
 // toolEfficiencyPrompt is injected into all agent system prompts to encourage
 // batching of tool calls and efficient file reading.
 const toolEfficiencyPrompt = `## Tool Efficiency
@@ -478,9 +492,6 @@ func repoSummaryVisitFile(rel string, d fs.DirEntry, dirs map[string]*dirInfo, t
 	}
 	*totalFiles++
 	dir := filepath.Dir(rel)
-	if dir == "." {
-		dir = "."
-	}
 	if dirs[dir] == nil {
 		dirs[dir] = &dirInfo{exts: make(map[string]int)}
 	}
@@ -620,12 +631,9 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		return nil, err
 	}
 
-	displayMode := mode
-	if displayMode == "" {
-		displayMode = "edit"
-	}
+	displayMode := resolveDisplayMode(mode)
 
-	data := TemplateData{Mode: mode, Vars: vars}
+	data := TemplateData{Mode: displayMode, Vars: vars}
 	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(agentPath, agentsDir, manifest, data)
 	if err != nil {
 		return nil, err
@@ -660,19 +668,16 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		return nil, err
 	}
 
-	var primaryModel, primaryProvider string
-	if len(manifest.Models) > 0 {
-		primaryModel = manifest.Models[0].Model
-		primaryProvider = manifest.Models[0].Provider
-	}
+	primary := manifest.PrimaryModel()
 
 	return &Bundle{
 		System:        sys.String(),
 		User:          userMessage,
 		Combined:      combined.Bytes(),
 		WorkDir:       workingDir,
-		Model:         primaryModel,
-		Provider:      primaryProvider,
+		Model:         primary.Model,
+		Provider:      primary.Provider,
+		BaseURL:       primary.BaseURL,
 		Models:        manifest.Models,
 		Budget:        manifest.Budget,
 		Environment:   manifest.Environment,
@@ -722,12 +727,9 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 		References: cfg.References,
 	}
 
-	displayMode := mode
-	if displayMode == "" {
-		displayMode = "edit"
-	}
+	displayMode := resolveDisplayMode(mode)
 
-	data := TemplateData{Mode: mode, Vars: vars}
+	data := TemplateData{Mode: displayMode, Vars: vars}
 	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(promptDir, baseDir, manifest, data)
 	if err != nil {
 		return nil, err
@@ -756,19 +758,16 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 	combined.WriteString(userMessage)
 	combined.WriteString("\n")
 
-	var primaryModel, primaryProvider string
-	if len(manifest.Models) > 0 {
-		primaryModel = manifest.Models[0].Model
-		primaryProvider = manifest.Models[0].Provider
-	}
+	primary := manifest.PrimaryModel()
 
 	return &Bundle{
 		System:   sys.String(),
 		User:     userMessage,
 		Combined: combined.Bytes(),
 		WorkDir:  workingDir,
-		Model:    primaryModel,
-		Provider: primaryProvider,
+		Model:    primary.Model,
+		Provider: primary.Provider,
+		BaseURL:  primary.BaseURL,
 		Models:   manifest.Models,
 	}, nil
 }
