@@ -36,6 +36,12 @@ squad run --agent go-review \
 squad run --agent go-review \
   --mcp-server grafana:sse:https://grafana.example.com/mcp
 
+# Streamable HTTP transport: NAME:http:FULL_URL
+# Current MCP HTTP spec — required for hosted endpoints such as
+# Google Drive / Google Calendar.
+squad run --agent weekly-planner \
+  --mcp-server gdrive:http:https://drivemcp.googleapis.com/mcp/v1
+
 # Multiple servers in one command
 squad run --agent go-review \
   --mcp-server db:npx:@myorg/db-mcp \
@@ -69,16 +75,31 @@ NAME:sse:URL
 Squad connects to an **already-running** HTTP server at `URL` using
 [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events).
 Squad does not spawn the server. It must be running before `squad run` is
-called.
+called. SSE is the legacy MCP HTTP transport; for new deployments prefer
+Streamable HTTP.
+
+### Streamable HTTP
+
+```
+NAME:http:URL
+```
+
+The current MCP HTTP transport (also accepted as `streamable_http` in YAML).
+This is what hosted MCP endpoints like Google Drive
+(`https://drivemcp.googleapis.com/mcp/v1`) and Google Calendar speak. Like
+SSE, the server must already be running and credentials are passed via
+HTTP headers. Use this transport for anything that exposes itself as
+"MCP over HTTP" in 2026 or later.
 
 ### Comparison
 
-| | Stdio | SSE |
-|---|---|---|
-| Second segment | Any executable (`npx`, `python`, `./bin`) | Literal keyword `sse` |
-| Third segment | Comma-separated CLI args | Full HTTP URL |
-| Server lifecycle | Squad spawns and manages it | Must already be running |
-| Extra config (yaml) | `env:` (subprocess env vars) | `headers:` (HTTP headers) |
+| | Stdio | SSE | Streamable HTTP |
+|---|---|---|---|
+| Second segment | Any executable (`npx`, `python`, `./bin`) | Literal keyword `sse` | Literal keyword `http` |
+| Third segment | Comma-separated CLI args | Full HTTP URL | Full HTTP URL |
+| Server lifecycle | Squad spawns and manages it | Must already be running | Must already be running |
+| Extra config (yaml) | `env:` (subprocess env vars) | `headers:` (HTTP headers) | `headers:` (HTTP headers) |
+| Spec status | — | Legacy MCP HTTP | Current MCP HTTP |
 
 ## Tool Naming
 
@@ -174,3 +195,81 @@ spawned or the SSE endpoint is unreachable), Squad aborts the run immediately
 with an error. There is no silent degradation or partial tool availability.
 Check server names, commands, and URLs before running if you see connection
 errors.
+
+## Inspecting Servers (`squad mcp`)
+
+The `squad mcp` subcommand lets you exercise a server without running an
+agent. Useful for debugging credentials, tool schemas, and connectivity.
+
+```bash
+# List the servers an agent's manifest declares
+squad mcp ls --agent weekly-planner
+
+# Connect to a server and dump basic info
+squad mcp probe gdrive:http:https://drivemcp.googleapis.com/mcp/v1
+
+# Connect and list the tools the server advertises
+squad mcp tools gcal:http:https://calendarmcp.googleapis.com/mcp/v1
+
+# Same, but emit each tool's full JSON schema
+squad mcp tools gcal:http:https://calendarmcp.googleapis.com/mcp/v1 --json
+```
+
+The `SPEC` argument to `probe` and `tools` uses the same syntax as
+`--mcp-server`.
+
+## Remote-Only Agents
+
+Some agents only ever talk to remote MCP servers — they never read or write
+local files. The canonical example is a scheduled "fire-and-forget" agent
+that pulls a Google Doc and creates Calendar events. Declare these with the
+inline `prompt:` form and `working_dir: none`:
+
+```yaml
+# agents/weekly-planner/agent.yaml
+name: weekly-planner
+version: 1
+description: "Weekly Family Planner → Calendar"
+working_dir: none
+models:
+  - provider: anthropic
+    model: claude-sonnet-4-6
+prompt: |
+  You are a weekly family planner assistant. Read this week's family
+  planner Google Doc and create Calendar events for every entry that
+  has a specific time. ...
+mcp_servers:
+  - name: gdrive
+    transport: streamable_http
+    url: https://drivemcp.googleapis.com/mcp/v1
+    headers:
+      - "Authorization=Bearer {{.Default \"GCLOUD_TOKEN\" \"\"}}"
+  - name: gcal
+    transport: streamable_http
+    url: https://calendarmcp.googleapis.com/mcp/v1
+    headers:
+      - "Authorization=Bearer {{.Default \"GCLOUD_TOKEN\" \"\"}}"
+```
+
+For these agents:
+
+- `prompt:` replaces the usual `entrypoint:` + `wrapper:` markdown pair —
+  the inline string becomes the entire system prompt.
+- `working_dir: none` tells the runner not to register Read/Write/Edit/
+  Glob/Grep/Bash, and to skip the repo-summary injection. The agent only
+  sees its MCP tools (plus Task/ReportFinding when applicable).
+- A per-run temp directory is allocated for session logs and torn down at
+  the end of the run.
+
+Pair the agent with a routine so it fires on a schedule:
+
+```yaml
+# .squad/routines/weekly-planner.yaml
+id: weekly-planner
+agent: weekly-planner
+schedule: "0 13 * * 1"   # every Monday 13:00 UTC
+provider: anthropic
+model: claude-sonnet-4-6
+prompt: ""
+enabled: true
+```

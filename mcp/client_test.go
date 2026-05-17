@@ -37,7 +37,12 @@ func TestConnectValidation(t *testing.T) {
 		{
 			name:    "unsupported transport",
 			cfg:     ServerConfig{Name: "test", Transport: "grpc"},
-			wantErr: `mcp server "test" has unsupported transport "grpc" (want stdio or sse)`,
+			wantErr: `mcp server "test" has unsupported transport "grpc" (want stdio, sse, or streamable_http)`,
+		},
+		{
+			name:    "missing url for streamable_http",
+			cfg:     ServerConfig{Name: "test", Transport: "streamable_http"},
+			wantErr: `mcp server "test" missing url for streamable_http transport`,
 		},
 	}
 	for _, tt := range tests {

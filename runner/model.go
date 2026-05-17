@@ -542,6 +542,7 @@ func applyBundleBudget(cfg *tools.TaskConfig, bundle *agent.Bundle) {
 		cfg.ChildMaxCost = bundle.Budget.ChildMaxCost
 		cfg.ChildMaxIter = bundle.Budget.ChildMaxIterations
 	}
+	cfg.RemoteOnly = bundle.RemoteOnly
 }
 
 // convertMCPHandlers converts MCP ToolHandlers to tools.Handler.

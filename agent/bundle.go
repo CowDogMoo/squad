@@ -41,6 +41,17 @@ type Manifest struct {
 	Wrapper    string            `yaml:"wrapper,omitempty"`
 	References []string          `yaml:"references,omitempty"`
 	Task       string            `yaml:"task,omitempty"`
+	// Prompt is an inline system prompt. When set, the agent does not
+	// need entrypoint or wrapper files — the inline prompt becomes the
+	// whole system message. Useful for short single-file agents like
+	// scheduled remote-tool runners.
+	Prompt string `yaml:"prompt,omitempty"`
+	// WorkingDir controls whether the agent operates on a local
+	// filesystem. Set to "none" for agents that only call remote MCP
+	// tools (Google Calendar/Drive, etc.). When "none", local file
+	// tools (Read/Write/Edit/Glob/Grep/Bash) are not registered and
+	// the run executes in a per-run temp directory.
+	WorkingDir string `yaml:"working_dir,omitempty"`
 
 	// Composed agent fields.
 	Stages []ComposedStage `yaml:"stages,omitempty"`
@@ -181,6 +192,10 @@ type Bundle struct {
 	DisableTask   bool               // when true, the Task tool is not registered for this agent
 	MaxIterations int                // iteration cap from manifest (0 = use CLI default)
 	EditDeadline  int                // stop after N iterations with no Edit calls (0 = disabled)
+	// RemoteOnly mirrors Manifest.IsRemoteOnly. When true, local
+	// filesystem tools are not registered and the runner skips
+	// working-dir resolution / repo-summary injection.
+	RemoteOnly bool
 }
 
 // TemplateData holds the data passed to prompt templates.
@@ -632,19 +647,26 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 	}
 
 	displayMode := resolveDisplayMode(mode)
-
 	data := TemplateData{Mode: displayMode, Vars: vars}
-	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(agentPath, agentsDir, manifest, data)
-	if err != nil {
-		return nil, err
-	}
 
-	refs, err := loadReferences(agentPath, manifest.References)
-	if err != nil {
-		return nil, err
+	var sys bytes.Buffer
+	if manifest.IsInlinePrompt() {
+		systemContent, perr := processTemplate("prompt", manifest.Prompt, agentsDir, data)
+		if perr != nil {
+			return nil, perr
+		}
+		sys = buildInlineSystemMessage(manifest, displayMode, workingDir, systemContent)
+	} else {
+		systemContent, wrapperContent, taskContent, lerr := loadAndProcessPrompts(agentPath, agentsDir, manifest, data)
+		if lerr != nil {
+			return nil, lerr
+		}
+		refs, rerr := loadReferences(agentPath, manifest.References)
+		if rerr != nil {
+			return nil, rerr
+		}
+		sys = buildSystemMessage(manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent, refs)
 	}
-
-	sys := buildSystemMessage(manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent, refs)
 
 	userMessage := prompt
 	if userMessage == "" {
@@ -685,7 +707,48 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		DisableTask:   manifest.DisableTask,
 		MaxIterations: manifest.MaxIterations,
 		EditDeadline:  manifest.EditDeadline,
+		RemoteOnly:    manifest.IsRemoteOnly(),
 	}, nil
+}
+
+// buildInlineSystemMessage assembles the system message for an inline-prompt
+// agent. It skips wrapper/references/task sections and (for remote-only
+// agents) the repo summary.
+func buildInlineSystemMessage(manifest *Manifest, displayMode, workingDir, promptContent string) bytes.Buffer {
+	var sys bytes.Buffer
+	sys.WriteString("# Squad Agent Bundle\n\n")
+	fmt.Fprintf(&sys, "Agent: %s (%s)\n", manifest.Name, manifest.Version)
+	fmt.Fprintf(&sys, "Mode: %s\n", displayMode)
+	if !manifest.IsRemoteOnly() {
+		fmt.Fprintf(&sys, "Working Directory: %s\n", workingDir)
+	}
+	sys.WriteString("\n## System Prompt\n\n")
+	sys.WriteString(promptContent)
+
+	if manifest.Output != nil && manifest.Output.Format == "json" {
+		sys.WriteString("\n\n## Output Contract\n\n")
+		sys.WriteString("You MUST emit your final response as a single JSON object.\n")
+		sys.WriteString("Do not wrap it in markdown code fences.\n")
+		if len(manifest.Output.Schema) > 0 {
+			schemaBytes, schemaErr := json.MarshalIndent(manifest.Output.Schema, "", "  ")
+			if schemaErr == nil {
+				sys.WriteString("\nYour output must conform to this JSON Schema:\n\n")
+				sys.Write(schemaBytes)
+				sys.WriteString("\n")
+			}
+		}
+	}
+
+	sys.WriteString("\n\n")
+	sys.WriteString(toolEfficiencyPrompt)
+
+	if !manifest.IsRemoteOnly() {
+		if repoSummary := compactRepoSummary(workingDir); repoSummary != "" {
+			sys.WriteString("\n")
+			sys.WriteString(repoSummary)
+		}
+	}
+	return sys
 }
 
 // InlineAgentConfig holds the configuration for an agent defined inline

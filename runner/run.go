@@ -135,10 +135,11 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 		return err
 	}
 
-	workingDir, err := resolveWorkingDir(opts.WorkingDir)
+	workingDir, cleanup, err := resolveRunWorkingDir(opts)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 
 	iso, err := setupIsolation(cmd.Context(), opts, workingDir)
 	if err != nil {
@@ -476,6 +477,30 @@ func resolveWorkingDir(dir string) (string, error) {
 	return filepath.Abs(dir)
 }
 
+// resolveRunWorkingDir picks the working directory for a run and returns a
+// cleanup func. Remote-only agents (working_dir: none in the manifest) get a
+// fresh temp dir that is removed on exit; everyone else gets the resolved
+// opts.WorkingDir (or cwd) and a no-op cleanup.
+func resolveRunWorkingDir(opts *RunOptions) (string, func(), error) {
+	if agentIsRemoteOnly(opts) {
+		dir, err := os.MkdirTemp("", "squad-remote-")
+		if err != nil {
+			return "", func() {}, fmt.Errorf("failed to create temp working dir: %w", err)
+		}
+		cleanup := func() {
+			if rmErr := os.RemoveAll(dir); rmErr != nil {
+				logging.Warn("failed to clean temp working dir %s: %v", dir, rmErr)
+			}
+		}
+		return dir, cleanup, nil
+	}
+	dir, err := resolveWorkingDir(opts.WorkingDir)
+	if err != nil {
+		return "", func() {}, err
+	}
+	return dir, func() {}, nil
+}
+
 // setupIsolation resolves the effective IsolationMode from CLI/manifest/config
 // precedence and prepares the worktree (if any). The returned Isolation must
 // be torn down via reportIsolationTeardown after the run completes.
@@ -508,6 +533,24 @@ func manifestIsolation(opts *RunOptions) string {
 		return ""
 	}
 	return m.Isolation
+}
+
+// agentIsRemoteOnly reads only the working_dir field from the agent manifest
+// to decide if a temp dir should be allocated before prepareBundle. Returns
+// false on any load failure; the real error surfaces from prepareBundle.
+func agentIsRemoteOnly(opts *RunOptions) bool {
+	if opts.Agent == "" {
+		return false
+	}
+	agentDir, err := FindAgentDir(opts.Agent, opts.AgentsDir, opts.Config)
+	if err != nil {
+		return false
+	}
+	m, err := agent.LoadManifest(agentDir)
+	if err != nil {
+		return false
+	}
+	return m.IsRemoteOnly()
 }
 
 // reportIsolationTeardown runs the worktree teardown and prints a notice on

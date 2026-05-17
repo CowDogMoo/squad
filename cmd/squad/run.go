@@ -295,7 +295,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Int("max-iterations", 100, "Maximum tool-calling iterations (range: 10-1000)")
 	cmd.Flags().Float64("max-cost", 5, "Maximum cost budget in USD (0 = unlimited)")
 	cmd.Flags().StringArray("var", nil, "Template variable in KEY=VALUE format (can be repeated)")
-	cmd.Flags().StringArray("mcp-server", nil, "MCP server: stdio NAME:COMMAND[:ARG1,ARG2,...] or SSE NAME:sse:URL (can be repeated)")
+	cmd.Flags().StringArray("mcp-server", nil, "MCP server: stdio NAME:COMMAND[:ARG1,ARG2,...], SSE NAME:sse:URL, or Streamable HTTP NAME:http:URL (can be repeated)")
 	cmd.Flags().Bool("stream", false, "Stream model output tokens to stderr as they arrive")
 	cmd.Flags().Int("max-concurrent-tasks", 0, "Max concurrent background child tasks (default: 4)")
 	cmd.Flags().Bool("json", false, "Force JSON output format (composed agents only)")
@@ -539,8 +539,9 @@ func composedDryRun(cmd *cobra.Command, manifest *agent.Manifest, p *pl.Pipeline
 // parseMCPServers parses MCP server specs into ServerConfig.
 // Supported formats:
 //
-//	Stdio: NAME:COMMAND[:ARG1,ARG2,...]
-//	SSE:   NAME:sse:URL
+//	Stdio:           NAME:COMMAND[:ARG1,ARG2,...]
+//	SSE:             NAME:sse:URL
+//	Streamable HTTP: NAME:http:URL   (or NAME:streamable_http:URL)
 func parseMCPServers(specs []string) []mcp.ServerConfig {
 	if len(specs) == 0 {
 		return nil
@@ -560,6 +561,19 @@ func parseMCPServers(specs []string) []mcp.ServerConfig {
 			configs = append(configs, mcp.ServerConfig{
 				Name:      parts[0],
 				Transport: "sse",
+				URL:       parts[2],
+			})
+			continue
+		}
+
+		// Detect Streamable HTTP transport: NAME:http:URL
+		if strings.EqualFold(parts[1], "http") || strings.EqualFold(parts[1], "streamable_http") {
+			if len(parts) < 3 || parts[2] == "" {
+				continue
+			}
+			configs = append(configs, mcp.ServerConfig{
+				Name:      parts[0],
+				Transport: "streamable_http",
 				URL:       parts[2],
 			})
 			continue
