@@ -158,6 +158,13 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 
 	opts.WorkingDir = workingDir
 
+	// Remote-only agents never produce file diffs; the "must edit code"
+	// guard is a code-editing-agent concern that doesn't apply here.
+	if bundle.RemoteOnly && opts.RequireActionable {
+		opts.RequireActionable = false
+		logging.InfoContext(cmd.Context(), "remote-only agent: disabling require-actionable")
+	}
+
 	ctx := tools.InitEdits(cmd.Context())
 	ctx = tools.InitEditDeadline(ctx)
 

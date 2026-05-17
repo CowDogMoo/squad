@@ -88,6 +88,89 @@ func TestResolveWorkingDir(t *testing.T) {
 	}
 }
 
+func TestResolveRunWorkingDir_Standard(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	dir, cleanup, err := resolveRunWorkingDir(&RunOptions{WorkingDir: tmp})
+	if err != nil {
+		t.Fatalf("resolveRunWorkingDir: %v", err)
+	}
+	defer cleanup()
+	if dir != tmp {
+		t.Fatalf("dir = %q, want %q", dir, tmp)
+	}
+	// Standard mode: cleanup is a no-op (directory survives).
+	cleanup()
+	if _, err := os.Stat(tmp); err != nil {
+		t.Fatalf("standard working dir was unexpectedly removed: %v", err)
+	}
+}
+
+func TestResolveRunWorkingDir_RemoteOnly(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	agentDir := filepath.Join(tmp, "agents", "remote")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := "name: remote\nversion: 1\nworking_dir: none\nprompt: hi\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	opts := &RunOptions{Agent: "remote", AgentsDir: filepath.Join(tmp, "agents")}
+	dir, cleanup, err := resolveRunWorkingDir(opts)
+	if err != nil {
+		t.Fatalf("resolveRunWorkingDir: %v", err)
+	}
+	if dir == "" {
+		t.Fatal("expected a temp dir, got empty string")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("temp dir not created: %v", err)
+	}
+	if !strings.Contains(dir, "squad-remote-") {
+		t.Errorf("temp dir name = %q, want it to contain squad-remote-", dir)
+	}
+	cleanup()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("temp dir should have been removed, stat err = %v", err)
+	}
+}
+
+func TestAgentIsRemoteOnly(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	cases := []struct {
+		name     string
+		manifest string
+		want     bool
+	}{
+		{"remote-only", "name: x\nversion: 1\nworking_dir: none\nprompt: hi\n", true},
+		{"standard leaf", "name: x\nversion: 1\nentrypoint: sys.md\nwrapper: wrap.md\n", false},
+		{"missing agent", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts := &RunOptions{}
+			if tc.manifest != "" {
+				agentDir := filepath.Join(tmp, tc.name)
+				if err := os.MkdirAll(agentDir, 0o755); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(tc.manifest), 0o644); err != nil {
+					t.Fatalf("write manifest: %v", err)
+				}
+				opts.Agent = tc.name
+				opts.AgentsDir = tmp
+			}
+			if got := agentIsRemoteOnly(opts); got != tc.want {
+				t.Errorf("agentIsRemoteOnly() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWriteResponse(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

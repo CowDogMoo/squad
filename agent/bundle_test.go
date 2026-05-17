@@ -92,6 +92,79 @@ readonly mode task instructions
 	}
 }
 
+func TestBuildBundle_InlinePromptRemoteOnly(t *testing.T) {
+	manifest := `name: weekly-planner
+version: 1
+working_dir: none
+models:
+  - provider: anthropic
+    model: claude-sonnet-4-6
+prompt: |
+  You are a calendar bot.
+  Use mcp__cal__create_event to add events.
+mcp_servers:
+  - name: cal
+    transport: streamable_http
+    url: https://calendarmcp.googleapis.com/mcp/v1
+`
+	dir, _ := setupTestAgent(t, "weekly-planner", map[string]string{"agent.yaml": manifest})
+
+	bundle, err := BuildBundle(dir, "weekly-planner", "do it", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	if !bundle.RemoteOnly {
+		t.Fatal("bundle.RemoteOnly should be true for working_dir: none")
+	}
+	assertContains(t, bundle.System, "You are a calendar bot.", "system prompt")
+	assertContains(t, bundle.System, "mcp__cal__create_event", "system prompt")
+	assertNotContains(t, bundle.System, "Working Directory:", "remote-only system message")
+	assertNotContains(t, bundle.System, "## Agent Wrapper", "inline-prompt system message")
+	assertNotContains(t, bundle.System, "## References", "inline-prompt system message")
+	if len(bundle.MCPServers) != 1 || bundle.MCPServers[0].Transport != "streamable_http" {
+		t.Fatalf("expected one streamable_http MCP server, got %+v", bundle.MCPServers)
+	}
+	if bundle.User != "do it" {
+		t.Fatalf("user = %q, want %q", bundle.User, "do it")
+	}
+}
+
+func TestBuildBundle_InlinePromptWithWorkingDir(t *testing.T) {
+	manifest := `name: simple
+version: 1
+models:
+  - provider: openai
+    model: gpt-4.1-mini
+prompt: "just a prompt"
+`
+	dir, _ := setupTestAgent(t, "simple", map[string]string{"agent.yaml": manifest})
+	bundle, err := BuildBundle(dir, "simple", "", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	if bundle.RemoteOnly {
+		t.Fatal("RemoteOnly should be false when working_dir is not 'none'")
+	}
+	assertContains(t, bundle.System, "Working Directory: /work", "system message")
+	assertContains(t, bundle.System, "just a prompt", "system message")
+}
+
+func TestBuildBundle_InlinePromptTemplateExpansion(t *testing.T) {
+	manifest := `name: tmpl
+version: 1
+working_dir: none
+prompt: |
+  Mode is {{.Mode}}. Var is {{.Var "FOO"}}.
+`
+	dir, _ := setupTestAgent(t, "tmpl", map[string]string{"agent.yaml": manifest})
+	bundle, err := BuildBundle(dir, "tmpl", "go", "/work", "readonly", map[string]string{"FOO": "bar"})
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	assertContains(t, bundle.System, "Mode is readonly", "templated system prompt")
+	assertContains(t, bundle.System, "Var is bar", "templated system prompt")
+}
+
 func TestBuildBundle_ReadonlyMode(t *testing.T) {
 	dir, _ := setupTestAgent(t, "demo", conditionalTestFiles())
 
