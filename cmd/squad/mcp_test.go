@@ -308,6 +308,158 @@ func TestParseSingleMCPSpecEmptyName(t *testing.T) {
 	}
 }
 
+// TestMCPListFindAgentDirError covers the FindAgentDir error return in `ls`
+// — no --agents-dir and no config available, so FindAgentDir errors out.
+func TestMCPListFindAgentDirError(t *testing.T) {
+	t.Parallel()
+	cmd := newMCPListCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"--agent", "missing"}) // no --agents-dir, no config
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when FindAgentDir cannot locate agent")
+	}
+}
+
+// TestMCPListLoadManifestError covers the LoadManifest error return.
+func TestMCPListLoadManifestError(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	agentDir := filepath.Join(tmp, "broken")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte("bad: ["), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cmd := newMCPListCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"--agent", "broken", "--agents-dir", tmp})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected LoadManifest error")
+	}
+}
+
+// errorWriter always fails on Write — used to exercise Fprintf error paths.
+type errorWriter struct{}
+
+func (errorWriter) Write(_ []byte) (int, error) { return 0, fmt.Errorf("write fails") }
+
+// TestMCPListFprintfErrors covers Fprintf failure branches in `ls`.
+func TestMCPListFprintfErrors(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	agentDir := filepath.Join(tmp, "demo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := "name: demo\nversion: 1\nworking_dir: none\nprompt: hi\nmcp_servers:\n  - name: srv\n    transport: sse\n    url: https://example.com\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cmd := newMCPListCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetOut(errorWriter{})
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"--agent", "demo", "--agents-dir", tmp})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected Fprintf error to propagate")
+	}
+}
+
+// TestMCPListZeroServersFprintfError covers the zero-servers Fprintf path.
+func TestMCPListZeroServersFprintfError(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	agentDir := filepath.Join(tmp, "empty")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte("name: empty\nversion: 1\nworking_dir: none\nprompt: hi\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cmd := newMCPListCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetOut(errorWriter{})
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"--agent", "empty", "--agents-dir", tmp})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected Fprintf error to propagate")
+	}
+}
+
+// TestMCPToolsFprintfErrorOnHeader covers the header Fprintf failure in tools.
+func TestMCPToolsFprintfErrorOnHeader(t *testing.T) {
+	t.Parallel()
+	url := startTestMCPServer(t)
+	cmd := newMCPToolsCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetOut(errorWriter{})
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"demo:http:" + url})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected Fprintf error to propagate")
+	}
+}
+
+// brokenAfterOneWriter succeeds on the first Write call then fails. Used so
+// the tools-loop body executes the per-tool Fprintf and surfaces an error.
+type brokenAfterOneWriter struct {
+	count int
+}
+
+func (w *brokenAfterOneWriter) Write(p []byte) (int, error) {
+	w.count++
+	if w.count > 1 {
+		return 0, fmt.Errorf("simulated write failure")
+	}
+	return len(p), nil
+}
+
+// TestMCPToolsFprintfErrorOnRow covers the per-tool Fprintf failure path.
+func TestMCPToolsFprintfErrorOnRow(t *testing.T) {
+	t.Parallel()
+	url := startTestMCPServer(t)
+	cmd := newMCPToolsCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetOut(&brokenAfterOneWriter{})
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"demo:http:" + url})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected per-row Fprintf error to propagate")
+	}
+}
+
+// TestMCPToolsJSONFprintfError covers the JSON-mode emitToolJSON error path.
+func TestMCPToolsJSONFprintfError(t *testing.T) {
+	t.Parallel()
+	url := startTestMCPServer(t)
+	cmd := newMCPToolsCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetOut(&brokenAfterOneWriter{})
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"demo:http:" + url, "--json"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected emitToolJSON Fprintf error to propagate")
+	}
+}
+
+// TestEmitToolJSONMarshalError covers the MarshalIndent error branch — a
+// schema containing a channel cannot be JSON-encoded.
+func TestEmitToolJSONMarshalError(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	err := emitToolJSON(&buf, "x", "d", make(chan int))
+	if err == nil {
+		t.Fatal("expected MarshalIndent error for unsupported type")
+	}
+}
+
 // ensure probe surfaces transport errors instead of swallowing them.
 func TestMCPProbeBadURL(t *testing.T) {
 	t.Parallel()

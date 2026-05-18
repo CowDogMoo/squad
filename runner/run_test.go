@@ -147,6 +147,31 @@ func TestAgentIsRemoteOnly_FindAgentDirError(t *testing.T) {
 	}
 }
 
+// TestResolveRunWorkingDir_MkdirTempFailure covers the os.MkdirTemp error
+// path by pointing TMPDIR at a non-existent directory.
+func TestResolveRunWorkingDir_MkdirTempFailure(t *testing.T) {
+	// Cannot use t.Parallel — modifies TMPDIR via t.Setenv.
+	tmp := t.TempDir()
+	agentDir := filepath.Join(tmp, "remote")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := "name: remote\nversion: 1\nworking_dir: none\nprompt: hi\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv("TMPDIR", filepath.Join(tmp, "does-not-exist"))
+	opts := &RunOptions{Agent: "remote", AgentsDir: tmp}
+	_, cleanup, err := resolveRunWorkingDir(opts)
+	if err == nil {
+		cleanup()
+		t.Fatal("expected MkdirTemp failure for non-existent TMPDIR")
+	}
+	if !strings.Contains(err.Error(), "failed to create temp working dir") {
+		t.Fatalf("error = %q, want temp-dir creation failure", err.Error())
+	}
+}
+
 // TestAgentIsRemoteOnly_ManifestParseError covers the LoadManifest failure
 // branch — the directory exists but agent.yaml is malformed.
 func TestAgentIsRemoteOnly_ManifestParseError(t *testing.T) {
