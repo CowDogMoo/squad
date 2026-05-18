@@ -23,13 +23,16 @@ const closeTimeout = 5 * time.Second
 
 // Client wraps an MCP server connection with its configuration.
 type Client struct {
-	name      string
-	inner     mcpclient.MCPClient
-	tools     []mcptypes.Tool
-	connected bool
+	name           string
+	inner          mcpclient.MCPClient
+	tools          []mcptypes.Tool
+	connected      bool
+	maxResultBytes int // per-server cap; 0 = package default, negative = no cap
 }
 
-// createTransport starts the appropriate MCP transport (stdio or SSE).
+// createTransport starts the appropriate MCP transport.
+// Supports stdio (subprocess), sse (legacy HTTP Server-Sent Events), and
+// streamable_http (current MCP HTTP spec used by hosted endpoints).
 func createTransport(ctx context.Context, cfg ServerConfig) (mcpclient.MCPClient, error) {
 	switch cfg.TransportType() {
 	case "stdio":
@@ -43,8 +46,10 @@ func createTransport(ctx context.Context, cfg ServerConfig) (mcpclient.MCPClient
 		return inner, nil
 	case "sse":
 		return createSSETransport(ctx, cfg)
+	case "streamable_http", "http":
+		return createStreamableHTTPTransport(ctx, cfg)
 	default:
-		return nil, fmt.Errorf("mcp server %q has unsupported transport %q (want stdio or sse)", cfg.Name, cfg.Transport)
+		return nil, fmt.Errorf("mcp server %q has unsupported transport %q (want stdio, sse, or streamable_http)", cfg.Name, cfg.Transport)
 	}
 }
 
@@ -74,6 +79,36 @@ func createSSETransport(ctx context.Context, cfg ServerConfig) (mcpclient.MCPCli
 		return nil, fmt.Errorf("failed to start MCP server %q (%s): %w", cfg.Name, cfg.URL, startErr)
 	}
 	return sseClient, nil
+}
+
+// createStreamableHTTPTransport creates and starts a Streamable HTTP transport
+// connection. This is the current MCP HTTP spec; use it for hosted MCP
+// endpoints (Google Drive, Google Calendar, etc.).
+func createStreamableHTTPTransport(ctx context.Context, cfg ServerConfig) (mcpclient.MCPClient, error) {
+	if cfg.URL == "" {
+		return nil, fmt.Errorf("mcp server %q missing url for streamable_http transport", cfg.Name)
+	}
+	var opts []transport.StreamableHTTPCOption
+	if len(cfg.Headers) > 0 {
+		hdrs := make(map[string]string, len(cfg.Headers))
+		for _, h := range cfg.Headers {
+			if idx := strings.Index(h, "="); idx > 0 {
+				hdrs[h[:idx]] = h[idx+1:]
+			}
+		}
+		opts = append(opts, transport.WithHTTPHeaders(hdrs))
+	}
+	httpClient, err := mcpclient.NewStreamableHttpClient(cfg.URL, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to MCP server %q (%s): %w", cfg.Name, cfg.URL, err)
+	}
+	if startErr := httpClient.Start(ctx); startErr != nil {
+		if cerr := httpClient.Close(); cerr != nil {
+			logging.Warn("MCP server %q close after start failure: %v", cfg.Name, cerr)
+		}
+		return nil, fmt.Errorf("failed to start MCP server %q (%s): %w", cfg.Name, cfg.URL, startErr)
+	}
+	return httpClient, nil
 }
 
 // closeOnError closes an MCP client and logs any close error.
@@ -138,8 +173,16 @@ func Connect(ctx context.Context, cfg ServerConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.maxResultBytes = cfg.MaxResultBytes
 	span.SetAttributes(attribute.Int("mcp.tools.count", len(c.tools)))
 	return c, nil
+}
+
+// MaxResultBytes returns the effective per-tool-call output cap for
+// this server. Resolution: explicit positive value wins, 0 maps to
+// the package default, negative disables truncation entirely.
+func (c *Client) MaxResultBytes() int {
+	return c.maxResultBytes
 }
 
 // Name returns the server's configured name.

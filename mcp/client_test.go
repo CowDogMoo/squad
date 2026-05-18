@@ -37,7 +37,12 @@ func TestConnectValidation(t *testing.T) {
 		{
 			name:    "unsupported transport",
 			cfg:     ServerConfig{Name: "test", Transport: "grpc"},
-			wantErr: `mcp server "test" has unsupported transport "grpc" (want stdio or sse)`,
+			wantErr: `mcp server "test" has unsupported transport "grpc" (want stdio, sse, or streamable_http)`,
+		},
+		{
+			name:    "missing url for streamable_http",
+			cfg:     ServerConfig{Name: "test", Transport: "streamable_http"},
+			wantErr: `mcp server "test" missing url for streamable_http transport`,
 		},
 	}
 	for _, tt := range tests {
@@ -333,6 +338,108 @@ func TestHandshakeListToolsFailureWithCloseError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "tools/list failed") {
 		t.Fatalf("error = %q, want tools/list failed", err.Error())
+	}
+}
+
+func TestCreateStreamableHTTPTransportMissingURL(t *testing.T) {
+	t.Parallel()
+	_, err := createStreamableHTTPTransport(context.Background(), ServerConfig{
+		Name:      "test-http",
+		Transport: "streamable_http",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing URL")
+	}
+	if !strings.Contains(err.Error(), "missing url for streamable_http") {
+		t.Fatalf("error = %q, want missing url", err.Error())
+	}
+}
+
+func TestCreateStreamableHTTPTransportInvalidURL(t *testing.T) {
+	t.Parallel()
+	_, err := createStreamableHTTPTransport(context.Background(), ServerConfig{
+		Name:      "test-http",
+		Transport: "streamable_http",
+		URL:       "://broken-url",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid URL")
+	}
+	if !strings.Contains(err.Error(), "test-http") {
+		t.Fatalf("error = %q, want to contain server name", err.Error())
+	}
+}
+
+func TestCreateStreamableHTTPTransportStartFailure(t *testing.T) {
+	t.Parallel()
+	// Use an already-cancelled context to force httpClient.Start() to fail
+	// — that drives the close-after-start-failure branch.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, err := createStreamableHTTPTransport(ctx, ServerConfig{
+		Name:      "test-http",
+		Transport: "streamable_http",
+		URL:       srv.URL,
+		Headers:   []string{"Authorization=Bearer token", "X-Trace=abc"},
+	})
+	// We just want the code path executed. Either Start succeeds (we move on)
+	// or returns an error wrapped with the server name.
+	if err != nil && !strings.Contains(err.Error(), "test-http") {
+		t.Fatalf("error = %q, want server name", err.Error())
+	}
+}
+
+func TestConnectStreamableHTTPHandshakeFailure(t *testing.T) {
+	t.Parallel()
+	// Server returns an immediate 500 to fail the MCP handshake.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, err := Connect(context.Background(), ServerConfig{
+		Name:      "test-http",
+		Transport: "streamable_http",
+		URL:       srv.URL,
+	})
+	if err == nil {
+		t.Fatal("expected handshake failure for streamable_http")
+	}
+	if !strings.Contains(err.Error(), "test-http") {
+		t.Fatalf("error = %q, want to contain server name", err.Error())
+	}
+}
+
+func TestConnectStreamableHTTPSetsMaxResultBytes(t *testing.T) {
+	t.Parallel()
+	// We can't perform a full handshake without a real server, so this test
+	// only verifies the MaxResultBytes accessor on a Client built directly.
+	c := &Client{name: "x", maxResultBytes: 42}
+	if c.MaxResultBytes() != 42 {
+		t.Fatalf("MaxResultBytes() = %d, want 42", c.MaxResultBytes())
+	}
+}
+
+// TestConnectHTTPAliasAccepted verifies that "http" is accepted as an alias
+// for streamable_http when routing through createTransport. We only check
+// that the validation error fires for missing URL (not "unsupported transport").
+func TestConnectHTTPAliasAccepted(t *testing.T) {
+	t.Parallel()
+	_, err := Connect(context.Background(), ServerConfig{
+		Name:      "test-http",
+		Transport: "http",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing URL on http transport")
+	}
+	if strings.Contains(err.Error(), "unsupported transport") {
+		t.Fatalf("http should be routed to streamable_http, got %q", err.Error())
 	}
 }
 

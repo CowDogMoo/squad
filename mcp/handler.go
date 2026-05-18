@@ -17,8 +17,26 @@ type ToolHandler struct {
 	Call func(ctx context.Context, rawArgs []byte) (string, error)
 }
 
-// maxMCPToolResult caps MCP tool output to avoid blowing up context.
-const maxMCPToolResult = 32 * 1024
+// defaultMaxMCPToolResult caps MCP tool output to avoid blowing up
+// context. Per-server override via ServerConfig.MaxResultBytes:
+// positive value sets a specific cap, negative disables truncation
+// (use for document-reading servers that need to return larger
+// payloads — e.g. Google Docs HTML exports of multi-page tables).
+const defaultMaxMCPToolResult = 32 * 1024
+
+// resolveCap converts the per-server config value into the actual
+// byte cap to apply. 0 → default, negative → unlimited, positive →
+// the value itself.
+func resolveCap(perServer int) int {
+	switch {
+	case perServer == 0:
+		return defaultMaxMCPToolResult
+	case perServer < 0:
+		return 0 // unlimited
+	default:
+		return perServer
+	}
+}
 
 // ToolPrefix is the namespace prefix for MCP tools: mcp__<server>__<tool>.
 const ToolPrefix = "mcp__"
@@ -72,9 +90,10 @@ func buildHandler(c *Client, t mcptypes.Tool) ToolHandler {
 
 		output := formatCallResult(result)
 
-		// Truncate large results to stay within context budget.
-		if len(output) > maxMCPToolResult {
-			output = output[:maxMCPToolResult] + "\n...output truncated"
+		// Truncate large results to stay within context budget,
+		// unless the server is configured for unlimited output.
+		if cap := resolveCap(c.MaxResultBytes()); cap > 0 && len(output) > cap {
+			output = output[:cap] + "\n...output truncated"
 		}
 
 		if result.IsError {

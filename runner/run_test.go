@@ -81,6 +81,142 @@ func TestResolveWorkingDir(t *testing.T) {
 	}
 }
 
+func TestResolveRunWorkingDir_Standard(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	dir, cleanup, err := resolveRunWorkingDir(&RunOptions{WorkingDir: tmp})
+	if err != nil {
+		t.Fatalf("resolveRunWorkingDir: %v", err)
+	}
+	defer cleanup()
+	if dir != tmp {
+		t.Fatalf("dir = %q, want %q", dir, tmp)
+	}
+	// Standard mode: cleanup is a no-op (directory survives).
+	cleanup()
+	if _, err := os.Stat(tmp); err != nil {
+		t.Fatalf("standard working dir was unexpectedly removed: %v", err)
+	}
+}
+
+func TestResolveRunWorkingDir_RemoteOnly(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	agentDir := filepath.Join(tmp, "agents", "remote")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := "name: remote\nversion: 1\nworking_dir: none\nprompt: hi\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	opts := &RunOptions{Agent: "remote", AgentsDir: filepath.Join(tmp, "agents")}
+	dir, cleanup, err := resolveRunWorkingDir(opts)
+	if err != nil {
+		t.Fatalf("resolveRunWorkingDir: %v", err)
+	}
+	if dir == "" {
+		t.Fatal("expected a temp dir, got empty string")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("temp dir not created: %v", err)
+	}
+	if !strings.Contains(dir, "squad-remote-") {
+		t.Errorf("temp dir name = %q, want it to contain squad-remote-", dir)
+	}
+	cleanup()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("temp dir should have been removed, stat err = %v", err)
+	}
+}
+
+// TestAgentIsRemoteOnly_FindAgentDirError covers the FindAgentDir failure
+// branch (config==nil with no explicit dir).
+func TestAgentIsRemoteOnly_FindAgentDirError(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{Agent: "ghost"} // no AgentsDir, no Config — FindAgentDir errors
+	if got := agentIsRemoteOnly(opts); got {
+		t.Fatal("expected false when FindAgentDir errors")
+	}
+}
+
+// TestResolveRunWorkingDir_MkdirTempFailure covers the os.MkdirTemp error
+// path by pointing TMPDIR at a non-existent directory.
+func TestResolveRunWorkingDir_MkdirTempFailure(t *testing.T) {
+	// Cannot use t.Parallel — modifies TMPDIR via t.Setenv.
+	tmp := t.TempDir()
+	agentDir := filepath.Join(tmp, "remote")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := "name: remote\nversion: 1\nworking_dir: none\nprompt: hi\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv("TMPDIR", filepath.Join(tmp, "does-not-exist"))
+	opts := &RunOptions{Agent: "remote", AgentsDir: tmp}
+	_, cleanup, err := resolveRunWorkingDir(opts)
+	if err == nil {
+		cleanup()
+		t.Fatal("expected MkdirTemp failure for non-existent TMPDIR")
+	}
+	if !strings.Contains(err.Error(), "failed to create temp working dir") {
+		t.Fatalf("error = %q, want temp-dir creation failure", err.Error())
+	}
+}
+
+// TestAgentIsRemoteOnly_ManifestParseError covers the LoadManifest failure
+// branch — the directory exists but agent.yaml is malformed.
+func TestAgentIsRemoteOnly_ManifestParseError(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	agentDir := filepath.Join(tmp, "broken")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte("bad: ["), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	opts := &RunOptions{Agent: "broken", AgentsDir: tmp}
+	if got := agentIsRemoteOnly(opts); got {
+		t.Fatal("expected false when manifest is malformed")
+	}
+}
+
+func TestAgentIsRemoteOnly(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	cases := []struct {
+		name     string
+		manifest string
+		want     bool
+	}{
+		{"remote-only", "name: x\nversion: 1\nworking_dir: none\nprompt: hi\n", true},
+		{"standard leaf", "name: x\nversion: 1\nentrypoint: sys.md\nwrapper: wrap.md\n", false},
+		{"missing agent", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts := &RunOptions{}
+			if tc.manifest != "" {
+				agentDir := filepath.Join(tmp, tc.name)
+				if err := os.MkdirAll(agentDir, 0o755); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(tc.manifest), 0o644); err != nil {
+					t.Fatalf("write manifest: %v", err)
+				}
+				opts.Agent = tc.name
+				opts.AgentsDir = tmp
+			}
+			if got := agentIsRemoteOnly(opts); got != tc.want {
+				t.Errorf("agentIsRemoteOnly() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWriteResponse(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -569,6 +705,51 @@ func TestExecuteRunInvokeModelError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "API key required") {
 		t.Fatalf("ExecuteRun() error = %q, want to contain %q", err.Error(), "API key required")
+	}
+}
+
+// TestExecuteRunRemoteOnlyDisablesRequireActionable verifies that when a
+// remote-only agent is run with --require-actionable, the flag is cleared
+// (remote-only agents never edit files, so the guard is meaningless).
+func TestExecuteRunRemoteOnlyDisablesRequireActionable(t *testing.T) {
+	// Stand up a minimal Ollama-compatible server so ExecuteRun reaches the
+	// post-bundle branch where RequireActionable is reset.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"mistral","message":{"role":"assistant","content":"ok"},"done":true}`))
+	}))
+	defer server.Close()
+
+	tmp := t.TempDir()
+	agentsDir := filepath.Join(tmp, "agents")
+	agentDir := filepath.Join(agentsDir, "remote")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := "name: remote\nversion: 1\nworking_dir: none\nprompt: hi\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	opts := &RunOptions{
+		Agent:             "remote",
+		AgentsDir:         agentsDir,
+		Provider:          "ollama",
+		Model:             "mistral",
+		BaseURL:           server.URL,
+		MaxIterations:     1,
+		ConfigAvailable:   true,
+		RequireActionable: true,
+	}
+	if err := ExecuteRun(cmd, []string{"hello"}, opts); err != nil {
+		t.Fatalf("ExecuteRun: %v", err)
+	}
+	if opts.RequireActionable {
+		t.Fatal("expected RequireActionable to be cleared for remote-only agent")
 	}
 }
 

@@ -1145,17 +1145,23 @@ func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor)
 		handlers[name] = handler
 	}
 
-	add(Handler{Def: definitionRead(), Call: readTool(workingDir)})
-	add(Handler{Def: definitionWrite(), Call: trackEdits(writeTool(workingDir))})
-	add(Handler{Def: definitionEdit(), Call: trackEdits(editTool(workingDir))})
-	add(Handler{Def: definitionGlob(), Call: globTool(workingDir)})
-	add(Handler{Def: definitionGrep(), Call: grepTool(workingDir)})
-	add(Handler{Def: definitionBash(), Call: bashTool(ex)})
-	add(Handler{Def: definitionBashBg(), Call: bashBackgroundTool(ex)})
-	add(Handler{Def: definitionBashOutput(), Call: bashOutputTool()})
-	add(Handler{Def: definitionMultiEdit(), Call: trackEdits(multiEditTool(workingDir))})
-	add(Handler{Def: definitionSystemInfo(), Call: systemInfoTool(ex)})
-	add(Handler{Def: definitionRepoMap(), Call: repoMapTool(workingDir)})
+	// Remote-only agents (e.g. weekly-planner: prompt + MCP servers, no
+	// local filesystem) skip registration of the local FS tools. The
+	// model only sees MCP tools (and Task/ReportFinding when enabled).
+	remoteOnly := taskCfg != nil && taskCfg.RemoteOnly
+	if !remoteOnly {
+		add(Handler{Def: definitionRead(), Call: readTool(workingDir)})
+		add(Handler{Def: definitionWrite(), Call: trackEdits(writeTool(workingDir))})
+		add(Handler{Def: definitionEdit(), Call: trackEdits(editTool(workingDir))})
+		add(Handler{Def: definitionGlob(), Call: globTool(workingDir)})
+		add(Handler{Def: definitionGrep(), Call: grepTool(workingDir)})
+		add(Handler{Def: definitionBash(), Call: bashTool(ex)})
+		add(Handler{Def: definitionBashBg(), Call: bashBackgroundTool(ex)})
+		add(Handler{Def: definitionBashOutput(), Call: bashOutputTool()})
+		add(Handler{Def: definitionMultiEdit(), Call: trackEdits(multiEditTool(workingDir))})
+		add(Handler{Def: definitionSystemInfo(), Call: systemInfoTool(ex)})
+		add(Handler{Def: definitionRepoMap(), Call: repoMapTool(workingDir)})
+	}
 
 	if taskCfg != nil {
 		// Only register Task/TaskResult when the agent is allowed to spawn children.

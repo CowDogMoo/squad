@@ -10,6 +10,27 @@ import (
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
 )
 
+func TestResolveCap(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		input int
+		want  int
+	}{
+		{"zero uses package default", 0, defaultMaxMCPToolResult},
+		{"negative disables truncation", -1, 0},
+		{"positive uses the value", 64 * 1024, 64 * 1024},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := resolveCap(tc.input); got != tc.want {
+				t.Errorf("resolveCap(%d) = %d, want %d", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPrefixedName(t *testing.T) {
 	tests := []struct {
 		server, tool, want string
@@ -315,7 +336,7 @@ func TestBuildHandlerCall(t *testing.T) {
 			mock: &mockMCPClient{
 				callResult: &mcptypes.CallToolResult{
 					Content: []mcptypes.Content{
-						mcptypes.TextContent{Type: "text", Text: strings.Repeat("x", maxMCPToolResult+100)},
+						mcptypes.TextContent{Type: "text", Text: strings.Repeat("x", defaultMaxMCPToolResult+100)},
 					},
 				},
 			},

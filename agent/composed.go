@@ -75,6 +75,19 @@ func (m *Manifest) IsComposed() bool {
 	return len(m.Stages) > 0
 }
 
+// IsInlinePrompt returns true if the manifest uses the inline `prompt:`
+// form instead of separate entrypoint+wrapper files.
+func (m *Manifest) IsInlinePrompt() bool {
+	return m.Prompt != ""
+}
+
+// IsRemoteOnly returns true when the agent has declared it does not
+// touch the local filesystem (working_dir: none). Local file tools
+// (Read/Write/Edit/Glob/Grep/Bash) are not registered for such agents.
+func (m *Manifest) IsRemoteOnly() bool {
+	return m.WorkingDir == "none"
+}
+
 // Validate checks the manifest for structural errors.
 // Composed manifests (with stages) must not have entrypoint/wrapper.
 // Leaf manifests (with entrypoint) must not have stages.
@@ -239,11 +252,28 @@ func (m *Manifest) validateComposedGates(stageNames map[string]bool) error {
 }
 
 func (m *Manifest) validateLeaf() error {
+	// Inline-prompt agents: a single `prompt:` field replaces the
+	// entrypoint+wrapper file pair. Either form is valid; mixing is not.
+	if m.Prompt != "" {
+		if m.EntryPoint != "" {
+			return fmt.Errorf("agent %q: cannot set both prompt and entrypoint", m.Name)
+		}
+		if m.Wrapper != "" {
+			return fmt.Errorf("agent %q: cannot set both prompt and wrapper", m.Name)
+		}
+		if m.WorkingDir != "" && m.WorkingDir != "none" {
+			return fmt.Errorf("agent %q: working_dir must be empty or \"none\" (got %q)", m.Name, m.WorkingDir)
+		}
+		return nil
+	}
 	if m.EntryPoint == "" {
 		return fmt.Errorf("agent %q: entrypoint is required", m.Name)
 	}
 	if m.Wrapper == "" {
 		return fmt.Errorf("agent %q: wrapper is required", m.Name)
+	}
+	if m.WorkingDir != "" && m.WorkingDir != "none" {
+		return fmt.Errorf("agent %q: working_dir must be empty or \"none\" (got %q)", m.Name, m.WorkingDir)
 	}
 	return nil
 }
