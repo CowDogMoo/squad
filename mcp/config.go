@@ -37,6 +37,14 @@ type ServerConfig struct {
 	// Headers are additional HTTP headers for SSE / streamable_http
 	// transport. Format: KEY=VALUE strings.
 	Headers []string `yaml:"headers,omitempty"`
+
+	// MaxResultBytes caps the bytes returned to the model from any
+	// single tool call on this server. 0 means use the package
+	// default (32 KiB). Negative means no cap — pass everything
+	// through (useful for document-reading servers like Google Docs
+	// where the HTML export of a multi-page table exceeds 32 KiB
+	// and a hard cap silently slices the document mid-row).
+	MaxResultBytes int `yaml:"max_result_bytes,omitempty"`
 }
 
 // TransportType returns the effective transport, defaulting to "stdio".

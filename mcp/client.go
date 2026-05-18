@@ -23,10 +23,11 @@ const closeTimeout = 5 * time.Second
 
 // Client wraps an MCP server connection with its configuration.
 type Client struct {
-	name      string
-	inner     mcpclient.MCPClient
-	tools     []mcptypes.Tool
-	connected bool
+	name           string
+	inner          mcpclient.MCPClient
+	tools          []mcptypes.Tool
+	connected      bool
+	maxResultBytes int // per-server cap; 0 = package default, negative = no cap
 }
 
 // createTransport starts the appropriate MCP transport.
@@ -172,8 +173,16 @@ func Connect(ctx context.Context, cfg ServerConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.maxResultBytes = cfg.MaxResultBytes
 	span.SetAttributes(attribute.Int("mcp.tools.count", len(c.tools)))
 	return c, nil
+}
+
+// MaxResultBytes returns the effective per-tool-call output cap for
+// this server. Resolution: explicit positive value wins, 0 maps to
+// the package default, negative disables truncation entirely.
+func (c *Client) MaxResultBytes() int {
+	return c.maxResultBytes
 }
 
 // Name returns the server's configured name.
