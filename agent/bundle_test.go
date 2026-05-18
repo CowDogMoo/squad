@@ -1351,3 +1351,130 @@ func TestBundle_FindModel_EmptyModelsList(t *testing.T) {
 		t.Fatalf("FindModel on empty bundle = %+v, want nil", got)
 	}
 }
+
+func TestBuildBundle_InlinePromptOutputContractJSON(t *testing.T) {
+	t.Parallel()
+	manifest := `name: inline-json
+version: 1
+working_dir: none
+prompt: "Emit a structured report."
+output:
+  format: json
+  schema:
+    type: object
+    required:
+      - status
+    properties:
+      status:
+        type: string
+`
+	dir, _ := setupTestAgent(t, "inline-json", map[string]string{"agent.yaml": manifest})
+	bundle, err := BuildBundle(dir, "inline-json", "go", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	assertContains(t, bundle.System, "Output Contract", "inline-json system")
+	assertContains(t, bundle.System, "single JSON object", "inline-json system")
+	assertContains(t, bundle.System, "JSON Schema", "inline-json system")
+	assertContains(t, bundle.System, `"status"`, "inline-json system")
+}
+
+// TestBuildBundle_InlinePromptOutputJSONNoSchema covers the json-format branch
+// when the schema map is empty — the contract is still emitted, but no schema
+// block follows.
+func TestBuildBundle_InlinePromptOutputJSONNoSchema(t *testing.T) {
+	t.Parallel()
+	manifest := `name: inline-json-bare
+version: 1
+working_dir: none
+prompt: "Emit JSON."
+output:
+  format: json
+`
+	dir, _ := setupTestAgent(t, "inline-json-bare", map[string]string{"agent.yaml": manifest})
+	bundle, err := BuildBundle(dir, "inline-json-bare", "", "/work", "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	assertContains(t, bundle.System, "Output Contract", "system")
+	assertNotContains(t, bundle.System, "conform to this JSON Schema", "no schema block")
+}
+
+// TestBuildBundle_InlinePromptWithRepoSummary exercises the repo-summary
+// branch in buildInlineSystemMessage by pointing working_dir at a populated
+// directory and omitting working_dir: none from the manifest.
+func TestBuildBundle_InlinePromptWithRepoSummary(t *testing.T) {
+	t.Parallel()
+	manifest := `name: inline-repo
+version: 1
+prompt: "Look around."
+`
+	dir, _ := setupTestAgent(t, "inline-repo", map[string]string{"agent.yaml": manifest})
+
+	// Create a populated working dir so compactRepoSummary returns content.
+	workDir := t.TempDir()
+	for _, name := range []string{"a.go", "b.go", "c.md"} {
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	bundle, err := BuildBundle(dir, "inline-repo", "", workDir, "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	assertContains(t, bundle.System, "Repository Structure", "repo summary should be present")
+	assertContains(t, bundle.System, workDir, "working dir line in repo summary")
+}
+
+func TestBuildBundleInline_BaseDirReferenceFallback(t *testing.T) {
+	t.Parallel()
+	// baseDir holds the shared reference; stage dir has its own system + wrapper.
+	baseDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(baseDir, "shared-ref.md"), []byte("shared ref content"), 0o644); err != nil {
+		t.Fatalf("write shared ref: %v", err)
+	}
+	stageDir := filepath.Join(baseDir, "stages", "scan")
+	if err := os.MkdirAll(stageDir, 0o755); err != nil {
+		t.Fatalf("mkdir stage: %v", err)
+	}
+	writeTestFiles(t, stageDir, map[string]string{
+		"system.md":  "stage system",
+		"wrapper.md": "stage wrapper",
+	})
+
+	cfg := &InlineAgentConfig{
+		Name:       "scan",
+		EntryPoint: "system.md",
+		Wrapper:    "wrapper.md",
+		References: []string{"shared-ref.md"},
+	}
+	bundle, err := BuildBundleInline(baseDir, cfg, "prompt", baseDir, "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundleInline: %v", err)
+	}
+	assertContains(t, bundle.System, "shared ref content", "fallback baseDir reference")
+}
+
+func TestBuildBundleInline_ReferenceMissingEverywhere(t *testing.T) {
+	t.Parallel()
+	baseDir := t.TempDir()
+	stageDir := filepath.Join(baseDir, "stages", "scan")
+	if err := os.MkdirAll(stageDir, 0o755); err != nil {
+		t.Fatalf("mkdir stage: %v", err)
+	}
+	writeTestFiles(t, stageDir, map[string]string{
+		"system.md":  "stage system",
+		"wrapper.md": "stage wrapper",
+	})
+	cfg := &InlineAgentConfig{
+		Name:       "scan",
+		EntryPoint: "system.md",
+		Wrapper:    "wrapper.md",
+		References: []string{"missing.md"},
+	}
+	_, err := BuildBundleInline(baseDir, cfg, "p", baseDir, "", nil)
+	if err == nil {
+		t.Fatal("expected error when reference missing in both stage and baseDir")
+	}
+}

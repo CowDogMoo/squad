@@ -93,6 +93,44 @@ func TestValidate_LeafWorkingDirInvalid(t *testing.T) {
 	}
 }
 
+// TestValidate_LeafEntrypointWorkingDirInvalid covers validateLeaf's
+// non-inline working_dir check — a manifest using entrypoint+wrapper that
+// also sets a non-"none" working_dir.
+func TestValidate_LeafEntrypointWorkingDirInvalid(t *testing.T) {
+	m := &Manifest{
+		Name:       "bad",
+		EntryPoint: "system.md",
+		Wrapper:    "agent.md",
+		WorkingDir: "/some/path",
+	}
+	err := m.Validate()
+	if err == nil || !strings.Contains(err.Error(), "working_dir must be empty or \"none\"") {
+		t.Fatalf("expected working_dir error, got: %v", err)
+	}
+}
+
+// TestIsInlinePrompt covers the IsInlinePrompt predicate.
+func TestIsInlinePrompt(t *testing.T) {
+	t.Parallel()
+	if (&Manifest{Prompt: "hi"}).IsInlinePrompt() != true {
+		t.Fatal("expected IsInlinePrompt true when Prompt set")
+	}
+	if (&Manifest{EntryPoint: "system.md"}).IsInlinePrompt() != false {
+		t.Fatal("expected IsInlinePrompt false when Prompt empty")
+	}
+}
+
+// TestIsRemoteOnly covers the IsRemoteOnly predicate.
+func TestIsRemoteOnly(t *testing.T) {
+	t.Parallel()
+	if (&Manifest{WorkingDir: "none"}).IsRemoteOnly() != true {
+		t.Fatal(`expected IsRemoteOnly true when WorkingDir = "none"`)
+	}
+	if (&Manifest{WorkingDir: ""}).IsRemoteOnly() != false {
+		t.Fatal("expected IsRemoteOnly false when WorkingDir empty")
+	}
+}
+
 func TestValidate_ComposedValid(t *testing.T) {
 	m := &Manifest{
 		Name:    "composed",

@@ -642,6 +642,51 @@ func TestExecuteRunInvokeModelError(t *testing.T) {
 	}
 }
 
+// TestExecuteRunRemoteOnlyDisablesRequireActionable verifies that when a
+// remote-only agent is run with --require-actionable, the flag is cleared
+// (remote-only agents never edit files, so the guard is meaningless).
+func TestExecuteRunRemoteOnlyDisablesRequireActionable(t *testing.T) {
+	// Stand up a minimal Ollama-compatible server so ExecuteRun reaches the
+	// post-bundle branch where RequireActionable is reset.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"mistral","message":{"role":"assistant","content":"ok"},"done":true}`))
+	}))
+	defer server.Close()
+
+	tmp := t.TempDir()
+	agentsDir := filepath.Join(tmp, "agents")
+	agentDir := filepath.Join(agentsDir, "remote")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := "name: remote\nversion: 1\nworking_dir: none\nprompt: hi\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	opts := &RunOptions{
+		Agent:             "remote",
+		AgentsDir:         agentsDir,
+		Provider:          "ollama",
+		Model:             "mistral",
+		BaseURL:           server.URL,
+		MaxIterations:     1,
+		ConfigAvailable:   true,
+		RequireActionable: true,
+	}
+	if err := ExecuteRun(cmd, []string{"hello"}, opts); err != nil {
+		t.Fatalf("ExecuteRun: %v", err)
+	}
+	if opts.RequireActionable {
+		t.Fatal("expected RequireActionable to be cleared for remote-only agent")
+	}
+}
+
 func TestExecuteRunSuccessOllama(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/chat" {
