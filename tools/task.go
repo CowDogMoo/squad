@@ -195,6 +195,10 @@ type TaskConfig struct {
 	ExtraTools    []Handler        // additional tools injected by MCP servers or other providers
 	ChildMaxCost  ChildMaxCostFunc // per-child budget lookup (nil = use remaining budget)
 	ChildMaxIter  ChildMaxIterFunc // per-child iteration cap (nil = inherit parent's cap)
+	// RemoteOnly suppresses registration of local-filesystem tools
+	// (Read/Write/Edit/MultiEdit/Glob/Grep/Bash/RepoMap/SystemInfo) for
+	// agents whose entire toolset is remote MCP tools.
+	RemoteOnly bool
 }
 
 type taskArgs struct {

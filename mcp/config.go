@@ -12,9 +12,11 @@ type ServerConfig struct {
 	// Tools are registered as "mcp__<name>__<tool_name>".
 	Name string `yaml:"name"`
 
-	// Transport selects the protocol: "stdio" (default) or "sse".
-	// Stdio spawns a subprocess and communicates over stdin/stdout.
-	// SSE connects to a running HTTP server using Server-Sent Events.
+	// Transport selects the protocol: "stdio" (default), "sse", or
+	// "streamable_http". Stdio spawns a subprocess and communicates over
+	// stdin/stdout. SSE connects to a running HTTP server using legacy
+	// Server-Sent Events. streamable_http speaks the current MCP HTTP
+	// spec used by hosted endpoints like Google's MCP services.
 	Transport string `yaml:"transport,omitempty"`
 
 	// Command is the executable to spawn for stdio transport.
@@ -27,12 +29,22 @@ type ServerConfig struct {
 	// Format: KEY=VALUE strings.
 	Env []string `yaml:"env,omitempty"`
 
-	// URL is the endpoint for SSE transport (e.g., "http://localhost:9876").
+	// URL is the endpoint for SSE / streamable_http transport
+	// (e.g., "http://localhost:9876" or
+	// "https://drivemcp.googleapis.com/mcp/v1").
 	URL string `yaml:"url,omitempty"`
 
-	// Headers are additional HTTP headers for SSE transport.
-	// Format: KEY=VALUE strings.
+	// Headers are additional HTTP headers for SSE / streamable_http
+	// transport. Format: KEY=VALUE strings.
 	Headers []string `yaml:"headers,omitempty"`
+
+	// MaxResultBytes caps the bytes returned to the model from any
+	// single tool call on this server. 0 means use the package
+	// default (32 KiB). Negative means no cap — pass everything
+	// through (useful for document-reading servers like Google Docs
+	// where the HTML export of a multi-page table exceeds 32 KiB
+	// and a hard cap silently slices the document mid-row).
+	MaxResultBytes int `yaml:"max_result_bytes,omitempty"`
 }
 
 // TransportType returns the effective transport, defaulting to "stdio".
@@ -49,6 +61,8 @@ func (c ServerConfig) ConnectString() string {
 	switch c.TransportType() {
 	case "sse":
 		return "sse: " + c.URL
+	case "streamable_http", "http":
+		return "streamable_http: " + c.URL
 	default:
 		if len(c.Args) == 0 {
 			return "stdio: " + c.Command

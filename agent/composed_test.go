@@ -30,6 +30,107 @@ func TestIsComposed_WithoutStages(t *testing.T) {
 	}
 }
 
+func TestValidate_LeafInlinePromptValid(t *testing.T) {
+	m := &Manifest{
+		Name:   "weekly-planner",
+		Prompt: "You are a weekly family planner...",
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("inline-prompt leaf should validate, got: %v", err)
+	}
+	if !m.IsInlinePrompt() {
+		t.Fatal("expected IsInlinePrompt() == true")
+	}
+}
+
+func TestValidate_LeafInlinePromptRejectsEntrypoint(t *testing.T) {
+	m := &Manifest{
+		Name:       "bad",
+		Prompt:     "hi",
+		EntryPoint: "system.md",
+	}
+	err := m.Validate()
+	if err == nil || !strings.Contains(err.Error(), "cannot set both prompt and entrypoint") {
+		t.Fatalf("expected entrypoint conflict error, got: %v", err)
+	}
+}
+
+func TestValidate_LeafInlinePromptRejectsWrapper(t *testing.T) {
+	m := &Manifest{
+		Name:    "bad",
+		Prompt:  "hi",
+		Wrapper: "agent.md",
+	}
+	err := m.Validate()
+	if err == nil || !strings.Contains(err.Error(), "cannot set both prompt and wrapper") {
+		t.Fatalf("expected wrapper conflict error, got: %v", err)
+	}
+}
+
+func TestValidate_LeafWorkingDirNone(t *testing.T) {
+	m := &Manifest{
+		Name:       "weekly-planner",
+		Prompt:     "remote only",
+		WorkingDir: "none",
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("working_dir: none should validate, got: %v", err)
+	}
+	if !m.IsRemoteOnly() {
+		t.Fatal("expected IsRemoteOnly() == true")
+	}
+}
+
+func TestValidate_LeafWorkingDirInvalid(t *testing.T) {
+	m := &Manifest{
+		Name:       "bad",
+		Prompt:     "hi",
+		WorkingDir: "/tmp/whatever",
+	}
+	err := m.Validate()
+	if err == nil || !strings.Contains(err.Error(), "working_dir must be empty or \"none\"") {
+		t.Fatalf("expected working_dir error, got: %v", err)
+	}
+}
+
+// TestValidate_LeafEntrypointWorkingDirInvalid covers validateLeaf's
+// non-inline working_dir check — a manifest using entrypoint+wrapper that
+// also sets a non-"none" working_dir.
+func TestValidate_LeafEntrypointWorkingDirInvalid(t *testing.T) {
+	m := &Manifest{
+		Name:       "bad",
+		EntryPoint: "system.md",
+		Wrapper:    "agent.md",
+		WorkingDir: "/some/path",
+	}
+	err := m.Validate()
+	if err == nil || !strings.Contains(err.Error(), "working_dir must be empty or \"none\"") {
+		t.Fatalf("expected working_dir error, got: %v", err)
+	}
+}
+
+// TestIsInlinePrompt covers the IsInlinePrompt predicate.
+func TestIsInlinePrompt(t *testing.T) {
+	t.Parallel()
+	if (&Manifest{Prompt: "hi"}).IsInlinePrompt() != true {
+		t.Fatal("expected IsInlinePrompt true when Prompt set")
+	}
+	if (&Manifest{EntryPoint: "system.md"}).IsInlinePrompt() != false {
+		t.Fatal("expected IsInlinePrompt false when Prompt empty")
+	}
+}
+
+// TestIsRemoteOnly covers the IsRemoteOnly predicate.
+func TestIsRemoteOnly(t *testing.T) {
+	t.Parallel()
+	if (&Manifest{WorkingDir: "none"}).IsRemoteOnly() != true {
+		t.Fatal(`expected IsRemoteOnly true when WorkingDir = "none"`)
+	}
+	if (&Manifest{WorkingDir: ""}).IsRemoteOnly() != false {
+		t.Fatal("expected IsRemoteOnly false when WorkingDir empty")
+	}
+}
+
 func TestValidate_ComposedValid(t *testing.T) {
 	m := &Manifest{
 		Name:    "composed",

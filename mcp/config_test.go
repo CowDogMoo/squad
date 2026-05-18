@@ -24,6 +24,11 @@ func TestTransportType(t *testing.T) {
 			cfg:      ServerConfig{Name: "test", Transport: "sse", URL: "http://localhost:9876"},
 			wantType: "sse",
 		},
+		{
+			name:     "streamable_http transport",
+			cfg:      ServerConfig{Name: "test", Transport: "streamable_http", URL: "https://example.com/mcp"},
+			wantType: "streamable_http",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -56,6 +61,16 @@ func TestConnectString(t *testing.T) {
 			name: "sse transport",
 			cfg:  ServerConfig{Name: "burpsuite", Transport: "sse", URL: "http://localhost:9876"},
 			want: "sse: http://localhost:9876",
+		},
+		{
+			name: "streamable_http transport",
+			cfg:  ServerConfig{Name: "gdrive", Transport: "streamable_http", URL: "https://drivemcp.googleapis.com/mcp/v1"},
+			want: "streamable_http: https://drivemcp.googleapis.com/mcp/v1",
+		},
+		{
+			name: "http alias for streamable_http",
+			cfg:  ServerConfig{Name: "gdrive", Transport: "http", URL: "https://example.com/mcp"},
+			want: "streamable_http: https://example.com/mcp",
 		},
 	}
 	for _, tt := range tests {

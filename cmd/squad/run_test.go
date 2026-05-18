@@ -884,6 +884,27 @@ func TestParseMCPServers(t *testing.T) {
 			wantFirst:     "grafana",
 			wantTransport: "", // first is stdio (default)
 		},
+		{
+			name:          "streamable http transport",
+			specs:         []string{"gcal:http:https://calendarmcp.googleapis.com/mcp/v1"},
+			wantLen:       1,
+			wantFirst:     "gcal",
+			wantTransport: "streamable_http",
+			wantURL:       "https://calendarmcp.googleapis.com/mcp/v1",
+		},
+		{
+			name:          "streamable_http alias",
+			specs:         []string{"x:streamable_http:https://example.com/mcp"},
+			wantLen:       1,
+			wantFirst:     "x",
+			wantTransport: "streamable_http",
+			wantURL:       "https://example.com/mcp",
+		},
+		{
+			name:    "streamable http missing url",
+			specs:   []string{"bad:http:"},
+			wantLen: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

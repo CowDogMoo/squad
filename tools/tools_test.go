@@ -272,6 +272,39 @@ func TestBuildHandlers(t *testing.T) {
 	}
 }
 
+func TestBuildHandlersRemoteOnly(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	extra := Handler{
+		Def: llms.Tool{
+			Type: "function",
+			Function: &llms.FunctionDefinition{
+				Name:        "mcp__gcal__create_event",
+				Description: "Create a calendar event",
+			},
+		},
+		Call: func(_ context.Context, _ []byte) (string, error) {
+			return "ok", nil
+		},
+	}
+	cfg := &TaskConfig{
+		AgentsDir:  "agents",
+		WorkingDir: dir,
+		RemoteOnly: true,
+		ExtraTools: []Handler{extra},
+	}
+	handlers, _ := BuildHandlers(dir, cfg, &executor.LocalExecutor{WorkingDir: dir})
+	if _, ok := handlers["Read"]; ok {
+		t.Fatal("Read should NOT be registered for RemoteOnly agents")
+	}
+	if _, ok := handlers["Bash"]; ok {
+		t.Fatal("Bash should NOT be registered for RemoteOnly agents")
+	}
+	if _, ok := handlers["mcp__gcal__create_event"]; !ok {
+		t.Fatal("MCP tool should still be registered for RemoteOnly agents")
+	}
+}
+
 func TestGlobMatcher(t *testing.T) {
 	t.Parallel()
 	matcher, err := newGlobMatcher("**/*.go")
