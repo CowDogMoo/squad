@@ -252,6 +252,62 @@ func TestEmitToolJSON(t *testing.T) {
 	}
 }
 
+// TestMCPProbeBadSpec exercises the parseSingleMCPSpec error return in probe.
+func TestMCPProbeBadSpec(t *testing.T) {
+	t.Parallel()
+	cmd := newMCPProbeCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"notaspec"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "invalid MCP server spec") {
+		t.Fatalf("expected invalid-spec error, got: %v", err)
+	}
+}
+
+// TestMCPToolsBadSpec covers the parseSingleMCPSpec error return in tools.
+func TestMCPToolsBadSpec(t *testing.T) {
+	t.Parallel()
+	cmd := newMCPToolsCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"notaspec"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "invalid MCP server spec") {
+		t.Fatalf("expected invalid-spec error, got: %v", err)
+	}
+}
+
+// TestMCPToolsBadURL covers the Connect error return in tools.
+func TestMCPToolsBadURL(t *testing.T) {
+	t.Parallel()
+	cmd := newMCPToolsCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := listener.Addr().String()
+	_ = listener.Close()
+	cmd.SetArgs([]string{fmt.Sprintf("dead:http:http://%s/mcp", addr)})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error connecting to dead port")
+	}
+}
+
+// TestParseSingleMCPSpecEmptyName covers the cfg.Name == "" branch.
+func TestParseSingleMCPSpecEmptyName(t *testing.T) {
+	t.Parallel()
+	_, err := parseSingleMCPSpec(":sse:http://example.com")
+	if err == nil || !strings.Contains(err.Error(), "missing name") {
+		t.Fatalf("expected missing-name error, got: %v", err)
+	}
+}
+
 // ensure probe surfaces transport errors instead of swallowing them.
 func TestMCPProbeBadURL(t *testing.T) {
 	t.Parallel()

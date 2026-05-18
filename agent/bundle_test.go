@@ -1456,6 +1456,22 @@ func TestBuildBundleInline_BaseDirReferenceFallback(t *testing.T) {
 	assertContains(t, bundle.System, "shared ref content", "fallback baseDir reference")
 }
 
+// TestBuildBundle_InlinePromptBadTemplate covers BuildBundle's error return
+// when the inline prompt contains an invalid template expression.
+func TestBuildBundle_InlinePromptBadTemplate(t *testing.T) {
+	t.Parallel()
+	manifest := `name: bad-tmpl
+version: 1
+working_dir: none
+prompt: "Broken {{.Unclosed"
+`
+	dir, _ := setupTestAgent(t, "bad-tmpl", map[string]string{"agent.yaml": manifest})
+	_, err := BuildBundle(dir, "bad-tmpl", "", "/work", "", nil)
+	if err == nil {
+		t.Fatal("expected error for invalid template in inline prompt")
+	}
+}
+
 func TestBuildBundleInline_ReferenceMissingEverywhere(t *testing.T) {
 	t.Parallel()
 	baseDir := t.TempDir()

@@ -137,6 +137,34 @@ func TestResolveRunWorkingDir_RemoteOnly(t *testing.T) {
 	}
 }
 
+// TestAgentIsRemoteOnly_FindAgentDirError covers the FindAgentDir failure
+// branch (config==nil with no explicit dir).
+func TestAgentIsRemoteOnly_FindAgentDirError(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{Agent: "ghost"} // no AgentsDir, no Config — FindAgentDir errors
+	if got := agentIsRemoteOnly(opts); got {
+		t.Fatal("expected false when FindAgentDir errors")
+	}
+}
+
+// TestAgentIsRemoteOnly_ManifestParseError covers the LoadManifest failure
+// branch — the directory exists but agent.yaml is malformed.
+func TestAgentIsRemoteOnly_ManifestParseError(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	agentDir := filepath.Join(tmp, "broken")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte("bad: ["), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	opts := &RunOptions{Agent: "broken", AgentsDir: tmp}
+	if got := agentIsRemoteOnly(opts); got {
+		t.Fatal("expected false when manifest is malformed")
+	}
+}
+
 func TestAgentIsRemoteOnly(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()

@@ -372,23 +372,27 @@ func TestCreateStreamableHTTPTransportInvalidURL(t *testing.T) {
 
 func TestCreateStreamableHTTPTransportStartFailure(t *testing.T) {
 	t.Parallel()
-	// Server that returns a non-MCP response so the streamable_http client
-	// fails during Start().
+	// Use an already-cancelled context to force httpClient.Start() to fail
+	// — that drives the close-after-start-failure branch.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
-	_, err := createStreamableHTTPTransport(context.Background(), ServerConfig{
+	_, err := createStreamableHTTPTransport(ctx, ServerConfig{
 		Name:      "test-http",
 		Transport: "streamable_http",
 		URL:       srv.URL,
 		Headers:   []string{"Authorization=Bearer token", "X-Trace=abc"},
 	})
-	// Start may or may not fail synchronously depending on the MCP HTTP
-	// client — but the Connect-level test exercises the handshake too. Any
-	// non-nil response here is acceptable; we just want the code path to run.
-	_ = err
+	// We just want the code path executed. Either Start succeeds (we move on)
+	// or returns an error wrapped with the server name.
+	if err != nil && !strings.Contains(err.Error(), "test-http") {
+		t.Fatalf("error = %q, want server name", err.Error())
+	}
 }
 
 func TestConnectStreamableHTTPHandshakeFailure(t *testing.T) {
