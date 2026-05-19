@@ -362,13 +362,6 @@ models:
 Only `--api-key` (or the env var) is still required at runtime; keys are never
 stored in manifests.
 
-> **Migration from `nvidia` or `databricks` provider**
->
-> Replace `provider: nvidia` or `provider: databricks` with
-> `provider: openai-compat` and add an explicit `base_url`. For NVIDIA use
-> `https://integrate.api.nvidia.com/v1`; for Databricks use your
-> `https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1` URL.
-
 ### Ollama
 
 Use `--num-ctx` (or `SQUAD_PROVIDER_NUM_CTX`) to control the context window size.

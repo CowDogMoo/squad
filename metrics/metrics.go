@@ -253,10 +253,6 @@ var (
 // SupportedProviders is the canonical, ordered list of provider names
 // squad recognizes for the --provider flag and the TUI launch form.
 // Keep this in sync with the provider dispatch in runner/model.go.
-//
-// Note: "nvidia" and "databricks" are still accepted by the runner as
-// deprecated shims that redirect to "openai-compat". They are intentionally
-// omitted here so completion and UI forms guide users toward the replacement.
 var SupportedProviders = []string{
 	"openai",
 	"openai-responses",
