@@ -46,6 +46,7 @@ func TestResolveIsolationMode(t *testing.T) {
 }
 
 func TestPrepareIsolationNonGitFallsBack(t *testing.T) {
+	scrubGitEnv(t)
 	dir := t.TempDir()
 	iso, err := PrepareIsolation(context.Background(), dir, IsolationWorktree, "agent")
 	if err != nil {
@@ -363,9 +364,40 @@ func stashCount(t *testing.T, dir string) int {
 	return strings.Count(s, "\n") + 1
 }
 
+// scrubGitEnv unsets GIT_* environment variables for the duration of the
+// test. When the test suite runs inside an outer git operation (notably
+// `pre-commit run` during `git commit`), git sets GIT_INDEX_FILE / GIT_DIR /
+// etc. to point at the parent repo. Child git invocations inside these tests
+// inherit those values and fail with confusing errors like
+// `.git/index: index file open failed: Not a directory`.
+func scrubGitEnv(t *testing.T) {
+	t.Helper()
+	vars := []string{
+		"GIT_INDEX_FILE",
+		"GIT_DIR",
+		"GIT_WORK_TREE",
+		"GIT_PREFIX",
+		"GIT_OBJECT_DIRECTORY",
+		"GIT_COMMON_DIR",
+	}
+	saved := make(map[string]string, len(vars))
+	for _, k := range vars {
+		if v, ok := os.LookupEnv(k); ok {
+			saved[k] = v
+			_ = os.Unsetenv(k)
+		}
+	}
+	t.Cleanup(func() {
+		for k, v := range saved {
+			_ = os.Setenv(k, v)
+		}
+	})
+}
+
 // initGitRepo creates a fresh git repo with one commit and returns its path.
 func initGitRepo(t *testing.T) string {
 	t.Helper()
+	scrubGitEnv(t)
 	dir := t.TempDir()
 	run := func(args ...string) {
 		cmd := exec.Command(args[0], args[1:]...)
