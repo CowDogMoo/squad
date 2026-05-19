@@ -88,7 +88,11 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 		agentOpts.Findings = pipelineRunner.Findings
 		agentOpts.AgentName = agentName
 
-		if warn := runner.ResolveModelPrecedence(ctx, &agentOpts, bundle); warn != "" {
+		warn, resolveErr := runner.ResolveModelPrecedence(ctx, &agentOpts, bundle)
+		if resolveErr != nil {
+			return "", nil, resolveErr
+		}
+		if warn != "" {
 			fmt.Fprintln(os.Stderr, warn)
 		}
 

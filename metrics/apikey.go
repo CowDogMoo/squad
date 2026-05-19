@@ -30,18 +30,24 @@ type APIKeyStatus struct {
 	Source APIKeySource
 }
 
-var providerAPIKeyEnv = map[string]string{
-	"openai":           "OPENAI_API_KEY",
-	"openai-responses": "OPENAI_API_KEY",
-	"anthropic":        "ANTHROPIC_API_KEY",
-	"gemini":           "GOOGLE_API_KEY",
-	"nvidia":           "NVIDIA_API_KEY",
-	"databricks":       "DATABRICKS_TOKEN",
+// providerAPIKeyEnv lists env vars checked for each provider, in the same
+// order the runner consults them (see runner/model.go). The first entry is
+// the canonical name reported back to callers for display.
+var providerAPIKeyEnv = map[string][]string{
+	"openai":           {"OPENAI_API_KEY"},
+	"openai-responses": {"OPENAI_API_KEY"},
+	"openai-compat":    {"OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"},
+	"anthropic":        {"ANTHROPIC_API_KEY"},
+	"gemini":           {"GOOGLE_API_KEY"},
+	// Deprecated shims (see runner/model.go): both redirect to openai-compat
+	// and use the same env-var fallback chain.
+	"nvidia":     {"OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"},
+	"databricks": {"OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"},
 }
 
 // KeyStatus mirrors provider token precedence used by the runner: an
-// explicitly resolved provider.token wins, then the provider-specific env var.
-// Ollama is local and does not need an API key.
+// explicitly resolved provider.token wins, then the provider-specific env
+// var(s). Ollama is local and does not need an API key.
 func KeyStatus(provider, providerToken string) APIKeyStatus {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "" {
@@ -50,15 +56,18 @@ func KeyStatus(provider, providerToken string) APIKeyStatus {
 	if provider == "ollama" {
 		return APIKeyStatus{State: APIKeyNotNeeded, Source: APIKeySourceNone}
 	}
-	envVar, ok := providerAPIKeyEnv[provider]
-	if !ok {
+	envVars, ok := providerAPIKeyEnv[provider]
+	if !ok || len(envVars) == 0 {
 		return APIKeyStatus{State: APIKeyNotNeeded, Source: APIKeySourceNone}
 	}
+	canonical := envVars[0]
 	if strings.TrimSpace(providerToken) != "" {
-		return APIKeyStatus{State: APIKeyOK, EnvVar: envVar, Source: APIKeySourceConfig}
+		return APIKeyStatus{State: APIKeyOK, EnvVar: canonical, Source: APIKeySourceConfig}
 	}
-	if os.Getenv(envVar) != "" {
-		return APIKeyStatus{State: APIKeyOK, EnvVar: envVar, Source: APIKeySourceEnv}
+	for _, env := range envVars {
+		if os.Getenv(env) != "" {
+			return APIKeyStatus{State: APIKeyOK, EnvVar: env, Source: APIKeySourceEnv}
+		}
 	}
-	return APIKeyStatus{State: APIKeyMissing, EnvVar: envVar, Source: APIKeySourceNone}
+	return APIKeyStatus{State: APIKeyMissing, EnvVar: canonical, Source: APIKeySourceNone}
 }

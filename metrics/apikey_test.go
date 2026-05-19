@@ -10,19 +10,42 @@ func TestKeyStatusProviderEnvTable(t *testing.T) {
 		{"", "OPENAI_API_KEY"},
 		{"openai", "OPENAI_API_KEY"},
 		{"openai-responses", "OPENAI_API_KEY"},
+		{"openai-compat", "OPENAI_COMPAT_API_KEY"},
 		{"anthropic", "ANTHROPIC_API_KEY"},
 		{"gemini", "GOOGLE_API_KEY"},
-		{"nvidia", "NVIDIA_API_KEY"},
-		{"databricks", "DATABRICKS_TOKEN"},
+		// Deprecated shims redirect to openai-compat and report its
+		// canonical env var, since that is the var actually consulted.
+		{"nvidia", "OPENAI_COMPAT_API_KEY"},
+		{"databricks", "OPENAI_COMPAT_API_KEY"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider, func(t *testing.T) {
-			t.Setenv(tc.envVar, "")
+			t.Setenv("OPENAI_API_KEY", "")
+			t.Setenv("OPENAI_COMPAT_API_KEY", "")
+			t.Setenv("ANTHROPIC_API_KEY", "")
+			t.Setenv("GOOGLE_API_KEY", "")
 			got := KeyStatus(tc.provider, "")
 			if got.State != APIKeyMissing || got.EnvVar != tc.envVar || got.Source != APIKeySourceNone {
 				t.Fatalf("KeyStatus(%q) = %+v, want missing %s from none", tc.provider, got, tc.envVar)
 			}
 		})
+	}
+}
+
+func TestKeyStatusOpenAICompatFallback(t *testing.T) {
+	// Compat-specific var wins when both are set.
+	t.Setenv("OPENAI_COMPAT_API_KEY", "compat-token")
+	t.Setenv("OPENAI_API_KEY", "openai-token")
+	got := KeyStatus("openai-compat", "")
+	if got.State != APIKeyOK || got.EnvVar != "OPENAI_COMPAT_API_KEY" || got.Source != APIKeySourceEnv {
+		t.Fatalf("compat-specific env should win: got %+v", got)
+	}
+
+	// Falls back to OPENAI_API_KEY when compat-specific is unset.
+	t.Setenv("OPENAI_COMPAT_API_KEY", "")
+	got = KeyStatus("openai-compat", "")
+	if got.State != APIKeyOK || got.EnvVar != "OPENAI_API_KEY" || got.Source != APIKeySourceEnv {
+		t.Fatalf("fallback to OPENAI_API_KEY: got %+v", got)
 	}
 }
 
