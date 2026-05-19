@@ -233,69 +233,219 @@ func printMetrics(cmd *cobra.Command, m *metrics.Metrics) error {
 	return err
 }
 
-// ResolveModelPrecedence fills opts.Model and opts.Provider using the
-// precedence: explicit (CLI flag / routine field) > config default (when
-// supported by the manifest) > manifest first model > config default.
-// Already-set fields are preserved. Returns a non-empty warning string when
-// the config default is set but not listed in the agent manifest; callers
-// should display this to the user on stderr.
-func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) string {
+// ResolveModelPrecedence selects the model/provider for this run by walking,
+// in order:
+//
+//  1. Explicit caller intent (opts.Model from a CLI flag or routine field).
+//     Always wins.
+//  2. Config default (opts.ConfigModel / opts.ConfigProvider) when the user
+//     has credentials for that provider. The config model may sit outside the
+//     agent manifest's models: list — that earns a warning, but the user's
+//     explicit intent is honoured because credentials, cost ceilings, and
+//     provider routing only live in the user's config.
+//  3. Manifest models walked in ranked order: the first entry with
+//     credentials wins. Skipping the top-ranked entry due to a missing key
+//     also earns a warning so the user knows they fell off the preferred
+//     path.
+//  4. As a last resort, the config default is used without credentials (with
+//     a strong warning that the call will likely fail). If even that is
+//     unavailable, a non-nil error is returned listing the env vars that
+//     would unblock the run.
+//
+// Returns (warning, error). Callers should display the warning on stderr when
+// non-empty and abort on a non-nil error.
+func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (string, error) {
 	if opts == nil || bundle == nil {
-		return ""
+		return "", nil
 	}
+	if opts.Model != "" {
+		applyExplicitModel(opts, bundle)
+		return "", nil
+	}
+	if warn, ok := applyConfigDefault(ctx, opts, bundle); ok {
+		return warn, nil
+	}
+	warn, picked, skipped := walkManifestForCreds(ctx, opts, bundle)
+	if picked {
+		return warn, nil
+	}
+	if opts.ConfigModel != "" {
+		return applyConfigDefaultUnauthenticated(ctx, opts, bundle), nil
+	}
+	if err := noCredentialsError(skipped); err != nil {
+		return "", err
+	}
+	applyLegacyBundleFallback(opts, bundle)
+	return "", nil
+}
 
-	var warn string
-	if opts.Model == "" {
-		configMatch := bundle.FindModel(opts.ConfigProvider, opts.ConfigModel)
-
-		switch {
-		case configMatch != nil:
-			// Config default is supported by this agent — use it; provider is also set.
-			opts.Model = configMatch.Model
-			opts.Provider = configMatch.Provider
-			if opts.BaseURL == "" {
-				opts.BaseURL = configMatch.BaseURL
+// applyExplicitModel handles rule 1: opts.Model was set explicitly. Fill in
+// Provider and BaseURL from the manifest match (preferred), bundle primary,
+// or config, without overriding values the caller already set.
+func applyExplicitModel(opts *RunOptions, bundle *agent.Bundle) {
+	if opts.Provider == "" {
+		for i := range bundle.Models {
+			if bundle.Models[i].Model != opts.Model {
+				continue
 			}
-			logging.InfoContext(ctx, "using config default model: %s (%s)", opts.Model, opts.Provider)
-			return ""
-
-		case opts.ConfigModel != "" && bundle.Model != "":
-			// Config default exists but is not in the manifest — warn and fall back.
-			warn = fmt.Sprintf(
-				"⚠  Config default model %q (%s) is not listed in the agent manifest.\n"+
-					"   Add it to the agent's models: list to avoid this fallback.\n"+
-					"   Falling back to manifest model %q (%s).",
-				opts.ConfigModel, opts.ConfigProvider, bundle.Model, bundle.Provider)
-			logging.WarnContext(ctx, "config default model %q (%s) is not listed in agent manifest; falling back to manifest model %q (%s)",
-				opts.ConfigModel, opts.ConfigProvider, bundle.Model, bundle.Provider)
-			opts.Model = bundle.Model
-
-		case bundle.Model != "":
-			opts.Model = bundle.Model
-			logging.InfoContext(ctx, "using manifest model: %s", bundle.Model)
-
-		case opts.ConfigModel != "":
-			opts.Model = opts.ConfigModel
-			logging.InfoContext(ctx, "using config model: %s", opts.ConfigModel)
+			opts.Provider = bundle.Models[i].Provider
+			if opts.BaseURL == "" {
+				opts.BaseURL = bundle.Models[i].BaseURL
+			}
+			break
 		}
 	}
-
 	if opts.Provider == "" {
 		switch {
 		case bundle.Provider != "":
 			opts.Provider = bundle.Provider
-			logging.InfoContext(ctx, "using manifest provider: %s", bundle.Provider)
 		case opts.ConfigProvider != "":
 			opts.Provider = opts.ConfigProvider
-			logging.InfoContext(ctx, "using config provider: %s", opts.ConfigProvider)
 		}
 	}
-
 	if opts.BaseURL == "" && bundle.BaseURL != "" {
 		opts.BaseURL = bundle.BaseURL
 	}
+}
 
-	return warn
+// applyConfigDefault handles rule 2: use the config default when its provider
+// has detected credentials. Returns (warn, true) when the config default was
+// applied; (",", false) when caller should fall through to manifest walk.
+func applyConfigDefault(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (string, bool) {
+	if opts.ConfigModel == "" {
+		return "", false
+	}
+	if metrics.KeyStatus(opts.ConfigProvider, opts.APIKey).State == metrics.APIKeyMissing {
+		return "", false
+	}
+	opts.Model = opts.ConfigModel
+	if opts.Provider == "" {
+		opts.Provider = opts.ConfigProvider
+	}
+	match := bundle.FindModel(opts.Provider, opts.Model)
+	fillBaseURL(opts, match, bundle)
+	if match == nil && len(bundle.Models) > 0 {
+		logging.WarnContext(ctx, "config default model %q (%s) is not listed in agent manifest; proceeding with config default", opts.Model, opts.Provider)
+		warn := fmt.Sprintf(
+			"⚠  Config default model %q (%s) is not listed in the agent manifest's models: list.\n"+
+				"   Proceeding with the config default; add it to the manifest's models: list to silence this warning.",
+			opts.Model, opts.Provider)
+		return warn, true
+	}
+	logging.InfoContext(ctx, "using config default model: %s (%s)", opts.Model, opts.Provider)
+	return "", true
+}
+
+// walkManifestForCreds handles rule 3: scan manifest models in rank order and
+// pick the first one whose provider has detected credentials. Returns
+// (warning, picked, skipped). When picked is false, skipped contains every
+// manifest entry that lacked credentials so the caller can build an error.
+func walkManifestForCreds(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (string, bool, []agent.ModelPreference) {
+	var skipped []agent.ModelPreference
+	for i := range bundle.Models {
+		candidate := bundle.Models[i]
+		if metrics.KeyStatus(candidate.Provider, opts.APIKey).State == metrics.APIKeyMissing {
+			skipped = append(skipped, candidate)
+			continue
+		}
+		opts.Model = candidate.Model
+		if opts.Provider == "" {
+			opts.Provider = candidate.Provider
+		}
+		if opts.BaseURL == "" {
+			opts.BaseURL = candidate.BaseURL
+		}
+		if opts.BaseURL == "" && bundle.BaseURL != "" {
+			opts.BaseURL = bundle.BaseURL
+		}
+		if len(skipped) == 0 {
+			logging.InfoContext(ctx, "using manifest model: %s (%s)", opts.Model, opts.Provider)
+			return "", true, nil
+		}
+		top := skipped[0]
+		topEnv := metrics.KeyStatus(top.Provider, "").EnvVar
+		logging.WarnContext(ctx, "manifest top model %q (%s) lacks credentials; using %q (%s) instead", top.Model, top.Provider, opts.Model, opts.Provider)
+		warn := fmt.Sprintf(
+			"⚠  Manifest's preferred model %q (%s) has no detected credentials; using %q (%s) instead.\n"+
+				"   Set %s to use the agent's preferred model.",
+			top.Model, top.Provider, opts.Model, opts.Provider, topEnv)
+		return warn, true, nil
+	}
+	return "", false, skipped
+}
+
+// applyConfigDefaultUnauthenticated handles rule 4a: nothing in the manifest
+// had credentials, but a config default exists — proceed with it so the user
+// sees a clear "auth will fail" warning rather than a silent override.
+func applyConfigDefaultUnauthenticated(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) string {
+	opts.Model = opts.ConfigModel
+	if opts.Provider == "" {
+		opts.Provider = opts.ConfigProvider
+	}
+	match := bundle.FindModel(opts.Provider, opts.Model)
+	fillBaseURL(opts, match, bundle)
+	logging.WarnContext(ctx, "no provider has detected credentials; proceeding with config default %q (%s)", opts.Model, opts.Provider)
+	return fmt.Sprintf(
+		"⚠  No provider has detected credentials. Proceeding with config default %q (%s);\n"+
+			"   the model call will likely fail authentication. Set the relevant API key to fix.",
+		opts.Model, opts.Provider)
+}
+
+// noCredentialsError handles rule 4b: manifest had entries but none had
+// credentials, and there is no config default. Returns an error listing the
+// env vars that would unblock the run, or nil if there is nothing to report.
+func noCredentialsError(skipped []agent.ModelPreference) error {
+	if len(skipped) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	envs := make([]string, 0, len(skipped))
+	for _, m := range skipped {
+		env := metrics.KeyStatus(m.Provider, "").EnvVar
+		if env == "" || seen[env] {
+			continue
+		}
+		seen[env] = true
+		envs = append(envs, env)
+	}
+	if len(envs) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"no provider in agent manifest has credentials configured; set one of: %s",
+		strings.Join(envs, ", "))
+}
+
+// applyLegacyBundleFallback preserves the pre-credential-aware behaviour for
+// the edge case of an empty manifest where the bundle still has Model /
+// Provider / BaseURL populated directly. Production bundles built by
+// BuildBundle always co-populate Models, so this only triggers on synthetic
+// bundles used by early-exit / dry-run callers and tests.
+func applyLegacyBundleFallback(opts *RunOptions, bundle *agent.Bundle) {
+	if opts.Model == "" && bundle.Model != "" {
+		opts.Model = bundle.Model
+	}
+	if opts.Provider == "" && bundle.Provider != "" {
+		opts.Provider = bundle.Provider
+	}
+	if opts.BaseURL == "" && bundle.BaseURL != "" {
+		opts.BaseURL = bundle.BaseURL
+	}
+}
+
+// fillBaseURL sets opts.BaseURL from the manifest match (preferred) or the
+// bundle's primary BaseURL, leaving an explicit caller-set BaseURL alone.
+func fillBaseURL(opts *RunOptions, match *agent.ModelPreference, bundle *agent.Bundle) {
+	if opts.BaseURL != "" {
+		return
+	}
+	if match != nil && match.BaseURL != "" {
+		opts.BaseURL = match.BaseURL
+		return
+	}
+	if bundle.BaseURL != "" {
+		opts.BaseURL = bundle.BaseURL
+	}
 }
 
 // prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
@@ -313,7 +463,11 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 		return nil, err
 	}
 
-	if warn := ResolveModelPrecedence(cmd.Context(), opts, bundle); warn != "" {
+	warn, resolveErr := ResolveModelPrecedence(cmd.Context(), opts, bundle)
+	if resolveErr != nil {
+		return nil, resolveErr
+	}
+	if warn != "" {
 		if _, fmtErr := fmt.Fprintln(cmd.ErrOrStderr(), warn); fmtErr != nil {
 			logging.Warn("failed to write model warning: %v", fmtErr)
 		}

@@ -413,14 +413,37 @@ func TestPrepareBundle(t *testing.T) {
 
 func TestResolveModelPrecedenceNilGuard(t *testing.T) {
 	t.Parallel()
-	// Calling with either argument nil must be a no-op rather than a panic;
-	// pipeline code passes a bundle that may be nil on early-exit paths.
-	ResolveModelPrecedence(context.Background(), nil, nil)
-	ResolveModelPrecedence(context.Background(), &RunOptions{}, nil)
-	ResolveModelPrecedence(context.Background(), nil, &agent.Bundle{})
+	// Calling with either argument nil must be a silent no-op rather than a
+	// panic; pipeline code passes a bundle that may be nil on early-exit
+	// paths. The function must not emit a warning or an error in any of
+	// these shapes.
+	nilCases := []struct {
+		name   string
+		opts   *RunOptions
+		bundle *agent.Bundle
+	}{
+		{"both nil", nil, nil},
+		{"nil bundle", &RunOptions{}, nil},
+		{"nil opts", nil, &agent.Bundle{}},
+	}
+	for _, tc := range nilCases {
+		warn, err := ResolveModelPrecedence(context.Background(), tc.opts, tc.bundle)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tc.name, err)
+		}
+		if warn != "" {
+			t.Fatalf("%s: unexpected warning: %q", tc.name, warn)
+		}
+	}
 
 	opts := &RunOptions{Model: "preset", Provider: "preset"}
-	ResolveModelPrecedence(context.Background(), opts, &agent.Bundle{Model: "manifest", Provider: "manifest"})
+	warn, err := ResolveModelPrecedence(context.Background(), opts, &agent.Bundle{Model: "manifest", Provider: "manifest"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if warn != "" {
+		t.Fatalf("unexpected warning: %q", warn)
+	}
 	if opts.Model != "preset" || opts.Provider != "preset" {
 		t.Fatalf("explicit values must win over manifest: Model=%q Provider=%q", opts.Model, opts.Provider)
 	}
@@ -441,7 +464,9 @@ func TestResolveModelPrecedenceBaseURL(t *testing.T) {
 			Provider: "openai-compat",
 			BaseURL:  compatURL,
 		}
-		ResolveModelPrecedence(context.Background(), opts, bundle)
+		if _, err := ResolveModelPrecedence(context.Background(), opts, bundle); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if opts.BaseURL != compatURL {
 			t.Fatalf("BaseURL = %q, want %q", opts.BaseURL, compatURL)
 		}
@@ -456,7 +481,9 @@ func TestResolveModelPrecedenceBaseURL(t *testing.T) {
 			Provider: "openai-compat",
 			BaseURL:  compatURL,
 		}
-		ResolveModelPrecedence(context.Background(), opts, bundle)
+		if _, err := ResolveModelPrecedence(context.Background(), opts, bundle); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if opts.BaseURL != explicit {
 			t.Fatalf("BaseURL = %q, want explicit %q", opts.BaseURL, explicit)
 		}
@@ -477,7 +504,9 @@ func TestResolveModelPrecedenceBaseURL(t *testing.T) {
 				},
 			},
 		}
-		ResolveModelPrecedence(context.Background(), opts, bundle)
+		if _, err := ResolveModelPrecedence(context.Background(), opts, bundle); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if opts.BaseURL != compatURL {
 			t.Fatalf("BaseURL = %q, want %q", opts.BaseURL, compatURL)
 		}
@@ -485,6 +514,206 @@ func TestResolveModelPrecedenceBaseURL(t *testing.T) {
 			t.Fatalf("Provider = %q, want openai-compat", opts.Provider)
 		}
 	})
+}
+
+// The TestResolveModelPrecedence_* family exercises the credential-aware
+// resolver: a missing API key on the manifest's top-ranked entry should make
+// the resolver walk down the list, surfacing a warning. When nothing has
+// credentials, the resolver returns an error naming the env vars that would
+// unblock the run. These tests mutate process env vars and therefore do not
+// run in parallel.
+
+func TestResolveModelPrecedence_WalksPastUncredentialedTop(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "gemini-key")
+	t.Setenv("OPENAI_API_KEY", "")
+	opts := &RunOptions{}
+	bundle := &agent.Bundle{
+		Model:    "claude-sonnet-4-6",
+		Provider: "anthropic",
+		Models: []agent.ModelPreference{
+			{Model: "claude-sonnet-4-6", Provider: "anthropic"},
+			{Model: "gemini-2.5-flash", Provider: "gemini"},
+			{Model: "gpt-4.1-mini", Provider: "openai"},
+		},
+	}
+	warn, err := ResolveModelPrecedence(context.Background(), opts, bundle)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.Model != "gemini-2.5-flash" || opts.Provider != "gemini" {
+		t.Fatalf("expected gemini-2.5-flash/gemini, got %q/%q", opts.Model, opts.Provider)
+	}
+	if !strings.Contains(warn, "ANTHROPIC_API_KEY") {
+		t.Fatalf("expected warning to name ANTHROPIC_API_KEY, got %q", warn)
+	}
+}
+
+func TestResolveModelPrecedence_ErrorsWhenNoManifestProviderHasCreds(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	opts := &RunOptions{}
+	bundle := &agent.Bundle{
+		Model:    "claude-sonnet-4-6",
+		Provider: "anthropic",
+		Models: []agent.ModelPreference{
+			{Model: "claude-sonnet-4-6", Provider: "anthropic"},
+			{Model: "gpt-4.1-mini", Provider: "openai"},
+		},
+	}
+	_, err := ResolveModelPrecedence(context.Background(), opts, bundle)
+	if err == nil {
+		t.Fatal("expected error when no provider has credentials")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "ANTHROPIC_API_KEY") || !strings.Contains(msg, "OPENAI_API_KEY") {
+		t.Fatalf("expected error to list missing env vars, got %q", msg)
+	}
+}
+
+func TestResolveModelPrecedence_ExplicitModelFillsFromManifestMatch(t *testing.T) {
+	opts := &RunOptions{Model: "gemini-2.5-flash"}
+	bundle := &agent.Bundle{
+		Models: []agent.ModelPreference{
+			{Model: "claude-sonnet-4-6", Provider: "anthropic"},
+			{Model: "gemini-2.5-flash", Provider: "gemini", BaseURL: "https://gemini.example/v1"},
+		},
+	}
+	warn, err := ResolveModelPrecedence(context.Background(), opts, bundle)
+	if err != nil || warn != "" {
+		t.Fatalf("unexpected warn=%q err=%v", warn, err)
+	}
+	if opts.Provider != "gemini" {
+		t.Fatalf("Provider = %q, want gemini", opts.Provider)
+	}
+	if opts.BaseURL != "https://gemini.example/v1" {
+		t.Fatalf("BaseURL = %q, want propagated from manifest match", opts.BaseURL)
+	}
+}
+
+// Bundle has no matching Models entry — Provider should come from
+// bundle.Provider, and only fall back to ConfigProvider when the bundle has
+// nothing either.
+func TestResolveModelPrecedence_ExplicitModelFallsBackToBundleProvider(t *testing.T) {
+	opts := &RunOptions{Model: "custom-model", ConfigProvider: "fallback-config"}
+	bundle := &agent.Bundle{Provider: "bundle-primary", BaseURL: "https://bundle.example/v1"}
+	warn, err := ResolveModelPrecedence(context.Background(), opts, bundle)
+	if err != nil || warn != "" {
+		t.Fatalf("unexpected warn=%q err=%v", warn, err)
+	}
+	if opts.Provider != "bundle-primary" {
+		t.Fatalf("Provider = %q, want bundle-primary (bundle.Provider wins over config)", opts.Provider)
+	}
+	if opts.BaseURL != "https://bundle.example/v1" {
+		t.Fatalf("BaseURL = %q, want propagated from bundle.BaseURL", opts.BaseURL)
+	}
+}
+
+func TestResolveModelPrecedence_ExplicitModelFallsBackToConfigProvider(t *testing.T) {
+	opts := &RunOptions{Model: "custom-model", ConfigProvider: "fallback-config"}
+	bundle := &agent.Bundle{} // empty bundle
+	if _, err := ResolveModelPrecedence(context.Background(), opts, bundle); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.Provider != "fallback-config" {
+		t.Fatalf("Provider = %q, want fallback-config (config last-resort)", opts.Provider)
+	}
+}
+
+// Config default with creds, model not in manifest, bundle has a primary
+// BaseURL — fillBaseURL should propagate that BaseURL.
+func TestResolveModelPrecedence_ConfigOutsideManifestInheritsBundleBaseURL(t *testing.T) {
+	t.Setenv("OPENAI_COMPAT_API_KEY", "compat-token")
+	opts := &RunOptions{
+		ConfigProvider: "openai-compat",
+		ConfigModel:    "outside-manifest-model",
+	}
+	bundle := &agent.Bundle{
+		BaseURL: "https://primary.example/v1",
+		Models: []agent.ModelPreference{
+			{Model: "claude-sonnet-4-6", Provider: "anthropic"},
+		},
+	}
+	if _, err := ResolveModelPrecedence(context.Background(), opts, bundle); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.BaseURL != "https://primary.example/v1" {
+		t.Fatalf("BaseURL = %q, want bundle primary fallback", opts.BaseURL)
+	}
+}
+
+// Picked manifest entry has no BaseURL of its own — bundle.BaseURL should
+// fill it in.
+func TestResolveModelPrecedence_ManifestWalkInheritsBundleBaseURL(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "openai-key")
+	opts := &RunOptions{}
+	bundle := &agent.Bundle{
+		BaseURL: "https://primary.example/v1",
+		Models: []agent.ModelPreference{
+			{Model: "gpt-4.1-mini", Provider: "openai"},
+		},
+	}
+	if _, err := ResolveModelPrecedence(context.Background(), opts, bundle); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.BaseURL != "https://primary.example/v1" {
+		t.Fatalf("BaseURL = %q, want primary fallback", opts.BaseURL)
+	}
+}
+
+// Two manifest entries share OPENAI_API_KEY; with no key set, the error
+// message must list it exactly once.
+func TestResolveModelPrecedence_NoCredsErrorDedupesEnvVars(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	opts := &RunOptions{}
+	bundle := &agent.Bundle{
+		Models: []agent.ModelPreference{
+			{Model: "gpt-4.1-mini", Provider: "openai"},
+			{Model: "gpt-4.1-nano", Provider: "openai"},
+			{Model: "claude-sonnet-4-6", Provider: "anthropic"},
+		},
+	}
+	_, err := ResolveModelPrecedence(context.Background(), opts, bundle)
+	if err == nil {
+		t.Fatal("expected error when no provider has credentials")
+	}
+	msg := err.Error()
+	if strings.Count(msg, "OPENAI_API_KEY") != 1 {
+		t.Fatalf("expected OPENAI_API_KEY listed exactly once, got %q", msg)
+	}
+}
+
+// The user's primary use case: openai-compat with a custom hosted model
+// (e.g. Qwen via Together AI). The model is not in the agent manifest, but
+// the user has expressed explicit intent in config and supplied a token.
+// Config wins and the resolver emits a warning.
+func TestResolveModelPrecedence_ConfigTokenWinsOverManifestTop(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
+	opts := &RunOptions{
+		APIKey:         "compat-token",
+		ConfigProvider: "openai-compat",
+		ConfigModel:    "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo",
+		BaseURL:        "https://api.together.xyz/v1",
+	}
+	bundle := &agent.Bundle{
+		Model:    "claude-sonnet-4-6",
+		Provider: "anthropic",
+		Models: []agent.ModelPreference{
+			{Model: "claude-sonnet-4-6", Provider: "anthropic"},
+		},
+	}
+	warn, err := ResolveModelPrecedence(context.Background(), opts, bundle)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.Model != "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo" || opts.Provider != "openai-compat" {
+		t.Fatalf("expected config default to win, got %q (%q)", opts.Model, opts.Provider)
+	}
+	if !strings.Contains(warn, "not listed in the agent manifest") {
+		t.Fatalf("expected outside-manifest warning, got %q", warn)
+	}
 }
 
 func runAndAssertBundle(t *testing.T, opts *RunOptions, wantModel, wantProvider string) {
@@ -521,8 +750,12 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 		runAndAssertBundle(t, opts, "manifest-model", "manifest-provider")
 	})
 
-	t.Run("manifest wins over config defaults", func(t *testing.T) {
+	t.Run("config default wins over manifest when it has credentials", func(t *testing.T) {
 		t.Parallel()
+		// Config default expresses explicit user intent (where keys, cost
+		// ceilings, and provider routing actually live), so it beats the
+		// manifest's preferred model. The unknown "config-provider" is
+		// treated as not-missing by KeyStatus, satisfying the creds gate.
 		agentsDir := writeTestAgentWithModels(t, "manifest-vs-config", "manifest-model", "manifest-provider")
 		opts := &RunOptions{
 			Agent:          "manifest-vs-config",
@@ -533,7 +766,7 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 			PrintBundle:    true,
 			BundleOut:      filepath.Join(t.TempDir(), "bundle.txt"),
 		}
-		runAndAssertBundle(t, opts, "manifest-model", "manifest-provider")
+		runAndAssertBundle(t, opts, "config-model", "config-provider")
 	})
 
 	t.Run("config defaults fill in when manifest is silent", func(t *testing.T) {
@@ -582,8 +815,11 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 		runAndAssertBundle(t, opts, "cli-model", "cli-provider")
 	})
 
-	t.Run("config default not in manifest emits warning to stderr", func(t *testing.T) {
+	t.Run("config default outside manifest proceeds with warning", func(t *testing.T) {
 		t.Parallel()
+		// Config default is outside the manifest's models: list. The user's
+		// explicit intent wins — we proceed with the config model and warn
+		// rather than overriding the user's choice with the manifest.
 		agentsDir := writeTestAgentWithModels(t, "warn-fallback", "manifest-model", "manifest-provider")
 		opts := &RunOptions{
 			Agent:          "warn-fallback",
@@ -602,8 +838,8 @@ func TestPrepareBundleManifestModelProvider(t *testing.T) {
 		if _, err := prepareBundle(cmd, opts, "prompt", t.TempDir()); err != nil {
 			t.Fatalf("prepareBundle() error = %v", err)
 		}
-		if opts.Model != "manifest-model" || opts.Provider != "manifest-provider" {
-			t.Fatalf("expected fallback to manifest, got Model=%q Provider=%q", opts.Model, opts.Provider)
+		if opts.Model != "other-model" || opts.Provider != "other-provider" {
+			t.Fatalf("expected config default to win, got Model=%q Provider=%q", opts.Model, opts.Provider)
 		}
 		if !strings.Contains(stderr.String(), "not listed in the agent manifest") {
 			t.Fatalf("expected warning on stderr, got %q", stderr.String())
