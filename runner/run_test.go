@@ -413,14 +413,37 @@ func TestPrepareBundle(t *testing.T) {
 
 func TestResolveModelPrecedenceNilGuard(t *testing.T) {
 	t.Parallel()
-	// Calling with either argument nil must be a no-op rather than a panic;
-	// pipeline code passes a bundle that may be nil on early-exit paths.
-	_, _ = ResolveModelPrecedence(context.Background(), nil, nil)
-	_, _ = ResolveModelPrecedence(context.Background(), &RunOptions{}, nil)
-	_, _ = ResolveModelPrecedence(context.Background(), nil, &agent.Bundle{})
+	// Calling with either argument nil must be a silent no-op rather than a
+	// panic; pipeline code passes a bundle that may be nil on early-exit
+	// paths. The function must not emit a warning or an error in any of
+	// these shapes.
+	nilCases := []struct {
+		name   string
+		opts   *RunOptions
+		bundle *agent.Bundle
+	}{
+		{"both nil", nil, nil},
+		{"nil bundle", &RunOptions{}, nil},
+		{"nil opts", nil, &agent.Bundle{}},
+	}
+	for _, tc := range nilCases {
+		warn, err := ResolveModelPrecedence(context.Background(), tc.opts, tc.bundle)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tc.name, err)
+		}
+		if warn != "" {
+			t.Fatalf("%s: unexpected warning: %q", tc.name, warn)
+		}
+	}
 
 	opts := &RunOptions{Model: "preset", Provider: "preset"}
-	_, _ = ResolveModelPrecedence(context.Background(), opts, &agent.Bundle{Model: "manifest", Provider: "manifest"})
+	warn, err := ResolveModelPrecedence(context.Background(), opts, &agent.Bundle{Model: "manifest", Provider: "manifest"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if warn != "" {
+		t.Fatalf("unexpected warning: %q", warn)
+	}
 	if opts.Model != "preset" || opts.Provider != "preset" {
 		t.Fatalf("explicit values must win over manifest: Model=%q Provider=%q", opts.Model, opts.Provider)
 	}
@@ -441,7 +464,9 @@ func TestResolveModelPrecedenceBaseURL(t *testing.T) {
 			Provider: "openai-compat",
 			BaseURL:  compatURL,
 		}
-		_, _ = ResolveModelPrecedence(context.Background(), opts, bundle)
+		if _, err := ResolveModelPrecedence(context.Background(), opts, bundle); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if opts.BaseURL != compatURL {
 			t.Fatalf("BaseURL = %q, want %q", opts.BaseURL, compatURL)
 		}
@@ -456,7 +481,9 @@ func TestResolveModelPrecedenceBaseURL(t *testing.T) {
 			Provider: "openai-compat",
 			BaseURL:  compatURL,
 		}
-		_, _ = ResolveModelPrecedence(context.Background(), opts, bundle)
+		if _, err := ResolveModelPrecedence(context.Background(), opts, bundle); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if opts.BaseURL != explicit {
 			t.Fatalf("BaseURL = %q, want explicit %q", opts.BaseURL, explicit)
 		}
@@ -477,7 +504,9 @@ func TestResolveModelPrecedenceBaseURL(t *testing.T) {
 				},
 			},
 		}
-		_, _ = ResolveModelPrecedence(context.Background(), opts, bundle)
+		if _, err := ResolveModelPrecedence(context.Background(), opts, bundle); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if opts.BaseURL != compatURL {
 			t.Fatalf("BaseURL = %q, want %q", opts.BaseURL, compatURL)
 		}
