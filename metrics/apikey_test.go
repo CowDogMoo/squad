@@ -13,10 +13,6 @@ func TestKeyStatusProviderEnvTable(t *testing.T) {
 		{"openai-compat", "OPENAI_COMPAT_API_KEY"},
 		{"anthropic", "ANTHROPIC_API_KEY"},
 		{"gemini", "GOOGLE_API_KEY"},
-		// Deprecated shims redirect to openai-compat and report its
-		// canonical env var, since that is the var actually consulted.
-		{"nvidia", "OPENAI_COMPAT_API_KEY"},
-		{"databricks", "OPENAI_COMPAT_API_KEY"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider, func(t *testing.T) {

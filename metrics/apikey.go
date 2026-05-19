@@ -39,10 +39,6 @@ var providerAPIKeyEnv = map[string][]string{
 	"openai-compat":    {"OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"},
 	"anthropic":        {"ANTHROPIC_API_KEY"},
 	"gemini":           {"GOOGLE_API_KEY"},
-	// Deprecated shims (see runner/model.go): both redirect to openai-compat
-	// and use the same env-var fallback chain.
-	"nvidia":     {"OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"},
-	"databricks": {"OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"},
 }
 
 // KeyStatus mirrors provider token precedence used by the runner: an
