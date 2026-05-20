@@ -194,7 +194,7 @@ func TestBuildComposedRunOptsConfigDefaultsBucket(t *testing.T) {
 	cmd := newRunCmd()
 	ctx := context.Background()
 	v := viper.New()
-	v.Set("provider.default", "nvidia")
+	v.Set("provider.default", "openai-compat")
 	v.Set("model.default", "qwen/qwen3-coder")
 	ctx = withViper(ctx, v)
 	cmd.SetContext(ctx)
@@ -205,8 +205,8 @@ func TestBuildComposedRunOptsConfigDefaultsBucket(t *testing.T) {
 	if opts.Model != "" {
 		t.Fatalf("config default leaked into explicit Model: %q", opts.Model)
 	}
-	if opts.ConfigProvider != "nvidia" {
-		t.Fatalf("ConfigProvider=%q, want nvidia", opts.ConfigProvider)
+	if opts.ConfigProvider != "openai-compat" {
+		t.Fatalf("ConfigProvider=%q, want openai-compat", opts.ConfigProvider)
 	}
 	if opts.ConfigModel != "qwen/qwen3-coder" {
 		t.Fatalf("ConfigModel=%q, want qwen/qwen3-coder", opts.ConfigModel)

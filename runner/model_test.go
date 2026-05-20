@@ -56,8 +56,8 @@ func TestIsOpenAICompatProvider(t *testing.T) {
 		{"ollama", "ollama", false},
 		{"anthropic", "anthropic", false},
 		{"openai-compat", "openai-compat", true},
-		{"nvidia", "nvidia", true},
-		{"databricks", "databricks", true},
+		{"nvidia", "nvidia", false},
+		{"databricks", "databricks", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -117,9 +117,6 @@ func TestBuildLLMVariants(t *testing.T) {
 		{"anthropic", "anthropic", "claude-3", &RunOptions{APIKey: "token"}, "*anthropic.LLM", false},
 		{"gemini", "gemini", "gemini-2.0-flash", &RunOptions{APIKey: "token"}, "*googleai.GoogleAI", false},
 		{"unknown provider", "unknown", "model", &RunOptions{}, "", true},
-		// nvidia/databricks are deprecated shims that redirect to openai-compat with a warning
-		{"nvidia deprecated shim", "nvidia", "meta/llama-3.1-8b-instruct", &RunOptions{APIKey: "nvapi-test-key"}, "*openai.LLM", false},
-		{"databricks deprecated shim", "databricks", "databricks-gpt-5-5-pro", &RunOptions{APIKey: "dapi-test-token", BaseURL: "https://example.com"}, "*openai.LLM", false},
 		{
 			"openai-compat/deepinfra",
 			"openai-compat",

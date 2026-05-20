@@ -299,23 +299,6 @@ func buildLLM(ctx context.Context, opts *RunOptions, provider, model string) (ll
 		return buildGeminiLLM(ctx, opts, model)
 	case "openai-compat":
 		return buildOpenAICompatLLM(opts, "openai-compat", model)
-	case "nvidia":
-		// Deprecated: use provider: openai-compat with base_url: https://integrate.api.nvidia.com/v1
-		logging.WarnContext(ctx, "provider 'nvidia' is deprecated; use 'openai-compat' with base_url: https://integrate.api.nvidia.com/v1")
-		if opts.BaseURL == "" {
-			opts.BaseURL = "https://integrate.api.nvidia.com/v1"
-		}
-		return buildOpenAICompatLLM(opts, "openai-compat", model)
-	case "databricks":
-		// Deprecated: use provider: openai-compat with base_url pointing to your Databricks AI Gateway
-		logging.WarnContext(ctx, "provider 'databricks' is deprecated; use 'openai-compat' with base_url and api_key set")
-		if opts.BaseURL == "" {
-			return nil, fmt.Errorf(
-				"databricks provider requires --base-url " +
-					"(e.g. https://<workspace>.ai-gateway.cloud.databricks.com/mlflow/v1)",
-			)
-		}
-		return buildOpenAICompatLLM(opts, "openai-compat", model)
 	default:
 		return nil, fmt.Errorf("provider not implemented: %s", provider)
 	}
@@ -414,8 +397,7 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 }
 
 func isOpenAICompatProvider(provider string) bool {
-	return provider == "" || provider == "openai" || provider == "openai-compat" ||
-		provider == "nvidia" || provider == "databricks"
+	return provider == "" || provider == "openai" || provider == "openai-compat"
 }
 
 // reasoningPrefixes returns the configured reasoning model prefixes,
