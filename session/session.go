@@ -46,6 +46,7 @@ const (
 	EventIteration   = "iteration"
 	EventError       = "error"
 	EventRunEnd      = "run_end"
+	EventSkillLoaded = "skill_loaded"
 )
 
 // Meta holds the per-session metadata kept in meta.json. It is rewritten on

@@ -243,6 +243,11 @@ type Bundle struct {
 	// filesystem tools are not registered and the runner skips
 	// working-dir resolution / repo-summary injection.
 	RemoteOnly bool
+	// SkillEntries is the filtered set of skills surfaced in the system
+	// prompt's "Available skills" block. The runner uses these to build
+	// the Skill tool's runtime so the names the agent sees are exactly
+	// the names it can load via Skill(name).
+	SkillEntries []skill.Entry
 }
 
 // TemplateData holds the data passed to prompt templates.
@@ -679,11 +684,16 @@ func topNExts(exts map[string]int, n int) string {
 	return strings.Join(parts, " ")
 }
 
-// renderSkillBlock discovers the visible skill catalog for workingDir and
-// returns the Level-1 system-prompt section listing each skill by name and
-// description. Returns the empty string when the catalog is disabled,
-// filtered to nothing, or no skills exist.
-func renderSkillBlock(workingDir string, manifestCfg *SkillsConfig, overrides *SkillOverrides) (string, error) {
+// resolveSkills discovers the catalog for workingDir, applies the agent's
+// manifest config plus any CLI overrides, and returns both the filtered
+// entries and the rendered Level-1 system-prompt block. The entries are the
+// authoritative set surfaced to the agent — the same list is later handed to
+// the Skill tool so the names the model sees are exactly the names it can
+// load.
+//
+// Returns (nil, "", nil) when skills are disabled or no entries survive the
+// filter, so callers can branch on either.
+func resolveSkills(workingDir string, manifestCfg *SkillsConfig, overrides *SkillOverrides) ([]skill.Entry, string, error) {
 	enabled := true
 	if manifestCfg != nil && manifestCfg.Enabled != nil {
 		enabled = *manifestCfg.Enabled
@@ -692,12 +702,12 @@ func renderSkillBlock(workingDir string, manifestCfg *SkillsConfig, overrides *S
 		enabled = *overrides.Enabled
 	}
 	if !enabled {
-		return "", nil
+		return nil, "", nil
 	}
 
 	catalog, err := skill.Discover(workingDir)
 	if err != nil {
-		return "", fmt.Errorf("discover skills: %w", err)
+		return nil, "", fmt.Errorf("discover skills: %w", err)
 	}
 	for _, le := range catalog.LoadErrors() {
 		logging.Warn("skipping invalid skill %s: %v", le.Path, le.Err)
@@ -708,7 +718,7 @@ func renderSkillBlock(workingDir string, manifestCfg *SkillsConfig, overrides *S
 		for _, s := range manifestCfg.Scopes {
 			scope, err := skill.ParseScope(s)
 			if err != nil {
-				return "", fmt.Errorf("agent skills config: %w", err)
+				return nil, "", fmt.Errorf("agent skills config: %w", err)
 			}
 			filterOpts.Scopes = append(filterOpts.Scopes, scope)
 		}
@@ -724,7 +734,8 @@ func renderSkillBlock(workingDir string, manifestCfg *SkillsConfig, overrides *S
 		}
 	}
 
-	return skill.RenderPromptBlock(catalog.Filter(filterOpts)), nil
+	entries := catalog.Filter(filterOpts)
+	return entries, skill.RenderPromptBlock(entries), nil
 }
 
 // buildSystemMessage assembles the system prompt content from all bundle components.
@@ -816,7 +827,7 @@ func BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode strin
 	if opts != nil {
 		skillOverrides = opts.SkillOverrides
 	}
-	skillBlock, err := renderSkillBlock(workingDir, manifest.Skills, skillOverrides)
+	skillEntries, skillBlock, err := resolveSkills(workingDir, manifest.Skills, skillOverrides)
 	if err != nil {
 		return nil, err
 	}
@@ -880,6 +891,7 @@ func BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode strin
 		MaxIterations: manifest.MaxIterations,
 		EditDeadline:  manifest.EditDeadline,
 		RemoteOnly:    manifest.IsRemoteOnly(),
+		SkillEntries:  skillEntries,
 	}, nil
 }
 
@@ -985,7 +997,7 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 		}
 	}
 
-	skillBlock, err := renderSkillBlock(workingDir, manifest.Skills, nil)
+	_, skillBlock, err := resolveSkills(workingDir, manifest.Skills, nil)
 	if err != nil {
 		return nil, err
 	}

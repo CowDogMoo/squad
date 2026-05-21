@@ -333,6 +333,11 @@ type RunWithToolsConfig struct {
 	// answer immediately. Not set for the regular openai provider, which relies
 	// on auto behavior.
 	ForceFirstToolCall bool
+	// Skill carries the per-run Agent Skills catalog and stack. When non-nil
+	// and the catalog exposes at least one visible skill, the Skill tool is
+	// registered and the Read/Bash anchor relaxes to permit access inside
+	// any skill dir that has been pushed onto the stack.
+	Skill *SkillRuntime
 }
 
 // RunWithTools drives the tool-calling loop for a LangChain-compatible LLM.
@@ -354,8 +359,9 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	ctx = InitTokenCalibration(ctx)
 	ctx = InitFileTracker(ctx)
 	ctx = InitBgCommandRegistry(ctx)
+	ctx = WithSkillRuntime(ctx, cfg.Skill)
 
-	handlers, toolDefs := BuildHandlers(workingDir, cfg.TaskCfg, cfg.Executor)
+	handlers, toolDefs := buildHandlersWithSkill(workingDir, cfg.TaskCfg, cfg.Executor, cfg.Skill)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
 	if maxIterations <= 0 {
@@ -1138,6 +1144,13 @@ func toolArgsSummaryComplex(toolName string, args map[string]interface{}) string
 // ReportFinding tool is also registered. MCP tools from taskCfg.ExtraTools
 // are appended last.
 func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor) (map[string]Handler, []llms.Tool) {
+	return buildHandlersWithSkill(workingDir, taskCfg, ex, nil)
+}
+
+// buildHandlersWithSkill is the full-featured constructor. Callers that need
+// the Skill tool — i.e. the runner — go through here; existing callers that
+// don't care (tests, pipeline glue) can keep using BuildHandlers.
+func buildHandlersWithSkill(workingDir string, taskCfg *TaskConfig, ex executor.Executor, skillRuntime *SkillRuntime) (map[string]Handler, []llms.Tool) {
 	handlers := map[string]Handler{}
 
 	add := func(handler Handler) {
@@ -1161,6 +1174,13 @@ func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor)
 		add(Handler{Def: definitionMultiEdit(), Call: trackEdits(multiEditTool(workingDir))})
 		add(Handler{Def: definitionSystemInfo(), Call: systemInfoTool(ex)})
 		add(Handler{Def: definitionRepoMap(), Call: repoMapTool(workingDir)})
+	}
+
+	// The Skill tool is registered only when at least one skill is visible
+	// to this agent. If the catalog is empty the model is told nothing about
+	// skills in its system prompt, so registering the tool would be misleading.
+	if skillRuntime.HasCatalog() {
+		add(Handler{Def: definitionSkill(), Call: skillTool(skillRuntime)})
 	}
 
 	if taskCfg != nil {
@@ -1389,7 +1409,7 @@ func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 			return "", fmt.Errorf("invalid args: %w", err)
 		}
 
-		path, err := ResolvePath(workingDir, payload.Path)
+		path, err := resolvePathInRun(ctx, workingDir, payload.Path)
 		if err != nil {
 			return "", err
 		}
@@ -1643,7 +1663,7 @@ func grepTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		if strings.TrimSpace(searchPath) == "" {
 			searchPath = "."
 		}
-		resolved, err := ResolvePath(workingDir, searchPath)
+		resolved, err := resolvePathInRun(ctx, workingDir, searchPath)
 		if err != nil {
 			return "", err
 		}
@@ -1759,6 +1779,7 @@ func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (s
 			attribute.String("squad.tool.command", TruncateString(command, 1000)),
 		)
 
+		command = withSkillEnv(ctx, command)
 		output, err := ex.Execute(ctx, command)
 		if err != nil {
 			return TruncateToolOutputHeadTail(string(limitOutput(output)), maxToolResultBytes), fmt.Errorf("command failed: %w", err)
@@ -2058,6 +2079,26 @@ func (b *FlexBool) UnmarshalJSON(data []byte) error {
 		*b = false
 	}
 	return nil
+}
+
+// resolvePathInRun is the runtime-aware variant of [ResolvePath]. It tries
+// the strict working-dir anchor first and, on rejection, consults the run's
+// skill stack so paths inside an active skill directory are also allowed.
+// All file-tool handlers should use this in place of bare ResolvePath so
+// loaded skills can reach their references and scripts.
+func resolvePathInRun(ctx context.Context, workingDir, input string) (string, error) {
+	abs, err := ResolvePath(workingDir, input)
+	if err == nil {
+		return abs, nil
+	}
+	stack := GetSkillStack(ctx)
+	if stack == nil {
+		return "", err
+	}
+	if abs, ok := stack.Resolve(input); ok {
+		return abs, nil
+	}
+	return "", err
 }
 
 // ResolvePath resolves input against workingDir and verifies the result is
