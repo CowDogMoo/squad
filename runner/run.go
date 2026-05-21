@@ -457,6 +457,25 @@ func fillBaseURL(opts *RunOptions, match *agent.ModelPreference, bundle *agent.B
 }
 
 // prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
+// resolveSkillCatalogPaths returns the catalog-scope directories — local
+// paths and cached git repos — declared in cfg.Skills. Returns nil when
+// cfg is absent or has no skills sources, which is the common case for
+// agents that don't opt into the catalog mechanism.
+func resolveSkillCatalogPaths(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	if len(cfg.Skills.Repositories) == 0 && len(cfg.Skills.LocalPaths) == 0 {
+		return nil
+	}
+	mgr, err := source.NewSkillsManager(cfg)
+	if err != nil {
+		logging.Warn("failed to build skills manager: %v", err)
+		return nil
+	}
+	return mgr.CatalogPaths()
+}
+
 func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir string) (*agent.Bundle, error) {
 	agentDir, err := FindAgentDir(opts.Agent, opts.AgentsDir, opts.Config)
 	if err != nil {
@@ -468,6 +487,7 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 
 	bundle, err := agent.BuildBundleWithOptions(agentsDir, opts.Agent, prompt, workingDir, opts.Mode, opts.Vars, &agent.BundleOptions{
 		SkillOverrides: opts.SkillOverrides,
+		CatalogPaths:   resolveSkillCatalogPaths(opts.Config),
 	})
 	if err != nil {
 		return nil, err

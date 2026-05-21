@@ -40,6 +40,10 @@ type SkillOverrides struct {
 type BundleOptions struct {
 	// SkillOverrides applies CLI-flag overrides to the skill catalog.
 	SkillOverrides *SkillOverrides
+	// CatalogPaths are additional directories to scan as catalog-scope
+	// skills (lowest precedence). Typically supplied by the runner from
+	// source.SkillsManager.CatalogPaths().
+	CatalogPaths []string
 }
 
 // ModelPreference represents a ranked model recommendation for an agent.
@@ -693,7 +697,7 @@ func topNExts(exts map[string]int, n int) string {
 //
 // Returns (nil, "", nil) when skills are disabled or no entries survive the
 // filter, so callers can branch on either.
-func resolveSkills(workingDir string, manifestCfg *SkillsConfig, overrides *SkillOverrides) ([]skill.Entry, string, error) {
+func resolveSkills(workingDir string, manifestCfg *SkillsConfig, overrides *SkillOverrides, catalogPaths []string) ([]skill.Entry, string, error) {
 	enabled := true
 	if manifestCfg != nil && manifestCfg.Enabled != nil {
 		enabled = *manifestCfg.Enabled
@@ -705,7 +709,7 @@ func resolveSkills(workingDir string, manifestCfg *SkillsConfig, overrides *Skil
 		return nil, "", nil
 	}
 
-	catalog, err := skill.Discover(workingDir)
+	catalog, err := skill.Discover(workingDir, catalogPaths...)
 	if err != nil {
 		return nil, "", fmt.Errorf("discover skills: %w", err)
 	}
@@ -824,10 +828,12 @@ func BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode strin
 	data := TemplateData{Mode: displayMode, Vars: vars}
 
 	var skillOverrides *SkillOverrides
+	var catalogPaths []string
 	if opts != nil {
 		skillOverrides = opts.SkillOverrides
+		catalogPaths = opts.CatalogPaths
 	}
-	skillEntries, skillBlock, err := resolveSkills(workingDir, manifest.Skills, skillOverrides)
+	skillEntries, skillBlock, err := resolveSkills(workingDir, manifest.Skills, skillOverrides, catalogPaths)
 	if err != nil {
 		return nil, err
 	}
@@ -997,7 +1003,7 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 		}
 	}
 
-	_, skillBlock, err := resolveSkills(workingDir, manifest.Skills, nil)
+	_, skillBlock, err := resolveSkills(workingDir, manifest.Skills, nil, nil)
 	if err != nil {
 		return nil, err
 	}

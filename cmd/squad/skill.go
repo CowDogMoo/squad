@@ -29,32 +29,70 @@ import (
 
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/skill"
+	"github.com/cowdogmoo/squad/source"
 	"github.com/spf13/cobra"
 )
 
-// newSkillCmd builds the `squad skill` command tree. Phase 1 covers list,
-// show, and validate; later phases add new, add, update, remove.
+// newSkillCmd builds the `squad skill` command tree.
 func newSkillCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "skill",
-		Short: "Inspect and validate Agent Skills",
+		Short: "Inspect, validate, and manage Agent Skills",
 		Long: `Manage skills — single-directory capabilities a running agent loads on demand.
 
 Skills follow the Anthropic Agent Skills open standard. Each skill is a
 directory containing a SKILL.md file with YAML frontmatter (name + description)
-and a markdown body. Skills live in two scopes:
+and a markdown body. Skills live in three scopes:
 
-  - repo:   <cwd>/.squad/skills/<name>/SKILL.md (checked into git)
-  - global: $XDG_CONFIG_HOME/squad/skills/<name>/SKILL.md (per-user)
+  - repo:    <cwd>/.squad/skills/<name>/SKILL.md (checked into git)
+  - global:  $XDG_CONFIG_HOME/squad/skills/<name>/SKILL.md (per-user)
+  - catalog: cloned git repos or registered local paths under cfg.Skills
 
-A repo-scoped skill shadows a global one with the same name.`,
+Precedence: repo > global > catalog. Names that collide are shadowed at the
+lower-precedence scope.`,
 	}
 	cmd.AddCommand(
 		newSkillListCmd(),
 		newSkillShowCmd(),
 		newSkillValidateCmd(),
+		newSkillAddCmd(),
+		newSkillRemoveCmd(),
+		newSkillUpdateCmd(),
+		newSkillSourcesCmd(),
 	)
 	return cmd
+}
+
+// discoverSkills builds a catalog using the current cwd plus every catalog
+// source configured in cfg.Skills. Returns the catalog and the search path
+// label so callers can render `Origin` correctly.
+func discoverSkills(cmd *cobra.Command, repoOverride string) (*skill.Catalog, error) {
+	repo, err := resolveSkillRepoRoot(repoOverride)
+	if err != nil {
+		return nil, err
+	}
+	cat, err := skill.Discover(repo, skillCatalogPaths(cmd)...)
+	if err != nil {
+		return nil, err
+	}
+	reportLoadErrors(cmd, cat)
+	return cat, nil
+}
+
+// skillCatalogPaths returns the local + cached-repo paths registered in
+// cfg.Skills. Errors building the manager are downgraded to warnings so the
+// CLI still works when XDG paths can't be created.
+func skillCatalogPaths(cmd *cobra.Command) []string {
+	cfg := configFromContext(cmd)
+	if cfg == nil {
+		return nil
+	}
+	mgr, err := source.NewSkillsManager(cfg)
+	if err != nil {
+		logging.WarnContext(cmd.Context(), "failed to build skills manager: %v", err)
+		return nil
+	}
+	return mgr.CatalogPaths()
 }
 
 func newSkillListCmd() *cobra.Command {
@@ -68,15 +106,10 @@ func newSkillListCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			repo, err := resolveSkillRepoRoot(repoOverride)
+			cat, err := discoverSkills(cmd, repoOverride)
 			if err != nil {
 				return err
 			}
-			cat, err := skill.Discover(repo)
-			if err != nil {
-				return err
-			}
-			reportLoadErrors(cmd, cat)
 			entries := cat.Visible()
 			if showAll {
 				entries = cat.All()
@@ -115,15 +148,10 @@ func newSkillShowCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			repo, err := resolveSkillRepoRoot(repoOverride)
+			cat, err := discoverSkills(cmd, repoOverride)
 			if err != nil {
 				return err
 			}
-			cat, err := skill.Discover(repo)
-			if err != nil {
-				return err
-			}
-			reportLoadErrors(cmd, cat)
 			entry, ok := cat.Find(args[0])
 			if !ok {
 				return fmt.Errorf("skill %q not found", args[0])
@@ -165,6 +193,131 @@ func newSkillValidateCmd() *cobra.Command {
 				_, _ = fmt.Fprintln(out, "OK")
 			}
 			return nil
+		},
+	}
+}
+
+func newSkillAddCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "add <alias> <git-url-or-local-path>",
+		Short: "Register a skill catalog source (git repo or local directory)",
+		Long: `Register a new skills catalog. Two forms are accepted:
+
+  squad skill add myteam https://github.com/me/squad-skills.git
+  squad skill add local /opt/shared/skills
+
+Git repositories are cloned into the skills cache on registration so the
+catalog is immediately discoverable. Local paths are added as-is.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			alias, target := args[0], args[1]
+			cfg := configFromContext(cmd)
+			if cfg == nil {
+				return fmt.Errorf("config not available in context")
+			}
+			mgr, err := source.NewSkillsManager(cfg)
+			if err != nil {
+				return err
+			}
+			if source.IsGitURL(target) {
+				if err := mgr.AddRepository(alias, target); err != nil {
+					return err
+				}
+				logging.InfoContext(cmd.Context(), "registered skill repository %s → %s", alias, target)
+				if err := mgr.EnsureRepositoriesCloned(); err != nil {
+					logging.WarnContext(cmd.Context(), "clone failed (you can retry with `squad skill update`): %v", err)
+				}
+				return nil
+			}
+			if err := mgr.AddLocalPath(target); err != nil {
+				return err
+			}
+			logging.InfoContext(cmd.Context(), "registered skill local path %s", target)
+			return nil
+		},
+	}
+}
+
+func newSkillRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "remove <alias-or-path>",
+		Aliases: []string{"rm"},
+		Short:   "Unregister a skill catalog source",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			cfg := configFromContext(cmd)
+			if cfg == nil {
+				return fmt.Errorf("config not available in context")
+			}
+			mgr, err := source.NewSkillsManager(cfg)
+			if err != nil {
+				return err
+			}
+			if err := mgr.RemoveSource(args[0]); err != nil {
+				return err
+			}
+			logging.InfoContext(cmd.Context(), "unregistered skill source: %s", args[0])
+			return nil
+		},
+	}
+}
+
+func newSkillUpdateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "update",
+		Short: "git pull every registered skill catalog repository",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			cfg := configFromContext(cmd)
+			if cfg == nil {
+				return fmt.Errorf("config not available in context")
+			}
+			mgr, err := source.NewSkillsManager(cfg)
+			if err != nil {
+				return err
+			}
+			if err := mgr.UpdateRepositories(); err != nil {
+				return err
+			}
+			logging.InfoContext(cmd.Context(), "all skill repositories updated")
+			return nil
+		},
+	}
+}
+
+func newSkillSourcesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "sources",
+		Short: "List configured skill catalog sources",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			cfg := configFromContext(cmd)
+			if cfg == nil {
+				return fmt.Errorf("config not available in context")
+			}
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			if len(cfg.Skills.Repositories) > 0 {
+				_, _ = fmt.Fprintln(w, "REPOSITORIES:")
+				_, _ = fmt.Fprintln(w, "NAME\tURL")
+				for name, url := range cfg.Skills.Repositories {
+					_, _ = fmt.Fprintf(w, "%s\t%s\n", name, url)
+				}
+				_, _ = fmt.Fprintln(w)
+			}
+			if len(cfg.Skills.LocalPaths) > 0 {
+				_, _ = fmt.Fprintln(w, "LOCAL PATHS:")
+				for _, path := range cfg.Skills.LocalPaths {
+					_, _ = fmt.Fprintln(w, path)
+				}
+			}
+			if len(cfg.Skills.Repositories) == 0 && len(cfg.Skills.LocalPaths) == 0 {
+				_, _ = fmt.Fprintln(w, "No sources configured. Run 'squad skill add <alias> <url>' to add one.")
+			}
+			return w.Flush()
 		},
 	}
 }

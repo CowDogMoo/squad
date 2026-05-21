@@ -20,6 +20,10 @@ const (
 	ScopeRepo Scope = iota
 	// ScopeGlobal is a user-level skill at $XDG_CONFIG_HOME/squad/skills/<name>/SKILL.md.
 	ScopeGlobal
+	// ScopeCatalog is a skill from a shared catalog — a git repo cloned under
+	// the skills cache dir or a directory the user has registered via
+	// skills.local_paths. Lowest precedence so local edits always win.
+	ScopeCatalog
 )
 
 // String returns the lowercase scope name used in CLI output and config.
@@ -29,6 +33,8 @@ func (s Scope) String() string {
 		return "repo"
 	case ScopeGlobal:
 		return "global"
+	case ScopeCatalog:
+		return "catalog"
 	default:
 		return fmt.Sprintf("scope(%d)", int(s))
 	}
@@ -41,8 +47,10 @@ func ParseScope(s string) (Scope, error) {
 		return ScopeRepo, nil
 	case "global":
 		return ScopeGlobal, nil
+	case "catalog":
+		return ScopeCatalog, nil
 	default:
-		return 0, fmt.Errorf("invalid skill scope %q (must be repo or global)", s)
+		return 0, fmt.Errorf("invalid skill scope %q (must be repo, global, or catalog)", s)
 	}
 }
 
@@ -99,11 +107,13 @@ func (e LoadError) Unwrap() error {
 
 // Discover scans the configured scopes for skill manifests. repoRoot, when
 // non-empty, enables repo-scope discovery under <repoRoot>/.squad/skills/.
-// A missing directory at any scope is not an error.
+// catalogDirs are additional roots whose immediate subdirectories are scanned
+// as catalog-scope skills (lowest precedence). A missing directory at any
+// scope is not an error.
 //
 // Returns the catalog and (separately) the slice of non-fatal load errors.
 // The catalog's All() method also exposes these via LoadErrors().
-func Discover(repoRoot string) (*Catalog, error) {
+func Discover(repoRoot string, catalogDirs ...string) (*Catalog, error) {
 	c := &Catalog{}
 
 	if repoRoot != "" {
@@ -118,6 +128,15 @@ func Discover(repoRoot string) (*Catalog, error) {
 	}
 	if err := c.scanDir(globalDir, ScopeGlobal, "global"); err != nil {
 		return nil, fmt.Errorf("scan global skills: %w", err)
+	}
+
+	for _, dir := range catalogDirs {
+		if dir == "" {
+			continue
+		}
+		if err := c.scanDir(dir, ScopeCatalog, dir); err != nil {
+			return nil, fmt.Errorf("scan catalog skills at %s: %w", dir, err)
+		}
 	}
 
 	c.resolveCollisions()
