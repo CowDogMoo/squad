@@ -48,16 +48,20 @@ const MaxNameLen = 64
 const MaxDescriptionLen = 1024
 
 // MaxBodyBytes caps the on-disk size of a SKILL.md body. The spec targets
-// <5k tokens for L2 content; 25 KiB is roughly 5x that ceiling in characters
-// and matches the cap announced in PLAN.md.
-const MaxBodyBytes = 25 * 1024
+// <5k tokens for L2 content. Empirically the largest first-party skill
+// Anthropic ships (skill-creator) is ~32 KiB, so the hard cap sits at 64
+// KiB — generous enough for legitimate large skills, still tight enough
+// to prevent runaway context consumption.
+const MaxBodyBytes = 64 * 1024
 
 // WarnBodyBytes is the soft cap surfaced by Validate as a warning. Skills
 // past this size still load but the author is told to consider splitting.
 const WarnBodyBytes = 5 * 1024
 
-// reservedSubstrings are forbidden inside a skill name. The spec disallows
-// these so authors don't impersonate first-party Anthropic skills.
+// reservedSubstrings carry the spec's anti-impersonation hint. We do not
+// reject names containing them — Anthropic's own `claude-api` skill
+// violates the rule, so treating it as fatal would break interop with
+// first-party skills. Validation surfaces it as a warning instead.
 var reservedSubstrings = []string{"anthropic", "claude"}
 
 // namePattern enforces the per-spec character class: lowercase letters,
@@ -79,7 +83,9 @@ type Manifest struct {
 }
 
 // ValidateName reports whether s is a syntactically valid skill name per the
-// open Skills spec.
+// open Skills spec. The reserved-substring rule ("anthropic"/"claude") is
+// enforced as a warning in [Validate] rather than here, because Anthropic's
+// own first-party skills violate it (e.g. `claude-api`).
 func ValidateName(s string) error {
 	if s == "" {
 		return errors.New("name is required")
@@ -90,16 +96,22 @@ func ValidateName(s string) error {
 	if !namePattern.MatchString(s) {
 		return fmt.Errorf("name %q is invalid: must be lowercase letters/digits/hyphens, must start and end with a letter or digit", s)
 	}
-	lower := strings.ToLower(s)
-	for _, banned := range reservedSubstrings {
-		if strings.Contains(lower, banned) {
-			return fmt.Errorf("name %q contains reserved substring %q", s, banned)
-		}
-	}
 	if strings.Contains(s, "<") || strings.Contains(s, ">") {
 		return fmt.Errorf("name %q must not contain XML tag characters", s)
 	}
 	return nil
+}
+
+// HasReservedSubstring reports whether s contains a spec-reserved substring.
+// Exported so the validator (and tests) can surface it as a warning.
+func HasReservedSubstring(s string) (string, bool) {
+	lower := strings.ToLower(s)
+	for _, banned := range reservedSubstrings {
+		if strings.Contains(lower, banned) {
+			return banned, true
+		}
+	}
+	return "", false
 }
 
 // ValidateDescription reports whether d satisfies the spec constraints:

@@ -123,6 +123,11 @@ func Validate(path string) (*ValidationReport, error) {
 			fmt.Sprintf("manifest name %q does not match directory name %q", m.Name, filepath.Base(abs)))
 	}
 
+	if banned, ok := HasReservedSubstring(m.Name); ok {
+		report.add(SeverityWarning, FileName,
+			fmt.Sprintf("name %q contains reserved substring %q (spec hint to avoid first-party impersonation)", m.Name, banned))
+	}
+
 	if len(m.Body) > WarnBodyBytes {
 		report.add(SeverityWarning, FileName,
 			fmt.Sprintf("body is %d bytes; spec target is <5 KiB — consider splitting into references/", len(m.Body)))

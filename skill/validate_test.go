@@ -97,6 +97,34 @@ func TestValidatePathTraversalLink(t *testing.T) {
 	}
 }
 
+func TestValidateReservedSubstringWarning(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "claude-api")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: claude-api\ndescription: ok\n---\nhi\n"
+	if err := os.WriteFile(filepath.Join(skillDir, FileName), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Validate(skillDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.HasErrors() {
+		t.Errorf("reserved substring should warn, not error: %v", r.Errors())
+	}
+	warningFound := false
+	for _, w := range r.Warnings() {
+		if strings.Contains(w.Message, "reserved substring") {
+			warningFound = true
+		}
+	}
+	if !warningFound {
+		t.Errorf("expected reserved-substring warning, got: %v", r.Warnings())
+	}
+}
+
 func TestValidateBodyWarning(t *testing.T) {
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, "big")

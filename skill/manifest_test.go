@@ -25,9 +25,11 @@ func TestValidateName(t *testing.T) {
 		{"leading hyphen", "-grocery", true},
 		{"trailing hyphen", "grocery-", true},
 		{"too long", strings.Repeat("a", 65), true},
-		{"contains anthropic", "my-anthropic-skill", true},
-		{"contains claude", "claude-helper", true},
-		{"contains uppercase reserved", "my-Anthropic", true},
+		// The reserved-substring rule is now a warning emitted by Validate,
+		// not a hard error in the name regex — Anthropic's own claude-api
+		// skill violates the spec hint, so the name parse must accept it.
+		{"contains anthropic", "my-anthropic-skill", false},
+		{"contains claude", "claude-helper", false},
 		{"contains lt", "skill<x", true},
 	}
 	for _, tc := range cases {

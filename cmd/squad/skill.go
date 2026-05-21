@@ -25,12 +25,15 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/skill"
 	"github.com/cowdogmoo/squad/source"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 // newSkillCmd builds the `squad skill` command tree.
@@ -59,6 +62,7 @@ lower-precedence scope.`,
 		newSkillRemoveCmd(),
 		newSkillUpdateCmd(),
 		newSkillSourcesCmd(),
+		newSkillNewCmd(),
 	)
 	return cmd
 }
@@ -320,6 +324,139 @@ func newSkillSourcesCmd() *cobra.Command {
 			return w.Flush()
 		},
 	}
+}
+
+func newSkillNewCmd() *cobra.Command {
+	var (
+		globalScope bool
+		repoPath    string
+		description string
+	)
+	cmd := &cobra.Command{
+		Use:   "new <name>",
+		Short: "Scaffold a new skill directory from a starter template",
+		Long: `Create a new skill at the appropriate scope.
+
+By default the skill is created at repo scope under <cwd>/.squad/skills/<name>.
+Pass --global to create at $XDG_CONFIG_HOME/squad/skills/<name>, or
+--repo <path> to target a specific repository root.
+
+The starter SKILL.md ships with the minimum frontmatter the spec requires
+(name + description) and a body that prompts the author to fill in the
+"when to use" / "how to do it" sections.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			name := args[0]
+			if err := skill.ValidateName(name); err != nil {
+				return err
+			}
+			if globalScope && repoPath != "" {
+				return fmt.Errorf("--global and --repo are mutually exclusive")
+			}
+			dir, scope, err := resolveNewSkillDir(name, globalScope, repoPath)
+			if err != nil {
+				return err
+			}
+			if _, err := os.Stat(dir); err == nil {
+				return fmt.Errorf("%s already exists", dir)
+			}
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
+			desc := description
+			if desc == "" {
+				desc = "TODO: one-sentence description of what this skill does and when to use it."
+			}
+			body := starterSkillBody(name)
+			if err := writeStarterSkillMD(dir, name, desc, body); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created %s skill: %s\n", scope, filepath.Join(dir, skill.FileName))
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&globalScope, "global", false, "Create the skill at global scope ($XDG_CONFIG_HOME/squad/skills)")
+	cmd.Flags().StringVar(&repoPath, "repo", "", "Create the skill at repo scope under this path (default: current working directory)")
+	cmd.Flags().StringVar(&description, "description", "", "Override the starter description")
+	return cmd
+}
+
+// resolveNewSkillDir computes the on-disk directory for a new skill given
+// the scope-selection flags. Returns the dir, a human-facing scope label,
+// and any error.
+func resolveNewSkillDir(name string, globalScope bool, repoOverride string) (string, string, error) {
+	if globalScope {
+		base, err := skill.GlobalSkillsDir()
+		if err != nil {
+			return "", "", err
+		}
+		return filepath.Join(base, name), "global", nil
+	}
+	repo := repoOverride
+	if repo == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", "", err
+		}
+		repo = cwd
+	}
+	abs, err := absolutePath(repo)
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Join(skill.RepoSkillsDir(abs), name), "repo", nil
+}
+
+// writeStarterSkillMD writes a starter SKILL.md to dir. The frontmatter is
+// serialized through yaml.Marshal so descriptions containing ':' or other
+// special characters are properly quoted; the SKILL.md spec's parser uses
+// real YAML, so concat'ing strings would silently produce invalid docs.
+func writeStarterSkillMD(dir, name, description, body string) error {
+	front := struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	}{Name: name, Description: description}
+
+	yamlBytes, err := yaml.Marshal(front)
+	if err != nil {
+		return fmt.Errorf("marshal frontmatter: %w", err)
+	}
+	var buf strings.Builder
+	buf.WriteString("---\n")
+	buf.Write(yamlBytes)
+	buf.WriteString("---\n")
+	buf.WriteString(body)
+	return os.WriteFile(filepath.Join(dir, skill.FileName), []byte(buf.String()), 0o644)
+}
+
+// starterSkillBody is the markdown body of a freshly scaffolded SKILL.md.
+// It primes the author for the sections that make a skill discoverable
+// without prescribing structure beyond what the spec requires.
+func starterSkillBody(name string) string {
+	return `# ` + name + `
+
+## When to use this skill
+
+TODO: describe the user request or task pattern that should trigger this
+skill. The Claude/agent reads the description field above to decide whether
+to load this file; once loaded, this section reinforces the criteria.
+
+## How to do it
+
+1. TODO: first concrete step
+2. TODO: second step
+
+## Constraints
+
+- TODO: anything the agent must NOT do (e.g. "never check out, only add to
+  cart").
+
+## Anti-patterns
+
+- TODO: shortcuts that look tempting but break. Future agents read this
+  section to avoid repeating prior mistakes.
+`
 }
 
 // resolveSkillRepoRoot returns the directory whose .squad/skills/ should be

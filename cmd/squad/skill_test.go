@@ -195,6 +195,101 @@ func TestSkillValidateOK(t *testing.T) {
 	}
 }
 
+func TestSkillNew_RepoScope(t *testing.T) {
+	setupXDG(t)
+	repoRoot := t.TempDir()
+	out, err := runSkillCmd(t, "new", "demo", "--repo", repoRoot)
+	if err != nil {
+		t.Fatalf("new: %v\n%s", err, out)
+	}
+	path := filepath.Join(skill.RepoSkillsDir(repoRoot), "demo", skill.FileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "name: demo") {
+		t.Errorf("scaffold missing name: %s", data)
+	}
+	if !strings.Contains(string(data), "When to use this skill") {
+		t.Errorf("scaffold missing starter section: %s", data)
+	}
+}
+
+func TestSkillNew_GlobalScope(t *testing.T) {
+	xdg := setupXDG(t)
+	out, err := runSkillCmd(t, "new", "demo", "--global")
+	if err != nil {
+		t.Fatalf("new --global: %v\n%s", err, out)
+	}
+	path := filepath.Join(xdg, ".config", "squad", "skills", "demo", skill.FileName)
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("global scaffold not created at %s: %v", path, err)
+	}
+}
+
+func TestSkillNew_RejectsExisting(t *testing.T) {
+	setupXDG(t)
+	repoRoot := t.TempDir()
+	if _, err := runSkillCmd(t, "new", "demo", "--repo", repoRoot); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSkillCmd(t, "new", "demo", "--repo", repoRoot)
+	if err == nil {
+		t.Fatalf("expected error on duplicate, got:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("wrong error: %v", err)
+	}
+}
+
+func TestSkillNew_InvalidName(t *testing.T) {
+	setupXDG(t)
+	out, err := runSkillCmd(t, "new", "BadName", "--repo", t.TempDir())
+	if err == nil {
+		t.Fatalf("expected validation error, got:\n%s", out)
+	}
+}
+
+func TestSkillNew_CustomDescription(t *testing.T) {
+	setupXDG(t)
+	repoRoot := t.TempDir()
+	custom := "Does the thing."
+	if _, err := runSkillCmd(t, "new", "demo", "--repo", repoRoot, "--description", custom); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(skill.RepoSkillsDir(repoRoot), "demo", skill.FileName)
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), custom) {
+		t.Errorf("custom description not embedded: %s", data)
+	}
+}
+
+func TestSkillNew_GlobalAndRepoMutuallyExclusive(t *testing.T) {
+	setupXDG(t)
+	if _, err := runSkillCmd(t, "new", "demo", "--global", "--repo", t.TempDir()); err == nil {
+		t.Fatal("expected mutually-exclusive error")
+	}
+}
+
+// TestSkillNew_RoundTripsThroughValidate ensures every scaffolded skill
+// passes the spec validator. Catches drift between starter content and
+// SKILL.md rules.
+func TestSkillNew_RoundTripsThroughValidate(t *testing.T) {
+	setupXDG(t)
+	repoRoot := t.TempDir()
+	if _, err := runSkillCmd(t, "new", "demo", "--repo", repoRoot); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(skill.RepoSkillsDir(repoRoot), "demo")
+	out, err := runSkillCmd(t, "validate", skillDir)
+	if err != nil {
+		t.Fatalf("scaffold did not pass validate: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "OK") {
+		t.Errorf("validate did not report OK:\n%s", out)
+	}
+}
+
 func TestSkillValidateFails(t *testing.T) {
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, "broken")
