@@ -126,6 +126,10 @@ type RunOptions struct {
 	// session creation failed. Callers like the routines daemon read this
 	// after ExecuteRun returns to record which session a fire produced.
 	LastSessionID string
+	// SkillOverrides applies per-run adjustments to the agent's skill
+	// catalog (--allow-skill / --deny-skill / --skills-enabled flags).
+	// nil means "use agent.yaml defaults".
+	SkillOverrides *agent.SkillOverrides
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.
@@ -458,7 +462,9 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 	agentsDir := filepath.Dir(agentDir)
 	opts.AgentsDir = agentsDir
 
-	bundle, err := agent.BuildBundle(agentsDir, opts.Agent, prompt, workingDir, opts.Mode, opts.Vars)
+	bundle, err := agent.BuildBundleWithOptions(agentsDir, opts.Agent, prompt, workingDir, opts.Mode, opts.Vars, &agent.BundleOptions{
+		SkillOverrides: opts.SkillOverrides,
+	})
 	if err != nil {
 		return nil, err
 	}

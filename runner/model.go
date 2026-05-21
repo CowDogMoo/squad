@@ -493,7 +493,9 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		AgentName:     opts.AgentName,
 	}
 	cfg.CallModel = func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
-		childBundle, err := agent.BuildBundle(agentsDir, agentName, prompt, workingDir, mode, opts.Vars)
+		childBundle, err := agent.BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode, opts.Vars, &agent.BundleOptions{
+			SkillOverrides: opts.SkillOverrides,
+		})
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to build child agent bundle: %w", err)
 		}
