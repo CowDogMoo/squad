@@ -145,3 +145,68 @@ func touch(path string) error {
 	}
 	return f.Close()
 }
+
+func TestStackEntries(t *testing.T) {
+	s := NewStack()
+	if got := s.Entries(); len(got) != 0 {
+		t.Errorf("empty stack should produce empty slice, got %v", got)
+	}
+	dir := t.TempDir()
+	e := Entry{Manifest: &Manifest{Name: "x"}, Dir: dir}
+	s.Push(e)
+	got := s.Entries()
+	if len(got) != 1 || got[0].Dir != dir {
+		t.Errorf("expected one entry with dir %q, got %v", dir, got)
+	}
+	// Returned slice must be a snapshot, not the internal slice.
+	got[0].Dir = "mutated"
+	if s.Entries()[0].Dir != dir {
+		t.Errorf("Entries should return a snapshot, mutation leaked")
+	}
+}
+
+func TestStackEntriesNil(t *testing.T) {
+	var s *Stack
+	if got := s.Entries(); got != nil {
+		t.Errorf("nil stack Entries should be nil, got %v", got)
+	}
+}
+
+func TestStackResolveEmptyInput(t *testing.T) {
+	s := NewStack()
+	if _, ok := s.Resolve(""); ok {
+		t.Error("empty input should not resolve")
+	}
+	if _, ok := s.Resolve("   "); ok {
+		t.Error("whitespace input should not resolve")
+	}
+}
+
+func TestStackResolveNilStack(t *testing.T) {
+	var s *Stack
+	if _, ok := s.Resolve("anything"); ok {
+		t.Error("nil stack should not resolve")
+	}
+}
+
+func TestStackResolveEmptyStack(t *testing.T) {
+	s := NewStack()
+	if _, ok := s.Resolve("anything"); ok {
+		t.Error("empty stack should not resolve")
+	}
+}
+
+func TestIsWithinRel(t *testing.T) {
+	if !isWithin("/a/b/c", "/a/b") {
+		t.Error("/a/b/c should be within /a/b")
+	}
+	if !isWithin("/a/b", "/a/b") {
+		t.Error("same path should be within itself")
+	}
+	if isWithin("/x", "/a/b") {
+		t.Error("/x should not be within /a/b")
+	}
+	if isWithin("/a/b/../c", "/a/b") {
+		t.Error("/a/b/../c (= /a/c) should not be within /a/b")
+	}
+}

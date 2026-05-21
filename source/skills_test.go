@@ -285,3 +285,113 @@ func TestSkillsManager_RemoveSourceNotFound(t *testing.T) {
 		t.Fatal("expected error removing ghost")
 	}
 }
+
+func TestSkillsManager_AddRepoCreatesMapWhenNil(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	cfg.Skills.Repositories = nil
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.AddRepository("team", "https://example.com/a.git"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Skills.Repositories["team"] == "" {
+		t.Errorf("expected team registered, got %v", cfg.Skills.Repositories)
+	}
+}
+
+func TestSkillsManager_NewWithCacheDirOverride(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	custom := t.TempDir()
+	cfg.Skills.CacheDir = custom
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mgr.gitOps == nil {
+		t.Error("expected gitOps configured")
+	}
+}
+
+func TestSkillsManager_UpdateBadURLReportsError(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	cfg.Skills.Repositories = map[string]string{
+		"bad": "https://example.invalid/nope.git",
+	}
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.UpdateRepositories(); err == nil {
+		t.Fatal("expected error from bad upstream")
+	}
+}
+
+func TestSkillsManager_EnsureClonedBadURLErrors(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	cfg.Skills.Repositories = map[string]string{
+		"bad": "https://example.invalid/nope.git",
+	}
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.EnsureRepositoriesCloned(); err == nil {
+		t.Fatal("expected clone error from bad upstream")
+	}
+}
+
+func TestSkillsManager_EnsureClonedSkipsAlreadyCached(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	url := makeBareSkillRepo(t, "echo", "ok.")
+
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.AddRepository("team", url); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.EnsureRepositoriesCloned(); err != nil {
+		t.Fatal(err)
+	}
+	// Second call should hit the "already cached" path and return nil quickly.
+	if err := mgr.EnsureRepositoriesCloned(); err != nil {
+		t.Fatalf("expected no-op on re-clone, got %v", err)
+	}
+}
+
+func TestSkillsManager_SaveConfigCreatesDirectory(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Drive saveConfig via AddRepository, then check that the config file exists.
+	if err := mgr.AddRepository("team", "https://example.com/a.git"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(mgr.configPath); err != nil {
+		t.Errorf("expected config file written at %s, got %v", mgr.configPath, err)
+	}
+}
+
+func TestSkillsManager_SaveConfigFailsWhenParentBlocked(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Block the parent directory by making it a regular file.
+	parent := filepath.Dir(mgr.configPath)
+	if err := os.RemoveAll(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(parent, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.AddRepository("team", "https://example.com/a.git"); err == nil {
+		t.Fatal("expected save failure when parent dir is a file")
+	}
+}

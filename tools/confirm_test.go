@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -263,5 +264,51 @@ func TestWithConfirmRuntime_NilNoop(t *testing.T) {
 func TestGetConfirmRuntime_MissingReturnsNil(t *testing.T) {
 	if got := GetConfirmRuntime(context.Background()); got != nil {
 		t.Fatalf("expected nil for empty ctx, got %+v", got)
+	}
+}
+
+func TestConfirm_InvalidJSONArgs(t *testing.T) {
+	rt := &ConfirmRuntime{AutoConfirm: AutoConfirmYes}
+	ctx := WithConfirmRuntime(context.Background(), rt)
+	handler := confirmTool(rt)
+	if _, err := handler(ctx, []byte("not json")); err == nil {
+		t.Fatal("expected JSON parse error")
+	}
+}
+
+type errWriter struct{}
+
+func (errWriter) Write(_ []byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestConfirm_TTYWriteError(t *testing.T) {
+	rt := &ConfirmRuntime{
+		In:    strings.NewReader("yes\n"),
+		Out:   errWriter{},
+		IsTTY: func() bool { return true },
+	}
+	if _, _, err := resolveConfirm(context.Background(), rt, "ok?", []string{"yes", "no"}); err == nil {
+		t.Fatal("expected write error to surface")
+	}
+}
+
+func TestConfirm_TTYNilStdin(t *testing.T) {
+	rt := &ConfirmRuntime{
+		In:    nil,
+		Out:   &bytes.Buffer{},
+		IsTTY: func() bool { return true },
+	}
+	if _, _, err := resolveConfirm(context.Background(), rt, "ok?", []string{"yes", "no"}); err == nil {
+		t.Fatal("expected error for nil stdin")
+	}
+}
+
+func TestConfirm_TTYReadEOFNoBytes(t *testing.T) {
+	rt := &ConfirmRuntime{
+		In:    strings.NewReader(""), // immediate EOF, no bytes
+		Out:   &bytes.Buffer{},
+		IsTTY: func() bool { return true },
+	}
+	if _, _, err := resolveConfirm(context.Background(), rt, "ok?", []string{"yes", "no"}); err == nil {
+		t.Fatal("expected read error to surface")
 	}
 }

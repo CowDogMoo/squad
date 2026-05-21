@@ -586,6 +586,152 @@ func TestStarterSkillBodyContainsName(t *testing.T) {
 	}
 }
 
+func TestSkillAddLocalPathMissingErrors(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "local", "/no/such/path"); err == nil {
+		t.Fatal("expected error for missing local path")
+	}
+}
+
+func TestSkillAddDuplicateRepositoryErrors(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	url := seedSkillRepo(t, "echo", "ok.")
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "team", url); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "team", url); err == nil {
+		t.Fatal("expected duplicate repo error")
+	}
+}
+
+func TestSkillUpdateBadRepoErrors(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	cfg.Skills.Repositories["bad"] = "https://example.invalid/no-such-repo.git"
+	if _, err := runSkillSubcmd(t, cfg, newSkillUpdateCmd); err == nil {
+		t.Fatal("expected error from bad upstream")
+	}
+}
+
+func TestSkillValidateMissingPathErrors(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	if _, err := runSkillSubcmd(t, cfg, newSkillValidateCmd, "/no/such/skill/dir"); err == nil {
+		t.Fatal("expected error for missing path")
+	}
+}
+
+func TestSkillValidateFailingReportSurfaces(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "ok")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, skill.FileName),
+		[]byte("---\nname: ok\ndescription: x\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSkillSubcmd(t, cfg, newSkillValidateCmd, skillDir)
+	if err != nil {
+		t.Fatalf("validate: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "OK") {
+		t.Errorf("expected OK marker in %q", out)
+	}
+}
+
+func TestSkillNew_GlobalAndRepoFlagsMutuallyExclusive(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	if _, err := runSkillSubcmd(t, cfg, newSkillNewCmd, "demo", "--global", "--repo", t.TempDir()); err == nil {
+		t.Fatal("expected mutually exclusive error")
+	}
+}
+
+func TestSkillNew_ExistingDirErrors(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	repo := t.TempDir()
+	if _, err := runSkillSubcmd(t, cfg, newSkillNewCmd, "demo", "--repo", repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSkillSubcmd(t, cfg, newSkillNewCmd, "demo", "--repo", repo); err == nil {
+		t.Fatal("expected error for existing dir")
+	}
+}
+
+func TestSkillNew_InvalidNameErrors(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	if _, err := runSkillSubcmd(t, cfg, newSkillNewCmd, "BadName", "--repo", t.TempDir()); err == nil {
+		t.Fatal("expected invalid-name error")
+	}
+}
+
+func TestSkillNew_MkdirFailsWhenParentIsFile(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	repo := t.TempDir()
+	// Block .squad/skills by writing a file at .squad
+	if err := os.WriteFile(filepath.Join(repo, ".squad"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSkillSubcmd(t, cfg, newSkillNewCmd, "demo", "--repo", repo); err == nil {
+		t.Fatal("expected mkdir error when .squad is a file")
+	}
+}
+
+func TestSkillListNonexistentRepoIsFine(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	// Missing directories at every scope are silently fine — verify list still
+	// emits the empty-state marker rather than erroring.
+	out, err := runSkillSubcmd(t, cfg, newSkillListCmd, "--repo", filepath.Join(t.TempDir(), "missing"))
+	if err != nil {
+		t.Fatalf("list: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "no skills found") {
+		t.Errorf("expected empty marker, got %q", out)
+	}
+}
+
+func TestSkillListBrokenSkillLogsWarning(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	repo := t.TempDir()
+	brokenDir := filepath.Join(skill.RepoSkillsDir(repo), "broken")
+	if err := os.MkdirAll(brokenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(brokenDir, skill.FileName), []byte("not valid"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSkillSubcmd(t, cfg, newSkillListCmd, "--repo", repo)
+	if err != nil {
+		t.Fatalf("list: %v\n%s", err, out)
+	}
+}
+
+func TestSkillShowNotFoundErrors(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	if _, err := runSkillSubcmd(t, cfg, newSkillShowCmd, "ghost", "--repo", t.TempDir()); err == nil {
+		t.Fatal("expected not-found error")
+	}
+}
+
+func TestSkillShowExistingSkill(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	repo := t.TempDir()
+	skillsDir := skill.RepoSkillsDir(repo)
+	if err := os.MkdirAll(filepath.Join(skillsDir, "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, "alpha", skill.FileName),
+		[]byte("---\nname: alpha\ndescription: ok.\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSkillSubcmd(t, cfg, newSkillShowCmd, "alpha", "--repo", repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Name:") || !strings.Contains(out, "alpha") {
+		t.Errorf("show output missing metadata: %q", out)
+	}
+}
+
 func TestSkillCmdTree(t *testing.T) {
 	cmd := newSkillCmd()
 	want := []string{"list", "show", "validate", "add", "remove", "update", "sources", "new"}

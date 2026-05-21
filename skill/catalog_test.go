@@ -335,3 +335,132 @@ func TestEntryNameNilManifest(t *testing.T) {
 		t.Fatalf("expected empty name for nil manifest, got %q", got)
 	}
 }
+
+func TestDiscoverEmptyCatalogDirIsSkipped(t *testing.T) {
+	withGlobalSkillsDir(t)
+	cat, err := Discover("", "", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.All()) != 0 {
+		t.Errorf("expected no entries, got %v", cat.All())
+	}
+}
+
+func TestDiscoverIgnoresNonDirItems(t *testing.T) {
+	withGlobalSkillsDir(t)
+	catalogDir := t.TempDir()
+	// A regular file in the catalog root must be silently ignored.
+	if err := os.WriteFile(filepath.Join(catalogDir, "stray.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := Discover("", catalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.All()) != 0 {
+		t.Errorf("expected zero entries, got %v", cat.All())
+	}
+}
+
+func TestDiscoverSubdirWithoutSkillMdIgnored(t *testing.T) {
+	withGlobalSkillsDir(t)
+	catalogDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(catalogDir, "no-skill"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := Discover("", catalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.All()) != 0 {
+		t.Errorf("expected zero entries (subdir has no SKILL.md), got %v", cat.All())
+	}
+}
+
+func TestDiscoverScanDirReadDirError(t *testing.T) {
+	withGlobalSkillsDir(t)
+	// Pointing repoRoot at a file (not a dir) → RepoSkillsDir(repoRoot) is
+	// <file>/.squad/skills, which ReadDir will fail with not-a-directory.
+	tmp := t.TempDir()
+	notADir := filepath.Join(tmp, "file")
+	if err := os.WriteFile(notADir, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// repoRoot itself is the file, so .squad/skills underneath is invalid.
+	_, err := Discover(notADir)
+	if err == nil {
+		t.Fatal("expected scan error when path traverses into a file")
+	}
+}
+
+func TestCatalogFindSkipsShadowed(t *testing.T) {
+	globalSkills := withGlobalSkillsDir(t)
+	if err := os.MkdirAll(globalSkills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, globalSkills, "dup", "global", "g body")
+
+	repoRoot := t.TempDir()
+	repoSkills := RepoSkillsDir(repoRoot)
+	if err := os.MkdirAll(repoSkills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, repoSkills, "dup", "repo", "r body")
+
+	cat, err := Discover(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := cat.Find("dup")
+	if !ok || entry.Manifest.Description != "repo" {
+		t.Fatalf("Find should return the repo-scope winner, got %#v", entry)
+	}
+}
+
+func TestCatalogFilterSkipsShadowed(t *testing.T) {
+	globalSkills := withGlobalSkillsDir(t)
+	if err := os.MkdirAll(globalSkills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, globalSkills, "dup", "global", "g body")
+	repoRoot := t.TempDir()
+	repoSkills := RepoSkillsDir(repoRoot)
+	if err := os.MkdirAll(repoSkills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, repoSkills, "dup", "repo", "r body")
+
+	cat, err := Discover(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cat.Filter(FilterOptions{})
+	if len(got) != 1 || got[0].Manifest.Description != "repo" {
+		t.Fatalf("Filter should yield only repo-scope dup, got %v", got)
+	}
+}
+
+func TestCatalogLoadErrorsCopy(t *testing.T) {
+	globalSkills := withGlobalSkillsDir(t)
+	brokenDir := filepath.Join(globalSkills, "broken")
+	if err := os.MkdirAll(brokenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(brokenDir, FileName), []byte("not valid"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := Discover("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := cat.LoadErrors()
+	if len(errs) == 0 {
+		t.Fatal("expected at least one load error")
+	}
+	// Mutate the copy — the catalog's slice must not be affected.
+	errs[0].Path = "mutated"
+	if cat.LoadErrors()[0].Path == "mutated" {
+		t.Error("LoadErrors should return a snapshot, mutation leaked")
+	}
+}

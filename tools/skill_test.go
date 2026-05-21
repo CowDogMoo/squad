@@ -245,3 +245,19 @@ func TestShellSingleQuote(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillRuntime_FindNilReceiver(t *testing.T) {
+	var r *SkillRuntime
+	if _, ok := r.find("anything"); ok {
+		t.Error("nil receiver find should return !ok")
+	}
+}
+
+func TestSkillTool_InvalidJSONArgs(t *testing.T) {
+	rt := &SkillRuntime{Entries: []skill.Entry{
+		{Manifest: &skill.Manifest{Name: "x", Body: "body"}, Dir: t.TempDir()},
+	}}
+	if _, err := skillTool(rt)(context.Background(), []byte("not json")); err == nil {
+		t.Fatal("expected JSON parse error")
+	}
+}

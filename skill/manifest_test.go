@@ -186,3 +186,70 @@ func TestIsSkillDir(t *testing.T) {
 		t.Fatal("dir with SKILL.md not reported as skill dir")
 	}
 }
+
+func TestValidateNameXMLChars(t *testing.T) {
+	if err := ValidateName("ok<bad"); err == nil {
+		t.Error("expected error for name containing <")
+	}
+}
+
+func TestValidateDescriptionGreaterThan(t *testing.T) {
+	if err := ValidateDescription("uses >x"); err == nil {
+		t.Error("expected error for description containing >")
+	}
+}
+
+func TestLoadManifestParseFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	if err := os.WriteFile(path, []byte("no frontmatter"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadManifest(path); err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestParseManifestInvalidYAMLFrontmatter(t *testing.T) {
+	raw := []byte("---\nname: ok\ndescription: \"unterminated\n---\nbody\n")
+	if _, err := ParseManifest(raw); err == nil {
+		t.Fatal("expected YAML parse error")
+	}
+}
+
+func TestParseManifestNoNewlineInBody(t *testing.T) {
+	// Frontmatter terminated but body has no trailing newline.
+	raw := []byte("---\nname: ok\ndescription: ok\n---")
+	if _, err := ParseManifest(raw); err != nil {
+		t.Fatalf("should accept body without trailing newline: %v", err)
+	}
+}
+
+func TestReadLineEmpty(t *testing.T) {
+	line, rest, ok := readLine(nil)
+	if ok || line != nil || rest != nil {
+		t.Errorf("empty input should return !ok, got line=%q rest=%q ok=%v", line, rest, ok)
+	}
+}
+
+func TestReadLineNoNewline(t *testing.T) {
+	line, rest, ok := readLine([]byte("abc"))
+	if !ok || string(line) != "abc" || rest != nil {
+		t.Errorf("got line=%q rest=%q ok=%v", line, rest, ok)
+	}
+}
+
+func TestIndexClosingFenceFinalLineNoNewline(t *testing.T) {
+	// A `---` on the final line with no trailing newline must still match.
+	idx := indexClosingFence([]byte("a\nb\n---"))
+	if idx != 4 {
+		t.Errorf("expected offset 4, got %d", idx)
+	}
+}
+
+func TestConsumeClosingLineNoNewline(t *testing.T) {
+	got := consumeClosingLine([]byte("---"))
+	if got != nil {
+		t.Errorf("expected nil, got %q", got)
+	}
+}

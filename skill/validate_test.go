@@ -229,3 +229,119 @@ func TestSeverityString(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateNonexistentPath(t *testing.T) {
+	if _, err := Validate("/no/such/path/exists/here"); err == nil {
+		t.Fatal("expected stat error")
+	}
+}
+
+func TestValidatePathIsFileNotDir(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Validate(file); err == nil {
+		t.Fatal("expected not-a-directory error")
+	}
+}
+
+func TestValidateMalformedFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "bad")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Invalid YAML — unterminated frontmatter.
+	if err := os.WriteFile(filepath.Join(skillDir, FileName),
+		[]byte("---\nname: bad\nno-close\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Validate(skillDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.HasErrors() {
+		t.Fatal("expected error finding for malformed frontmatter")
+	}
+}
+
+func TestValidateScriptsDirWithSubdirIgnored(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "scr")
+	if err := os.MkdirAll(filepath.Join(skillDir, "scripts", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, FileName),
+		[]byte("---\nname: scr\ndescription: x\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Validate(skillDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.HasErrors() {
+		t.Fatalf("nested subdir should be ignored, got: %v", r.Errors())
+	}
+}
+
+func TestValidatePathTraversalEmptyLink(t *testing.T) {
+	if isPathTraversal("") {
+		t.Error("empty target should not traverse")
+	}
+}
+
+func TestIsPathTraversalWithFragment(t *testing.T) {
+	if isPathTraversal("ref.md#anchor") {
+		t.Error("fragmented relative path inside skill should not traverse")
+	}
+	if !isPathTraversal("../parent.md#anchor") {
+		t.Error("../parent.md should traverse even with fragment")
+	}
+}
+
+func TestFileHasShebangMissingFile(t *testing.T) {
+	if _, err := fileHasShebang("/no/such/file"); err == nil {
+		t.Error("expected open error")
+	}
+}
+
+func TestFileHasShebangEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.sh")
+	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := fileHasShebang(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Error("expected false for empty file")
+	}
+}
+
+func TestValidationReportHasErrorsErrorsWarnings(t *testing.T) {
+	r := &ValidationReport{}
+	if r.HasErrors() {
+		t.Error("empty report should not have errors")
+	}
+	if len(r.Errors()) != 0 || len(r.Warnings()) != 0 {
+		t.Error("empty report should have no findings")
+	}
+	r.add(SeverityWarning, "x", "w")
+	if r.HasErrors() {
+		t.Error("warning-only report should not have errors")
+	}
+	if len(r.Warnings()) != 1 {
+		t.Errorf("expected 1 warning, got %d", len(r.Warnings()))
+	}
+	r.add(SeverityError, "x", "e")
+	if !r.HasErrors() {
+		t.Error("report with error should report HasErrors")
+	}
+	if len(r.Errors()) != 1 {
+		t.Errorf("expected 1 error, got %d", len(r.Errors()))
+	}
+}

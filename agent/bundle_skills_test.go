@@ -213,3 +213,131 @@ func TestBuildBundle_SkillBlockSize(t *testing.T) {
 		t.Errorf("skill block too verbose: %d chars\n%s", blockLen, rest[:end])
 	}
 }
+
+func TestResolveSkills_InvalidScopeInManifestErrors(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdg, ".config"))
+	t.Setenv("HOME", xdg)
+	wd := t.TempDir()
+
+	cfg := &SkillsConfig{Scopes: []string{"not-a-real-scope"}}
+	_, _, err := resolveSkills(wd, cfg, nil, nil)
+	if err == nil {
+		t.Fatal("expected error for invalid scope name")
+	}
+	if !strings.Contains(err.Error(), "agent skills config") {
+		t.Errorf("error message should mention agent skills config, got %v", err)
+	}
+}
+
+func TestResolveSkills_ManifestDisabledShortCircuits(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdg, ".config"))
+	t.Setenv("HOME", xdg)
+	wd := t.TempDir()
+	repoSkills := skill.RepoSkillsDir(wd)
+	if err := os.MkdirAll(repoSkills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, repoSkills, "alpha", "Description.", "body")
+
+	disabled := false
+	entries, block, err := resolveSkills(wd, &SkillsConfig{Enabled: &disabled}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected no entries when disabled, got %d", len(entries))
+	}
+	if block != "" {
+		t.Errorf("expected empty block, got %q", block)
+	}
+}
+
+func TestResolveSkills_OverrideEnabledTrumpsManifest(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdg, ".config"))
+	t.Setenv("HOME", xdg)
+	wd := t.TempDir()
+	repoSkills := skill.RepoSkillsDir(wd)
+	if err := os.MkdirAll(repoSkills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, repoSkills, "alpha", "Description.", "body")
+
+	disabled := false
+	enabled := true
+	entries, _, err := resolveSkills(wd, &SkillsConfig{Enabled: &disabled},
+		&SkillOverrides{Enabled: &enabled}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("override should re-enable, got %d entries", len(entries))
+	}
+}
+
+func TestResolveSkills_OverrideDenyAppliesAfterManifest(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdg, ".config"))
+	t.Setenv("HOME", xdg)
+	wd := t.TempDir()
+	repoSkills := skill.RepoSkillsDir(wd)
+	if err := os.MkdirAll(repoSkills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, repoSkills, "alpha", "A", "a")
+	writeSkill(t, repoSkills, "beta", "B", "b")
+
+	entries, _, err := resolveSkills(wd, &SkillsConfig{Deny: []string{"alpha"}},
+		&SkillOverrides{Deny: []string{"beta"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Override deny replaces manifest deny, so alpha is back, beta is hidden.
+	if len(entries) != 1 || entries[0].Name() != "alpha" {
+		t.Errorf("expected only alpha, got %v", entries)
+	}
+}
+
+func TestResolveSkills_OverrideAllowApplies(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdg, ".config"))
+	t.Setenv("HOME", xdg)
+	wd := t.TempDir()
+	repoSkills := skill.RepoSkillsDir(wd)
+	if err := os.MkdirAll(repoSkills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, repoSkills, "alpha", "A", "a")
+	writeSkill(t, repoSkills, "beta", "B", "b")
+
+	entries, _, err := resolveSkills(wd, nil,
+		&SkillOverrides{Allow: []string{"alpha"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "alpha" {
+		t.Errorf("expected only alpha via override allow, got %v", entries)
+	}
+}
+
+func TestResolveSkills_ManifestScopeFilter(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdg, ".config"))
+	t.Setenv("HOME", xdg)
+	wd := t.TempDir()
+	repoSkills := skill.RepoSkillsDir(wd)
+	if err := os.MkdirAll(repoSkills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, repoSkills, "alpha", "A", "a")
+
+	entries, _, err := resolveSkills(wd, &SkillsConfig{Scopes: []string{"global"}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected no entries when scope is global only, got %v", entries)
+	}
+}
