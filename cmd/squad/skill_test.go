@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/skill"
+	"github.com/spf13/cobra"
 )
 
 // runSkillCmd builds the skill subtree and executes it with args. It returns
@@ -287,6 +290,313 @@ func TestSkillNew_RoundTripsThroughValidate(t *testing.T) {
 	}
 	if !strings.Contains(out, "OK") {
 		t.Errorf("validate did not report OK:\n%s", out)
+	}
+}
+
+// newSkillTestCfg installs an isolated XDG layout so the SkillsManager's
+// config-save side effect can't bleed into the developer's real ~/.config.
+func newSkillTestCfg(t *testing.T) *config.Config {
+	t.Helper()
+	setupXDG(t)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(t.TempDir(), ".cache"))
+	return &config.Config{
+		Skills: config.SkillsConfig{
+			Repositories: map[string]string{},
+			LocalPaths:   nil,
+		},
+	}
+}
+
+// seedSkillRepo creates a tiny git repo containing <name>/SKILL.md and
+// returns a file:// URL that go-git can clone offline.
+func seedSkillRepo(t *testing.T, name, description string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not on PATH")
+	}
+	seed := t.TempDir()
+	dir := filepath.Join(seed, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\nname: " + name + "\ndescription: " + description + "\n---\nbody\n"
+	if err := os.WriteFile(filepath.Join(dir, skill.FileName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "init", "-q", "-b", "main"},
+		{"git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "."},
+		{"git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "seed"},
+	} {
+		c := exec.Command(args[0], args[1:]...)
+		c.Dir = seed
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	return "file://" + seed
+}
+
+// runSkillSubcmd executes a single skill subcommand with config injected.
+// Args are passed to RunE directly to avoid cobra's flag-parsing intercept
+// (which can swallow stdout for commands invoked without a root parent).
+func runSkillSubcmd(t *testing.T, cfg *config.Config, build func() *cobra.Command, args ...string) (string, error) {
+	t.Helper()
+	cmd := build()
+	cmd.SetContext(withConfig(context.Background(), cfg))
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	if err := cmd.ParseFlags(args); err != nil {
+		return buf.String(), err
+	}
+	if err := cmd.RunE(cmd, cmd.Flags().Args()); err != nil {
+		return buf.String(), err
+	}
+	return buf.String(), nil
+}
+
+func TestSkillAddLocalPath(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	dir := t.TempDir()
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "local", dir); err != nil {
+		t.Fatalf("add local: %v", err)
+	}
+	if len(cfg.Skills.LocalPaths) != 1 {
+		t.Fatalf("expected 1 local path, got %v", cfg.Skills.LocalPaths)
+	}
+}
+
+func TestSkillAddRepository(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	url := seedSkillRepo(t, "echo", "An echo skill.")
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "team", url); err != nil {
+		t.Fatalf("add repo: %v", err)
+	}
+	if cfg.Skills.Repositories["team"] != url {
+		t.Fatalf("repo not registered: %v", cfg.Skills.Repositories)
+	}
+}
+
+func TestSkillAddMissingConfig(t *testing.T) {
+	cmd := newSkillAddCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{"team", "/tmp/x"})
+	var buf bytes.Buffer
+	cmd.SetErr(&buf)
+	cmd.SetOut(&buf)
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error when config missing")
+	}
+}
+
+func TestSkillRemoveRepository(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	url := seedSkillRepo(t, "echo", "ok.")
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "team", url); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := runSkillSubcmd(t, cfg, newSkillRemoveCmd, "team"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, ok := cfg.Skills.Repositories["team"]; ok {
+		t.Fatalf("team should be removed, got %v", cfg.Skills.Repositories)
+	}
+}
+
+func TestSkillRemoveUnknown(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	if _, err := runSkillSubcmd(t, cfg, newSkillRemoveCmd, "ghost"); err == nil {
+		t.Fatal("expected error removing unknown source")
+	}
+}
+
+func TestSkillRemoveMissingConfig(t *testing.T) {
+	cmd := newSkillRemoveCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{"x"})
+	var buf bytes.Buffer
+	cmd.SetErr(&buf)
+	cmd.SetOut(&buf)
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error when config missing")
+	}
+}
+
+func TestSkillUpdateEmpty(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	if _, err := runSkillSubcmd(t, cfg, newSkillUpdateCmd); err != nil {
+		t.Fatalf("update with no repos should be a no-op: %v", err)
+	}
+}
+
+func TestSkillUpdateWithRepo(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	url := seedSkillRepo(t, "echo", "ok.")
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "team", url); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := runSkillSubcmd(t, cfg, newSkillUpdateCmd); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+}
+
+func TestSkillUpdateMissingConfig(t *testing.T) {
+	cmd := newSkillUpdateCmd()
+	cmd.SetContext(context.Background())
+	var buf bytes.Buffer
+	cmd.SetErr(&buf)
+	cmd.SetOut(&buf)
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error when config missing")
+	}
+}
+
+func TestSkillSourcesEmpty(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	out, err := runSkillSubcmd(t, cfg, newSkillSourcesCmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "No sources configured") {
+		t.Fatalf("expected empty-state hint, got: %q", out)
+	}
+}
+
+func TestSkillSourcesPopulated(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	cfg.Skills.Repositories["team"] = "https://example.com/a.git"
+	cfg.Skills.LocalPaths = []string{"/tmp/skills"}
+	out, err := runSkillSubcmd(t, cfg, newSkillSourcesCmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "REPOSITORIES") || !strings.Contains(out, "team") {
+		t.Fatalf("expected repo section, got: %q", out)
+	}
+	if !strings.Contains(out, "LOCAL PATHS") || !strings.Contains(out, "/tmp/skills") {
+		t.Fatalf("expected local-path section, got: %q", out)
+	}
+}
+
+func TestSkillSourcesMissingConfig(t *testing.T) {
+	cmd := newSkillSourcesCmd()
+	cmd.SetContext(context.Background())
+	var buf bytes.Buffer
+	cmd.SetErr(&buf)
+	cmd.SetOut(&buf)
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error when config missing")
+	}
+}
+
+func TestResolveSkillRepoRootOverride(t *testing.T) {
+	dir := t.TempDir()
+	got, err := resolveSkillRepoRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(dir)
+	gotResolved, _ := filepath.EvalSymlinks(got)
+	if want != "" && gotResolved != want {
+		t.Fatalf("override = %q, want %q", gotResolved, want)
+	}
+}
+
+func TestResolveSkillRepoRootDefault(t *testing.T) {
+	got, err := resolveSkillRepoRoot("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == "" {
+		t.Fatal("expected non-empty default")
+	}
+}
+
+func TestResolveNewSkillDirRepo(t *testing.T) {
+	repo := t.TempDir()
+	dir, scope, err := resolveNewSkillDir("alpha", false, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope != "repo" {
+		t.Fatalf("scope = %q, want repo", scope)
+	}
+	if !strings.HasSuffix(dir, filepath.Join(".squad", "skills", "alpha")) {
+		t.Fatalf("dir = %q does not end with .squad/skills/alpha", dir)
+	}
+}
+
+func TestResolveNewSkillDirGlobal(t *testing.T) {
+	setupXDG(t)
+	dir, scope, err := resolveNewSkillDir("alpha", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope != "global" {
+		t.Fatalf("scope = %q, want global", scope)
+	}
+	if !strings.HasSuffix(dir, filepath.Join("squad", "skills", "alpha")) {
+		t.Fatalf("dir = %q does not end with squad/skills/alpha", dir)
+	}
+}
+
+func TestResolveNewSkillDirCWD(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, scope, err := resolveNewSkillDir("alpha", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope != "repo" {
+		t.Fatalf("scope = %q, want repo", scope)
+	}
+	wdResolved, _ := filepath.EvalSymlinks(wd)
+	dirResolved, _ := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(filepath.Dir(dir))))
+	if wdResolved != "" && dirResolved != "" && dirResolved != wdResolved {
+		t.Fatalf("dir = %q should be rooted at cwd %q", dir, wd)
+	}
+}
+
+func TestSkillCatalogPathsNilConfig(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	if got := skillCatalogPaths(cmd); got != nil {
+		t.Fatalf("expected nil when config missing, got %v", got)
+	}
+}
+
+func TestSkillCatalogPathsLocal(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	localDir := t.TempDir()
+	cfg.Skills.LocalPaths = []string{localDir}
+	cmd := &cobra.Command{}
+	cmd.SetContext(withConfig(context.Background(), cfg))
+	paths := skillCatalogPaths(cmd)
+	if len(paths) != 1 || paths[0] != localDir {
+		t.Fatalf("paths = %v, want [%q]", paths, localDir)
+	}
+}
+
+func TestStarterSkillBodyContainsName(t *testing.T) {
+	if !strings.Contains(starterSkillBody("grocery"), "# grocery") {
+		t.Fatal("body missing skill-name header")
+	}
+}
+
+func TestSkillCmdTree(t *testing.T) {
+	cmd := newSkillCmd()
+	want := []string{"list", "show", "validate", "add", "remove", "update", "sources", "new"}
+	got := make(map[string]bool, len(cmd.Commands()))
+	for _, c := range cmd.Commands() {
+		got[strings.Fields(c.Use)[0]] = true
+	}
+	for _, name := range want {
+		if !got[name] {
+			t.Errorf("missing subcommand %q (have %v)", name, got)
+		}
 	}
 }
 

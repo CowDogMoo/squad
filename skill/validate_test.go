@@ -213,3 +213,19 @@ func TestIsPathTraversal(t *testing.T) {
 		}
 	}
 }
+
+func TestSeverityString(t *testing.T) {
+	cases := []struct {
+		in   Severity
+		want string
+	}{
+		{SeverityError, "error"},
+		{SeverityWarning, "warning"},
+		{Severity(99), "unknown"},
+	}
+	for _, tc := range cases {
+		if got := tc.in.String(); got != tc.want {
+			t.Errorf("%d.String() = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

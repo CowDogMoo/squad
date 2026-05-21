@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -295,4 +296,42 @@ func equalSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestScopeString(t *testing.T) {
+	cases := []struct {
+		in   Scope
+		want string
+	}{
+		{ScopeRepo, "repo"},
+		{ScopeGlobal, "global"},
+		{ScopeCatalog, "catalog"},
+		{Scope(99), "scope(99)"},
+	}
+	for _, tc := range cases {
+		if got := tc.in.String(); got != tc.want {
+			t.Errorf("%d.String() = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestLoadErrorErrorAndUnwrap(t *testing.T) {
+	inner := errors.New("boom")
+	le := LoadError{Path: "/tmp/x", Err: inner}
+	if got := le.Error(); !strings.Contains(got, "/tmp/x") || !strings.Contains(got, "boom") {
+		t.Errorf("Error() = %q, missing path or wrapped message", got)
+	}
+	if errors.Unwrap(le) != inner {
+		t.Errorf("Unwrap() did not return the inner error")
+	}
+	if !errors.Is(le, inner) {
+		t.Errorf("errors.Is should find the inner error via Unwrap")
+	}
+}
+
+func TestEntryNameNilManifest(t *testing.T) {
+	e := Entry{}
+	if got := e.Name(); got != "" {
+		t.Fatalf("expected empty name for nil manifest, got %q", got)
+	}
 }

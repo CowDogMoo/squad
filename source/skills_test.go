@@ -221,3 +221,67 @@ func TestSkillsManager_AddRejectsDuplicate(t *testing.T) {
 		t.Error("expected error on duplicate alias with different URL")
 	}
 }
+
+func TestSkillsManager_AddLocalPathMissing(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.AddLocalPath("/this/does/not/exist"); err == nil {
+		t.Fatal("expected error for missing path")
+	}
+}
+
+func TestSkillsManager_AddLocalPathNotADirectory(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	file := filepath.Join(tmp, "file.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.AddLocalPath(file); err == nil {
+		t.Fatal("expected error for non-directory")
+	}
+}
+
+func TestSkillsManager_AddLocalPathDuplicate(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	if err := mgr.AddLocalPath(tmp); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.AddLocalPath(tmp); err == nil {
+		t.Fatal("expected duplicate error")
+	}
+}
+
+func TestSkillsManager_AddRepositoryRejectsNonGitURL(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.AddRepository("local", "/not/a/url"); err == nil {
+		t.Fatal("expected error for non-git URL")
+	}
+}
+
+func TestSkillsManager_RemoveSourceNotFound(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RemoveSource("ghost"); err == nil {
+		t.Fatal("expected error removing ghost")
+	}
+}

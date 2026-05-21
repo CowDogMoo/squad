@@ -244,3 +244,24 @@ func TestBuildHandlers_ConfirmRegistrationGated(t *testing.T) {
 		t.Error("Confirm should register when runtime is present")
 	}
 }
+
+func TestWithConfirmRuntime_RoundTrip(t *testing.T) {
+	rt := &ConfirmRuntime{AutoConfirm: AutoConfirmYes}
+	ctx := WithConfirmRuntime(context.Background(), rt)
+	if got := GetConfirmRuntime(ctx); got != rt {
+		t.Fatalf("expected runtime back, got %+v", got)
+	}
+}
+
+func TestWithConfirmRuntime_NilNoop(t *testing.T) {
+	ctx := WithConfirmRuntime(context.Background(), nil)
+	if got := GetConfirmRuntime(ctx); got != nil {
+		t.Fatalf("expected nil runtime, got %+v", got)
+	}
+}
+
+func TestGetConfirmRuntime_MissingReturnsNil(t *testing.T) {
+	if got := GetConfirmRuntime(context.Background()); got != nil {
+		t.Fatalf("expected nil for empty ctx, got %+v", got)
+	}
+}

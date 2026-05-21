@@ -17,6 +17,8 @@ import (
 	"github.com/cowdogmoo/squad/mcp"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/responses"
+	"github.com/cowdogmoo/squad/session"
+	"github.com/cowdogmoo/squad/skill"
 	"github.com/cowdogmoo/squad/tools"
 	"github.com/tmc/langchaingo/llms"
 )
@@ -1438,5 +1440,141 @@ func TestConnectMCPServers(t *testing.T) {
 			}
 			closeMCPClients(clients)
 		})
+	}
+}
+
+func TestBuildConfirmRuntimeDefault(t *testing.T) {
+	rt := buildConfirmRuntime(&RunOptions{})
+	if rt == nil {
+		t.Fatal("expected non-nil runtime")
+	}
+	if rt.AutoConfirm != tools.AutoConfirmUnset {
+		t.Errorf("expected Unset, got %q", rt.AutoConfirm)
+	}
+	if rt.IsTTY == nil {
+		t.Error("expected IsTTY callback")
+	}
+}
+
+func TestBuildConfirmRuntimeYes(t *testing.T) {
+	rt := buildConfirmRuntime(&RunOptions{AutoConfirm: tools.AutoConfirmYes})
+	if rt.AutoConfirm != tools.AutoConfirmYes {
+		t.Errorf("AutoConfirm = %q, want yes", rt.AutoConfirm)
+	}
+}
+
+func TestBuildConfirmRuntimeInvalidFallsThrough(t *testing.T) {
+	rt := buildConfirmRuntime(&RunOptions{AutoConfirm: tools.AutoConfirmMode("nonsense")})
+	if rt.AutoConfirm != tools.AutoConfirmUnset {
+		t.Errorf("invalid value should fall through to Unset, got %q", rt.AutoConfirm)
+	}
+}
+
+func TestBuildSkillRuntimeNoEntries(t *testing.T) {
+	if got := buildSkillRuntime(context.Background(), &agent.Bundle{}, &RunOptions{}); got != nil {
+		t.Fatalf("expected nil when bundle has no skill entries")
+	}
+	if got := buildSkillRuntime(context.Background(), nil, &RunOptions{}); got != nil {
+		t.Fatalf("expected nil when bundle is nil")
+	}
+}
+
+func TestRehydrateSkillStackNoOpWhenNilLogger(t *testing.T) {
+	rt := &tools.SkillRuntime{}
+	rehydrateSkillStack(rt, "/anywhere", nil)
+	rehydrateSkillStack(nil, "/anywhere", nil)
+}
+
+func TestBuildSkillRuntimeWithEntriesAndOnLoad(t *testing.T) {
+	wd := t.TempDir()
+	logger, err := session.New(wd, "a", "openai", "gpt-5", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+
+	ctx := session.WithLogger(context.Background(), logger)
+	skillDir := filepath.Join(t.TempDir(), "alpha")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entry := skill.Entry{
+		Manifest: &skill.Manifest{Name: "alpha", Description: "ok"},
+		Scope:    skill.ScopeRepo,
+		Dir:      skillDir,
+	}
+	bundle := &agent.Bundle{SkillEntries: []skill.Entry{entry}}
+
+	rt := buildSkillRuntime(ctx, bundle, &RunOptions{})
+	if rt == nil {
+		t.Fatal("expected runtime")
+	}
+	rt.OnLoad(entry)
+
+	events, err := os.ReadFile(filepath.Join(logger.Dir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(events), session.EventSkillLoaded) {
+		t.Errorf("expected %s in events, got %s", session.EventSkillLoaded, events)
+	}
+}
+
+func TestRehydrateSkillStackReplaysEvents(t *testing.T) {
+	wd := t.TempDir()
+	logger, err := session.New(wd, "a", "openai", "gpt-5", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append(session.EventSkillLoaded, map[string]any{"name": "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append(session.EventSkillLoaded, map[string]any{"name": "missing"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+
+	skillDir := filepath.Join(t.TempDir(), "alpha")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entry := skill.Entry{
+		Manifest: &skill.Manifest{Name: "alpha", Description: "ok"},
+		Scope:    skill.ScopeRepo,
+		Dir:      skillDir,
+	}
+	rt := &tools.SkillRuntime{
+		Entries: []skill.Entry{entry},
+		Stack:   skill.NewStack(),
+	}
+	rehydrateSkillStack(rt, wd, logger)
+	if !rt.Stack.Contains(entry.Dir) {
+		t.Errorf("expected alpha pushed onto stack after rehydrate")
+	}
+}
+
+func TestResolveSkillCatalogPaths_Nil(t *testing.T) {
+	if got := resolveSkillCatalogPaths(nil); got != nil {
+		t.Errorf("expected nil for nil config, got %v", got)
+	}
+}
+
+func TestResolveSkillCatalogPaths_Empty(t *testing.T) {
+	cfg := &config.Config{}
+	if got := resolveSkillCatalogPaths(cfg); got != nil {
+		t.Errorf("expected nil for empty config, got %v", got)
+	}
+}
+
+func TestResolveSkillCatalogPaths_Local(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(t.TempDir(), ".cache"))
+	local := t.TempDir()
+	cfg := &config.Config{
+		Skills: config.SkillsConfig{LocalPaths: []string{local}},
+	}
+	paths := resolveSkillCatalogPaths(cfg)
+	if len(paths) != 1 || paths[0] != local {
+		t.Fatalf("paths = %v, want [%q]", paths, local)
 	}
 }
