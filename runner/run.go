@@ -130,6 +130,10 @@ type RunOptions struct {
 	// catalog (--allow-skill / --deny-skill / --skills-enabled flags).
 	// nil means "use agent.yaml defaults".
 	SkillOverrides *agent.SkillOverrides
+	// AutoConfirm is the resolution policy for the Confirm tool in
+	// non-TTY runs. Empty (the default) means "abort" so unattended runs
+	// fail loudly when a skill needs a human checkpoint.
+	AutoConfirm tools.AutoConfirmMode
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.

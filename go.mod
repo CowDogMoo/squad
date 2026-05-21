@@ -16,6 +16,7 @@ require (
 	github.com/go-git/go-git/v5 v5.17.1
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.45.0
+	github.com/mattn/go-isatty v0.0.20
 	github.com/openai/openai-go/v3 v3.17.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
@@ -110,7 +111,6 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect

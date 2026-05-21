@@ -23,6 +23,7 @@ import (
 	"github.com/cowdogmoo/squad/skill"
 	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/cowdogmoo/squad/tools"
+	"github.com/mattn/go-isatty"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
 	"github.com/tmc/langchaingo/llms/googleai"
@@ -31,6 +32,31 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// buildConfirmRuntime wires os.Stdin / os.Stderr / the resolved --auto-confirm
+// policy into a ConfirmRuntime for the Confirm tool. Always returns a non-nil
+// runtime so the tool is registered for every run; the runtime's AutoConfirm
+// + isStdinTTY decide whether each call prompts a human or resolves against
+// the policy.
+func buildConfirmRuntime(opts *RunOptions) *tools.ConfirmRuntime {
+	mode := opts.AutoConfirm
+	if mode != "" && !mode.IsValid() {
+		logging.Warn("ignoring invalid --auto-confirm value %q", mode)
+		mode = tools.AutoConfirmUnset
+	}
+	return &tools.ConfirmRuntime{
+		In:          os.Stdin,
+		Out:         os.Stderr,
+		IsTTY:       isStdinTTY,
+		AutoConfirm: mode,
+	}
+}
+
+// isStdinTTY reports whether stdin is connected to a terminal. The mattn
+// isatty pull is already an indirect dep, so this stays a single file.
+func isStdinTTY() bool {
+	return isatty.IsTerminal(os.Stdin.Fd())
+}
 
 // buildSkillRuntime constructs the per-run Skill tool runtime from the
 // bundle's filtered entries. Returns nil when no skills are visible so
@@ -318,6 +344,7 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		UseCacheControl:    useCacheControl,
 		ForceFirstToolCall: forceFirstTool,
 		Skill:              buildSkillRuntime(ctx, bundle, opts),
+		Confirm:            buildConfirmRuntime(opts),
 	}, callOpts...)
 	m.Finish()
 	if err != nil {

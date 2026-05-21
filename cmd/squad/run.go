@@ -37,6 +37,7 @@ import (
 	"github.com/cowdogmoo/squad/metrics"
 	pl "github.com/cowdogmoo/squad/pipeline"
 	"github.com/cowdogmoo/squad/runner"
+	"github.com/cowdogmoo/squad/tools"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -152,7 +153,16 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		MaxConcurrentTasks: v.GetInt("run.max_concurrent_tasks"),
 		ResumeID:           v.GetString("run.resume"),
 		SkillOverrides:     skillOverrides,
+		AutoConfirm:        autoConfirmMode(cmd),
 	}
+}
+
+// autoConfirmMode reads the --auto-confirm flag and returns it as an
+// AutoConfirmMode. An invalid value falls through as "" so resolveConfirm
+// surfaces the error at tool-call time with a clear message.
+func autoConfirmMode(cmd *cobra.Command) tools.AutoConfirmMode {
+	raw, _ := cmd.Flags().GetString("auto-confirm")
+	return tools.AutoConfirmMode(strings.ToLower(strings.TrimSpace(raw)))
 }
 
 // resolveSkillOverrides translates --skills-enabled / --skills-disabled /
@@ -333,9 +343,14 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Bool("skills-disabled", false, "Force-disable the Agent Skills catalog for this run (overrides agent.yaml)")
 	cmd.Flags().StringArray("allow-skill", nil, "Restrict the skill catalog to this name (can be repeated; replaces agent.yaml allow list)")
 	cmd.Flags().StringArray("deny-skill", nil, "Remove a skill from the catalog by name (can be repeated; replaces agent.yaml deny list)")
+	cmd.Flags().String("auto-confirm", "", "How the Confirm tool resolves in non-TTY runs: yes (auto-approve), no (auto-decline), or abort (default; fail loudly)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 	cmd.MarkFlagsMutuallyExclusive("skills-enabled", "skills-disabled")
+
+	_ = cmd.RegisterFlagCompletionFunc("auto-confirm", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"yes", "no", "abort"}, cobra.ShellCompDirectiveNoFileComp
+	})
 
 	// Dynamic completions for --agent (scan agents directories).
 	_ = cmd.RegisterFlagCompletionFunc("agent", completeAgentNames)

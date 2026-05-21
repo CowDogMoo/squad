@@ -209,20 +209,20 @@ func TestBashTool_NoSkillEnvWhenStackEmpty(t *testing.T) {
 func TestBuildHandlers_SkillToolGatedByCatalog(t *testing.T) {
 	wd := t.TempDir()
 	// Empty runtime — no Skill tool should be registered.
-	handlers, _ := buildHandlersWithSkill(wd, nil, &executor.LocalExecutor{WorkingDir: wd}, nil)
+	handlers, _ := buildHandlersWithSkill(wd, nil, &executor.LocalExecutor{WorkingDir: wd}, nil, nil)
 	if _, ok := handlers["Skill"]; ok {
 		t.Error("Skill tool should not appear when runtime is nil")
 	}
 
 	// Empty Entries — also no Skill tool.
-	handlers, _ = buildHandlersWithSkill(wd, nil, &executor.LocalExecutor{WorkingDir: wd}, &SkillRuntime{})
+	handlers, _ = buildHandlersWithSkill(wd, nil, &executor.LocalExecutor{WorkingDir: wd}, &SkillRuntime{}, nil)
 	if _, ok := handlers["Skill"]; ok {
 		t.Error("Skill tool should not appear when entries are empty")
 	}
 
 	// With at least one entry the tool appears.
 	rt := &SkillRuntime{Entries: []skill.Entry{fakeSkillEntry("alpha", wd)}}
-	handlers, _ = buildHandlersWithSkill(wd, nil, &executor.LocalExecutor{WorkingDir: wd}, rt)
+	handlers, _ = buildHandlersWithSkill(wd, nil, &executor.LocalExecutor{WorkingDir: wd}, rt, nil)
 	if _, ok := handlers["Skill"]; !ok {
 		t.Error("Skill tool should be registered when catalog has entries")
 	}

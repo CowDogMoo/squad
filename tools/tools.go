@@ -338,6 +338,10 @@ type RunWithToolsConfig struct {
 	// registered and the Read/Bash anchor relaxes to permit access inside
 	// any skill dir that has been pushed onto the stack.
 	Skill *SkillRuntime
+	// Confirm carries the per-run TTY input + auto-confirm policy used by
+	// the Confirm tool. A nil runtime causes Confirm calls to abort, which
+	// is the documented default for unattended runs.
+	Confirm *ConfirmRuntime
 }
 
 // RunWithTools drives the tool-calling loop for a LangChain-compatible LLM.
@@ -360,8 +364,9 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	ctx = InitFileTracker(ctx)
 	ctx = InitBgCommandRegistry(ctx)
 	ctx = WithSkillRuntime(ctx, cfg.Skill)
+	ctx = WithConfirmRuntime(ctx, cfg.Confirm)
 
-	handlers, toolDefs := buildHandlersWithSkill(workingDir, cfg.TaskCfg, cfg.Executor, cfg.Skill)
+	handlers, toolDefs := buildHandlersWithSkill(workingDir, cfg.TaskCfg, cfg.Executor, cfg.Skill, cfg.Confirm)
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
 	if maxIterations <= 0 {
@@ -1144,13 +1149,13 @@ func toolArgsSummaryComplex(toolName string, args map[string]interface{}) string
 // ReportFinding tool is also registered. MCP tools from taskCfg.ExtraTools
 // are appended last.
 func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor) (map[string]Handler, []llms.Tool) {
-	return buildHandlersWithSkill(workingDir, taskCfg, ex, nil)
+	return buildHandlersWithSkill(workingDir, taskCfg, ex, nil, nil)
 }
 
 // buildHandlersWithSkill is the full-featured constructor. Callers that need
-// the Skill tool — i.e. the runner — go through here; existing callers that
-// don't care (tests, pipeline glue) can keep using BuildHandlers.
-func buildHandlersWithSkill(workingDir string, taskCfg *TaskConfig, ex executor.Executor, skillRuntime *SkillRuntime) (map[string]Handler, []llms.Tool) {
+// the Skill or Confirm tools — i.e. the runner — go through here; existing
+// callers that don't care (tests, pipeline glue) can keep using BuildHandlers.
+func buildHandlersWithSkill(workingDir string, taskCfg *TaskConfig, ex executor.Executor, skillRuntime *SkillRuntime, confirmRuntime *ConfirmRuntime) (map[string]Handler, []llms.Tool) {
 	handlers := map[string]Handler{}
 
 	add := func(handler Handler) {
@@ -1181,6 +1186,13 @@ func buildHandlersWithSkill(workingDir string, taskCfg *TaskConfig, ex executor.
 	// skills in its system prompt, so registering the tool would be misleading.
 	if skillRuntime.HasCatalog() {
 		add(Handler{Def: definitionSkill(), Call: skillTool(skillRuntime)})
+	}
+
+	// The Confirm tool is always registered when a runtime is present so the
+	// agent can pause for human approval regardless of whether it has skills.
+	// A nil runtime means the runner explicitly suppressed it (e.g. tests).
+	if confirmRuntime != nil {
+		add(Handler{Def: definitionConfirm(), Call: confirmTool(confirmRuntime)})
 	}
 
 	if taskCfg != nil {
