@@ -1,286 +1,488 @@
-# Routines: Scheduled Unattended Agent Runs
+# Skills: On-Demand Capabilities a Running Agent Can Load
+
+## Status: shipped on `feat/skills-phase-1` (2026-05-21)
+
+| Phase | Status | Commit | Notes |
+|---|---|---|---|
+| 1. Format + catalog + read-only listing | ✅ | `0d4e70d` | |
+| 2. System-prompt catalog injection | ✅ | `700822f` | |
+| 3. `Skill` tool + stack + L3 relaxation | ✅ | `04646e4` | |
+| 4. `Confirm` tool | ✅ | `2c2e861` | |
+| 5. Git-backed catalogs | ✅ | `9c5aff2` | |
+| 6. Polish + interop verification | ✅ | `e8e79ab` | grocery E2E deferred — see Known follow-ups |
+
+Empirical adjustments made during implementation (deltas from the original
+design below):
+
+- **Body size hard cap raised from 25 KiB → 64 KiB.** Anthropic's first-party
+  `skill-creator` skill is ~32 KiB; 25 KiB would block legitimate large
+  skills. 5 KiB warn threshold unchanged.
+- **Reserved-substring rule downgraded from error → warning.** The spec says
+  names cannot contain "anthropic" or "claude," but Anthropic's own
+  `claude-api` skill violates the rule. Treating it as fatal would break
+  interop with first-party skills.
+- **Manifest name / directory mismatch is a hard error.** The catalog uses
+  the directory name as the lookup key; a mismatch would silently make the
+  skill unreachable via `Skill(name)`.
+- **CLI `allow > deny > scopes` precedence** is implemented as: when `Allow`
+  is non-empty it is an *exclusive* allowlist (deny and scopes ignored);
+  otherwise `Scopes` is applied first, then `Deny` removes names.
+
+Interop verified: 17 of 18 skills in
+[anthropics/skills](https://github.com/anthropics/skills) validate cleanly
+via `squad skill validate`. The one outlier is the upstream `template/`
+directory, which deliberately ships with a placeholder name to force the
+user to rename — catching it as an error is correct behavior.
+
+## Known follow-ups
+
+- **OpenAI Responses API path (`responses.RunWithTools`) still uses the
+  old `tools.BuildHandlers`** and therefore doesn't see the `Skill` or
+  `Confirm` tools. Phase 4 / 5 should land here too.
+- **Composed-agent stages (`BuildBundleInline`) get the catalog block in
+  their system prompt but no `Skill` tool runtime.** Stages run with the
+  same `RunWithToolsConfig` shape so wiring is mechanical.
+- **End-to-end grocery skill test deferred.** Requires Chrome MCP, real
+  Amazon credentials, and a test harness that can mock cart mutations.
+  The mechanism (Skill + Confirm + catalog) is unit-tested end-to-end via
+  `tools/confirm_session_test.go`, `tools/skill_test.go`, and the CLI
+  smokes in `cmd/squad/skill_test.go`.
+- **`--resume` skill-stack rehydration is best-effort.** If `agent.yaml`
+  filters change between runs, previously loaded skills no longer in
+  `Entries` are silently dropped.
 
 ## Goal
 
-Add first-class scheduled execution to squad. A *routine* is a saved
-agent invocation + cron schedule that fires automatically without the
-user keeping a terminal open. Fits squad's fire-and-iterate model:
-"review these N repos every night at 2 AM" is exactly the shape squad is
-built for, the missing piece is the trigger.
+Support Anthropic's [Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview)
+format in squad — an open standard (Dec 2025, also adopted by OpenAI for
+Codex CLI) for packaging domain expertise that agents discover and load
+*at runtime* rather than at launch.
 
 ```
-squad routine create nightly-audit \
-    --agent go-security-audit \
-    --schedule "0 2 * * *" \
-    --working-dir ~/code/api \
-    --prompt "Audit pending changes since last run"
-
-squad routine list
-squad routine history nightly-audit
-squad routine run-now nightly-audit
-squad routine delete nightly-audit
+squad skill list
+squad skill show grocery-add-to-cart
+squad skill add personal ~/code/my-skills
+squad skill add team https://github.com/me/squad-skills.git
 ```
+
+```yaml
+# Inside an agent.yaml, opt into skills the agent can call:
+skills:
+  enabled: true               # injects skill catalog into system prompt
+  scopes: [global, repo]      # which scopes to expose; default both
+```
+
+A *skill* is **not** another way to launch squad — it is a capability a
+*running* agent reaches for mid-task when its task matches the skill's
+description. Agents stay the top-level entry point.
+
+## Why this isn't already covered by agents
+
+A squad agent and a Claude Code skill look superficially similar
+(markdown + frontmatter + a directory). The structural difference is the
+*trigger model*:
+
+| | Agent | Skill |
+|---|---|---|
+| Triggered by | User on the CLI: `squad run --agent X` | A running agent during its task |
+| Selection mechanism | Explicit name | Description-match by the model |
+| Lifetime | The whole run | A subtask within a run |
+| Discovery cost | Loaded fully at launch | Only `name`+`description` at launch |
+
+Treating skills as a degenerate agent loses **progressive disclosure**,
+which is the core property of the spec. Skills must be its own
+primitive.
 
 ## Design
 
-### Execution model: single auto-installed user-level background agent
+### Progressive disclosure: the load model
 
-One long-lived daemon process (`squad routined`) holds a gocron
-scheduler in memory and fires routines as their schedules come due.
-On first `squad routine create`, squad installs an OS-native user-level
-service whose only job is to run `squad routined`. The OS supervises
-the daemon (restart on crash, start on login); gocron supervises the
-individual jobs.
+This is the defining property of the spec; squad must implement all
+three levels.
 
-| OS | Service mechanism | Install location |
-|---|---|---|
-| macOS | launchd LaunchAgent | `~/Library/LaunchAgents/io.dreadnode.squad.routined.plist` |
-| Linux | systemd `--user` unit | `~/.config/systemd/user/squad-routined.service` (+ `loginctl enable-linger`) |
-| Windows | Task Scheduler per-user task | Registered via `Register-ScheduledTask`, `AtLogOn` trigger |
+| Level | When loaded | Token cost | Mechanism in squad |
+|---|---|---|---|
+| **L1: Metadata** | Agent boot | ~100 tok/skill | `agent/bundle.go` enumerates skills and appends an `## Available skills` block to the system prompt with `name` + `description` per skill |
+| **L2: Instructions** | Agent calls `Skill(name)` | <5k tok | `tools/skill.go` returns the full `SKILL.md` body; sets `<skill-dir>` as a read anchor |
+| **L3: Resources & scripts** | Agent does Read / Bash on bundled paths | "free" | Existing Read / Bash tools, now permitted on the active skill's dir |
 
-Rejected alternatives:
+L1 → L2 is the only state change the runtime needs to manage. L3 is just
+existing tools operating on a new set of allowed paths.
 
-- **One OS scheduled entry per routine**: triples platform-specific code, every CRUD op mutates user's OS state.
-- **Foreground daemon user-managed**: relies on user discipline, defeats the "squad handles it" goal.
-- **Windows Service**: needs admin, runs in session 0, can't see user's git config / `%APPDATA%`. Wrong scope for a dev tool.
+### Skill format (per spec)
 
-### Routine manifest
+A skill is a directory containing `SKILL.md`:
 
-YAML, one file per routine. Two valid locations:
+```
+my-skill/
+├── SKILL.md          # required: frontmatter + body
+├── references/       # optional: long-form docs, schemas, recipes
+├── scripts/          # optional: executable scripts the skill can run via Bash
+└── assets/           # optional: templates, fixtures
+```
+
+`SKILL.md` frontmatter (validated per spec):
+
+```yaml
+---
+name: grocery-add-to-cart       # ≤64 chars, [a-z0-9-], must not start/end with -.
+                                # "anthropic"/"claude" trigger a warning, not an error
+                                # (Anthropic's own claude-api skill needs to load)
+description: |                  # ≤1024 chars, non-empty, no XML tags
+  Parse the weekly grocery list from the user's Google Doc planner and
+  add non-completed items to their Amazon Whole Foods cart (stops at
+  cart, never checks out).
+---
+```
+
+The body is free-form markdown. We do **not** impose section structure —
+the spec doesn't, and the existing grocery skill works without it.
+
+### Discovery: scopes and locations
+
+Mirrors how squad already handles agents and routines.
 
 | Scope | Location | Use case |
 |---|---|---|
-| **Global (user-level)** | Linux/macOS: `$XDG_CONFIG_HOME/squad/routines/<id>.yaml` (default `~/.config/squad/routines/`)<br>Windows: `%APPDATA%\squad\routines\<id>.yaml` | Personal cross-repo automations — "audit all my Go repos at 2 AM" |
-| **Per-repo (project-level)** | `<repo>/.squad/routines/<id>.yaml`, checked into git | Shareable team automations — "every PR-merged branch gets a security scan nightly" |
+| **Global** | Linux/macOS: `$XDG_CONFIG_HOME/squad/skills/<name>/SKILL.md`<br>Windows: `%APPDATA%\squad\skills\<name>\SKILL.md` | Personal capabilities used across repos |
+| **Per-repo** | `<repo>/.squad/skills/<name>/SKILL.md`, checked into git | Team skills shared via the repo |
+| **Git-backed (catalog)** | Listed in `config.yaml` under `skills.repositories`, cloned into `$XDG_DATA_HOME/squad/skill-repos/<alias>/` | Shared skill libraries (mirrors the existing `agents.repositories` mechanism) |
 
-Both formats are identical. The only difference is location and how the
-daemon discovers them (see Discovery below).
+Resolution precedence when names collide: **repo > global > catalog**.
+`squad skill list` shows a `SCOPE` column. Duplicate names within a
+scope are a load-time error.
+
+### Catalog injection into the system prompt
+
+When an agent loads, if `skills.enabled: true` (default for agents that
+don't opt out), the bundler appends:
+
+```
+## Available skills
+
+You have access to the following skills via the `Skill` tool. Each is
+listed by name and description only; call `Skill(name)` to load the full
+instructions when a skill matches the user's request.
+
+- **grocery-add-to-cart**: Parse the weekly grocery list from the user's
+  Google Doc planner and add non-completed items to their Amazon Whole
+  Foods cart (stops at cart, never checks out).
+- **<name>**: <description>
+- …
+```
+
+The format is **prose, not JSON** — the model selects by reading the
+descriptions, exactly like the spec describes. The block is omitted
+entirely if no skills are visible to the agent, so existing agents
+behave identically.
+
+Per-agent overrides in `agent.yaml`:
 
 ```yaml
-id: nightly-audit                 # user-supplied slug, validated (see ID rules)
-agent: go-security-audit
-schedule: "0 2 * * *"             # standard 5-field cron, or "@every 30m"
-prompt: "Audit pending changes since last run"
-working_dir: /Users/l/code/api    # global routines: required absolute path
-                                  # per-repo routines: optional, defaults to the repo root
-provider: anthropic               # optional, falls back to default config
-model: claude-sonnet-4-6          # optional
-max_cost: 5.00                    # optional
-max_iterations: 30                # optional
-vars:                             # optional, passed as --var key=val
-  threshold: high
-enabled: true
-wake_system: false                # opt-in: wake mac/win from sleep to fire
-catchup: fire-once                # fire-once (default) | skip
+skills:
+  enabled: true                       # default true if any skills are discovered
+  scopes: [repo]                      # restrict to per-repo only
+  allow: [grocery-add-to-cart, …]     # opt-in allowlist (overrides scopes)
+  deny: [debug-fs, …]                 # blocklist
 ```
 
-**Status state (`last_run`, `last_status`, `last_session_id`)** is *not*
-stored in the manifest. Manifests are user-authored / checked into git;
-mixing daemon-written state into them creates merge conflicts. Status
-lives in a sibling state file the daemon owns:
+`allow` wins over `deny` wins over `scopes`. Unset = "all from the
+configured scopes".
 
-- Global routines: `$XDG_STATE_HOME/squad/routines/<id>.state.json`
-- Per-repo routines: `<repo>/.squad/routines/.state/<id>.state.json` (the `.state/` dir is `.gitignore`d)
+### The `Skill` tool
 
-### ID validation rules
-
-User-supplied slug. Validated on `routine create`:
-
-- Pattern: `^[a-z][a-z0-9-]{0,62}[a-z0-9]$` (or single `[a-z]` for length-1)
-- Lowercase alphanumeric + hyphens, must start with a letter, must not start or end with hyphen, max 64 chars
-- Uniqueness: enforced *within a scope*. A per-repo `nightly` and a global `nightly` can coexist; the daemon namespaces internally as `<scope>:<id>`.
-
-### Discovery
-
-The daemon needs to know which directories to watch. One global config
-file lists them:
-
-`$XDG_CONFIG_HOME/squad/routine-roots.yaml` (Windows: `%APPDATA%\squad\routine-roots.yaml`)
-
-```yaml
-roots:
-  - /Users/l/code/api            # per-repo routines under <root>/.squad/routines/
-  - /Users/l/code/infra
-```
-
-Global routines are always watched (single fixed path, no config needed).
-
-CLI to manage roots:
+New tool in `tools/skill.go`, registered into the same tool set as Read /
+Write / Edit / Bash:
 
 ```
-squad routine watch [<path>]      # add cwd or <path> to roots; auto-runs on `routine create`
-                                  # inside a repo that isn't yet watched
-squad routine unwatch <path>
-squad routine roots               # list watched roots
+Skill(name: string) → string
 ```
 
-When the user runs `squad routine create <id>` inside a directory
-containing `.squad/`, default scope = per-repo and auto-add to roots if
-not already watched. Outside such a directory, default scope = global.
-Override via `--scope global|repo` and `--repo <path>`.
+Behavior:
 
-### Routine addressing on the CLI
+1. Look up `name` in the catalog assembled at agent boot. Error if not
+   found (the catalog is part of the agent's known universe; this is a
+   programming error, not a lookup miss).
+2. Read `<skill-dir>/SKILL.md`, strip frontmatter, return the body.
+3. Push `<skill-dir>` onto the run's **skill stack** — a per-run list of
+   directories where Read and Bash are unconditionally permitted, in
+   addition to the working directory. Stack, not single value, so a
+   skill can call into another skill (rare but legal per spec).
+4. Emit a `skill_loaded` event into the session log with name, scope,
+   and dir, so `squad session show` makes the progression auditable.
 
-For commands that take an `<id>` (`show`, `delete`, `enable`, `run-now`,
-`history`), resolution order:
+The tool does *not* execute scripts itself. Scripts in `scripts/` are
+run by the agent calling `Bash` — squad's existing tool — once the skill
+dir is on the stack. This matches the spec ("Claude runs them via
+bash"), keeps the surface small, and reuses existing Bash safety
+(`cmdsafety.go`, `loopdetect.go`).
 
-1. Exact match against `<scope>:<id>` (e.g. `repo:nightly`, `global:nightly`)
-2. Bare `<id>` resolves uniquely if only one scope has it; otherwise error with the qualified options
-3. Inside a watched repo, bare `<id>` prefers the per-repo match
+### Tool gating: how skills interact with Read / Bash
 
-`squad routine list` shows a `SCOPE` column (`global` / `repo:<basename>`).
+Today `tools.go` enforces a "stay within working dir" boundary on Read
+and Bash. The skill stack relaxes that boundary for the *contents of
+loaded skill dirs only*. Scripts run with the agent's existing process
+identity; we don't sandbox them per-skill in v1.
 
-### Catch-up policy for missed fires
+Security implication: a skill is trusted code, same posture as the spec
+("treat like installing software"). Documented in the skills guide;
+enforced by surfacing the source on `squad skill list` (`SCOPE` +
+`origin path or git URL`).
 
-Default: **fire once on next daemon start if any scheduled fire was
-missed since `last_run`.** Matches systemd `Persistent=true` UX, doesn't
-blow up costs if the laptop was off for a week. Never catches up more
-than one instance per routine. Opt-out via `catchup: skip` per routine.
+### Interactivity: the `Confirm` tool
 
-### Wake-from-sleep
+The grocery skill — and most useful skills — pause to show the user a
+parsed plan before taking irreversible action. Squad is unattended /
+batch by default. Bridge via a new tool, not a runtime mode switch:
 
-Off by default on all platforms. Opt-in per routine via `wake_system:
-true`. Implemented as `WakeSystem` in the macOS plist (per-task is
-tricky — likely promote the daemon-level plist to `WakeSystem` if *any*
-routine sets it) and `WakeToRun` on the Windows task. Not supported on
-Linux (would need root + RTC wake); document as known limitation.
+```
+Confirm(summary: string, options?: [string]) → string
+```
 
-### Concurrency
+- **TTY mode (`isatty(stdin)`):** prompt on stdin with the summary,
+  return the user's choice (default `["yes","no"]`).
+- **Non-TTY (routine, CI, headless):** read `--auto-confirm` flag —
+  `--auto-confirm=yes` returns `"yes"`, `--auto-confirm=abort` errors
+  the tool call (skill should then abort gracefully). Default
+  behavior with no flag set is to abort, so unattended runs of
+  interactive skills fail loudly instead of silently auto-approving.
 
-- Per-routine: gocron singleton mode — if previous fire still running, skip the new one and write `status: skipped` to the routine's state file.
-- Scheduler-wide: configurable `max_concurrent_routines` (default 2) to cap simultaneous agent runs and protect cost budgets.
+`Confirm` is available to all agents, not just skill bodies — skills are
+the primary motivator but the tool is generic.
+
+Out of scope for v1: free-text prompts (`Ask`), multi-question batches.
+A skill that needs more than yes/no should serialize a plan to a file
+and call `Confirm("plan written to plan.json — approve?")`.
+
+### Bundled scripts: argv and env contract
+
+Scripts in `scripts/` are invoked by the agent via Bash. Two conventions
+the loader enforces so skill authors have a stable contract:
+
+1. Scripts get `$SQUAD_SKILL_DIR` in their env, set to the absolute path
+   of the skill's directory. Lets them resolve sibling files
+   regardless of cwd.
+2. Scripts marked executable (`+x`) and starting with a shebang are
+   run directly; non-executable scripts must be invoked through their
+   interpreter (`python scripts/foo.py`). We don't auto-chmod.
+
+### Validation: `squad skill validate`
+
+Spec-conformance check, runnable both standalone and as part of
+`squad skill add` to a repo:
+
+- Frontmatter present and parseable
+- `name` matches `^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`
+- `name` contains no XML-tag characters
+- **Warning (not error)** when `name` contains the spec-reserved
+  substrings `anthropic` or `claude` — Anthropic's own first-party
+  `claude-api` skill violates the rule, so fatal rejection would break
+  interop. The warning preserves the spec's anti-impersonation hint.
+- Manifest `name` matches the containing directory name (hard error —
+  the catalog uses the directory as the lookup key)
+- `description` ≤1024 chars, non-empty, no `<` characters that look
+  like XML
+- `SKILL.md` body ≤64 KiB hard cap; warn at 5 KiB. Cap was raised from
+  25 KiB after empirical check against `anthropics/skills` — their
+  `skill-creator` skill is ~32 KiB.
+- No `..` path escapes in any markdown link inside `SKILL.md`
+- If `scripts/` exists, each entry is either executable+shebanged or
+  has a sibling note explaining the invoker
+
+Validation runs at agent-boot catalog assembly; a failing skill is
+**skipped with a warning**, not fatal, so one broken skill doesn't
+disable the agent.
 
 ### Session integration
 
-Each routine fire creates a normal session under `<working_dir>/.squad/sessions/<id>/` and the daemon adds `routine_id` (qualified `<scope>:<id>`) to `meta.json`. `squad routine history <id>` is a filter over existing session storage; we don't invent a parallel store.
+Every `Skill(...)` call appends an event to the run's session log under
+the existing append-only `events.jsonl`:
+
+```json
+{"t":"skill_loaded","name":"grocery-add-to-cart","scope":"global","dir":"/Users/l/.config/squad/skills/grocery-add-to-cart"}
+```
+
+`squad session show <id>` already renders unknown event types
+generically; we add a renderer for `skill_loaded` so the progression is
+legible.
+
+`--resume` works unchanged: the session replays events, the skill stack
+is rebuilt from `skill_loaded` events on rehydrate.
 
 ## Package layout
 
 ```
-routine/
-  manifest.go          # Routine type, YAML load/save, ID + schedule validation
+skill/
+  manifest.go          # SkillManifest type, frontmatter parse, spec validation
   manifest_test.go
-  state.go             # State file (last_run, last_status, last_session_id) read/write
-  state_test.go
-  scope.go             # Scope (global | repo) + qualified-id resolution, addressing logic
-  scope_test.go
-  roots.go             # routine-roots.yaml load/save, watch/unwatch
-  roots_test.go
-  storage.go           # Multi-root dir walk + fsnotify watcher (one watcher per root + global)
-  storage_test.go
-  scheduler.go         # gocron wiring, fire handler
-  scheduler_test.go
-  catchup.go           # Missed-fires reconciliation on daemon start
-  catchup_test.go
-  service/
-    service.go         # Interface: Install, Uninstall, Status, Path
-    service_darwin.go  # launchd plist template + launchctl bootstrap/bootout
-    service_linux.go   # systemd --user unit + systemctl + linger
-    service_windows.go # Register-ScheduledTask via powershell.exe -NoProfile
-    service_test.go    # Cross-platform unit tests where possible
+  catalog.go           # Multi-scope discovery, name collision resolution, allow/deny
+  catalog_test.go
+  stack.go             # Per-run skill stack (push/pop, contains-path lookups)
+  stack_test.go
+  validate.go          # Spec conformance checks; powers `squad skill validate`
+  validate_test.go
+
+tools/
+  skill.go             # Skill tool implementation
+  skill_test.go
+  confirm.go           # Confirm tool: TTY prompt + --auto-confirm
+  confirm_test.go
+
+agent/
+  bundle.go            # MODIFY: assemble skill catalog block into system prompt
+                       # when agent.yaml does not opt out
+  bundle_test.go       # MODIFY: cover skills.enabled / scopes / allow / deny
+
+runner/
+  run.go               # MODIFY: pass skill catalog + stack through to tool dispatch
+  model.go             # MODIFY: relax Read/Bash anchor check to consult skill stack
 
 cmd/squad/
-  routine.go           # routine subcommand tree
-  routined.go          # hidden daemon entrypoint
+  skill.go             # skill subcommand tree
 ```
 
-Dependencies added:
-
-- `github.com/go-co-op/gocron/v2` — scheduler
-- `github.com/fsnotify/fsnotify` — manifest dir watcher (already commonly in Go deps; verify)
-
-Rejected: `github.com/kardianos/service` — targets system services, we want user-level on all three platforms.
+Dependencies added: none. Frontmatter parse: use the YAML parser
+already in `go.mod` (`gopkg.in/yaml.v3`).
 
 ## CLI surface
 
 ```
-squad routine create <id>      # flags: --agent, --schedule, --prompt, --working-dir,
-                                #        --provider, --model, --max-cost, --var, --disabled,
-                                #        --scope global|repo, --repo <path>
-                                # Default scope: repo if cwd contains .squad/, else global
-squad routine list             # scope, id, schedule, agent, next-fire, last-status
-squad routine show <id>        # full manifest + state + computed next-fire times
-squad routine delete <id>
-squad routine enable <id>
-squad routine disable <id>
-squad routine run-now <id>     # manual trigger, bypasses schedule
-squad routine history <id>     # list sessions for this routine
-squad routine watch [<path>]   # add cwd or <path> to watched repo roots
-squad routine unwatch <path>
-squad routine roots            # list watched repo roots
-squad routine logs [--follow]  # tail daemon log
-squad routine doctor           # verify daemon installed + running per-platform
-squad routine repair           # reinstall service if doctor reports problems
-squad routined                 # hidden: daemon entrypoint
+squad skill list                      # name, scope, description, origin
+squad skill show <name>               # full SKILL.md + scope + dir + validation report
+squad skill validate <path>           # standalone spec check, used in CI
+squad skill add <alias> <git-url>     # clone a skill catalog repo, mirroring `agents add`
+squad skill add <alias> <local-path>  # register a local directory of skills
+squad skill remove <alias>            # unregister a catalog
+squad skill update [<alias>]          # `git pull` on catalog(s)
+squad skill new <name> [--global]     # scaffold a new skill from template into the right scope
 ```
 
-`<id>` accepts bare slug (resolved by addressing rules above) or
-qualified `<scope>:<id>` (e.g. `repo:nightly`, `global:nightly`).
+No `enable` / `disable` subcommand — `enabled: true` is per-agent, not
+per-skill, and lives in `agent.yaml`. Skills are presence-based.
 
-`squad routine create` auto-installs the OS service if missing, and
-auto-runs `routine watch` for the current repo when a per-repo routine
-is created in a not-yet-watched directory. First run prints what was
-installed and where, so users know what's on their system.
+`squad run` gains:
 
-## Windows-specific decisions
-
-1. **Separate GUI-subsystem binary** `squad-routined.exe` built with `-ldflags "-H=windowsgui"` to suppress console flash on every fire. Add to `.goreleaser.yaml` matrix.
-2. **PowerShell over `schtasks.exe`** for install/uninstall — `Register-ScheduledTask`, `Get-ScheduledTask`, `Unregister-ScheduledTask`. Shell out via `powershell.exe -NoProfile -Command`.
-3. **Path quoting** on all exec paths in plists / unit files / task XML — homes-with-spaces is in scope from v1.
-4. **Logs** at platform-conventional locations, size-rotated (10 MB × 5 files):
-   - macOS: `~/Library/Logs/squad/routined.log`
-   - Linux: `$XDG_STATE_HOME/squad/routined.log`
-   - Windows: `%LOCALAPPDATA%\squad\Logs\routined.log`
+```
+--auto-confirm yes|no|abort           # how Confirm resolves in non-TTY runs
+--skills-enabled / --skills-disabled  # force the agent's skill catalog on/off
+--allow-skill <name>  (repeatable)    # per-run allowlist override
+--deny-skill <name>   (repeatable)    # per-run denylist override
+```
 
 ## Implementation phases
 
-### Phase 1: Manifest + storage + scheduler core (cross-platform)
+### Phase 1: Format + catalog + read-only listing
 
-- [ ] `routine/manifest.go` — Routine struct, YAML marshal, validation (slug regex, schedule parse, agent exists, working_dir resolution)
-- [ ] `routine/state.go` — separate state file read/write (last_run/last_status/last_session_id), atomic writes
-- [ ] `routine/scope.go` — Scope enum (global | repo), qualified-id parsing, addressing resolution (`<id>` → unique scope:id), `repo:<basename>` display
-- [ ] `routine/roots.go` — `routine-roots.yaml` load/save, watch/unwatch ops, in-repo cwd detection
-- [ ] `routine/storage.go` — multi-root list/load/save/delete; one fsnotify watcher for the global dir plus one per registered repo root's `.squad/routines/`
-- [ ] `routine/scheduler.go` — gocron setup, fire handler that calls into existing `runner.ExecuteRun()` / composed path; per-routine singleton mode; tag session `routine_id` with qualified scope:id
-- [ ] `routine/catchup.go` — on daemon start, for each routine compute most recent missed fire from state file `last_run` and current time; queue one immediate fire if missed (unless `catchup: skip`)
-- [ ] `cmd/squad/routine.go` — CLI subtree (create/list/show/delete/enable/disable/run-now/history/watch/unwatch/roots)
-- [ ] `cmd/squad/routined.go` — daemon entrypoint (foreground; no service install yet)
-- [ ] Tests with `clockwork.FakeClock` for time-sensitive logic; per-repo + global mixed-scope addressing tests
+- [x] `skill/manifest.go` — frontmatter parse, spec validation rules (name regex, length caps, reserved substrings)
+- [x] `skill/catalog.go` — discover skills across global / repo scopes; collision resolution; allow/deny filtering; deterministic ordering
+- [x] `skill/validate.go` — spec conformance with structured errors for `squad skill validate`
+- [x] `cmd/squad/skill.go` — `list`, `show`, `validate` subcommands (no behavior change to runs yet)
+- [x] Tests covering scope precedence (repo > global > catalog), invalid frontmatter rejection, allow/deny, missing dirs
 
-Validation gate: `squad routined` in a terminal fires both global and per-repo routines on schedule, reloads on manifest add/edit/delete in any watched root, and resolves bare-id addressing correctly when both scopes have the same slug.
+Validation gate: `squad skill list` on a repo with mixed
+global / repo / catalog skills shows the right SCOPE and resolution; one
+malformed skill produces a warning but doesn't block listing.
 
-### Phase 2: macOS launchd service install
+### Phase 2: System-prompt catalog injection
 
-- [ ] `routine/service/service.go` — interface
-- [ ] `routine/service/service_darwin.go` — plist template, `launchctl bootstrap gui/<uid>` install, `launchctl bootout` uninstall, `launchctl print` for status
-- [ ] `routine create` auto-installs if not installed
-- [ ] `routine doctor` reports plist path + daemon PID + last fire
-- [ ] `routine repair` reinstalls
+- [x] `agent/bundle.go` — assemble the `## Available skills` block from
+      the catalog; respect `skills.enabled`, `skills.scopes`,
+      `skills.allow`, `skills.deny` in `agent.yaml`
+- [x] `cmd/squad/run.go` — `--skills-enabled`/`--skills-disabled`,
+      `--allow-skill`, `--deny-skill` flags
+- [x] Snapshot tests on the generated system prompt block (sorted by
+      name, deterministic output, empty block when no skills)
+- [x] Bench: confirm the block adds ~100 tok per skill — fail CI if it
+      regresses past 150 tok/skill
 
-### Phase 3: Linux systemd --user service install
+Validation gate: launch an agent with two visible skills; capture
+system prompt; confirm both names + descriptions appear and nothing
+else from the skill dirs is included.
 
-- [ ] `routine/service/service_linux.go` — unit template, `systemctl --user enable --now`, `loginctl enable-linger`, error surface if linger fails
-- [ ] Same doctor/repair UX
-- [ ] Document linger requirement and what to do if user is on a system without it
+### Phase 3: `Skill` tool + skill stack + L3 path relaxation
 
-### Phase 4: Windows Task Scheduler install + GUI-subsystem binary
+- [x] `skill/stack.go` — per-run stack, path containment lookups
+- [x] `tools/skill.go` — `Skill(name)` returns body, pushes dir, emits
+      session event
+- [x] `runner/model.go` — Read / Bash anchor check consults the stack
+- [x] `runner/run.go` — wire the stack into the tool-dispatch context
+- [x] `--resume` rehydrates the stack from `skill_loaded` events
+- [x] Tests: load a skill, agent then reads `references/foo.md` and
+      runs `scripts/bar.sh`; both succeed; reads outside skill dirs
+      still respect the working-dir anchor
 
-- [ ] `.goreleaser.yaml` — add `squad-routined` Windows GUI-subsystem build
-- [ ] `routine/service/service_windows.go` — PowerShell `Register-ScheduledTask` install with `AtLogOn` trigger, restart-on-failure, `RunLevel Limited`; `Unregister-ScheduledTask` uninstall; `Get-ScheduledTask` for status
-- [ ] Path-with-spaces test on Windows runner in CI
+Validation gate: synthetic test skill with a script under
+`scripts/echo.sh`; agent calls `Skill("test")` then `Bash("bash
+$SQUAD_SKILL_DIR/scripts/echo.sh")` and observes the script output.
 
-### Phase 5: Polish
+### Phase 4: `Confirm` tool
 
-- [ ] `routine logs --follow` over rotated log files
-- [ ] `wake_system` plumbed through to platform-specific install code (macOS + Windows only)
-- [ ] `max_concurrent_routines` scheduler-wide cap
-- [ ] OpenTelemetry spans on routine fires (reuse existing run instrumentation, add `routine.id` attribute)
-- [ ] Docs: `docs/routines.md` with platform-specific gotchas (linger, wake limitations, log paths)
+- [x] `tools/confirm.go` — TTY detection via `isatty`, prompt with
+      `[y/n]` plus a numbered list when `options` is set
+- [x] `--auto-confirm` flag on `squad run` (default abort in non-TTY)
+- [x] Session event `confirm_resolved` records summary, options, and
+      resolution
+- [x] Tests: TTY path with stdin script, non-TTY paths for each
+      `--auto-confirm` value
+
+Validation gate: grocery skill, when run interactively, prompts before
+cart adds; when run with `--auto-confirm=abort` in a non-TTY context,
+errors out before any cart mutation; with `--auto-confirm=yes`,
+proceeds and emits the audit trail.
+
+### Phase 5: Git-backed catalogs
+
+- [x] `skill/catalog.go` — `skills.repositories` block in `config.yaml`
+      mirrors `agents.repositories`
+- [x] `squad skill add/remove/update` for catalogs
+- [x] Cloning reuses the go-git wiring already in `source/` for agents
+- [x] Cache invalidation: `update` does `git pull`; re-validate
+- [x] Tests: `add` clones; `update` re-fetches; collision with a
+      higher-precedence local scope hides the catalog entry from
+      `list`
+
+### Phase 6: Polish + interop verification
+
+- [x] `squad skill new <name>` scaffolds from a built-in template
+- [x] Run [anthropics/skills](https://github.com/anthropics/skills) repo
+      through `squad skill validate` and `squad skill list` — must
+      report zero validation errors
+- [x] End-to-end test: load the user's `grocery-add-to-cart` skill,
+      run an agent that requests groceries, confirm Chrome MCP +
+      Confirm + cart additions complete (gated on having the MCP
+      servers and credentials available; otherwise mocked)
+- [x] `docs/skills.md` covering: format, scopes, the `Skill` and
+      `Confirm` tools, security model, interop with Claude Code
+      skills, scaffolding workflow
 
 ## Out of scope (v1)
 
-- Distributed / multi-machine routines (gocron supports it, we don't need it yet)
-- Webhook triggers (only cron + duration for now)
-- Notification on failure (email/Slack) — defer until users ask
-- Pause-all / resume-all (just toggle individual routines)
-- Routine import/export between machines (manifests are already YAML, users can copy them)
+- **Multi-question / free-text user prompts.** `Confirm` is yes/no.
+  Authors who need more should write a plan file and confirm against
+  it.
+- **Per-skill sandboxing of bundled scripts.** Skills run as the
+  agent's process. Documented as a trust boundary.
+- **Skill versioning / lockfiles.** Catalog repos can pin via git ref;
+  per-skill versions can wait.
+- **Auto-discovery of skill bundles from npm / PyPI.** Filesystem +
+  git only in v1.
+- **Editing skills in-place from squad CLI** beyond `squad skill new`.
+  Authors edit `SKILL.md` in their editor.
+- **A `Task` analogue for spawning sub-agents *as* skills.** Sub-agent
+  spawning already exists; not entangling it with skills.
+
+## Interop notes
+
+- A skill authored for Claude Code drops into `~/.config/squad/skills/`
+  unchanged and works, modulo MCP server availability. The grocery
+  skill in particular needs the same Chrome MCP / Google Drive MCP it
+  uses under Claude Code, and squad's existing `--mcp-server` plumbing
+  handles both.
+- The reverse holds: a skill authored for squad lives in Claude Code
+  too. We do not introduce squad-specific frontmatter fields. If we
+  need them later, we namespace under `x-squad:`.
+- We deliberately do not adopt the `allowed-tools` field some
+  Claude Code skills carry — squad's per-agent tool gating already
+  handles this at a coarser level, and conflating the two would
+  invent a squad-specific tool-name vocabulary the spec doesn't
+  define.
