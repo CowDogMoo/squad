@@ -263,7 +263,9 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 		taskCfg.ParentMetrics = m
 	}
 	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
-	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, opts.ResumeResponseID, temperature, maxTokens, opts.MaxIterations, bundle.EditDeadline, reasoningPrefixes(opts), taskCfg, m, ex)
+	skillRuntime := buildSkillRuntime(ctx, bundle, opts)
+	confirmRuntime := buildConfirmRuntime(opts)
+	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, opts.ResumeResponseID, temperature, maxTokens, opts.MaxIterations, bundle.EditDeadline, reasoningPrefixes(opts), taskCfg, m, ex, skillRuntime, confirmRuntime)
 	m.Finish()
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {

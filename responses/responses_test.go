@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/skill"
 	"github.com/cowdogmoo/squad/tools"
 	openai "github.com/openai/openai-go/v3"
 	oairesponses "github.com/openai/openai-go/v3/responses"
@@ -357,6 +359,8 @@ func TestRunWithToolsNoToolCalls(t *testing.T) {
 		nil,
 		nil,
 		&executor.LocalExecutor{WorkingDir: td},
+		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
@@ -476,6 +480,8 @@ func TestRunWithToolsExhaustedWithPendingCalls(t *testing.T) {
 		&tools.TaskConfig{},
 		nil,
 		&executor.LocalExecutor{WorkingDir: td2},
+		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
@@ -580,6 +586,8 @@ func TestRunWithToolsFollowUp(t *testing.T) {
 		nil,
 		nil,
 		&executor.LocalExecutor{WorkingDir: td3},
+		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools() error = %v", err)
@@ -771,6 +779,8 @@ func TestRunWithToolsErrors(t *testing.T) {
 				&tools.TaskConfig{},
 				nil,
 				&executor.LocalExecutor{WorkingDir: td},
+				nil,
+				nil,
 			)
 			if err == nil {
 				t.Fatalf("expected error")
@@ -867,6 +877,8 @@ func TestRunWithToolsBudgetExceededDuringLoop(t *testing.T) {
 		nil,
 		m,
 		&executor.LocalExecutor{WorkingDir: td4},
+		nil,
+		nil,
 	)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
@@ -970,4 +982,133 @@ func TestTrackResponseMetricsAccumulates(t *testing.T) {
 	if m.OutputTokens() != 150 {
 		t.Fatalf("OutputTokens = %d, want 150", m.OutputTokens())
 	}
+}
+
+// TestRunWithToolsRegistersSkillAndConfirm regression-tests the
+// Responses API path's tool registration. Before the fix this file
+// landed in, the Responses path called tools.BuildHandlers (which omits
+// the Skill and Confirm tools) regardless of whether the runner had
+// constructed runtimes for them. The fix routes through
+// tools.BuildHandlersWithSkill and forwards the runtimes — verified
+// here by capturing the outgoing request and asserting that the tool
+// names appear (when runtimes are non-nil) or are absent (when nil).
+func TestRunWithToolsRegistersSkillAndConfirm(t *testing.T) {
+	t.Parallel()
+
+	// Minimal valid response payload: a single message, no tool calls.
+	payload := map[string]any{
+		"id":                  "resp-skill",
+		"object":              "response",
+		"created_at":          0,
+		"model":               "gpt-4o",
+		"parallel_tool_calls": false,
+		"temperature":         0,
+		"tool_choice":         "auto",
+		"tools":               []any{},
+		"top_p":               1,
+		"error":               map[string]any{"code": "", "message": ""},
+		"incomplete_details":  map[string]any{"reason": ""},
+		"instructions":        "system",
+		"metadata":            map[string]any{},
+		"output": []map[string]any{
+			{
+				"id":     "msg-1",
+				"type":   "message",
+				"role":   "assistant",
+				"status": "completed",
+				"content": []map[string]any{
+					{"type": "output_text", "text": "ok"},
+				},
+			},
+		},
+	}
+
+	type capture struct {
+		Tools []struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+
+	runAndCapture := func(t *testing.T, skillRT *tools.SkillRuntime, confirmRT *tools.ConfirmRuntime) capture {
+		t.Helper()
+		var cap capture
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &cap)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(payload)
+		}))
+		defer server.Close()
+
+		td := t.TempDir()
+		_, err := RunWithTools(
+			context.Background(),
+			"key",
+			server.URL,
+			"gpt-4o",
+			"system",
+			"user",
+			td,
+			"",
+			"",
+			0.4,
+			0,
+			1,
+			0,
+			nil,
+			nil,
+			nil,
+			&executor.LocalExecutor{WorkingDir: td},
+			skillRT,
+			confirmRT,
+		)
+		if err != nil {
+			t.Fatalf("RunWithTools() error = %v", err)
+		}
+		return cap
+	}
+
+	hasTool := func(c capture, name string) bool {
+		for _, tdef := range c.Tools {
+			if tdef.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("both nil → neither tool registered", func(t *testing.T) {
+		t.Parallel()
+		got := runAndCapture(t, nil, nil)
+		if hasTool(got, "Skill") {
+			t.Errorf("Skill tool was registered with nil runtime; tools=%+v", got.Tools)
+		}
+		if hasTool(got, "Confirm") {
+			t.Errorf("Confirm tool was registered with nil runtime; tools=%+v", got.Tools)
+		}
+	})
+
+	t.Run("populated runtimes → both tools registered", func(t *testing.T) {
+		t.Parallel()
+		skillRT := &tools.SkillRuntime{
+			Entries: []skill.Entry{{
+				Manifest: &skill.Manifest{
+					Name:        "demo-skill",
+					Description: "regression-test fixture",
+				},
+				Scope: skill.ScopeRepo,
+			}},
+			Stack: skill.NewStack(),
+		}
+		confirmRT := &tools.ConfirmRuntime{}
+
+		got := runAndCapture(t, skillRT, confirmRT)
+		if !hasTool(got, "Skill") {
+			t.Errorf("Skill tool MISSING from Responses API request; tools=%+v", got.Tools)
+		}
+		if !hasTool(got, "Confirm") {
+			t.Errorf("Confirm tool MISSING from Responses API request; tools=%+v", got.Tools)
+		}
+	})
 }

@@ -86,7 +86,7 @@ func UseResponsesAPI(provider, model string, prefixes []string) bool {
 // RunWithTools drives a tool-calling loop using the OpenAI Responses API.
 // resumeResponseID, if non-empty, chains the initial request via
 // PreviousResponseID so a prior session can be continued server-side.
-func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization, resumeResponseID string, temperature float64, maxTokens, maxIterations, editDeadline int, reasoningPrefixes []string, taskCfg *tools.TaskConfig, m *metrics.Metrics, ex executor.Executor) (string, error) {
+func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, userPrompt, workingDir, organization, resumeResponseID string, temperature float64, maxTokens, maxIterations, editDeadline int, reasoningPrefixes []string, taskCfg *tools.TaskConfig, m *metrics.Metrics, ex executor.Executor, skillRuntime *tools.SkillRuntime, confirmRuntime *tools.ConfirmRuntime) (string, error) {
 	ctx, span := telemetry.Tracer().Start(ctx, "responses.tool_loop",
 		trace.WithAttributes(
 			attribute.String("gen_ai.request.model", model),
@@ -96,8 +96,12 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 	defer span.End()
 
 	client := newClient(apiKey, baseURL, organization)
-	handlers, toolDefs := tools.BuildHandlers(workingDir, taskCfg, ex)
+	handlers, toolDefs := tools.BuildHandlersWithSkill(workingDir, taskCfg, ex, skillRuntime, confirmRuntime)
 	registerLargeResultTool(ctx, handlers, &toolDefs)
+	// Per-iteration runtimes must also be installed on ctx so the Skill /
+	// Confirm tool handlers find them when invoked.
+	ctx = tools.WithSkillRuntime(ctx, skillRuntime)
+	ctx = tools.WithConfirmRuntime(ctx, confirmRuntime)
 	if maxIterations <= 0 {
 		maxIterations = tools.MaxToolIterations
 	}

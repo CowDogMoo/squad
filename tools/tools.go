@@ -1152,6 +1152,13 @@ func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor)
 	return buildHandlersWithSkill(workingDir, taskCfg, ex, nil, nil)
 }
 
+// BuildHandlersWithSkill is the exported variant of buildHandlersWithSkill,
+// used by callers in other packages (e.g. the OpenAI Responses API path)
+// that need to register the Skill and Confirm tools.
+func BuildHandlersWithSkill(workingDir string, taskCfg *TaskConfig, ex executor.Executor, skillRuntime *SkillRuntime, confirmRuntime *ConfirmRuntime) (map[string]Handler, []llms.Tool) {
+	return buildHandlersWithSkill(workingDir, taskCfg, ex, skillRuntime, confirmRuntime)
+}
+
 // buildHandlersWithSkill is the full-featured constructor. Callers that need
 // the Skill or Confirm tools — i.e. the runner — go through here; existing
 // callers that don't care (tests, pipeline glue) can keep using BuildHandlers.
