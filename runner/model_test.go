@@ -1571,7 +1571,7 @@ func TestResolveSkillCatalogPaths_Local(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(t.TempDir(), ".cache"))
 	local := t.TempDir()
 	cfg := &config.Config{
-		Skills: config.SkillsConfig{LocalPaths: map[string]string{"local": local}},
+		Skills: config.SkillsConfig{LocalPaths: []string{local}},
 	}
 	paths := resolveSkillCatalogPaths(cfg)
 	if len(paths) != 1 || paths[0] != local {

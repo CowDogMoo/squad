@@ -63,9 +63,8 @@ func (m *SkillsManager) AddRepository(name, gitURL string) error {
 }
 
 // AddLocalPath registers an absolute local directory as a skills catalog
-// source under alias. Each immediate subdirectory is treated as a skill.
-// The alias is what `squad skill remove` matches on.
-func (m *SkillsManager) AddLocalPath(alias, path string) error {
+// source. Each immediate subdirectory is treated as a skill.
+func (m *SkillsManager) AddLocalPath(path string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("failed to resolve path: %w", err)
@@ -77,40 +76,29 @@ func (m *SkillsManager) AddLocalPath(alias, path string) error {
 	if !stat.IsDir() {
 		return fmt.Errorf("path is not a directory: %s", absPath)
 	}
-	if m.cfg.Skills.LocalPaths == nil {
-		m.cfg.Skills.LocalPaths = make(map[string]string)
-	}
-	if existing, ok := m.cfg.Skills.LocalPaths[alias]; ok {
+	for _, existing := range m.cfg.Skills.LocalPaths {
 		if existing == absPath {
-			return fmt.Errorf("skill path already configured under alias %q: %s", alias, absPath)
-		}
-		return fmt.Errorf("alias %q already in use for %s (use remove first)", alias, existing)
-	}
-	for existingAlias, existingPath := range m.cfg.Skills.LocalPaths {
-		if existingPath == absPath {
-			return fmt.Errorf("skill path %s already registered under alias %q", absPath, existingAlias)
+			return fmt.Errorf("skill path already configured: %s", absPath)
 		}
 	}
-	m.cfg.Skills.LocalPaths[alias] = absPath
+	m.cfg.Skills.LocalPaths = append(m.cfg.Skills.LocalPaths, absPath)
 	return m.saveConfig()
 }
 
-// RemoveSource removes either a registered repository (by alias) or a
-// registered local path (by alias, or by absolute / original path form for
-// back-compat with users who recall the path).
+// RemoveSource removes either a registered repository (by name) or a
+// registered local path (by absolute or original form).
 func (m *SkillsManager) RemoveSource(nameOrPath string) error {
 	if _, ok := m.cfg.Skills.Repositories[nameOrPath]; ok {
 		delete(m.cfg.Skills.Repositories, nameOrPath)
 		return m.saveConfig()
 	}
-	if _, ok := m.cfg.Skills.LocalPaths[nameOrPath]; ok {
-		delete(m.cfg.Skills.LocalPaths, nameOrPath)
-		return m.saveConfig()
-	}
 	absPath, _ := filepath.Abs(nameOrPath)
-	for alias, path := range m.cfg.Skills.LocalPaths {
+	for i, path := range m.cfg.Skills.LocalPaths {
 		if path == nameOrPath || path == absPath {
-			delete(m.cfg.Skills.LocalPaths, alias)
+			m.cfg.Skills.LocalPaths = append(
+				m.cfg.Skills.LocalPaths[:i],
+				m.cfg.Skills.LocalPaths[i+1:]...,
+			)
 			return m.saveConfig()
 		}
 	}

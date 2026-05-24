@@ -204,19 +204,20 @@ func newSkillValidateCmd() *cobra.Command {
 
 func newSkillAddCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "add <alias> <git-url-or-local-path>",
+		Use:   "add <alias> <git-url> | <local-path>",
 		Short: "Register a skill catalog source (git repo or local directory)",
 		Long: `Register a new skills catalog. Two forms are accepted:
 
   squad skill add myteam https://github.com/me/squad-skills.git
-  squad skill add local /opt/shared/skills
+  squad skill add /opt/shared/skills
 
-Git repositories are cloned into the skills cache on registration so the
-catalog is immediately discoverable. Local paths are added as-is.`,
-		Args: cobra.ExactArgs(2),
+Git repositories require an alias (the short handle used by
+'squad skill remove'). Local paths are identified by the path itself, so no
+alias is needed. Git repositories are cloned into the skills cache on
+registration so the catalog is immediately discoverable.`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			alias, target := args[0], args[1]
 			cfg := configFromContext(cmd)
 			if cfg == nil {
 				return fmt.Errorf("config not available in context")
@@ -225,7 +226,22 @@ catalog is immediately discoverable. Local paths are added as-is.`,
 			if err != nil {
 				return err
 			}
-			if source.IsGitURL(target) {
+			switch len(args) {
+			case 1:
+				target := args[0]
+				if source.IsGitURL(target) {
+					return fmt.Errorf("git repositories require an alias: squad skill add <alias> %s", target)
+				}
+				if err := mgr.AddLocalPath(target); err != nil {
+					return err
+				}
+				logging.InfoContext(cmd.Context(), "registered skill local path %s", target)
+				return nil
+			case 2:
+				alias, target := args[0], args[1]
+				if !source.IsGitURL(target) {
+					return fmt.Errorf("two-argument form is for git repositories; %q is not a git URL (drop the alias to register a local path)", target)
+				}
 				if err := mgr.AddRepository(alias, target); err != nil {
 					return err
 				}
@@ -235,10 +251,6 @@ catalog is immediately discoverable. Local paths are added as-is.`,
 				}
 				return nil
 			}
-			if err := mgr.AddLocalPath(alias, target); err != nil {
-				return err
-			}
-			logging.InfoContext(cmd.Context(), "registered skill local path %s → %s", alias, target)
 			return nil
 		},
 	}
@@ -315,13 +327,14 @@ func newSkillSourcesCmd() *cobra.Command {
 			}
 			if len(cfg.Skills.LocalPaths) > 0 {
 				_, _ = fmt.Fprintln(w, "LOCAL PATHS:")
-				_, _ = fmt.Fprintln(w, "NAME\tPATH")
-				for _, name := range sortedKeys(cfg.Skills.LocalPaths) {
-					_, _ = fmt.Fprintf(w, "%s\t%s\n", name, cfg.Skills.LocalPaths[name])
+				paths := append([]string(nil), cfg.Skills.LocalPaths...)
+				sort.Strings(paths)
+				for _, path := range paths {
+					_, _ = fmt.Fprintln(w, path)
 				}
 			}
 			if len(cfg.Skills.Repositories) == 0 && len(cfg.Skills.LocalPaths) == 0 {
-				_, _ = fmt.Fprintln(w, "No sources configured. Run 'squad skill add <alias> <url>' to add one.")
+				_, _ = fmt.Fprintln(w, "No sources configured. Run 'squad skill add <alias> <url>' or 'squad skill add <path>' to add one.")
 			}
 			return w.Flush()
 		},

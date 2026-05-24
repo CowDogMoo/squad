@@ -57,7 +57,7 @@ func newSkillsCfg(t *testing.T) *config.Config {
 	return &config.Config{
 		Skills: config.SkillsConfig{
 			Repositories: map[string]string{},
-			LocalPaths:   map[string]string{},
+			LocalPaths:   []string{},
 		},
 	}
 }
@@ -107,7 +107,7 @@ func TestSkillsManager_AddLocalPathAndDiscover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddLocalPath("note", localDir); err != nil {
+	if err := mgr.AddLocalPath(localDir); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,24 +190,9 @@ func TestSkillsManager_RemoveSourceUnregisters(t *testing.T) {
 	}
 }
 
-func TestSkillsManager_RemoveLocalPathByAlias(t *testing.T) {
-	cfg := newSkillsCfg(t)
-	cfg.Skills.LocalPaths = map[string]string{"team": "/tmp/skills-x"}
-	mgr, err := NewSkillsManager(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.RemoveSource("team"); err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Skills.LocalPaths) != 0 {
-		t.Errorf("local path not removed: %v", cfg.Skills.LocalPaths)
-	}
-}
-
 func TestSkillsManager_RemoveLocalPathByPath(t *testing.T) {
 	cfg := newSkillsCfg(t)
-	cfg.Skills.LocalPaths = map[string]string{"team": "/tmp/skills-x"}
+	cfg.Skills.LocalPaths = []string{"/tmp/skills-x"}
 	mgr, err := NewSkillsManager(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -243,7 +228,7 @@ func TestSkillsManager_AddLocalPathMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddLocalPath("ghost", "/this/does/not/exist"); err == nil {
+	if err := mgr.AddLocalPath("/this/does/not/exist"); err == nil {
 		t.Fatal("expected error for missing path")
 	}
 }
@@ -259,23 +244,8 @@ func TestSkillsManager_AddLocalPathNotADirectory(t *testing.T) {
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddLocalPath("note", file); err == nil {
+	if err := mgr.AddLocalPath(file); err == nil {
 		t.Fatal("expected error for non-directory")
-	}
-}
-
-func TestSkillsManager_AddLocalPathDuplicateAlias(t *testing.T) {
-	cfg := newSkillsCfg(t)
-	mgr, err := NewSkillsManager(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmp := t.TempDir()
-	if err := mgr.AddLocalPath("team", tmp); err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.AddLocalPath("team", tmp); err == nil {
-		t.Fatal("expected duplicate-alias error")
 	}
 }
 
@@ -286,10 +256,10 @@ func TestSkillsManager_AddLocalPathDuplicatePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	tmp := t.TempDir()
-	if err := mgr.AddLocalPath("team-a", tmp); err != nil {
+	if err := mgr.AddLocalPath(tmp); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddLocalPath("team-b", tmp); err == nil {
+	if err := mgr.AddLocalPath(tmp); err == nil {
 		t.Fatal("expected duplicate-path error")
 	}
 }
@@ -435,7 +405,7 @@ func TestNewSkillsManager_FailsWithoutXDG(t *testing.T) {
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
 			Repositories: map[string]string{},
-			LocalPaths:   map[string]string{},
+			LocalPaths:   []string{},
 		},
 	}
 	if _, err := NewSkillsManager(cfg); err == nil {
@@ -455,7 +425,7 @@ func TestNewSkillsManager_SkillsCacheDirError(t *testing.T) {
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
 			Repositories: map[string]string{},
-			LocalPaths:   map[string]string{},
+			LocalPaths:   []string{},
 		},
 	}
 	if _, err := NewSkillsManager(cfg); err == nil {
@@ -463,9 +433,10 @@ func TestNewSkillsManager_SkillsCacheDirError(t *testing.T) {
 	}
 }
 
-// TestSkillsManager_AddLocalPathInitializesNilMap drives the lazy-init
-// branch in AddLocalPath where cfg.Skills.LocalPaths is nil.
-func TestSkillsManager_AddLocalPathInitializesNilMap(t *testing.T) {
+// TestSkillsManager_AddLocalPathAppendsToNilSlice drives the append-to-nil
+// behavior in AddLocalPath where cfg.Skills.LocalPaths is nil. Go allows
+// append on a nil slice, so this should succeed.
+func TestSkillsManager_AddLocalPathAppendsToNilSlice(t *testing.T) {
 	cfg := newSkillsCfg(t)
 	cfg.Skills.LocalPaths = nil
 	mgr, err := NewSkillsManager(cfg)
@@ -473,32 +444,29 @@ func TestSkillsManager_AddLocalPathInitializesNilMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	if err := mgr.AddLocalPath("team", dir); err != nil {
+	if err := mgr.AddLocalPath(dir); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Skills.LocalPaths["team"] == "" {
-		t.Fatalf("expected team registered, got %v", cfg.Skills.LocalPaths)
+	if len(cfg.Skills.LocalPaths) != 1 {
+		t.Fatalf("expected one local path registered, got %v", cfg.Skills.LocalPaths)
 	}
 }
 
-// TestSkillsManager_AddLocalPathDuplicateSameAbs verifies the
-// "already configured under alias" duplicate detection when both alias and
-// absPath match an existing entry.
-func TestSkillsManager_AddLocalPathDuplicateSameAbs(t *testing.T) {
+// TestSkillsManager_AddLocalPathDuplicateErrorMessage verifies the duplicate
+// error surfaces the "already configured" string so users can recognize it.
+func TestSkillsManager_AddLocalPathDuplicateErrorMessage(t *testing.T) {
 	cfg := newSkillsCfg(t)
 	mgr, err := NewSkillsManager(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	if err := mgr.AddLocalPath("team", dir); err != nil {
+	if err := mgr.AddLocalPath(dir); err != nil {
 		t.Fatal(err)
 	}
-	// Re-register the same alias with the same path; takes the
-	// "already configured under alias" branch.
-	err = mgr.AddLocalPath("team", dir)
+	err = mgr.AddLocalPath(dir)
 	if err == nil {
-		t.Fatal("expected duplicate-alias-same-path error")
+		t.Fatal("expected duplicate-path error")
 	}
 	if !strings.Contains(err.Error(), "already configured") {
 		t.Fatalf("wrong error: %v", err)

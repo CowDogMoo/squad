@@ -359,28 +359,48 @@ func runSkillSubcmd(t *testing.T, cfg *config.Config, build func() *cobra.Comman
 func TestSkillAddLocalPath(t *testing.T) {
 	cfg := newSkillTestCfg(t)
 	dir := t.TempDir()
-	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "local", dir); err != nil {
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, dir); err != nil {
 		t.Fatalf("add local: %v", err)
 	}
 	if len(cfg.Skills.LocalPaths) != 1 {
 		t.Fatalf("expected 1 local path, got %v", cfg.Skills.LocalPaths)
 	}
-	if _, ok := cfg.Skills.LocalPaths["local"]; !ok {
-		t.Fatalf("expected alias 'local' in LocalPaths, got %v", cfg.Skills.LocalPaths)
+	if cfg.Skills.LocalPaths[0] != dir {
+		t.Fatalf("expected %q in LocalPaths, got %v", dir, cfg.Skills.LocalPaths)
 	}
 }
 
-func TestSkillRemoveLocalByAlias(t *testing.T) {
+func TestSkillRemoveLocalByPath(t *testing.T) {
 	cfg := newSkillTestCfg(t)
 	dir := t.TempDir()
-	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "local", dir); err != nil {
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, dir); err != nil {
 		t.Fatalf("add local: %v", err)
 	}
-	if _, err := runSkillSubcmd(t, cfg, newSkillRemoveCmd, "local"); err != nil {
-		t.Fatalf("remove local by alias: %v", err)
+	if _, err := runSkillSubcmd(t, cfg, newSkillRemoveCmd, dir); err != nil {
+		t.Fatalf("remove local by path: %v", err)
 	}
 	if len(cfg.Skills.LocalPaths) != 0 {
 		t.Fatalf("expected no local paths after remove, got %v", cfg.Skills.LocalPaths)
+	}
+}
+
+// TestSkillAddLocalPathRejectsAliasForm verifies that the two-argument form
+// errors when the second argument is not a git URL — the contract is that
+// local paths take exactly one positional argument now.
+func TestSkillAddLocalPathRejectsAliasForm(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	dir := t.TempDir()
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "local", dir); err == nil {
+		t.Fatal("expected error when supplying alias+path for a local registration")
+	}
+}
+
+// TestSkillAddRepositoryRequiresAlias verifies that a single-arg git URL
+// is rejected because repositories still require an alias.
+func TestSkillAddRepositoryRequiresAlias(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "https://example.com/a.git"); err == nil {
+		t.Fatal("expected error when supplying a git URL without an alias")
 	}
 }
 
@@ -483,7 +503,7 @@ func TestSkillSourcesEmpty(t *testing.T) {
 func TestSkillSourcesPopulated(t *testing.T) {
 	cfg := newSkillTestCfg(t)
 	cfg.Skills.Repositories["team"] = "https://example.com/a.git"
-	cfg.Skills.LocalPaths = map[string]string{"local": "/tmp/skills"}
+	cfg.Skills.LocalPaths = []string{"/tmp/skills"}
 	out, err := runSkillSubcmd(t, cfg, newSkillSourcesCmd)
 	if err != nil {
 		t.Fatal(err)
@@ -588,7 +608,7 @@ func TestSkillCatalogPathsNilConfig(t *testing.T) {
 func TestSkillCatalogPathsLocal(t *testing.T) {
 	cfg := newSkillTestCfg(t)
 	localDir := t.TempDir()
-	cfg.Skills.LocalPaths = map[string]string{"local": localDir}
+	cfg.Skills.LocalPaths = []string{localDir}
 	cmd := &cobra.Command{}
 	cmd.SetContext(withConfig(context.Background(), cfg))
 	paths := skillCatalogPaths(cmd)
@@ -772,7 +792,7 @@ func TestSkillCatalogPathsManagerError(t *testing.T) {
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
 			Repositories: map[string]string{},
-			LocalPaths:   map[string]string{},
+			LocalPaths:   []string{},
 		},
 	}
 	cmd := &cobra.Command{}
@@ -790,7 +810,7 @@ func TestSkillAddRepositoryNewMgrError(t *testing.T) {
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
 			Repositories: map[string]string{},
-			LocalPaths:   map[string]string{},
+			LocalPaths:   []string{},
 		},
 	}
 	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "team", "https://example.com/a.git"); err == nil {
@@ -806,7 +826,7 @@ func TestSkillRemoveNewMgrError(t *testing.T) {
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
 			Repositories: map[string]string{},
-			LocalPaths:   map[string]string{},
+			LocalPaths:   []string{},
 		},
 	}
 	if _, err := runSkillSubcmd(t, cfg, newSkillRemoveCmd, "team"); err == nil {
@@ -822,7 +842,7 @@ func TestSkillUpdateNewMgrError(t *testing.T) {
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
 			Repositories: map[string]string{},
-			LocalPaths:   map[string]string{},
+			LocalPaths:   []string{},
 		},
 	}
 	if _, err := runSkillSubcmd(t, cfg, newSkillUpdateCmd); err == nil {
@@ -852,7 +872,7 @@ func TestSkillListDiscoverError(t *testing.T) {
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
 			Repositories: map[string]string{},
-			LocalPaths:   map[string]string{},
+			LocalPaths:   []string{},
 		},
 	}
 	if _, err := runSkillSubcmd(t, cfg, newSkillListCmd, "--repo", t.TempDir()); err == nil {
@@ -867,7 +887,7 @@ func TestSkillShowDiscoverError(t *testing.T) {
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
 			Repositories: map[string]string{},
-			LocalPaths:   map[string]string{},
+			LocalPaths:   []string{},
 		},
 	}
 	if _, err := runSkillSubcmd(t, cfg, newSkillShowCmd, "alpha", "--repo", t.TempDir()); err == nil {
@@ -883,7 +903,7 @@ func TestSkillNew_GlobalResolveError(t *testing.T) {
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
 			Repositories: map[string]string{},
-			LocalPaths:   map[string]string{},
+			LocalPaths:   []string{},
 		},
 	}
 	if _, err := runSkillSubcmd(t, cfg, newSkillNewCmd, "demo", "--global"); err == nil {

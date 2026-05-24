@@ -721,6 +721,16 @@ func TestInitConfigWithConfigPath(t *testing.T) {
 	}
 }
 
+// TestInitConfigMissingConfigFile asserts that an explicitly-supplied
+// --config path that does not exist is a loud error, not a silent
+// fall-back to defaults. The previous behaviour discarded the user's
+// requested config when any load failure occurred — including type
+// mismatches like skills.local_paths shape errors — which led to
+// confusing "why is my config ignored?" reports.
+//
+// The no-config-file-at-all path (no flag, no file in any XDG dir) is
+// still handled by config.Load swallowing ConfigFileNotFoundError; it is
+// covered by TestLoadMissingFileReturnsDefaults in the config package.
 func TestInitConfigMissingConfigFile(t *testing.T) {
 	baseDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", baseDir)
@@ -733,16 +743,12 @@ func TestInitConfigMissingConfigFile(t *testing.T) {
 		t.Fatalf("Set config: %v", err)
 	}
 
-	if err := initConfig(root, nil); err != nil {
-		t.Fatalf("initConfig() error = %v", err)
+	err := initConfig(root, nil)
+	if err == nil {
+		t.Fatalf("initConfig() with missing --config path must error, got nil")
 	}
-	loaded := configFromContext(root)
-	if loaded == nil {
-		t.Fatalf("expected config in context")
-	}
-	defaults := config.Defaults()
-	if loaded.Log.Level != defaults.Log.Level {
-		t.Fatalf("Log.Level = %q, want %q", loaded.Log.Level, defaults.Log.Level)
+	if !strings.Contains(err.Error(), "failed to load config") {
+		t.Fatalf("error = %q, want it to mention failed to load config", err.Error())
 	}
 }
 

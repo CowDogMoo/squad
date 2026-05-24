@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -136,13 +135,14 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	if err != nil {
-		logging.Warn("failed to load config, using defaults: %v", err)
-		cfg = config.Defaults()
-		v = viper.New()
-		config.SetDefaults(v)
-		v.SetEnvPrefix("SQUAD")
-		v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-		v.AutomaticEnv()
+		// A config file that is present but unparsable or has a type
+		// mismatch is a user error — surfacing it loudly is preferable to
+		// silently falling back to defaults and discarding the user's
+		// intended configuration. config.Load only returns errors when a
+		// file was found and could not be read or unmarshaled; a missing
+		// file is handled as a not-found inside config.Load and produces
+		// pure defaults.
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	if err := bindPersistentFlags(cmd, v); err != nil {

@@ -93,11 +93,10 @@ type SkillsConfig struct {
 	// Repositories maps a catalog alias to its Git URL. squad skill add /
 	// update operate on this map.
 	Repositories map[string]string `mapstructure:"repositories" yaml:"repositories"`
-	// LocalPaths maps a catalog alias to an absolute local directory. Each
-	// path is treated as a catalog root and its immediate subdirectories are
-	// scanned for SKILL.md files. The alias is what `squad skill remove`
-	// matches on.
-	LocalPaths map[string]string `mapstructure:"local_paths" yaml:"local_paths"`
+	// LocalPaths lists additional directories to search for skill
+	// subdirectories. Each path is treated as a catalog root and its
+	// immediate subdirectories are scanned for SKILL.md files.
+	LocalPaths []string `mapstructure:"local_paths" yaml:"local_paths"`
 }
 
 // LogConfig holds logging configuration.
@@ -246,6 +245,6 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("agents.local_paths", []string{})
 	v.SetDefault("skills.cache_dir", "")
 	v.SetDefault("skills.repositories", map[string]string{})
-	v.SetDefault("skills.local_paths", map[string]string{})
+	v.SetDefault("skills.local_paths", []string{})
 	v.SetDefault("otel.endpoint", "")
 }
