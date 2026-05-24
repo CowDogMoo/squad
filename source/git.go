@@ -31,6 +31,8 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 // GitOperations handles git operations for agent repositories.
@@ -75,6 +77,7 @@ func (g *GitOperations) clone(gitURL, repoPath string) (string, error) {
 	cloneOpts := &git.CloneOptions{
 		URL:      gitURL,
 		Progress: os.Stdout,
+		Auth:     httpAuthFromEnv(gitURL),
 	}
 
 	if _, err := git.PlainClone(repoPath, false, cloneOpts); err != nil {
@@ -82,6 +85,43 @@ func (g *GitOperations) clone(gitURL, repoPath string) (string, error) {
 	}
 
 	return repoPath, nil
+}
+
+// remoteURL returns the URL of the named-or-first remote on repo, or empty
+// string if none can be resolved. Used so pull() can route through the same
+// env-token logic as clone().
+func remoteURL(repo *git.Repository) string {
+	if repo == nil {
+		return ""
+	}
+	remote, err := repo.Remote("origin")
+	if err != nil || remote == nil {
+		return ""
+	}
+	urls := remote.Config().URLs
+	if len(urls) == 0 {
+		return ""
+	}
+	return urls[0]
+}
+
+// httpAuthFromEnv returns BasicAuth derived from GH_TOKEN or GITHUB_TOKEN
+// for https://github.com URLs, or nil if no token is set or the URL is not
+// an HTTPS GitHub URL. go-git does not consult the OS git credential helper,
+// so callers must supply Auth explicitly to clone private repositories.
+func httpAuthFromEnv(gitURL string) transport.AuthMethod {
+	if !strings.HasPrefix(gitURL, "https://github.com/") &&
+		!strings.HasPrefix(gitURL, "https://www.github.com/") {
+		return nil
+	}
+	token := os.Getenv("GH_TOKEN")
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	if token == "" {
+		return nil
+	}
+	return &githttp.BasicAuth{Username: "x-access-token", Password: token}
 }
 
 // pull pulls the latest changes from the remote.
@@ -99,6 +139,7 @@ func (g *GitOperations) pull(repoPath string) error {
 	pullOpts := &git.PullOptions{
 		RemoteName: "origin",
 		Progress:   os.Stdout,
+		Auth:       httpAuthFromEnv(remoteURL(repo)),
 	}
 
 	if err := w.Pull(pullOpts); err != nil && err != git.NoErrAlreadyUpToDate {
