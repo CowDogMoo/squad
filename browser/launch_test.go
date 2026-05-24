@@ -61,3 +61,60 @@ func exec_LookPath_true() (string, error) {
 	}
 	return "", errors.New("true not found")
 }
+
+func TestChromeCandidatesHonorsEnv(t *testing.T) {
+	t.Setenv("SQUAD_BROWSER_BIN", "/custom/chrome")
+	got := chromeCandidates()
+	if len(got) != 1 || got[0] != "/custom/chrome" {
+		t.Fatalf("chromeCandidates() = %v, want [/custom/chrome]", got)
+	}
+}
+
+func TestChromeCandidatesDefaults(t *testing.T) {
+	t.Setenv("SQUAD_BROWSER_BIN", "")
+	got := chromeCandidates()
+	// We don't assert specific paths (OS-dependent), but the list should
+	// be non-empty on darwin/linux. On unsupported OSes (e.g. windows in
+	// CI), the function returns nil — accept either.
+	if got == nil {
+		return
+	}
+	if len(got) == 0 {
+		t.Fatal("chromeCandidates() returned empty non-nil slice")
+	}
+}
+
+func TestFindChromeNoCandidates(t *testing.T) {
+	// Empty SQUAD_BROWSER_BIN with PATH that contains no chrome binaries.
+	t.Setenv("SQUAD_BROWSER_BIN", filepath.Join(t.TempDir(), "absent"))
+	_, err := findChrome()
+	if !errors.Is(err, ErrChromeNotFound) {
+		t.Fatalf("findChrome() err = %v, want ErrChromeNotFound", err)
+	}
+}
+
+func TestIsAbsExecutableRejectsDir(t *testing.T) {
+	dir := t.TempDir()
+	if isAbsExecutable(dir) {
+		t.Fatal("isAbsExecutable should return false for a directory")
+	}
+}
+
+func TestIsAbsExecutableRejectsRelative(t *testing.T) {
+	if isAbsExecutable("relative/path") {
+		t.Fatal("isAbsExecutable should return false for relative paths")
+	}
+}
+
+func TestLaunchDetachReturnsImmediately(t *testing.T) {
+	withRoot(t)
+	path, err := exec_LookPath_true()
+	if err != nil {
+		t.Skip("no `true` binary; skipping detach test")
+	}
+	t.Setenv("SQUAD_BROWSER_BIN", path)
+	// Wait:false exercises the goroutine-reap branch.
+	if err := Launch("amazon", LaunchOptions{Wait: false}); err != nil {
+		t.Fatalf("Launch (detach): %v", err)
+	}
+}

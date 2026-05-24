@@ -167,3 +167,31 @@ func TestDeleteRejectsInvalidName(t *testing.T) {
 		t.Fatal("expected error for invalid name")
 	}
 }
+
+func TestRootFallsBackToHome(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("HOME", tmpHome)
+	want := filepath.Join(tmpHome, ".local", "share", "squad", "browser-profiles")
+	if got := Root(); got != want {
+		t.Fatalf("Root() = %q, want %q", got, want)
+	}
+}
+
+func TestListSkipsNonDirEntries(t *testing.T) {
+	root := withRoot(t)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("seed root: %v", err)
+	}
+	// File instead of dir — must be skipped.
+	if err := os.WriteFile(filepath.Join(root, "stray-file"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	profiles, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(profiles) != 0 {
+		t.Fatalf("List should ignore non-directory entries, got: %+v", profiles)
+	}
+}
