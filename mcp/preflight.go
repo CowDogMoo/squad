@@ -15,10 +15,11 @@ import (
 // versioned specifiers like "chrome-devtools-mcp@latest".
 const chromeDevToolsPackage = "chrome-devtools-mcp"
 
-// cdpDefaultEndpoint is the standard Chrome remote-debugging endpoint
+// cdpEndpoint is the standard Chrome remote-debugging endpoint
 // chrome-devtools-mcp falls back to when Chrome's built-in permission API
-// (Chrome 144+) isn't available or hasn't been granted.
-const cdpDefaultEndpoint = "http://127.0.0.1:9222/json/version"
+// (Chrome 144+) isn't available or hasn't been granted. var so tests can
+// redirect the probe at an httptest server.
+var cdpEndpoint = "http://127.0.0.1:9222/json/version"
 
 // cdpProbeTimeout caps the pre-flight probe. Fast enough that a missing
 // Chrome doesn't measurably delay agent startup; long enough that a loaded
@@ -59,7 +60,7 @@ func chromeUsesAutoConnect(cfg ServerConfig) bool {
 func cdpReachable(ctx context.Context) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, cdpProbeTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, cdpDefaultEndpoint, nil)
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, cdpEndpoint, nil)
 	if err != nil {
 		return false
 	}
@@ -89,7 +90,7 @@ func PreflightServer(ctx context.Context, cfg ServerConfig) {
 		return
 	}
 	if cdpReachable(ctx) {
-		logging.InfoContext(ctx, "chrome MCP pre-flight: CDP endpoint reachable at %s", cdpDefaultEndpoint)
+		logging.InfoContext(ctx, "chrome MCP pre-flight: CDP endpoint reachable at %s", cdpEndpoint)
 		return
 	}
 	if chromeUsesAutoConnect(cfg) {
@@ -98,11 +99,11 @@ func PreflightServer(ctx context.Context, cfg ServerConfig) {
 			"If chrome tool calls fail with \"Could not find DevToolsActivePort\": (1) ensure Chrome 144+ "+
 			"and grant access via chrome://inspect/#remote-debugging → \"Allow remote debugging\" "+
 			"(persists for the life of the Chrome process), OR (2) quit Chrome and relaunch with "+
-			"--remote-debugging-port=9222 so the legacy attach path works.", cdpDefaultEndpoint)
+			"--remote-debugging-port=9222 so the legacy attach path works.", cdpEndpoint)
 		return
 	}
 	logging.Warn("chrome MCP pre-flight: CDP endpoint %s unreachable and --autoConnect is not set. "+
 		"chrome-devtools-mcp will launch its own Chrome instance with a dedicated profile; "+
 		"your existing browser session (cookies, logins) will not be available to the agent. "+
-		"Add --autoConnect to attach to your running Chrome instead.", cdpDefaultEndpoint)
+		"Add --autoConnect to attach to your running Chrome instead.", cdpEndpoint)
 }
