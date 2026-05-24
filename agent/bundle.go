@@ -227,6 +227,30 @@ func (td TemplateData) Default(key, defaultVal string) string {
 	return defaultVal
 }
 
+// Env returns the value of an OS environment variable, or the first
+// non-empty fallback when unset. Distinct from Var/Default which read
+// from squad's --var / cfg.Vars map. Usage in templates:
+//
+//	env:
+//	  - "GOOGLE_TOKEN={{.Env \"GOOGLE_TOKEN\"}}"
+//	  - "API_BASE={{.Env \"API_BASE\" \"https://api.example.com\"}}"
+//
+// Squad's `--var KEY=VAL` flags shadow OS env when both name the same
+// key — author your manifest to call `.Env` for ambient credentials
+// (refresh tokens, machine-local secrets) and `.Default` / `.Var` for
+// runtime knobs the caller is expected to set explicitly.
+func (td TemplateData) Env(key string, fallbacks ...string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	for _, f := range fallbacks {
+		if f != "" {
+			return f
+		}
+	}
+	return ""
+}
+
 // BrowserProfile returns the absolute path to the named browser profile
 // dir, creating it lazily if missing. Usage in templates:
 //
