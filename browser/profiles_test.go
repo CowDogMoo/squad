@@ -178,6 +178,52 @@ func TestRootFallsBackToHome(t *testing.T) {
 	}
 }
 
+func TestListReturnsErrorWhenRootIsFile(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmp)
+	root := Root()
+	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+	if err := os.WriteFile(root, []byte(""), 0o600); err != nil {
+		t.Fatalf("seed root as file: %v", err)
+	}
+	if _, err := List(); err == nil {
+		t.Fatal("List should error when root is a file")
+	}
+}
+
+func TestDeleteNonDirectory(t *testing.T) {
+	root := withRoot(t)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("seed root: %v", err)
+	}
+	// Put a file where the profile dir would normally be.
+	if err := os.WriteFile(filepath.Join(root, "amazon"), []byte(""), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	err := Delete("amazon")
+	if err == nil || !strings.Contains(err.Error(), "non-directory") {
+		t.Fatalf("Delete on a file should error, got: %v", err)
+	}
+}
+
+func TestProfileDirMkdirAllFails(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmp)
+	// Put a file at the path Root() will try to MkdirAll under.
+	root := Root()
+	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+	if err := os.WriteFile(root, []byte(""), 0o600); err != nil {
+		t.Fatalf("seed file in root path: %v", err)
+	}
+	if _, err := ProfileDir("amazon"); err == nil {
+		t.Fatal("ProfileDir should error when root path is a file")
+	}
+}
+
 func TestListSkipsNonDirEntries(t *testing.T) {
 	root := withRoot(t)
 	if err := os.MkdirAll(root, 0o700); err != nil {

@@ -106,6 +106,27 @@ func TestIsAbsExecutableRejectsRelative(t *testing.T) {
 	}
 }
 
+func TestLaunchWithStderrAndWaitFailure(t *testing.T) {
+	withRoot(t)
+	// `/usr/bin/false` exits 1 — exercises Stderr wiring and the Wait error path.
+	candidates := []string{"/usr/bin/false", "/bin/false"}
+	var falsePath string
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && !info.IsDir() {
+			falsePath = c
+			break
+		}
+	}
+	if falsePath == "" {
+		t.Skip("no `false` binary on PATH")
+	}
+	t.Setenv("SQUAD_BROWSER_BIN", falsePath)
+	err := Launch("amazon", LaunchOptions{Wait: true, Stderr: os.Stderr})
+	if err == nil || !strings.Contains(err.Error(), "chrome exited") {
+		t.Fatalf("Launch should report wait error, got: %v", err)
+	}
+}
+
 func TestLaunchDetachReturnsImmediately(t *testing.T) {
 	withRoot(t)
 	path, err := exec_LookPath_true()
