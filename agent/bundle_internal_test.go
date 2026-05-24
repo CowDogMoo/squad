@@ -491,6 +491,187 @@ func TestBuildBundleInline_MissingEntrypoint(t *testing.T) {
 	}
 }
 
+// TestProcessTemplate_NowFunction exercises the {{now}} template helper.
+// Default layout is time.RFC3339; a custom layout argument is honored.
+func TestProcessTemplate_NowFunction(t *testing.T) {
+	t.Parallel()
+
+	out, err := processTemplate("test", `{{now}}`, t.TempDir(), TemplateData{})
+	if err != nil {
+		t.Fatalf("processTemplate: %v", err)
+	}
+	if _, perr := time.Parse(time.RFC3339, out); perr != nil {
+		t.Fatalf("default-layout output %q is not RFC3339: %v", out, perr)
+	}
+
+	// Custom layout.
+	out, err = processTemplate("test", `{{now "2006"}}`, t.TempDir(), TemplateData{})
+	if err != nil {
+		t.Fatalf("processTemplate custom: %v", err)
+	}
+	if len(out) != 4 {
+		t.Fatalf("custom-layout output %q should be 4 digits", out)
+	}
+
+	// Empty layout falls back to RFC3339.
+	out, err = processTemplate("test", `{{now ""}}`, t.TempDir(), TemplateData{})
+	if err != nil {
+		t.Fatalf("processTemplate empty: %v", err)
+	}
+	if _, perr := time.Parse(time.RFC3339, out); perr != nil {
+		t.Fatalf("empty-layout fallback output %q is not RFC3339: %v", out, perr)
+	}
+}
+
+// TestProcessTemplate_TodayFunction exercises the {{today}} helper.
+func TestProcessTemplate_TodayFunction(t *testing.T) {
+	t.Parallel()
+	out, err := processTemplate("test", `{{today}}`, t.TempDir(), TemplateData{})
+	if err != nil {
+		t.Fatalf("processTemplate: %v", err)
+	}
+	if _, perr := time.Parse("Monday 2006-01-02", out); perr != nil {
+		t.Fatalf("today output %q does not match 'Monday 2006-01-02': %v", out, perr)
+	}
+}
+
+// TestProcessTemplate_ParseError exercises the template.Parse error branch.
+func TestProcessTemplate_ParseError(t *testing.T) {
+	t.Parallel()
+	_, err := processTemplate("bad", `{{ this is not valid }}`, t.TempDir(), TemplateData{})
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), "failed to parse template") {
+		t.Fatalf("err=%v, want 'failed to parse template'", err)
+	}
+}
+
+// TestProcessTemplate_ExecuteError exercises the tmpl.Execute error branch by
+// referencing a field that doesn't exist on TemplateData with strict mode.
+// text/template by default treats missing fields as zero value — but invoking
+// a method that returns an error will surface it.
+func TestProcessTemplate_ExecuteError(t *testing.T) {
+	t.Parallel()
+	// BrowserProfile returns an error for invalid names; that error must
+	// propagate out of Execute.
+	_, err := processTemplate("exec", `{{.BrowserProfile "Bad Name"}}`, t.TempDir(), TemplateData{})
+	if err == nil {
+		t.Fatal("expected execute error")
+	}
+	if !strings.Contains(err.Error(), "failed to execute template") {
+		t.Fatalf("err=%v, want 'failed to execute template'", err)
+	}
+}
+
+// TestMakeIncludeFunc_MissingFile covers the OpenInRoot-error branch.
+func TestMakeIncludeFunc_MissingFile(t *testing.T) {
+	t.Parallel()
+	agentsDir := t.TempDir()
+	// Create the _templates dir so OpenInRoot can open the root, but no file inside.
+	if err := os.MkdirAll(filepath.Join(agentsDir, "_templates"), 0o755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	include := makeIncludeFunc(agentsDir)
+	_, err := include("no-such-template.md")
+	if err == nil {
+		t.Fatal("expected error for missing include")
+	}
+	if !strings.Contains(err.Error(), "failed to include template") {
+		t.Fatalf("err=%v, want 'failed to include template'", err)
+	}
+}
+
+// TestMakeIncludeFunc_Success exercises the happy path including the
+// defer-close branch.
+func TestMakeIncludeFunc_Success(t *testing.T) {
+	t.Parallel()
+	agentsDir := t.TempDir()
+	templatesDir := filepath.Join(agentsDir, "_templates")
+	if err := os.MkdirAll(templatesDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(templatesDir, "rules.md"), []byte("  shared content  "), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	include := makeIncludeFunc(agentsDir)
+	got, err := include("rules.md")
+	if err != nil {
+		t.Fatalf("include: %v", err)
+	}
+	if got != "shared content" {
+		t.Fatalf("got %q, want trimmed 'shared content'", got)
+	}
+}
+
+// TestReadFileInRoot_MissingPath covers the OpenInRoot error path.
+func TestReadFileInRoot_MissingPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	_, err := readFileInRoot(root, "nope.md")
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+// TestReadFileInRoot_Success exercises the happy path.
+func TestReadFileInRoot_Success(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	got, err := readFileInRoot(root, "a.txt")
+	if err != nil {
+		t.Fatalf("readFileInRoot: %v", err)
+	}
+	if string(got) != "hello" {
+		t.Fatalf("got %q, want 'hello'", string(got))
+	}
+}
+
+// TestLoadReferences_SkipsBlankRefs covers the strings.TrimSpace(ref) == ""
+// continue branch.
+func TestLoadReferences_SkipsBlankRefs(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "ref.md"), []byte("body"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	got, err := loadReferences(root, []string{"", "   ", "ref.md", "\t"})
+	if err != nil {
+		t.Fatalf("loadReferences: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d entries, want 1", len(got))
+	}
+	if !strings.Contains(got[0], "body") {
+		t.Fatalf("got[0]=%q, want it to contain 'body'", got[0])
+	}
+}
+
+// TestLoadReferences_MissingFile covers the readFileInRoot error wrapping.
+func TestLoadReferences_MissingFile(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	_, err := loadReferences(root, []string{"nope.md"})
+	if err == nil {
+		t.Fatal("expected error for missing reference")
+	}
+	if !strings.Contains(err.Error(), "failed to read reference") {
+		t.Fatalf("err=%v, want 'failed to read reference'", err)
+	}
+}
+
+// TestChildMaxCost_NilBudget covers the b == nil branch.
+func TestChildMaxCost_NilBudget(t *testing.T) {
+	t.Parallel()
+	var b *BudgetConfig
+	if got := b.ChildMaxCost("anything"); got != 0 {
+		t.Fatalf("got %v, want 0 for nil budget", got)
+	}
+}
+
 // fakeDirEntry implements fs.DirEntry for testing.
 type fakeDirEntry struct {
 	fname string

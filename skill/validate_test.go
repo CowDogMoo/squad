@@ -322,6 +322,95 @@ func TestFileHasShebangEmpty(t *testing.T) {
 	}
 }
 
+// TestValidateReadManifestFails covers the branch where ReadFile fails
+// with something other than ErrNotExist — here the SKILL.md slot is held
+// by a directory, so ReadFile returns EISDIR.
+func TestValidateReadManifestFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory-at-file-path EISDIR semantics are unix-only")
+	}
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "shadow")
+	if err := os.MkdirAll(filepath.Join(skillDir, FileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Validate(skillDir); err == nil {
+		t.Fatal("expected read error when SKILL.md path is a directory")
+	}
+}
+
+// TestValidateScriptsDirIsFile covers the validateScripts error branch:
+// `scripts/` is a regular file, so ReadDir fails with non-ErrNotExist.
+func TestValidateScriptsDirIsFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ReadDir-on-file behavior differs on windows")
+	}
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "scr")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, FileName),
+		[]byte("---\nname: scr\ndescription: x\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// `scripts` slot is a regular file → ReadDir errors with non-ErrNotExist.
+	if err := os.WriteFile(filepath.Join(skillDir, "scripts"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Validate(skillDir); err == nil {
+		t.Fatal("expected Validate to return error when scripts/ is a file")
+	}
+}
+
+// TestValidateScriptUnreadable triggers the fileHasShebang error path —
+// the script is mode 0 so os.Open returns a permission error, which
+// validateScripts surfaces as a warning rather than crashing.
+func TestValidateScriptUnreadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission semantics are unix-only")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can read any file; chmod 0 cannot block")
+	}
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "scr")
+	if err := os.MkdirAll(filepath.Join(skillDir, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, FileName),
+		[]byte("---\nname: scr\ndescription: x\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(skillDir, "scripts", "do.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// chmod 0 so os.Open inside fileHasShebang fails.
+	if err := os.Chmod(scriptPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// Restore permissions so t.TempDir() cleanup can remove the file.
+		if err := os.Chmod(scriptPath, 0o644); err != nil {
+			t.Logf("restore chmod failed: %v", err)
+		}
+	})
+	r, err := Validate(skillDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundReadWarn := false
+	for _, w := range r.Warnings() {
+		if strings.Contains(w.Message, "read:") {
+			foundReadWarn = true
+		}
+	}
+	if !foundReadWarn {
+		t.Errorf("expected a read warning, got %v", r.Warnings())
+	}
+}
+
 func TestValidationReportHasErrorsErrorsWarnings(t *testing.T) {
 	r := &ValidationReport{}
 	if r.HasErrors() {

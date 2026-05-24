@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -438,6 +439,113 @@ func TestCatalogFilterSkipsShadowed(t *testing.T) {
 	got := cat.Filter(FilterOptions{})
 	if len(got) != 1 || got[0].Manifest.Description != "repo" {
 		t.Fatalf("Filter should yield only repo-scope dup, got %v", got)
+	}
+}
+
+// TestDiscoverGlobalSkillsDirError covers the branch where GlobalSkillsDir()
+// fails — set XDG_CONFIG_HOME and HOME both empty so ConfigFile returns
+// os.ErrNotExist.
+func TestDiscoverGlobalSkillsDirError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	if _, err := Discover(""); err == nil {
+		t.Fatal("expected Discover error when GlobalSkillsDir cannot be resolved")
+	}
+}
+
+// TestGlobalSkillsDirError directly exercises the ConfigFile error branch
+// inside GlobalSkillsDir.
+func TestGlobalSkillsDirError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	if _, err := GlobalSkillsDir(); err == nil {
+		t.Fatal("expected GlobalSkillsDir error when XDG_CONFIG_HOME and HOME are empty")
+	}
+}
+
+// TestDiscoverScanGlobalFails forces the scan-global branch to error by
+// making the global skills directory unreadable (mode 0). MkdirAll inside
+// GlobalSkillsDir succeeds because the directory already exists, but the
+// subsequent ReadDir in scanDir returns a permission error that is NOT
+// fs.ErrNotExist — exactly the branch we want to exercise.
+func TestDiscoverScanGlobalFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission semantics are unix-only")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permission checks")
+	}
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("HOME", tmp)
+	skills := filepath.Join(tmp, "squad", "skills")
+	if err := os.MkdirAll(skills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Strip read permission so ReadDir errors with EACCES (not ErrNotExist).
+	if err := os.Chmod(skills, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(skills, 0o755); err != nil {
+			t.Logf("restore chmod failed: %v", err)
+		}
+	})
+	if _, err := Discover(""); err == nil {
+		t.Fatal("expected scan-global error when skills directory is unreadable")
+	}
+}
+
+// TestDiscoverScanCatalogFails forces the catalog scan branch to error by
+// passing a path that resolves to a non-directory.
+func TestDiscoverScanCatalogFails(t *testing.T) {
+	withGlobalSkillsDir(t)
+	tmp := t.TempDir()
+	notADir := filepath.Join(tmp, "file")
+	if err := os.WriteFile(notADir, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Discover("", notADir); err == nil {
+		t.Fatal("expected scan-catalog error when path is a file")
+	}
+}
+
+// TestResolveCollisionsCatalogBeforeRepo verifies the branch where a
+// later-scanned higher-precedence entry (e.g. repo) supersedes an
+// earlier-scanned lower-precedence entry (catalog). The previous test
+// covered repo-before-global; this one walks the swap path explicitly.
+func TestResolveCollisionsCatalogBeforeRepo(t *testing.T) {
+	withGlobalSkillsDir(t)
+	// Build a catalog dir with "dup"; build a repo with "dup".
+	// Discover scans repo first, then global, then catalog — so to take
+	// the swap-the-winner branch we need a LATER-scanned entry with a
+	// LOWER scope number, i.e. we cannot via Discover. Instead we
+	// construct the Catalog directly.
+	c := &Catalog{
+		entries: []Entry{
+			{Manifest: &Manifest{Name: "dup"}, Scope: ScopeCatalog},
+			{Manifest: &Manifest{Name: "dup"}, Scope: ScopeRepo},
+		},
+	}
+	c.resolveCollisions()
+	if !c.entries[0].Shadowed {
+		t.Errorf("catalog entry should be shadowed by repo entry; got %v", c.entries)
+	}
+	if c.entries[1].Shadowed {
+		t.Errorf("repo entry should be the winner, not shadowed; got %v", c.entries)
+	}
+}
+
+// TestCatalogFind_SkipsShadowedAndReturnsFalseWhenAllShadowed exercises
+// the `if e.Shadowed { continue }` branch followed by no match.
+func TestCatalogFind_SkipsShadowedAndReturnsFalseWhenAllShadowed(t *testing.T) {
+	c := &Catalog{
+		entries: []Entry{
+			{Manifest: &Manifest{Name: "alpha"}, Scope: ScopeCatalog, Shadowed: true},
+		},
+	}
+	if _, ok := c.Find("alpha"); ok {
+		t.Fatal("Find should skip a shadowed entry")
 	}
 }
 

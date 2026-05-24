@@ -425,3 +425,82 @@ func TestSkillsManager_SaveConfigFailsWhenParentBlocked(t *testing.T) {
 		t.Fatal("expected save failure when parent dir is a file")
 	}
 }
+
+// TestNewSkillsManager_FailsWithoutXDG covers the config.ConfigFile error
+// path: with HOME and XDG_CONFIG_HOME both empty the config dir cannot be
+// resolved.
+func TestNewSkillsManager_FailsWithoutXDG(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	cfg := &config.Config{
+		Skills: config.SkillsConfig{
+			Repositories: map[string]string{},
+			LocalPaths:   map[string]string{},
+		},
+	}
+	if _, err := NewSkillsManager(cfg); err == nil {
+		t.Fatal("expected NewSkillsManager error when XDG_CONFIG_HOME and HOME are empty")
+	}
+}
+
+// TestNewSkillsManager_SkillsCacheDirError exercises the branch where
+// config.ConfigFile succeeds (because XDG_CONFIG_HOME is set) but the cache
+// dir cannot be resolved. We set XDG_CACHE_HOME and HOME to empty so
+// SkillsCacheDir returns os.ErrNotExist.
+func TestNewSkillsManager_SkillsCacheDirError(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", "")
+	cfg := &config.Config{
+		Skills: config.SkillsConfig{
+			Repositories: map[string]string{},
+			LocalPaths:   map[string]string{},
+		},
+	}
+	if _, err := NewSkillsManager(cfg); err == nil {
+		t.Fatal("expected NewSkillsManager error when SkillsCacheDir cannot be resolved")
+	}
+}
+
+// TestSkillsManager_AddLocalPathInitializesNilMap drives the lazy-init
+// branch in AddLocalPath where cfg.Skills.LocalPaths is nil.
+func TestSkillsManager_AddLocalPathInitializesNilMap(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	cfg.Skills.LocalPaths = nil
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := mgr.AddLocalPath("team", dir); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Skills.LocalPaths["team"] == "" {
+		t.Fatalf("expected team registered, got %v", cfg.Skills.LocalPaths)
+	}
+}
+
+// TestSkillsManager_AddLocalPathDuplicateSameAbs verifies the
+// "already configured under alias" duplicate detection when both alias and
+// absPath match an existing entry.
+func TestSkillsManager_AddLocalPathDuplicateSameAbs(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := mgr.AddLocalPath("team", dir); err != nil {
+		t.Fatal(err)
+	}
+	// Re-register the same alias with the same path; takes the
+	// "already configured under alias" branch.
+	err = mgr.AddLocalPath("team", dir)
+	if err == nil {
+		t.Fatal("expected duplicate-alias-same-path error")
+	}
+	if !strings.Contains(err.Error(), "already configured") {
+		t.Fatalf("wrong error: %v", err)
+	}
+}
