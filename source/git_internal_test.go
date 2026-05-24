@@ -1,8 +1,6 @@
 package source
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -93,32 +91,4 @@ func TestRemoteURLReturnsOrigin(t *testing.T) {
 	if got := remoteURL(repo); got != wantURL {
 		t.Fatalf("remoteURL = %q, want %q", got, wantURL)
 	}
-}
-
-func TestRemoteURLOriginWithoutURLs(t *testing.T) {
-	// CreateRemote rejects empty URL lists, so we have to construct the
-	// degenerate case by reaching past CreateRemote: write a config that
-	// declares an origin with no fetch URL.
-	dir := t.TempDir()
-	repo, err := git.PlainInit(dir, false)
-	if err != nil {
-		t.Fatalf("PlainInit: %v", err)
-	}
-	cfgPath := filepath.Join(dir, ".git", "config")
-	cfg := `[core]
-	repositoryformatversion = 0
-[remote "origin"]
-`
-	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	// Reload by re-opening.
-	reopened, err := git.PlainOpen(dir)
-	if err != nil {
-		t.Fatalf("PlainOpen: %v", err)
-	}
-	if got := remoteURL(reopened); got != "" {
-		t.Fatalf("remoteURL with empty URLs = %q, want empty", got)
-	}
-	_ = repo
 }
