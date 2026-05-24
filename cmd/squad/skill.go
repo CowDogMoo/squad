@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -234,10 +235,10 @@ catalog is immediately discoverable. Local paths are added as-is.`,
 				}
 				return nil
 			}
-			if err := mgr.AddLocalPath(target); err != nil {
+			if err := mgr.AddLocalPath(alias, target); err != nil {
 				return err
 			}
-			logging.InfoContext(cmd.Context(), "registered skill local path %s", target)
+			logging.InfoContext(cmd.Context(), "registered skill local path %s → %s", alias, target)
 			return nil
 		},
 	}
@@ -307,15 +308,16 @@ func newSkillSourcesCmd() *cobra.Command {
 			if len(cfg.Skills.Repositories) > 0 {
 				_, _ = fmt.Fprintln(w, "REPOSITORIES:")
 				_, _ = fmt.Fprintln(w, "NAME\tURL")
-				for name, url := range cfg.Skills.Repositories {
-					_, _ = fmt.Fprintf(w, "%s\t%s\n", name, url)
+				for _, name := range sortedKeys(cfg.Skills.Repositories) {
+					_, _ = fmt.Fprintf(w, "%s\t%s\n", name, cfg.Skills.Repositories[name])
 				}
 				_, _ = fmt.Fprintln(w)
 			}
 			if len(cfg.Skills.LocalPaths) > 0 {
 				_, _ = fmt.Fprintln(w, "LOCAL PATHS:")
-				for _, path := range cfg.Skills.LocalPaths {
-					_, _ = fmt.Fprintln(w, path)
+				_, _ = fmt.Fprintln(w, "NAME\tPATH")
+				for _, name := range sortedKeys(cfg.Skills.LocalPaths) {
+					_, _ = fmt.Fprintf(w, "%s\t%s\n", name, cfg.Skills.LocalPaths[name])
 				}
 			}
 			if len(cfg.Skills.Repositories) == 0 && len(cfg.Skills.LocalPaths) == 0 {
@@ -479,4 +481,13 @@ func reportLoadErrors(cmd *cobra.Command, cat *skill.Catalog) {
 	for _, le := range cat.LoadErrors() {
 		logging.WarnContext(cmd.Context(), "skipping invalid skill %s: %v", le.Path, le.Err)
 	}
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

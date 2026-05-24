@@ -365,6 +365,23 @@ func TestSkillAddLocalPath(t *testing.T) {
 	if len(cfg.Skills.LocalPaths) != 1 {
 		t.Fatalf("expected 1 local path, got %v", cfg.Skills.LocalPaths)
 	}
+	if _, ok := cfg.Skills.LocalPaths["local"]; !ok {
+		t.Fatalf("expected alias 'local' in LocalPaths, got %v", cfg.Skills.LocalPaths)
+	}
+}
+
+func TestSkillRemoveLocalByAlias(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	dir := t.TempDir()
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "local", dir); err != nil {
+		t.Fatalf("add local: %v", err)
+	}
+	if _, err := runSkillSubcmd(t, cfg, newSkillRemoveCmd, "local"); err != nil {
+		t.Fatalf("remove local by alias: %v", err)
+	}
+	if len(cfg.Skills.LocalPaths) != 0 {
+		t.Fatalf("expected no local paths after remove, got %v", cfg.Skills.LocalPaths)
+	}
 }
 
 func TestSkillAddRepository(t *testing.T) {
@@ -466,7 +483,7 @@ func TestSkillSourcesEmpty(t *testing.T) {
 func TestSkillSourcesPopulated(t *testing.T) {
 	cfg := newSkillTestCfg(t)
 	cfg.Skills.Repositories["team"] = "https://example.com/a.git"
-	cfg.Skills.LocalPaths = []string{"/tmp/skills"}
+	cfg.Skills.LocalPaths = map[string]string{"local": "/tmp/skills"}
 	out, err := runSkillSubcmd(t, cfg, newSkillSourcesCmd)
 	if err != nil {
 		t.Fatal(err)
@@ -571,7 +588,7 @@ func TestSkillCatalogPathsNilConfig(t *testing.T) {
 func TestSkillCatalogPathsLocal(t *testing.T) {
 	cfg := newSkillTestCfg(t)
 	localDir := t.TempDir()
-	cfg.Skills.LocalPaths = []string{localDir}
+	cfg.Skills.LocalPaths = map[string]string{"local": localDir}
 	cmd := &cobra.Command{}
 	cmd.SetContext(withConfig(context.Background(), cfg))
 	paths := skillCatalogPaths(cmd)
