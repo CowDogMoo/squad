@@ -32,6 +32,43 @@ func TestTemplateBrowserProfile(t *testing.T) {
 	}
 }
 
+func TestTemplateEnvReadsOSEnv(t *testing.T) {
+	t.Setenv("SQUAD_TEMPLATE_ENV_TEST", "hello")
+	out, err := processTemplate("inline", `value={{.Env "SQUAD_TEMPLATE_ENV_TEST"}}`, t.TempDir(), TemplateData{})
+	if err != nil {
+		t.Fatalf("processTemplate: %v", err)
+	}
+	if out != "value=hello" {
+		t.Fatalf("got %q, want %q", out, "value=hello")
+	}
+}
+
+func TestTemplateEnvFallback(t *testing.T) {
+	t.Setenv("SQUAD_TEMPLATE_ENV_UNSET", "")
+	out, err := processTemplate("inline",
+		`value={{.Env "SQUAD_TEMPLATE_ENV_UNSET" "fallback"}}`,
+		t.TempDir(), TemplateData{})
+	if err != nil {
+		t.Fatalf("processTemplate: %v", err)
+	}
+	if out != "value=fallback" {
+		t.Fatalf("got %q, want %q", out, "value=fallback")
+	}
+}
+
+func TestTemplateEnvEmptyWhenUnsetAndNoFallback(t *testing.T) {
+	t.Setenv("SQUAD_TEMPLATE_ENV_BARE", "")
+	out, err := processTemplate("inline",
+		`value={{.Env "SQUAD_TEMPLATE_ENV_BARE"}}`,
+		t.TempDir(), TemplateData{})
+	if err != nil {
+		t.Fatalf("processTemplate: %v", err)
+	}
+	if out != "value=" {
+		t.Fatalf("got %q, want %q", out, "value=")
+	}
+}
+
 func TestTemplateBrowserProfileRejectsInvalid(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmp)
