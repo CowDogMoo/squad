@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/cowdogmoo/squad/browser"
 	"github.com/cowdogmoo/squad/executor"
@@ -302,11 +303,24 @@ func resolveDisplayMode(mode string) string {
 // Templates can use {{if eq .Mode "edit"}}...{{end}} conditionals.
 // Templates can use {{include "hard-rules/universal.md"}} to include shared content.
 // Templates can use {{.Var "KEY"}} or {{.Default "KEY" "default"}} for custom variables.
+// Templates can use {{now "Monday 2006-01-02"}} for the current local date/time
+// formatted via Go's reference layout, or {{today}} as a shortcut for
+// "Monday 2006-01-02".
 func processTemplate(name, content, agentsDir string, data TemplateData) (string, error) {
 	data.Mode = resolveDisplayMode(data.Mode)
 
 	funcMap := template.FuncMap{
 		"include": makeIncludeFunc(agentsDir),
+		"now": func(layouts ...string) string {
+			layout := time.RFC3339
+			if len(layouts) > 0 && layouts[0] != "" {
+				layout = layouts[0]
+			}
+			return time.Now().Format(layout)
+		},
+		"today": func() string {
+			return time.Now().Format("Monday 2006-01-02")
+		},
 	}
 
 	tmpl, err := template.New(name).Funcs(funcMap).Parse(content)
