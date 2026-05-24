@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/cowdogmoo/squad/browser"
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/mcp"
@@ -224,6 +225,22 @@ func (td TemplateData) Default(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+// BrowserProfile returns the absolute path to the named browser profile
+// dir, creating it lazily if missing. Usage in templates:
+//
+//	mcp_servers:
+//	  - name: chrome
+//	    command: npx
+//	    args:
+//	      - chrome-devtools-mcp@latest
+//	      - --userDataDir={{.BrowserProfile "amazon"}}
+//
+// The agent.yaml stays portable across machines — each machine maintains
+// its own logins in its own copy of the profile dir.
+func (td TemplateData) BrowserProfile(name string) (string, error) {
+	return browser.ProfileDir(name)
 }
 
 // makeIncludeFunc creates an include function that reads from the _templates directory.

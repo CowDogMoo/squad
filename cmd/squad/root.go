@@ -76,6 +76,7 @@ Define an agent in markdown and YAML, point it at any LLM, and turn it loose on 
 	rootCmd.AddCommand(newRoutineCmd())
 	rootCmd.AddCommand(newRoutinedCmd())
 	rootCmd.AddCommand(newMCPCmd())
+	rootCmd.AddCommand(newBrowserCmd())
 
 	return rootCmd
 }

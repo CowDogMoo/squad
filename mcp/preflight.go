@@ -4,6 +4,8 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -50,6 +52,49 @@ func chromeUsesAutoConnect(cfg ServerConfig) bool {
 		}
 	}
 	return false
+}
+
+// chromeUserDataDir extracts the --userDataDir value from cfg.Args, if
+// present. Supports both `--userDataDir=PATH` and `--userDataDir PATH`
+// forms. Returns the empty string when not specified.
+func chromeUserDataDir(cfg ServerConfig) string {
+	for i, a := range cfg.Args {
+		if strings.HasPrefix(a, "--userDataDir=") {
+			return strings.TrimPrefix(a, "--userDataDir=")
+		}
+		if a == "--userDataDir" && i+1 < len(cfg.Args) {
+			return cfg.Args[i+1]
+		}
+	}
+	return ""
+}
+
+// looksLikeFreshProfile reports whether dir appears to be an
+// uninitialized Chrome user-data directory. Chrome populates standard
+// child paths ("Default/Cookies", "Local State") on its first run; their
+// absence is a strong signal that no browser session has saved here yet,
+// which means cookie-gated MCP tasks (e.g. Amazon-cart adds) will fail
+// at the first page that requires authentication.
+//
+// Returns false when dir doesn't exist (a missing dir is a different
+// failure mode handled by the caller).
+func looksLikeFreshProfile(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return false
+	}
+	markers := []string{
+		filepath.Join(dir, "Default", "Cookies"),
+		filepath.Join(dir, "Local State"),
+	}
+	for _, m := range markers {
+		if _, err := os.Stat(m); err == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // cdpReachable performs a quick HEAD against the standard CDP endpoint.
@@ -102,8 +147,24 @@ func PreflightServer(ctx context.Context, cfg ServerConfig) {
 			"--remote-debugging-port=9222 so the legacy attach path works.", cdpEndpoint)
 		return
 	}
+	// No CDP, no autoConnect — chrome-devtools-mcp will spawn its own
+	// browser. If a --userDataDir is provided, check whether it looks
+	// initialized; an empty profile dir means the agent will hit any
+	// auth wall on first navigation.
+	if dataDir := chromeUserDataDir(cfg); dataDir != "" {
+		if looksLikeFreshProfile(dataDir) {
+			logging.Warn("chrome MCP pre-flight: user-data-dir %s exists but has no saved Chrome session "+
+				"(no Default/Cookies, no Local State). Any site that requires login will block the agent. "+
+				"Sign in once by running: squad browser open <profile-name> <site-url>", dataDir)
+		} else {
+			logging.InfoContext(ctx, "chrome MCP pre-flight: using saved profile at %s", dataDir)
+		}
+		return
+	}
 	logging.Warn("chrome MCP pre-flight: CDP endpoint %s unreachable and --autoConnect is not set. "+
 		"chrome-devtools-mcp will launch its own Chrome instance with a dedicated profile; "+
 		"your existing browser session (cookies, logins) will not be available to the agent. "+
-		"Add --autoConnect to attach to your running Chrome instead.", cdpEndpoint)
+		"Either add --autoConnect to attach to your running Chrome, or wire a named profile "+
+		"via --userDataDir={{.BrowserProfile \"NAME\"}} and run `squad browser open NAME` once "+
+		"to sign in.", cdpEndpoint)
 }
