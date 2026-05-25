@@ -53,6 +53,11 @@ type RunConfig struct {
 	// Isolation is the default isolation mode when neither the CLI flag nor
 	// the agent manifest specifies one. Valid values: "" (none) or "worktree".
 	Isolation string `mapstructure:"isolation" yaml:"isolation"`
+	// MaxRetries is the number of additional attempts after a failed LLM
+	// call for transient errors (rate limits, 5xx, network blips). Total
+	// attempts = MaxRetries + 1. Zero or negative falls back to the
+	// package default in tools/retry.go.
+	MaxRetries int `mapstructure:"max_retries" yaml:"max_retries"`
 }
 
 // OtelConfig holds OpenTelemetry configuration.
@@ -219,6 +224,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("model.reasoning_prefixes", []string{"gpt-5"})
 	v.SetDefault("run.max_cost", 5.0)
 	v.SetDefault("run.isolation", "")
+	v.SetDefault("run.max_retries", 3)
 	v.SetDefault("agents.cache_dir", "")
 	v.SetDefault("agents.repositories", map[string]string{
 		"official": "https://github.com/cowdogmoo/squad-agents.git",

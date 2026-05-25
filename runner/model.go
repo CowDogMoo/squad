@@ -243,6 +243,7 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		Executor:           ex,
 		UseCacheControl:    useCacheControl,
 		ForceFirstToolCall: forceFirstTool,
+		MaxRetries:         opts.MaxRetries,
 	}, callOpts...)
 	m.Finish()
 	if err != nil {

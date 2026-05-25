@@ -88,6 +88,9 @@ type RunOptions struct {
 	MaxIterations int
 	// MaxCost is the total cost budget in USD (0 = unlimited).
 	MaxCost float64
+	// MaxRetries overrides the per-call LLM retry count for transient
+	// errors. Zero or negative falls back to tools.DefaultMaxRetries.
+	MaxRetries int
 	// Mode is the run mode passed to prompt templates (e.g., "edit").
 	Mode string
 	// Vars holds template variables passed to prompt templates.

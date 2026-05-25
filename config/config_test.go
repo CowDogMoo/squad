@@ -25,6 +25,34 @@ func TestDefaults(t *testing.T) {
 	if len(cfg.Model.ReasoningPrefixes) != 1 || cfg.Model.ReasoningPrefixes[0] != "gpt-5" {
 		t.Fatalf("unexpected reasoning prefixes: %+v", cfg.Model.ReasoningPrefixes)
 	}
+	if cfg.Run.MaxRetries != 3 {
+		t.Fatalf("expected run.max_retries default = 3, got %d", cfg.Run.MaxRetries)
+	}
+}
+
+func TestLoadFromPathMaxRetriesEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("run:\n  max_retries: 6\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, _, err := LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadFromPath: %v", err)
+	}
+	if cfg.Run.MaxRetries != 6 {
+		t.Fatalf("expected run.max_retries = 6 from file, got %d", cfg.Run.MaxRetries)
+	}
+
+	t.Setenv("SQUAD_RUN_MAX_RETRIES", "9")
+	cfg, _, err = LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadFromPath: %v", err)
+	}
+	if cfg.Run.MaxRetries != 9 {
+		t.Fatalf("expected env override max_retries = 9, got %d", cfg.Run.MaxRetries)
+	}
 }
 
 func TestLoadFromPathWithEnvOverrides(t *testing.T) {

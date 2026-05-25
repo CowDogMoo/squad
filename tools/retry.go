@@ -16,9 +16,12 @@ import (
 )
 
 const (
-	maxRetries     = 3
-	retryBaseDelay = 2 * time.Second
-	retryMaxDelay  = 30 * time.Second
+	// DefaultMaxRetries is the number of additional attempts after a failed
+	// LLM call when no explicit override is supplied. Total attempts =
+	// DefaultMaxRetries + 1.
+	DefaultMaxRetries = 3
+	retryBaseDelay    = 2 * time.Second
+	retryMaxDelay     = 30 * time.Second
 )
 
 // retryableErrorCodes lists llms.ErrorCode values that warrant a retry.
@@ -107,8 +110,12 @@ func isRetryable(err error) bool {
 
 // retryGenerateContent wraps llm.GenerateContent with retry and exponential
 // backoff for transient errors. It returns the first successful response or
-// the last error after exhausting retries.
-func retryGenerateContent(ctx context.Context, llm llms.Model, messages []llms.MessageContent, callOpts []llms.CallOption) (*llms.ContentResponse, error) {
+// the last error after exhausting retries. A maxRetries <= 0 falls back to
+// DefaultMaxRetries.
+func retryGenerateContent(ctx context.Context, llm llms.Model, messages []llms.MessageContent, callOpts []llms.CallOption, maxRetries int) (*llms.ContentResponse, error) {
+	if maxRetries <= 0 {
+		maxRetries = DefaultMaxRetries
+	}
 	ctx, span := telemetry.Tracer().Start(ctx, "llm.generate",
 		trace.WithAttributes(
 			attribute.Int("llm.retry.max_attempts", maxRetries+1),
