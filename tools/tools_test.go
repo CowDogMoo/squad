@@ -1159,7 +1159,7 @@ func TestRunWithToolsLoop(t *testing.T) {
 func TestFinishToolLoopFallback(t *testing.T) {
 	t.Parallel()
 	llm := &fakeLLM{responses: []*llms.ContentResponse{{Choices: []*llms.ContentChoice{{Content: ""}}}}}
-	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, nil, nil)
+	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("finishToolLoop() error = %v", err)
 	}
@@ -1204,7 +1204,7 @@ func TestFinishToolLoopFinalContent(t *testing.T) {
 	llm := &stubLLM{
 		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
 	}
-	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, nil, nil)
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("finishToolLoop() error = %v", err)
 	}
@@ -1215,7 +1215,7 @@ func TestFinishToolLoopFinalContent(t *testing.T) {
 
 func TestFinishToolLoopErrorNoContent(t *testing.T) {
 	llm := &stubLLM{err: errors.New("boom")}
-	_, err := finishToolLoop(context.Background(), llm, nil, "", 1, nil, nil)
+	_, err := finishToolLoop(context.Background(), llm, nil, "", 1, nil, nil, 0)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -1613,7 +1613,7 @@ func TestFinishToolLoopBudgetExceeded(t *testing.T) {
 	llm := &stubLLM{
 		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final"}}},
 	}
-	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, m, nil)
+	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, m, nil, 0)
 	if err != nil {
 		t.Fatalf("finishToolLoop() error = %v", err)
 	}
@@ -1796,7 +1796,7 @@ func TestFinishToolLoopBudgetExceededWithContent(t *testing.T) {
 		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final structured report"}}},
 	}
 
-	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, m, nil)
+	out, err := finishToolLoop(context.Background(), llm, nil, "partial", 1, m, nil, 0)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
@@ -1817,7 +1817,7 @@ func TestFinishToolLoopBudgetExceededNoContent(t *testing.T) {
 		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: "final report"}}},
 	}
 
-	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil)
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil, 0)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
@@ -1838,7 +1838,7 @@ func TestFinishToolLoopBudgetExceededGraceCallFails(t *testing.T) {
 		err: errors.New("API error"),
 	}
 
-	out, err := finishToolLoop(context.Background(), llm, nil, "partial fallback", 1, m, nil)
+	out, err := finishToolLoop(context.Background(), llm, nil, "partial fallback", 1, m, nil, 0)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
@@ -2089,7 +2089,7 @@ func TestFinishToolLoopBudgetExceededGraceCallFailsNoContent(t *testing.T) {
 	// Grace call fails and there is no lastContent to fall back on.
 	llm := &stubLLM{err: errors.New("API error")}
 
-	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil)
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil, 0)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
@@ -2110,7 +2110,7 @@ func TestFinishToolLoopBudgetExceededEmptyGraceResponse(t *testing.T) {
 	}
 
 	// With lastContent: should return it.
-	out, err := finishToolLoop(context.Background(), llm, nil, "fallback", 1, m, nil)
+	out, err := finishToolLoop(context.Background(), llm, nil, "fallback", 1, m, nil, 0)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}
@@ -2130,7 +2130,7 @@ func TestFinishToolLoopBudgetExceededEmptyGraceAndNoContent(t *testing.T) {
 		resp: &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: ""}}},
 	}
 
-	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil)
+	out, err := finishToolLoop(context.Background(), llm, nil, "", 1, m, nil, 0)
 	if !errors.Is(err, metrics.ErrBudgetExceeded) {
 		t.Fatalf("expected ErrBudgetExceeded, got: %v", err)
 	}

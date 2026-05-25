@@ -347,6 +347,7 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		ForceFirstToolCall: forceFirstTool,
 		Skill:              buildSkillRuntime(ctx, bundle, opts),
 		Confirm:            buildConfirmRuntime(opts),
+		MaxRetries:         opts.MaxRetries,
 	}, callOpts...)
 	m.Finish()
 	if err != nil {

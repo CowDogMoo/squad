@@ -342,6 +342,9 @@ type RunWithToolsConfig struct {
 	// the Confirm tool. A nil runtime causes Confirm calls to abort, which
 	// is the documented default for unattended runs.
 	Confirm *ConfirmRuntime
+	// MaxRetries is the number of additional attempts after a failed LLM
+	// call for transient errors. Zero falls back to DefaultMaxRetries.
+	MaxRetries int
 }
 
 // RunWithTools drives the tool-calling loop for a LangChain-compatible LLM.
@@ -387,7 +390,7 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 		return lastContent, loopErr
 	}
 
-	return finishToolLoop(ctx, llm, messages, lastContent, maxIterations, cfg.Metrics, callOpts)
+	return finishToolLoop(ctx, llm, messages, lastContent, maxIterations, cfg.Metrics, callOpts, cfg.MaxRetries)
 }
 
 // logIterationStart logs the current iteration number with cost/token info if metrics are available.
@@ -671,7 +674,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		SetIteration(ctx, i)
 		logIterationStart(ctx, i, maxIter, m)
 		iterStart := time.Now()
-		response, err := retryGenerateContent(ctx, llm, messages, resolveIterOpts(callOpts, cfg.ForceFirstToolCall, i))
+		response, err := retryGenerateContent(ctx, llm, messages, resolveIterOpts(callOpts, cfg.ForceFirstToolCall, i), cfg.MaxRetries)
 		iterDuration := time.Since(iterStart)
 		if err := validateResponse(ctx, response, err, iterDuration); err != nil {
 			return lastContent, messages, err, false
@@ -853,7 +856,7 @@ func toInt64(v any) int64 {
 	}
 }
 
-func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, lastContent string, maxIter int, m *metrics.Metrics, callOpts []llms.CallOption) (string, error) {
+func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, lastContent string, maxIter int, m *metrics.Metrics, callOpts []llms.CallOption, maxRetries int) (string, error) {
 	budgetExceeded := m != nil && m.BudgetExceeded()
 
 	if budgetExceeded {
@@ -877,7 +880,7 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 	copy(finalOpts, callOpts)
 	finalOpts = append(finalOpts, llms.WithToolChoice("none"))
 
-	response, err := retryGenerateContent(ctx, llm, messages, finalOpts)
+	response, err := retryGenerateContent(ctx, llm, messages, finalOpts, maxRetries)
 	if err == nil && response != nil && len(response.Choices) > 0 {
 		if m != nil {
 			m.IncrementIterations()
