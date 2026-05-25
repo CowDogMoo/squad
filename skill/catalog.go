@@ -144,10 +144,28 @@ func Discover(repoRoot string, catalogDirs ...string) (*Catalog, error) {
 	return c, nil
 }
 
-// scanDir reads dir for skill subdirectories. Each entry must be a directory
-// containing SKILL.md; everything else is ignored. Parse failures become
-// LoadErrors and are surfaced separately from successfully-loaded entries.
+// scanDir loads skills from dir. The Agent Skills spec defines a skill as a
+// directory containing SKILL.md, so dir itself is a skill when SKILL.md sits
+// at its root (the layout used by single-skill catalog repos like
+// blader/humanizer). Either way, immediate subdirectories are also scanned so
+// monorepo-style catalogs continue to work. Parse failures become LoadErrors
+// and are surfaced separately from successfully-loaded entries.
 func (c *Catalog) scanDir(dir string, scope Scope, origin string) error {
+	rootManifest := filepath.Join(dir, FileName)
+	if info, err := os.Stat(rootManifest); err == nil && !info.IsDir() {
+		if m, err := LoadManifest(rootManifest); err != nil {
+			c.loadErrors = append(c.loadErrors, LoadError{Path: rootManifest, Err: err})
+		} else {
+			c.entries = append(c.entries, Entry{
+				Manifest:     m,
+				Scope:        scope,
+				Dir:          dir,
+				ManifestPath: rootManifest,
+				Origin:       origin,
+			})
+		}
+	}
+
 	items, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

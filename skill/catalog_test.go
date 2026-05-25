@@ -379,6 +379,75 @@ func TestDiscoverSubdirWithoutSkillMdIgnored(t *testing.T) {
 	}
 }
 
+func TestDiscoverCatalogDirIsItselfASkill(t *testing.T) {
+	withGlobalSkillsDir(t)
+	// Simulate a single-skill catalog repo (e.g. blader/humanizer): the
+	// clone's root directory IS the skill — SKILL.md sits at the top
+	// level, not in a named subdirectory.
+	catalogDir := t.TempDir()
+	manifest := "---\nname: humanizer\ndescription: rewrite AI-generated prose into something a human would actually say\n---\nbody\n"
+	if err := os.WriteFile(filepath.Join(catalogDir, FileName), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cat, err := Discover("", catalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := cat.Visible()
+	if len(visible) != 1 || visible[0].Name() != "humanizer" {
+		t.Fatalf("want one humanizer entry, got %v", entryNames(visible))
+	}
+	if visible[0].Dir != catalogDir {
+		t.Errorf("Dir = %s, want %s", visible[0].Dir, catalogDir)
+	}
+	if visible[0].Scope != ScopeCatalog {
+		t.Errorf("Scope = %v, want catalog", visible[0].Scope)
+	}
+}
+
+func TestDiscoverCatalogDirSkillAndSubdirSkillsCoexist(t *testing.T) {
+	withGlobalSkillsDir(t)
+	catalogDir := t.TempDir()
+	rootManifest := "---\nname: root-skill\ndescription: skill defined at the catalog root\n---\nbody\n"
+	if err := os.WriteFile(filepath.Join(catalogDir, FileName), []byte(rootManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, catalogDir, "nested", "skill in a subdirectory", "body")
+
+	cat, err := Discover("", catalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := entryNames(cat.Visible())
+	sort.Strings(names)
+	want := []string{"nested", "root-skill"}
+	if !equalSlices(names, want) {
+		t.Fatalf("visible = %v, want %v", names, want)
+	}
+}
+
+func TestDiscoverCatalogDirSkillInvalidIsLoadError(t *testing.T) {
+	withGlobalSkillsDir(t)
+	catalogDir := t.TempDir()
+	// Missing required `description` field — parse should fail and the
+	// failure should be surfaced as a LoadError, not a fatal Discover error.
+	if err := os.WriteFile(filepath.Join(catalogDir, FileName), []byte("---\nname: broken\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cat, err := Discover("", catalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.Visible()) != 0 {
+		t.Errorf("expected no visible entries, got %v", entryNames(cat.Visible()))
+	}
+	if len(cat.LoadErrors()) != 1 {
+		t.Fatalf("expected 1 LoadError, got %d", len(cat.LoadErrors()))
+	}
+}
+
 func TestDiscoverScanDirReadDirError(t *testing.T) {
 	withGlobalSkillsDir(t)
 	// Pointing repoRoot at a file (not a dir) → RepoSkillsDir(repoRoot) is
