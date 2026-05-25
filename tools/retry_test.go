@@ -167,11 +167,11 @@ func TestRetryGenerateContent(t *testing.T) {
 		{
 			name: "exhausts all retries",
 			responses: func() []*llms.ContentResponse {
-				r := make([]*llms.ContentResponse, maxRetries+1)
+				r := make([]*llms.ContentResponse, DefaultMaxRetries+1)
 				return r
 			}(),
 			errors: func() []error {
-				e := make([]error, maxRetries+1)
+				e := make([]error, DefaultMaxRetries+1)
 				for i := range e {
 					e[i] = fmt.Errorf("503 service unavailable")
 				}
@@ -181,7 +181,7 @@ func TestRetryGenerateContent(t *testing.T) {
 				return context.WithTimeout(context.Background(), 60*time.Second)
 			},
 			wantErr:   true,
-			wantCalls: maxRetries + 1,
+			wantCalls: DefaultMaxRetries + 1,
 		},
 		{
 			name:      "context canceled during backoff",
@@ -215,7 +215,7 @@ func TestRetryGenerateContent(t *testing.T) {
 				defer cancel()
 			}
 
-			got, err := retryGenerateContent(ctx, mock, nil, nil)
+			got, err := retryGenerateContent(ctx, mock, nil, nil, 0)
 
 			if tt.wantErr {
 				if err == nil {
@@ -234,6 +234,41 @@ func TestRetryGenerateContent(t *testing.T) {
 			}
 
 			if tt.wantCalls > 0 && mock.calls != tt.wantCalls {
+				t.Errorf("calls = %d, want %d", mock.calls, tt.wantCalls)
+			}
+		})
+	}
+}
+
+func TestRetryGenerateContentCustomMaxRetries(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxRetries int
+		wantCalls  int
+	}{
+		{"zero falls back to default", 0, DefaultMaxRetries + 1},
+		{"negative falls back to default", -5, DefaultMaxRetries + 1},
+		{"explicit 1 retry = 2 calls", 1, 2},
+		{"explicit 2 retries = 3 calls", 2, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := tt.wantCalls
+			responses := make([]*llms.ContentResponse, n)
+			errs := make([]error, n)
+			for i := range errs {
+				errs[i] = fmt.Errorf("503 service unavailable")
+			}
+			mock := &mockLLM{responses: responses, errors: errs}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+
+			_, err := retryGenerateContent(ctx, mock, nil, nil, tt.maxRetries)
+			if err == nil {
+				t.Fatal("expected error after exhausting retries")
+			}
+			if mock.calls != tt.wantCalls {
 				t.Errorf("calls = %d, want %d", mock.calls, tt.wantCalls)
 			}
 		})

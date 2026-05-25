@@ -395,6 +395,47 @@ func TestNewRunOptions(t *testing.T) {
 	}
 }
 
+func TestNewRunOptionsMaxRetries(t *testing.T) {
+	tests := []struct {
+		name       string
+		setRetries int
+		want       int
+	}{
+		{"default", 3, 3},
+		{"custom value", 7, 7},
+		{"negative clamped to zero", -1, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := viper.New()
+			v.Set("run.max_retries", tt.setRetries)
+
+			cmd := commandWithViper(v)
+			ctx := withConfig(cmd.Context(), config.Defaults())
+			cmd.SetContext(ctx)
+
+			opts := newRunOptions(cmd)
+			if opts.MaxRetries != tt.want {
+				t.Fatalf("MaxRetries = %d, want %d", opts.MaxRetries, tt.want)
+			}
+		})
+	}
+}
+
+func TestBindRunFlagsMaxRetries(t *testing.T) {
+	cmd := newRunCmd()
+	v := viper.New()
+	if err := bindRunFlags(cmd, v); err != nil {
+		t.Fatalf("bindRunFlags: %v", err)
+	}
+	if err := cmd.Flags().Set("max-retries", "9"); err != nil {
+		t.Fatalf("Set max-retries: %v", err)
+	}
+	if got := v.GetInt("run.max_retries"); got != 9 {
+		t.Fatalf("run.max_retries = %d, want 9", got)
+	}
+}
+
 func TestBindRunFlags(t *testing.T) {
 	cmd := newRunCmd()
 	v := viper.New()

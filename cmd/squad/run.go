@@ -93,6 +93,11 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		maxCost = 0
 	}
 
+	maxRetries := v.GetInt("run.max_retries")
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+
 	cfg := configFromContext(cmd)
 
 	// Split provider/model into explicit (CLI flag) vs config-default
@@ -141,6 +146,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		NumCtx:             v.GetInt("provider.num_ctx"),
 		MaxIterations:      maxIter,
 		MaxCost:            maxCost,
+		MaxRetries:         maxRetries,
 		Mode:               mode,
 		Vars:               vars,
 		ConfigAvailable:    cfg != nil,
@@ -211,6 +217,7 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 		{"run.mode", "mode"},
 		{"run.max_iterations", "max-iterations"},
 		{"run.max_cost", "max-cost"},
+		{"run.max_retries", "max-retries"},
 		{"run.stream", "stream"},
 		{"run.max_concurrent_tasks", "max-concurrent-tasks"},
 		{"run.resume", "resume"},
@@ -294,6 +301,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().String("mode", "", "Agent mode override (e.g. readonly)")
 	cmd.Flags().Int("max-iterations", 100, "Maximum tool-calling iterations (range: 10-1000)")
 	cmd.Flags().Float64("max-cost", 5, "Maximum cost budget in USD (0 = unlimited)")
+	cmd.Flags().Int("max-retries", 3, "LLM retry attempts for transient errors (total calls = max-retries + 1)")
 	cmd.Flags().StringArray("var", nil, "Template variable in KEY=VALUE format (can be repeated)")
 	cmd.Flags().StringArray("mcp-server", nil, "MCP server: stdio NAME:COMMAND[:ARG1,ARG2,...], SSE NAME:sse:URL, or Streamable HTTP NAME:http:URL (can be repeated)")
 	cmd.Flags().Bool("stream", false, "Stream model output tokens to stderr as they arrive")
