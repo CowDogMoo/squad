@@ -32,6 +32,11 @@ const (
 	// PipelineMaxCostVar is a reserved stage var key used to propagate
 	// the effective per-agent cost cap from the pipeline runner.
 	PipelineMaxCostVar = "__pipeline_max_cost"
+
+	// PipelineStageNameVar is a reserved stage var key used to propagate
+	// the current stage name to the RunAgent callback so it can look up
+	// stage-scoped overrides (e.g. mcp_servers) on the Pipeline.
+	PipelineStageNameVar = "__pipeline_stage_name"
 )
 
 // StageResult records the outcome of a single stage execution.
@@ -406,7 +411,15 @@ func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, pr
 	}
 
 	mode := stage.Mode
-	vars := stage.Vars
+	// Copy stage vars so we can inject reserved keys without mutating the
+	// shared Stage.Vars map (stages may run multiple agents).
+	vars := make(map[string]string, len(stage.Vars)+2)
+	for k, v := range stage.Vars {
+		vars[k] = v
+	}
+	// Always inject the stage name so the RunAgent callback can look up
+	// stage-scoped overrides (e.g. mcp_servers) on the Pipeline.
+	vars[PipelineStageNameVar] = stage.Name
 
 	// Inject effective budget cap for the agent via reserved var.
 	// This is min(remaining pipeline budget, stage max_cost).
@@ -416,16 +429,6 @@ func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, pr
 			effectiveCap = stage.MaxCost
 		}
 		if effectiveCap > 0 {
-			if vars == nil {
-				vars = make(map[string]string)
-			} else {
-				// Copy to avoid mutating stage vars.
-				merged := make(map[string]string, len(vars)+1)
-				for k, v := range vars {
-					merged[k] = v
-				}
-				vars = merged
-			}
 			vars[PipelineMaxCostVar] = fmt.Sprintf("%.4f", effectiveCap)
 		}
 	}

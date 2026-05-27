@@ -1441,3 +1441,92 @@ func TestStageAgentList(t *testing.T) {
 		}
 	})
 }
+
+func TestPipelineStageByName(t *testing.T) {
+	t.Parallel()
+	p := &Pipeline{
+		Stages: []Stage{
+			{Name: "first", Agent: "a"},
+			{Name: "second", Agent: "b"},
+		},
+	}
+	if s := p.StageByName("second"); s == nil || s.Agent != "b" {
+		t.Fatalf("StageByName(second) = %+v, want stage with agent b", s)
+	}
+	if s := p.StageByName("missing"); s != nil {
+		t.Fatalf("StageByName(missing) = %+v, want nil", s)
+	}
+}
+
+// TestRunnerInjectsStageNameVar verifies the runner injects the reserved
+// __pipeline_stage_name var on every RunAgent call so the cmd-layer
+// callback can look up stage-scoped overrides (e.g. mcp_servers) on the
+// Pipeline.
+func TestRunnerInjectsStageNameVar(t *testing.T) {
+	p := &Pipeline{
+		Name:    "stagename-injection",
+		Version: "v1",
+		Stages: []Stage{
+			{Name: "alpha", Agent: "a1"},
+			{Name: "beta", Agent: "a2", DependsOn: []string{"alpha"}},
+		},
+	}
+
+	seen := map[string]string{} // agent -> stage name seen via reserved var
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			seen[agentName] = vars[PipelineStageNameVar]
+			return "ok", nil, nil
+		},
+	}
+
+	if _, err := runner.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if seen["a1"] != "alpha" {
+		t.Fatalf("agent a1 saw stage name %q, want %q", seen["a1"], "alpha")
+	}
+	if seen["a2"] != "beta" {
+		t.Fatalf("agent a2 saw stage name %q, want %q", seen["a2"], "beta")
+	}
+}
+
+// TestRunnerDoesNotMutateStageVars guards the runner against mutating
+// the shared Stage.Vars map when injecting reserved keys. A stage that
+// runs multiple agents (or runs across reruns) would otherwise see
+// stale reserved-key state.
+func TestRunnerDoesNotMutateStageVars(t *testing.T) {
+	stageVars := map[string]string{"USER_KEY": "user_value"}
+	p := &Pipeline{
+		Name:    "no-mutate",
+		Version: "v1",
+		Stages: []Stage{
+			{Name: "only", Agent: "a1", Vars: stageVars},
+		},
+	}
+
+	runner := &Runner{
+		Pipeline:   p,
+		WorkingDir: t.TempDir(),
+		Prompt:     "Begin.",
+		RunAgent: func(ctx context.Context, agentName, prompt, workingDir, mode string, vars map[string]string) (string, *metrics.Metrics, error) {
+			return "ok", nil, nil
+		},
+	}
+
+	if _, err := runner.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, leaked := stageVars[PipelineStageNameVar]; leaked {
+		t.Fatalf("stage var map was mutated; saw reserved key %q", PipelineStageNameVar)
+	}
+	if stageVars["USER_KEY"] != "user_value" {
+		t.Fatalf("user-provided var clobbered: %v", stageVars)
+	}
+	if len(stageVars) != 1 {
+		t.Fatalf("expected 1 entry in stage vars, got %d: %v", len(stageVars), stageVars)
+	}
+}

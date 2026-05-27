@@ -45,39 +45,13 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 	return func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
 		mergedVars := mergeVars(vars, stageVars)
 
-		var bundle *agent.Bundle
+		bundle, err := buildAgentBundle(agentName, agentPrompt, wd, mode, mergedVars, agentsDir, composedAgentDir, cfg, pipelineRunner)
+		if err != nil {
+			return "", nil, err
+		}
 
-		// Check if this is an inline agent defined in the composed manifest.
-		if inlineCfg, ok := pipelineRunner.InlineAgents[agentName]; ok && inlineCfg != nil {
-			inlineAgent := &agent.InlineAgentConfig{
-				Name:       agentName,
-				EntryPoint: inlineCfg.EntryPoint,
-				Wrapper:    inlineCfg.Wrapper,
-				Task:       inlineCfg.Task,
-				References: inlineCfg.References,
-			}
-			for _, m := range inlineCfg.Models {
-				inlineAgent.Models = append(inlineAgent.Models, agent.ModelPreference{
-					Model:    m.Model,
-					Provider: m.Provider,
-				})
-			}
-			var buildErr error
-			bundle, buildErr = agent.BuildBundleInline(pipelineRunner.ComposedDir, inlineAgent, agentPrompt, wd, mode, mergedVars)
-			if buildErr != nil {
-				return "", nil, fmt.Errorf("failed to build inline agent %s: %w", agentName, buildErr)
-			}
-		} else {
-			resolvedAgentsDir, agentErr := findAgentDirForComposed(agentName, agentsDir, composedAgentDir, cfg)
-			if agentErr != nil {
-				return "", nil, agentErr
-			}
-
-			var buildErr error
-			bundle, buildErr = agent.BuildBundle(resolvedAgentsDir, agentName, agentPrompt, wd, mode, mergedVars)
-			if buildErr != nil {
-				return "", nil, fmt.Errorf("failed to build agent %s: %w", agentName, buildErr)
-			}
+		if err := applyStageMCPOverride(bundle, mergedVars, mode, composedAgentDir, pipelineRunner); err != nil {
+			return "", nil, err
 		}
 
 		agentOpts := *opts
@@ -96,20 +70,86 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 			fmt.Fprintln(os.Stderr, warn)
 		}
 
-		// Apply effective budget cap propagated from the pipeline runner.
-		// This accounts for both remaining pipeline budget and per-stage caps.
-		if capStr, ok := mergedVars[pl.PipelineMaxCostVar]; ok {
-			var cap float64
-			if _, err := fmt.Sscanf(capStr, "%f", &cap); err == nil && cap > 0 {
-				agentOpts.MaxCost = cap
-			} else {
-				return "", nil, fmt.Errorf("pipeline budget exhausted")
-			}
-			delete(mergedVars, pl.PipelineMaxCostVar)
+		if err := applyPipelineBudgetCap(&agentOpts, mergedVars); err != nil {
+			return "", nil, err
 		}
 
 		return runner.InvokeModel(ctx, &agentOpts, bundle)
 	}
+}
+
+// buildAgentBundle builds the agent bundle, dispatching to inline or
+// external loading based on whether the named agent is registered as
+// an inline agent on the pipeline runner.
+func buildAgentBundle(agentName, prompt, wd, mode string, mergedVars map[string]string, agentsDir, composedAgentDir string, cfg *config.Config, pipelineRunner *pl.Runner) (*agent.Bundle, error) {
+	if inlineCfg, ok := pipelineRunner.InlineAgents[agentName]; ok && inlineCfg != nil {
+		inlineAgent := &agent.InlineAgentConfig{
+			Name:       agentName,
+			EntryPoint: inlineCfg.EntryPoint,
+			Wrapper:    inlineCfg.Wrapper,
+			Task:       inlineCfg.Task,
+			References: inlineCfg.References,
+		}
+		for _, m := range inlineCfg.Models {
+			inlineAgent.Models = append(inlineAgent.Models, agent.ModelPreference{
+				Model:    m.Model,
+				Provider: m.Provider,
+			})
+		}
+		bundle, err := agent.BuildBundleInline(pipelineRunner.ComposedDir, inlineAgent, prompt, wd, mode, mergedVars)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build inline agent %s: %w", agentName, err)
+		}
+		return bundle, nil
+	}
+
+	resolvedAgentsDir, err := findAgentDirForComposed(agentName, agentsDir, composedAgentDir, cfg)
+	if err != nil {
+		return nil, err
+	}
+	bundle, err := agent.BuildBundle(resolvedAgentsDir, agentName, prompt, wd, mode, mergedVars)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build agent %s: %w", agentName, err)
+	}
+	return bundle, nil
+}
+
+// applyStageMCPOverride replaces the bundle's MCP server list with the
+// running stage's override, if one is declared. Non-empty list overrides;
+// explicit empty list disables MCP for the stage; nil inherits from the
+// agent's manifest. Consumes the reserved stage-name var.
+func applyStageMCPOverride(bundle *agent.Bundle, mergedVars map[string]string, mode, composedAgentDir string, pipelineRunner *pl.Runner) error {
+	stageName, ok := mergedVars[pl.PipelineStageNameVar]
+	if !ok {
+		return nil
+	}
+	delete(mergedVars, pl.PipelineStageNameVar)
+	stage := pipelineRunner.Pipeline.StageByName(stageName)
+	if stage == nil || stage.MCPServers == nil {
+		return nil
+	}
+	if err := agent.ApplyMCPOverride(bundle, stage.MCPServers, mode, composedAgentDir, mergedVars); err != nil {
+		return fmt.Errorf("stage %q: mcp override: %w", stageName, err)
+	}
+	return nil
+}
+
+// applyPipelineBudgetCap reads the reserved per-agent cost cap injected
+// by the pipeline runner and applies it to the run options. Consumes
+// the reserved var. An unparsable or zero cap signals an exhausted
+// pipeline budget.
+func applyPipelineBudgetCap(agentOpts *runner.RunOptions, mergedVars map[string]string) error {
+	capStr, ok := mergedVars[pl.PipelineMaxCostVar]
+	if !ok {
+		return nil
+	}
+	delete(mergedVars, pl.PipelineMaxCostVar)
+	var capVal float64
+	if _, err := fmt.Sscanf(capStr, "%f", &capVal); err != nil || capVal <= 0 {
+		return fmt.Errorf("pipeline budget exhausted")
+	}
+	agentOpts.MaxCost = capVal
+	return nil
 }
 
 // outputReport formats and writes the pipeline report to stdout and/or a file.

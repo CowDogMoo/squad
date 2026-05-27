@@ -476,6 +476,28 @@ func resolveEnvironmentTemplates(env *executor.Config, data TemplateData) error 
 }
 
 // resolveMCPServerTemplates processes template variables in MCP server configurations.
+// ApplyMCPOverride replaces a bundle's MCP server list with the supplied
+// override, applying the same template expansion (Var/Env/BrowserProfile/AgentDir)
+// that BuildBundle uses. Intended for stage-scoped MCP overrides in
+// composed agents, where a stage's mcp_servers replaces the parent
+// manifest's list for that stage's run only.
+func ApplyMCPOverride(b *Bundle, override []mcp.ServerConfig, mode, agentDir string, vars map[string]string) error {
+	if b == nil {
+		return fmt.Errorf("ApplyMCPOverride: bundle is nil")
+	}
+	data := TemplateData{
+		Mode:     mode,
+		Vars:     vars,
+		AgentDir: agentDir,
+	}
+	resolved, err := resolveMCPServerTemplates(override, data)
+	if err != nil {
+		return err
+	}
+	b.MCPServers = resolved
+	return nil
+}
+
 func resolveMCPServerTemplates(servers []mcp.ServerConfig, data TemplateData) ([]mcp.ServerConfig, error) {
 	resolveStr := func(name, val string) (string, error) {
 		if val == "" || !strings.Contains(val, "{{") {
