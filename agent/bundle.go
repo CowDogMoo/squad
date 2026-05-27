@@ -256,9 +256,14 @@ type Bundle struct {
 
 // TemplateData holds the data passed to prompt templates.
 // Templates can use {{.Mode}}, {{.Var "KEY"}}, or {{.Vars.KEY}}.
+//
+// AgentDir is the absolute path to the agent's directory on disk. Useful for
+// MCP `command:` entries that point at scripts shipped alongside the agent —
+// `{{.AgentDir}}/wrapper.sh` keeps the manifest portable across machines.
 type TemplateData struct {
-	Mode string
-	Vars map[string]string
+	Mode     string
+	Vars     map[string]string
+	AgentDir string
 }
 
 // Var returns the value of a template variable, or empty string if not set.
@@ -825,7 +830,7 @@ func BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode strin
 	}
 
 	displayMode := resolveDisplayMode(mode)
-	data := TemplateData{Mode: displayMode, Vars: vars}
+	data := TemplateData{Mode: displayMode, Vars: vars, AgentDir: agentPath}
 
 	var skillOverrides *SkillOverrides
 	var catalogPaths []string
@@ -987,7 +992,7 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 
 	displayMode := resolveDisplayMode(mode)
 
-	data := TemplateData{Mode: displayMode, Vars: vars}
+	data := TemplateData{Mode: displayMode, Vars: vars, AgentDir: promptDir}
 	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(promptDir, baseDir, manifest, data)
 	if err != nil {
 		return nil, err

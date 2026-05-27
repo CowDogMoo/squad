@@ -843,6 +843,20 @@ func TestResolveMCPServerTemplates(t *testing.T) {
 		}
 	})
 
+	t.Run("AgentDir resolves in command", func(t *testing.T) {
+		t.Parallel()
+		servers := []mcp.ServerConfig{
+			{Name: "wrap", Command: `{{.AgentDir}}/wrapper.sh`},
+		}
+		resolved, err := resolveMCPServerTemplates(servers, TemplateData{AgentDir: "/abs/path/to/agent"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolved[0].Command != "/abs/path/to/agent/wrapper.sh" {
+			t.Fatalf("Command = %q, want /abs/path/to/agent/wrapper.sh", resolved[0].Command)
+		}
+	})
+
 	t.Run("invalid template syntax", func(t *testing.T) {
 		t.Parallel()
 		servers := []mcp.ServerConfig{
