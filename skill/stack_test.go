@@ -1,8 +1,10 @@
 package skill
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -193,6 +195,78 @@ func TestStackResolveEmptyStack(t *testing.T) {
 	s := NewStack()
 	if _, ok := s.Resolve("anything"); ok {
 		t.Error("empty stack should not resolve")
+	}
+}
+
+// TestStackConcurrent exercises the documented "safe for concurrent use"
+// guarantee. Run with -race to catch a regression that drops the lock; the
+// stack is read from background task workers while the dispatch goroutine
+// pushes new skills.
+func TestStackConcurrent(t *testing.T) {
+	s := NewStack()
+	dirs := []string{t.TempDir(), t.TempDir(), t.TempDir()}
+
+	var wg sync.WaitGroup
+	for i, d := range dirs {
+		wg.Add(1)
+		go func(name, dir string) {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				s.Push(entry(name, dir))
+			}
+		}(fmt.Sprintf("s%d", i), d)
+	}
+	for range dirs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_ = s.Len()
+				_, _ = s.Top()
+				_ = s.Entries()
+				_ = s.Contains(dirs[0])
+				_, _ = s.Resolve("scripts/x.sh")
+			}
+		}()
+	}
+	wg.Wait()
+
+	if s.Len() != len(dirs) {
+		t.Errorf("after concurrent idempotent pushes, len = %d, want %d", s.Len(), len(dirs))
+	}
+}
+
+func TestVerifyNoSymlinkEscape(t *testing.T) {
+	skillDir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(skillDir, "link")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	inside := filepath.Join(skillDir, "real.txt")
+	if err := os.WriteFile(inside, []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewStack()
+	s.Push(entry("a", skillDir))
+
+	if err := s.VerifyNoSymlinkEscape(filepath.Join(skillDir, "link", "secret.txt")); err == nil {
+		t.Error("symlink escape should be rejected")
+	}
+	if err := s.VerifyNoSymlinkEscape(inside); err != nil {
+		t.Errorf("real file inside skill dir should pass: %v", err)
+	}
+	// A non-existent path is allowed through (the file op surfaces its own error).
+	if err := s.VerifyNoSymlinkEscape(filepath.Join(skillDir, "does-not-exist.txt")); err != nil {
+		t.Errorf("non-existent path should be allowed through: %v", err)
+	}
+	// Nil receiver is a no-op.
+	var nilStack *Stack
+	if err := nilStack.VerifyNoSymlinkEscape(inside); err != nil {
+		t.Errorf("nil stack should be a no-op: %v", err)
 	}
 }
 

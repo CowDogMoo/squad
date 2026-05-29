@@ -334,6 +334,28 @@ func RepoSkillsDir(repoRoot string) string {
 	return filepath.Join(repoRoot, ".squad", "skills")
 }
 
+// FindRepoRoot walks up from start looking for the nearest ancestor that
+// contains a .git entry and returns it, so repo-scoped skills under
+// <root>/.squad/skills are discoverable when squad is run from a subdirectory.
+// When start is not inside a git repository (or cannot be resolved), start is
+// returned unchanged so discovery still works in non-repo working dirs.
+func FindRepoRoot(start string) string {
+	abs, err := filepath.Abs(start)
+	if err != nil {
+		return start
+	}
+	for dir := abs; ; {
+		if _, statErr := os.Stat(filepath.Join(dir, ".git")); statErr == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return abs
+		}
+		dir = parent
+	}
+}
+
 // GlobalSkillsDir returns the user-level skills directory. The parent
 // (`$XDG_CONFIG_HOME/squad/`) is created on demand by the config package; we
 // do not create the `skills/` directory itself so that an absent directory

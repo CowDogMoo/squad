@@ -736,7 +736,7 @@ func resolveSkills(workingDir string, manifestCfg *SkillsConfig, overrides *Skil
 		return nil, "", nil
 	}
 
-	catalog, err := skill.Discover(workingDir, catalogPaths...)
+	catalog, err := skill.Discover(skill.FindRepoRoot(workingDir), catalogPaths...)
 	if err != nil {
 		return nil, "", fmt.Errorf("discover skills: %w", err)
 	}

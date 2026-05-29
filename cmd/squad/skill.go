@@ -24,6 +24,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -247,7 +248,17 @@ registration so the catalog is immediately discoverable.`,
 				}
 				logging.InfoContext(cmd.Context(), "registered skill repository %s → %s", alias, target)
 				if err := mgr.EnsureRepositoriesCloned(); err != nil {
-					logging.WarnContext(cmd.Context(), "clone failed (you can retry with `squad skill update`): %v", err)
+					// The config row was written, so registration succeeded and we
+					// exit 0 — but the catalog is empty until the clone lands, so
+					// surface the failure to stderr (always visible, unlike a log
+					// line gated by --log-level) with the exact recovery command.
+					msg := fmt.Sprintf(
+						"warning: registered %q but the initial clone failed: %v\n"+
+							"the catalog will be empty until you run `squad skill update`\n",
+						alias, err)
+					if _, werr := io.WriteString(cmd.ErrOrStderr(), msg); werr != nil {
+						logging.WarnContext(cmd.Context(), "could not write clone-failure notice to stderr: %v", werr)
+					}
 				}
 				return nil
 			}
@@ -475,8 +486,10 @@ to load this file; once loaded, this section reinforces the criteria.
 }
 
 // resolveSkillRepoRoot returns the directory whose .squad/skills/ should be
-// scanned for repo-scoped skills. An explicit override wins; otherwise we use
-// the current working directory.
+// scanned for repo-scoped skills. An explicit override wins; otherwise we walk
+// up from the current working directory to the git repo root so repo-scoped
+// skills resolve the same way whether squad is run from the root or a
+// subdirectory (falling back to the cwd when not inside a repo).
 func resolveSkillRepoRoot(override string) (string, error) {
 	if override != "" {
 		abs, err := absolutePath(override)
@@ -485,7 +498,11 @@ func resolveSkillRepoRoot(override string) (string, error) {
 		}
 		return abs, nil
 	}
-	return os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return skill.FindRepoRoot(cwd), nil
 }
 
 // reportLoadErrors logs (as warnings) every skill that failed to load. We

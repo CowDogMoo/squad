@@ -159,6 +159,149 @@ func TestReadTool_StackDoesNotAllowArbitraryPaths(t *testing.T) {
 	}
 }
 
+// pushedSkillCtx returns a context carrying a SkillRuntime whose stack already
+// contains skillDir, plus the read cache / file tracker the file tools expect.
+func pushedSkillCtx(skillDir string) context.Context {
+	rt := &SkillRuntime{
+		Entries: []skill.Entry{fakeSkillEntry("alpha", skillDir)},
+		Stack:   skill.NewStack(),
+	}
+	rt.Stack.Push(rt.Entries[0])
+	ctx := WithSkillRuntime(context.Background(), rt)
+	ctx = InitReadCache(ctx)
+	ctx = InitFileTracker(ctx)
+	return ctx
+}
+
+// TestWriteEditStayAnchoredWithSkillLoaded is the load-bearing security
+// assertion: even when a skill is on the stack (which relaxes Read/Grep into
+// the skill dir), Write/Edit/MultiEdit must remain anchored to the working
+// dir and refuse to touch the skill dir. A regression that swapped these tools
+// to resolvePathInRun would let an agent write arbitrary files through a
+// loaded skill — this test fails loudly if that happens.
+func TestWriteEditStayAnchoredWithSkillLoaded(t *testing.T) {
+	workingDir := t.TempDir()
+	skillDir := t.TempDir()
+
+	// Seed a real file in the skill dir so Edit/MultiEdit would otherwise
+	// succeed if the anchor were relaxed — the rejection must come from the
+	// path check, not from a missing file.
+	target := filepath.Join(skillDir, "victim.txt")
+	if err := os.WriteFile(target, []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := pushedSkillCtx(skillDir)
+
+	writeArgs, _ := json.Marshal(map[string]string{"path": target, "content": "x"})
+	if _, err := writeTool(workingDir)(ctx, writeArgs); err == nil {
+		t.Error("Write into a loaded skill dir must be rejected")
+	}
+
+	editArgs, _ := json.Marshal(map[string]string{"path": target, "old": "hello", "new": "bye"})
+	if _, err := editTool(workingDir)(ctx, editArgs); err == nil {
+		t.Error("Edit into a loaded skill dir must be rejected")
+	}
+
+	multiArgs, _ := json.Marshal(map[string]any{
+		"path":  target,
+		"edits": []map[string]any{{"old": "hello", "new": "bye"}},
+	})
+	if _, err := multiEditTool(workingDir)(ctx, multiArgs); err == nil {
+		t.Error("MultiEdit into a loaded skill dir must be rejected")
+	}
+
+	// The skill-dir file must be untouched by any of the above.
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hello\n" {
+		t.Errorf("skill-dir file was modified: %q", got)
+	}
+}
+
+// TestGrepTool_StackRelaxation mirrors the Read relaxation: Grep cannot reach
+// the skill dir before the skill is pushed, but can after — and still refuses
+// paths outside every active skill dir.
+func TestGrepTool_StackRelaxation(t *testing.T) {
+	workingDir := t.TempDir()
+	skillDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(skillDir, "ref.md"), []byte("MATCHME here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	grep := grepTool(workingDir)
+	args, _ := json.Marshal(map[string]string{"pattern": "MATCHME", "path": skillDir})
+
+	// Before push: the skill dir is outside the working dir, so grep is rejected.
+	emptyCtx := WithSkillRuntime(context.Background(), &SkillRuntime{Stack: skill.NewStack()})
+	if _, err := grep(emptyCtx, args); err == nil {
+		t.Fatal("expected anchor error before skill is on stack")
+	}
+
+	// After push: grep reaches the skill dir.
+	ctx := pushedSkillCtx(skillDir)
+	out, err := grep(ctx, args)
+	if err != nil {
+		t.Fatalf("grep after push: %v", err)
+	}
+	if !strings.Contains(out, "MATCHME") {
+		t.Errorf("expected match in output, got %q", out)
+	}
+
+	// An unrelated outside dir is still rejected even with a skill loaded.
+	outside := t.TempDir()
+	outArgs, _ := json.Marshal(map[string]string{"pattern": "MATCHME", "path": outside})
+	if _, err := grep(ctx, outArgs); err == nil {
+		t.Error("grep of an unrelated outside dir must be rejected")
+	}
+}
+
+// TestResolvePathInRun_RejectsTraversalWithStack proves the relaxed resolver
+// rejects traversal and outside-absolute inputs even when the stack is
+// populated — the asymmetry only widens access to files genuinely inside a
+// skill dir.
+func TestResolvePathInRun_RejectsTraversalWithStack(t *testing.T) {
+	workingDir := t.TempDir()
+	skillDir := t.TempDir()
+	ctx := pushedSkillCtx(skillDir)
+
+	if _, err := resolvePathInRun(ctx, workingDir, "../../etc/passwd"); err == nil {
+		t.Error("relative traversal must be rejected with a populated stack")
+	}
+	if _, err := resolvePathInRun(ctx, workingDir, "/etc/passwd"); err == nil {
+		t.Error("outside-absolute path must be rejected with a populated stack")
+	}
+	// A path genuinely inside the skill dir resolves.
+	inside := filepath.Join(skillDir, "ok.md")
+	if _, err := resolvePathInRun(ctx, workingDir, inside); err != nil {
+		t.Errorf("path inside skill dir should resolve: %v", err)
+	}
+}
+
+// TestReadTool_RejectsSymlinkEscape covers the defense-in-depth check: a
+// symlink inside the skill dir that points outside it must not become a read
+// primitive for arbitrary files.
+func TestReadTool_RejectsSymlinkEscape(t *testing.T) {
+	workingDir := t.TempDir()
+	skillDir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("SECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(skillDir, "link")); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+
+	ctx := pushedSkillCtx(skillDir)
+	escapePath := filepath.Join(skillDir, "link", "secret.txt") // lexically inside skillDir
+	args, _ := json.Marshal(map[string]string{"path": escapePath})
+	if _, err := readTool(workingDir)(ctx, args); err == nil {
+		t.Fatal("read through a skill-dir symlink that escapes the dir must be rejected")
+	}
+}
+
 func TestBashTool_SkillDirEnv(t *testing.T) {
 	skillDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(skillDir, "scripts"), 0o755); err != nil {

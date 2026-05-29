@@ -641,3 +641,35 @@ func TestCatalogLoadErrorsCopy(t *testing.T) {
 		t.Error("LoadErrors should return a snapshot, mutation leaked")
 	}
 }
+
+func TestFindRepoRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// From a subdirectory we walk up to the dir containing .git. Resolve
+	// symlinks on both sides because t.TempDir() lives under a symlinked
+	// path (/var -> /private/var) on macOS.
+	got, err := filepath.EvalSymlinks(FindRepoRoot(sub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("FindRepoRoot(%q) = %q, want %q", sub, got, want)
+	}
+
+	// Outside any repo, the input is returned unchanged.
+	noRepo := t.TempDir()
+	if got := FindRepoRoot(noRepo); got != noRepo {
+		t.Errorf("FindRepoRoot outside a repo = %q, want %q", got, noRepo)
+	}
+}

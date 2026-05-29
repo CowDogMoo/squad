@@ -164,8 +164,10 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 }
 
 // autoConfirmMode reads the --auto-confirm flag and returns it as an
-// AutoConfirmMode. An invalid value falls through as "" so resolveConfirm
-// surfaces the error at tool-call time with a clear message.
+// AutoConfirmMode (lowercased/trimmed). Validation happens downstream in
+// runner.buildConfirmRuntime, which warns and coerces any unrecognized value
+// to the unset (abort) policy — so an invalid flag fails safe rather than
+// silently auto-approving.
 func autoConfirmMode(cmd *cobra.Command) tools.AutoConfirmMode {
 	raw, _ := cmd.Flags().GetString("auto-confirm")
 	return tools.AutoConfirmMode(strings.ToLower(strings.TrimSpace(raw)))
@@ -349,8 +351,8 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().String("isolate", "", "Isolation mode: 'worktree' (separate dir + branch), 'branch' (new branch in-place), 'commit' (snapshot dirty tree), 'staged' (commit index, stash rest), 'unstaged' (work as-is), or 'none' (default: from manifest/config)")
 	cmd.Flags().Bool("skills-enabled", false, "Force-enable the Agent Skills catalog for this run (overrides agent.yaml)")
 	cmd.Flags().Bool("skills-disabled", false, "Force-disable the Agent Skills catalog for this run (overrides agent.yaml)")
-	cmd.Flags().StringArray("allow-skill", nil, "Restrict the skill catalog to this name (can be repeated; replaces agent.yaml allow list)")
-	cmd.Flags().StringArray("deny-skill", nil, "Remove a skill from the catalog by name (can be repeated; replaces agent.yaml deny list)")
+	cmd.Flags().StringArray("allow-skill", nil, "Restrict the skill catalog to this name (can be repeated; when set, overrides the agent.yaml allow list)")
+	cmd.Flags().StringArray("deny-skill", nil, "Remove a skill from the catalog by name (can be repeated; when set, overrides the agent.yaml deny list)")
 	cmd.Flags().String("auto-confirm", "", "How the Confirm tool resolves in non-TTY runs: yes (auto-approve), no (auto-decline), or abort (default; fail loudly)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")

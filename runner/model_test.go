@@ -1553,6 +1553,60 @@ func TestRehydrateSkillStackReplaysEvents(t *testing.T) {
 	}
 }
 
+// TestRehydrateSkillStackToleratesMalformedEvents feeds a malformed JSON line
+// and a duplicate skill_loaded event into the log. Rehydration must skip the
+// junk line without crashing and push each known skill exactly once.
+func TestRehydrateSkillStackToleratesMalformedEvents(t *testing.T) {
+	wd := t.TempDir()
+	logger, err := session.New(wd, "a", "openai", "gpt-5", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+
+	if err := logger.Append(session.EventSkillLoaded, map[string]any{"name": "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	// Duplicate load of the same skill — Push is idempotent, so the stack
+	// must still contain alpha exactly once.
+	if err := logger.Append(session.EventSkillLoaded, map[string]any{"name": "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	// Inject a malformed line directly into the event log.
+	f, err := os.OpenFile(filepath.Join(logger.Dir(), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("this is not json\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	skillDir := filepath.Join(t.TempDir(), "alpha")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entry := skill.Entry{
+		Manifest: &skill.Manifest{Name: "alpha", Description: "ok"},
+		Scope:    skill.ScopeRepo,
+		Dir:      skillDir,
+	}
+	rt := &tools.SkillRuntime{
+		Entries: []skill.Entry{entry},
+		Stack:   skill.NewStack(),
+	}
+	rehydrateSkillStack(rt, wd, logger)
+
+	if !rt.Stack.Contains(entry.Dir) {
+		t.Error("expected alpha pushed onto stack despite malformed line")
+	}
+	if rt.Stack.Len() != 1 {
+		t.Errorf("duplicate load should be idempotent, stack len = %d, want 1", rt.Stack.Len())
+	}
+}
+
 func TestResolveSkillCatalogPaths_Nil(t *testing.T) {
 	if got := resolveSkillCatalogPaths(nil); got != nil {
 		t.Errorf("expected nil for nil config, got %v", got)

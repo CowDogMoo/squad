@@ -1,6 +1,9 @@
 package skill
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -142,6 +145,42 @@ func (s *Stack) Resolve(input string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// VerifyNoSymlinkEscape defends the relaxed read path against a skill dir that
+// contains a symlink pointing outside itself. Resolve does a purely lexical
+// containment check (it must, since callers resolve paths to files that may
+// not exist yet); this method closes the gap for paths that DO exist by
+// resolving symlinks on both the target and every active skill dir and
+// re-checking containment on the real paths.
+//
+// A path that does not exist is allowed through unchanged — lexical
+// containment already held and the caller's file operation surfaces its own
+// not-found error. An existing path that resolves outside every skill dir is
+// rejected.
+func (s *Stack) VerifyNoSymlinkEscape(abs string) error {
+	if s == nil {
+		return nil
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, e := range s.dirs {
+		realBase, berr := filepath.EvalSymlinks(e.Dir)
+		if berr != nil {
+			continue
+		}
+		if isWithin(real, realBase) {
+			return nil
+		}
+	}
+	return fmt.Errorf("path %q resolves outside the active skill directory via symlink", abs)
 }
 
 // isWithin reports whether child sits at or beneath parent. Both must be

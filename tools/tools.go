@@ -2118,6 +2118,11 @@ func resolvePathInRun(ctx context.Context, workingDir, input string) (string, er
 		return "", err
 	}
 	if abs, ok := stack.Resolve(input); ok {
+		// Resolve confirms lexical containment; this rejects an existing
+		// target that escapes the skill dir through a symlink.
+		if serr := stack.VerifyNoSymlinkEscape(abs); serr != nil {
+			return "", serr
+		}
 		return abs, nil
 	}
 	return "", err
