@@ -37,15 +37,12 @@ template-matrix.json
 
 # Development artifacts
 TODO
+FIXME.md
 
 # Test output files (but keep *_test.go files!)
 *.test
 test-results/
 testdata/tmp/
-
-.claude
-FIXME.md
-CLAUDE.md
 
 # Secrets and environment files
 .env
