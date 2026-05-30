@@ -85,24 +85,44 @@ func (m *SkillsManager) AddLocalPath(path string) error {
 	return m.saveConfig()
 }
 
-// RemoveSource removes either a registered repository (by name) or a
-// registered local path (by absolute or original form).
+// RemoveSource unregisters every catalog source that matches nameOrPath,
+// across both namespaces. A single identifier can name a Repository by alias,
+// a Repository by its URL (so passing the path of a `file://`-cloned repo
+// finds it), or a LocalPath by either its literal or absolute form. All
+// matches are removed in one pass so a catalog registered both ways — e.g.
+// `add humanizer file:///tmp/x` plus `add /tmp/x` — comes out in a single
+// call rather than leaving the cached clone behind to show up in `skill list`.
+// Returns an error only when nothing matched.
 func (m *SkillsManager) RemoveSource(nameOrPath string) error {
+	absPath, _ := filepath.Abs(nameOrPath)
+	fileURL := "file://" + absPath
+	removed := 0
+
 	if _, ok := m.cfg.Skills.Repositories[nameOrPath]; ok {
 		delete(m.cfg.Skills.Repositories, nameOrPath)
-		return m.saveConfig()
+		removed++
 	}
-	absPath, _ := filepath.Abs(nameOrPath)
-	for i, path := range m.cfg.Skills.LocalPaths {
-		if path == nameOrPath || path == absPath {
-			m.cfg.Skills.LocalPaths = append(
-				m.cfg.Skills.LocalPaths[:i],
-				m.cfg.Skills.LocalPaths[i+1:]...,
-			)
-			return m.saveConfig()
+	for name, url := range m.cfg.Skills.Repositories {
+		if url == nameOrPath || url == fileURL {
+			delete(m.cfg.Skills.Repositories, name)
+			removed++
 		}
 	}
-	return fmt.Errorf("skill source not found: %s", nameOrPath)
+
+	kept := make([]string, 0, len(m.cfg.Skills.LocalPaths))
+	for _, path := range m.cfg.Skills.LocalPaths {
+		if path == nameOrPath || path == absPath {
+			removed++
+			continue
+		}
+		kept = append(kept, path)
+	}
+	m.cfg.Skills.LocalPaths = kept
+
+	if removed == 0 {
+		return fmt.Errorf("skill source not found: %s", nameOrPath)
+	}
+	return m.saveConfig()
 }
 
 // UpdateRepositories pulls latest from every configured git repository

@@ -205,6 +205,52 @@ func TestSkillsManager_RemoveLocalPathByPath(t *testing.T) {
 	}
 }
 
+// TestSkillsManager_RemoveSourceClearsDualRegistration covers the case where
+// the same catalog dir was registered both as a file:// git repo (alias +
+// URL) and as a local path. A single remove by path must wipe both, otherwise
+// the cached clone keeps surfacing skills in `squad skill list`.
+func TestSkillsManager_RemoveSourceClearsDualRegistration(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	catalogPath := t.TempDir()
+	cfg.Skills.Repositories = map[string]string{
+		"humanizer": "file://" + catalogPath,
+	}
+	cfg.Skills.LocalPaths = []string{catalogPath}
+
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RemoveSource(catalogPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Skills.Repositories["humanizer"]; ok {
+		t.Error("file:// repo aliased on the removed path should be gone")
+	}
+	if len(cfg.Skills.LocalPaths) != 0 {
+		t.Errorf("local path should be gone, got %v", cfg.Skills.LocalPaths)
+	}
+}
+
+// TestSkillsManager_RemoveByRepositoryURL covers the symmetric path: passing
+// the exact registered URL (not the alias) removes the repository entry.
+func TestSkillsManager_RemoveByRepositoryURL(t *testing.T) {
+	cfg := newSkillsCfg(t)
+	cfg.Skills.Repositories = map[string]string{
+		"team": "https://example.com/team-skills.git",
+	}
+	mgr, err := NewSkillsManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RemoveSource("https://example.com/team-skills.git"); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Skills.Repositories) != 0 {
+		t.Errorf("repository should be gone, got %v", cfg.Skills.Repositories)
+	}
+}
+
 func TestSkillsManager_AddRejectsDuplicate(t *testing.T) {
 	cfg := newSkillsCfg(t)
 	mgr, err := NewSkillsManager(cfg)
