@@ -36,16 +36,18 @@ const (
 
 // Event types written to events.jsonl.
 const (
-	EventRunStart    = "run_start"
-	EventResume      = "resume"
-	EventPrompt      = "prompt"
-	EventResponse    = "response"
-	EventToolCall    = "tool_call"
-	EventToolResult  = "tool_result"
-	EventLargeResult = "large_result"
-	EventIteration   = "iteration"
-	EventError       = "error"
-	EventRunEnd      = "run_end"
+	EventRunStart        = "run_start"
+	EventResume          = "resume"
+	EventPrompt          = "prompt"
+	EventResponse        = "response"
+	EventToolCall        = "tool_call"
+	EventToolResult      = "tool_result"
+	EventLargeResult     = "large_result"
+	EventIteration       = "iteration"
+	EventError           = "error"
+	EventRunEnd          = "run_end"
+	EventSkillLoaded     = "skill_loaded"
+	EventConfirmResolved = "confirm_resolved"
 )
 
 // Meta holds the per-session metadata kept in meta.json. It is rewritten on

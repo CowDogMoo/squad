@@ -150,6 +150,7 @@ func bashBackgroundTool(ex executor.Executor) func(ctx context.Context, rawArgs 
 			return "", fmt.Errorf("background commands not available")
 		}
 
+		command = withSkillEnv(ctx, command)
 		id := registry.Spawn(ctx, ex, command)
 		logging.InfoContext(ctx, "  → BashBackground %s → %s", TruncateString(command, 120), id)
 		return fmt.Sprintf("Command started in background. ID: %s\nUse BashOutput(command_id=%q) to check status and collect output.", id, id), nil

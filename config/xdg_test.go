@@ -200,3 +200,39 @@ func TestConfigCachePathErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestSkillsCacheDir(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+
+	got, err := SkillsCacheDir()
+	if err != nil {
+		t.Fatalf("SkillsCacheDir() error = %v", err)
+	}
+	if !strings.HasSuffix(got, filepath.Join("squad", "skills")) {
+		t.Fatalf("unexpected cache dir: %s", got)
+	}
+	stat, statErr := os.Stat(got)
+	if statErr != nil {
+		t.Fatalf("stat error = %v", statErr)
+	}
+	if !stat.IsDir() {
+		t.Fatalf("not a directory: %s", got)
+	}
+}
+
+func TestSkillsCacheDirNoEnv(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", "")
+	if _, err := SkillsCacheDir(); err == nil {
+		t.Fatal("expected error when no cache home resolvable")
+	}
+}
+
+func TestCacheDirEmptyEnv(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", "")
+	if got := CacheDir(); got != "" {
+		t.Fatalf("expected empty cache dir, got %q", got)
+	}
+}

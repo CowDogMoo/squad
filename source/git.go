@@ -171,10 +171,14 @@ func (g *GitOperations) getCachePath(gitURL string) string {
 	return filepath.Join(g.cacheDir, fmt.Sprintf("%s-%s", name, hashStr))
 }
 
-// IsGitURL reports whether s looks like a git URL.
+// IsGitURL reports whether s looks like a git URL. file:// URLs are accepted
+// for local-repo workflows (testing, on-disk mirrors) — git natively
+// understands them and go-git's clone path treats them the same as any
+// remote.
 func IsGitURL(s string) bool {
 	return strings.HasPrefix(s, "https://") ||
 		strings.HasPrefix(s, "http://") ||
 		strings.HasPrefix(s, "git@") ||
+		strings.HasPrefix(s, "file://") ||
 		strings.HasSuffix(s, ".git")
 }

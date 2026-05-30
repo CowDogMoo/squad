@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/cowdogmoo/squad/mcp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -37,7 +38,11 @@ type Stage struct {
 	Partition       *Partition        `yaml:"partition,omitempty"`        // automatic work partitioning
 	Summarize       string            `yaml:"summarize,omitempty"`        // auto | always | never — controls stage output summarization
 	SummarizePrompt string            `yaml:"summarize_prompt,omitempty"` // custom summarization instruction
-	InlineConfig    *InlineConfig     `yaml:"-"`                          // inline agent config (set programmatically, not from YAML)
+	// MCPServers, when non-empty, replaces the parent agent's MCP server
+	// list for this stage only. Set programmatically by ManifestToPipeline
+	// from ComposedStage.MCPServers; not parsed from pipeline YAML.
+	MCPServers   []mcp.ServerConfig `yaml:"-"`
+	InlineConfig *InlineConfig      `yaml:"-"` // inline agent config (set programmatically, not from YAML)
 }
 
 // InlineConfig holds inline agent configuration set by ManifestToPipeline
@@ -284,6 +289,18 @@ func (p *Pipeline) TopologicalOrder() [][]Stage {
 	}
 
 	return tiers
+}
+
+// StageByName returns the named stage, or nil if no stage matches.
+// Used by the RunAgent callback to look up stage-scoped overrides
+// (e.g. mcp_servers) that are not in the agent's manifest.
+func (p *Pipeline) StageByName(name string) *Stage {
+	for i := range p.Stages {
+		if p.Stages[i].Name == name {
+			return &p.Stages[i]
+		}
+	}
+	return nil
 }
 
 // GatesAfter returns all gates configured to run after the named stage.

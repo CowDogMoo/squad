@@ -18,8 +18,33 @@ import (
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/mcp"
+	"github.com/cowdogmoo/squad/skill"
 	"gopkg.in/yaml.v3"
 )
+
+// SkillOverrides supplies per-run adjustments to the agent's skill catalog.
+// Each field is opt-in; an unset field defers to the agent.yaml Skills block
+// or, if that is also unset, to the engine default.
+type SkillOverrides struct {
+	// Enabled, when non-nil, force-enables or disables the catalog for this
+	// run, overriding the manifest.
+	Enabled *bool
+	// Allow, when non-empty, replaces the manifest's Allow list for this run.
+	Allow []string
+	// Deny, when non-empty, replaces the manifest's Deny list for this run.
+	Deny []string
+}
+
+// BundleOptions carries optional inputs to BuildBundleWithOptions. A nil
+// pointer is equivalent to a zero value — all fields are opt-in.
+type BundleOptions struct {
+	// SkillOverrides applies CLI-flag overrides to the skill catalog.
+	SkillOverrides *SkillOverrides
+	// CatalogPaths are additional directories to scan as catalog-scope
+	// skills (lowest precedence). Typically supplied by the runner from
+	// source.SkillsManager.CatalogPaths().
+	CatalogPaths []string
+}
 
 // ModelPreference represents a ranked model recommendation for an agent.
 // The first entry in a models list is the primary (preferred) model.
@@ -72,6 +97,30 @@ type Manifest struct {
 	// "worktree" to run inside a fresh git worktree on a new branch.
 	// CLI --isolate and config run.isolation override this.
 	Isolation string `yaml:"isolation,omitempty"`
+
+	// Skills, when non-nil, configures the Agent Skills catalog injected
+	// into this agent's system prompt at boot. nil means "use defaults"
+	// (catalog enabled, both scopes, no allow/deny). See skill package
+	// and PLAN.md for the progressive-disclosure model.
+	Skills *SkillsConfig `yaml:"skills,omitempty"`
+}
+
+// SkillsConfig controls which Agent Skills are surfaced to this agent via
+// the system-prompt catalog. Each field is opt-in; an unset field falls
+// through to the engine default.
+type SkillsConfig struct {
+	// Enabled, when non-nil, force-enables or disables the skill catalog
+	// for this agent. nil means "auto-enable when any skill is discovered".
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// Scopes restricts catalog assembly to this set of skill scopes. Empty
+	// means all scopes ("repo" + "global"). Values match skill.Scope.String().
+	Scopes []string `yaml:"scopes,omitempty"`
+	// Allow, when non-empty, is an exclusive allowlist of skill names. Wins
+	// over Deny and Scopes per PLAN.md.
+	Allow []string `yaml:"allow,omitempty"`
+	// Deny removes skills by name from the catalog. Applied only when Allow
+	// is empty.
+	Deny []string `yaml:"deny,omitempty"`
 }
 
 // BudgetConfig provides static hints for cost estimation.
@@ -198,13 +247,23 @@ type Bundle struct {
 	// filesystem tools are not registered and the runner skips
 	// working-dir resolution / repo-summary injection.
 	RemoteOnly bool
+	// SkillEntries is the filtered set of skills surfaced in the system
+	// prompt's "Available skills" block. The runner uses these to build
+	// the Skill tool's runtime so the names the agent sees are exactly
+	// the names it can load via Skill(name).
+	SkillEntries []skill.Entry
 }
 
 // TemplateData holds the data passed to prompt templates.
 // Templates can use {{.Mode}}, {{.Var "KEY"}}, or {{.Vars.KEY}}.
+//
+// AgentDir is the absolute path to the agent's directory on disk. Useful for
+// MCP `command:` entries that point at scripts shipped alongside the agent —
+// `{{.AgentDir}}/wrapper.sh` keeps the manifest portable across machines.
 type TemplateData struct {
-	Mode string
-	Vars map[string]string
+	Mode     string
+	Vars     map[string]string
+	AgentDir string
 }
 
 // Var returns the value of a template variable, or empty string if not set.
@@ -417,6 +476,28 @@ func resolveEnvironmentTemplates(env *executor.Config, data TemplateData) error 
 }
 
 // resolveMCPServerTemplates processes template variables in MCP server configurations.
+// ApplyMCPOverride replaces a bundle's MCP server list with the supplied
+// override, applying the same template expansion (Var/Env/BrowserProfile/AgentDir)
+// that BuildBundle uses. Intended for stage-scoped MCP overrides in
+// composed agents, where a stage's mcp_servers replaces the parent
+// manifest's list for that stage's run only.
+func ApplyMCPOverride(b *Bundle, override []mcp.ServerConfig, mode, agentDir string, vars map[string]string) error {
+	if b == nil {
+		return fmt.Errorf("ApplyMCPOverride: bundle is nil")
+	}
+	data := TemplateData{
+		Mode:     mode,
+		Vars:     vars,
+		AgentDir: agentDir,
+	}
+	resolved, err := resolveMCPServerTemplates(override, data)
+	if err != nil {
+		return err
+	}
+	b.MCPServers = resolved
+	return nil
+}
+
 func resolveMCPServerTemplates(servers []mcp.ServerConfig, data TemplateData) ([]mcp.ServerConfig, error) {
 	resolveStr := func(name, val string) (string, error) {
 		if val == "" || !strings.Contains(val, "{{") {
@@ -634,8 +715,62 @@ func topNExts(exts map[string]int, n int) string {
 	return strings.Join(parts, " ")
 }
 
+// resolveSkills discovers the catalog for workingDir, applies the agent's
+// manifest config plus any CLI overrides, and returns both the filtered
+// entries and the rendered Level-1 system-prompt block. The entries are the
+// authoritative set surfaced to the agent — the same list is later handed to
+// the Skill tool so the names the model sees are exactly the names it can
+// load.
+//
+// Returns (nil, "", nil) when skills are disabled or no entries survive the
+// filter, so callers can branch on either.
+func resolveSkills(workingDir string, manifestCfg *SkillsConfig, overrides *SkillOverrides, catalogPaths []string) ([]skill.Entry, string, error) {
+	enabled := true
+	if manifestCfg != nil && manifestCfg.Enabled != nil {
+		enabled = *manifestCfg.Enabled
+	}
+	if overrides != nil && overrides.Enabled != nil {
+		enabled = *overrides.Enabled
+	}
+	if !enabled {
+		return nil, "", nil
+	}
+
+	catalog, err := skill.Discover(skill.FindRepoRoot(workingDir), catalogPaths...)
+	if err != nil {
+		return nil, "", fmt.Errorf("discover skills: %w", err)
+	}
+	for _, le := range catalog.LoadErrors() {
+		logging.Warn("skipping invalid skill %s: %v", le.Path, le.Err)
+	}
+
+	filterOpts := skill.FilterOptions{}
+	if manifestCfg != nil {
+		for _, s := range manifestCfg.Scopes {
+			scope, err := skill.ParseScope(s)
+			if err != nil {
+				return nil, "", fmt.Errorf("agent skills config: %w", err)
+			}
+			filterOpts.Scopes = append(filterOpts.Scopes, scope)
+		}
+		filterOpts.Allow = manifestCfg.Allow
+		filterOpts.Deny = manifestCfg.Deny
+	}
+	if overrides != nil {
+		if len(overrides.Allow) > 0 {
+			filterOpts.Allow = overrides.Allow
+		}
+		if len(overrides.Deny) > 0 {
+			filterOpts.Deny = overrides.Deny
+		}
+	}
+
+	entries := catalog.Filter(filterOpts)
+	return entries, skill.RenderPromptBlock(entries), nil
+}
+
 // buildSystemMessage assembles the system prompt content from all bundle components.
-func buildSystemMessage(manifest *Manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent string, refs []string) bytes.Buffer {
+func buildSystemMessage(manifest *Manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent, skillBlock string, refs []string) bytes.Buffer {
 	var sys bytes.Buffer
 	sys.WriteString("# Squad Agent Bundle\n\n")
 	fmt.Fprintf(&sys, "Agent: %s (%s)\n", manifest.Name, manifest.Version)
@@ -678,6 +813,11 @@ func buildSystemMessage(manifest *Manifest, displayMode, workingDir, wrapperCont
 	sys.WriteString("\n\n")
 	sys.WriteString(toolEfficiencyPrompt)
 
+	if skillBlock != "" {
+		sys.WriteString("\n")
+		sys.WriteString(skillBlock)
+	}
+
 	// Inject compact repo structure summary so agents don't waste
 	// iterations discovering the basic layout.
 	if repoSummary := compactRepoSummary(workingDir); repoSummary != "" {
@@ -693,7 +833,17 @@ func buildSystemMessage(manifest *Manifest, displayMode, workingDir, wrapperCont
 // given mode and vars, resolves references and MCP server configs, and
 // constructs the combined system and user messages. prompt becomes the user
 // message (defaulting to "Begin." when empty).
+//
+// Callers that need to overlay the agent.yaml skills config — e.g. CLI flags
+// like --allow-skill / --skills-disabled — should use [BuildBundleWithOptions]
+// instead.
 func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map[string]string) (*Bundle, error) {
+	return BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode, vars, nil)
+}
+
+// BuildBundleWithOptions is the full-featured constructor that also accepts
+// per-run overrides via opts. A nil opts is equivalent to [BuildBundle].
+func BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode string, vars map[string]string, opts *BundleOptions) (*Bundle, error) {
 	agentPath := filepath.Join(agentsDir, agentName)
 
 	manifest, err := LoadManifest(agentPath)
@@ -702,7 +852,18 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 	}
 
 	displayMode := resolveDisplayMode(mode)
-	data := TemplateData{Mode: displayMode, Vars: vars}
+	data := TemplateData{Mode: displayMode, Vars: vars, AgentDir: agentPath}
+
+	var skillOverrides *SkillOverrides
+	var catalogPaths []string
+	if opts != nil {
+		skillOverrides = opts.SkillOverrides
+		catalogPaths = opts.CatalogPaths
+	}
+	skillEntries, skillBlock, err := resolveSkills(workingDir, manifest.Skills, skillOverrides, catalogPaths)
+	if err != nil {
+		return nil, err
+	}
 
 	var sys bytes.Buffer
 	if manifest.IsInlinePrompt() {
@@ -710,7 +871,7 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		if perr != nil {
 			return nil, perr
 		}
-		sys = buildInlineSystemMessage(manifest, displayMode, workingDir, systemContent)
+		sys = buildInlineSystemMessage(manifest, displayMode, workingDir, systemContent, skillBlock)
 	} else {
 		systemContent, wrapperContent, taskContent, lerr := loadAndProcessPrompts(agentPath, agentsDir, manifest, data)
 		if lerr != nil {
@@ -720,7 +881,7 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		if rerr != nil {
 			return nil, rerr
 		}
-		sys = buildSystemMessage(manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent, refs)
+		sys = buildSystemMessage(manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent, skillBlock, refs)
 	}
 
 	userMessage := prompt
@@ -763,13 +924,14 @@ func BuildBundle(agentsDir, agentName, prompt, workingDir, mode string, vars map
 		MaxIterations: manifest.MaxIterations,
 		EditDeadline:  manifest.EditDeadline,
 		RemoteOnly:    manifest.IsRemoteOnly(),
+		SkillEntries:  skillEntries,
 	}, nil
 }
 
 // buildInlineSystemMessage assembles the system message for an inline-prompt
 // agent. It skips wrapper/references/task sections and (for remote-only
 // agents) the repo summary.
-func buildInlineSystemMessage(manifest *Manifest, displayMode, workingDir, promptContent string) bytes.Buffer {
+func buildInlineSystemMessage(manifest *Manifest, displayMode, workingDir, promptContent, skillBlock string) bytes.Buffer {
 	var sys bytes.Buffer
 	sys.WriteString("# Squad Agent Bundle\n\n")
 	fmt.Fprintf(&sys, "Agent: %s (%s)\n", manifest.Name, manifest.Version)
@@ -796,6 +958,11 @@ func buildInlineSystemMessage(manifest *Manifest, displayMode, workingDir, promp
 
 	sys.WriteString("\n\n")
 	sys.WriteString(toolEfficiencyPrompt)
+
+	if skillBlock != "" {
+		sys.WriteString("\n")
+		sys.WriteString(skillBlock)
+	}
 
 	if !manifest.IsRemoteOnly() {
 		if repoSummary := compactRepoSummary(workingDir); repoSummary != "" {
@@ -847,7 +1014,7 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 
 	displayMode := resolveDisplayMode(mode)
 
-	data := TemplateData{Mode: displayMode, Vars: vars}
+	data := TemplateData{Mode: displayMode, Vars: vars, AgentDir: promptDir}
 	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(promptDir, baseDir, manifest, data)
 	if err != nil {
 		return nil, err
@@ -863,7 +1030,11 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 		}
 	}
 
-	sys := buildSystemMessage(manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent, refs)
+	_, skillBlock, err := resolveSkills(workingDir, manifest.Skills, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	sys := buildSystemMessage(manifest, displayMode, workingDir, wrapperContent, systemContent, taskContent, skillBlock, refs)
 
 	userMessage := prompt
 	if userMessage == "" {

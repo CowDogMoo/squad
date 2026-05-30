@@ -1,6 +1,8 @@
 package source
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -90,5 +92,17 @@ func TestRemoteURLReturnsOrigin(t *testing.T) {
 	}
 	if got := remoteURL(repo); got != wantURL {
 		t.Fatalf("remoteURL = %q, want %q", got, wantURL)
+	}
+}
+
+func TestPullOpenFailsOnNonRepo(t *testing.T) {
+	tmp := t.TempDir()
+	notARepo := filepath.Join(tmp, "notarepo")
+	if err := os.MkdirAll(notARepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := NewGitOperations(tmp)
+	if err := g.pull(notARepo); err == nil {
+		t.Fatal("expected pull error on non-repo path")
 	}
 }

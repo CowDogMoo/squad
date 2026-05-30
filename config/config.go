@@ -44,6 +44,7 @@ type Config struct {
 	Provider ProviderConfig `mapstructure:"provider" yaml:"provider"`
 	Model    ModelConfig    `mapstructure:"model" yaml:"model"`
 	Agents   AgentsConfig   `mapstructure:"agents" yaml:"agents"`
+	Skills   SkillsConfig   `mapstructure:"skills" yaml:"skills"`
 	Otel     OtelConfig     `mapstructure:"otel" yaml:"otel"`
 	Run      RunConfig      `mapstructure:"run" yaml:"run"`
 }
@@ -82,6 +83,24 @@ type AgentsConfig struct {
 	//   local_paths:
 	//     - /opt/shared/agents
 	//     - ~/dev/my-agents
+	LocalPaths []string `mapstructure:"local_paths" yaml:"local_paths"`
+}
+
+// SkillsConfig holds Agent Skills catalog configuration. The shape mirrors
+// AgentsConfig so the same mental model applies: skills come from local
+// directories you've registered, plus git repositories that squad clones
+// into a local cache on demand. The per-repo and global scopes are not
+// configured here — they live at well-known filesystem locations.
+type SkillsConfig struct {
+	// CacheDir is where cloned skill catalog repositories are cached.
+	// Empty falls through to config.SkillsCacheDir().
+	CacheDir string `mapstructure:"cache_dir" yaml:"cache_dir"`
+	// Repositories maps a catalog alias to its Git URL. squad skill add /
+	// update operate on this map.
+	Repositories map[string]string `mapstructure:"repositories" yaml:"repositories"`
+	// LocalPaths lists additional directories to search for skill
+	// subdirectories. Each path is treated as a catalog root and its
+	// immediate subdirectories are scanned for SKILL.md files.
 	LocalPaths []string `mapstructure:"local_paths" yaml:"local_paths"`
 }
 
@@ -230,5 +249,8 @@ func SetDefaults(v *viper.Viper) {
 		"official": "https://github.com/cowdogmoo/squad-agents.git",
 	})
 	v.SetDefault("agents.local_paths", []string{})
+	v.SetDefault("skills.cache_dir", "")
+	v.SetDefault("skills.repositories", map[string]string{})
+	v.SetDefault("skills.local_paths", []string{})
 	v.SetDefault("otel.endpoint", "")
 }

@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/cowdogmoo/squad/config"
-	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/routine/daemon"
 )
 
@@ -48,8 +47,8 @@ func run() int {
 
 	cfg, _, err := config.Load()
 	if err != nil {
-		logging.Warn("failed to load config, using defaults: %v", err)
-		cfg = config.Defaults()
+		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		return 1
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

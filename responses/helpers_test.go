@@ -179,7 +179,7 @@ func TestRunWithToolsForwardsResumeResponseID(t *testing.T) {
 	out, err := RunWithTools(
 		context.Background(),
 		"key", server.URL, "gpt-4o", "system", "user", td,
-		"", "resp_prior", 0.4, 0, 1, 0, nil, nil, nil, nil,
+		"", "resp_prior", 0.4, 0, 1, 0, nil, nil, nil, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("RunWithTools: %v", err)

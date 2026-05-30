@@ -37,6 +37,7 @@ import (
 	"github.com/cowdogmoo/squad/metrics"
 	pl "github.com/cowdogmoo/squad/pipeline"
 	"github.com/cowdogmoo/squad/runner"
+	"github.com/cowdogmoo/squad/tools"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -80,6 +81,8 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 
 	mcpStrings, _ := cmd.Flags().GetStringArray("mcp-server")
 	mcpServers := parseMCPServers(mcpStrings)
+
+	skillOverrides := resolveSkillOverrides(cmd)
 
 	maxIter := v.GetInt("run.max_iterations")
 	if maxIter < 10 {
@@ -155,7 +158,44 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		Stream:             v.GetBool("run.stream"),
 		MaxConcurrentTasks: v.GetInt("run.max_concurrent_tasks"),
 		ResumeID:           v.GetString("run.resume"),
+		SkillOverrides:     skillOverrides,
+		AutoConfirm:        autoConfirmMode(cmd),
 	}
+}
+
+// autoConfirmMode reads the --auto-confirm flag and returns it as an
+// AutoConfirmMode (lowercased/trimmed). Validation happens downstream in
+// runner.buildConfirmRuntime, which warns and coerces any unrecognized value
+// to the unset (abort) policy — so an invalid flag fails safe rather than
+// silently auto-approving.
+func autoConfirmMode(cmd *cobra.Command) tools.AutoConfirmMode {
+	raw, _ := cmd.Flags().GetString("auto-confirm")
+	return tools.AutoConfirmMode(strings.ToLower(strings.TrimSpace(raw)))
+}
+
+// resolveSkillOverrides translates --skills-enabled / --skills-disabled /
+// --allow-skill / --deny-skill into a SkillOverrides struct. Returns nil
+// when no skill flag was set so the agent.yaml config is left alone.
+func resolveSkillOverrides(cmd *cobra.Command) *agent.SkillOverrides {
+	enabledChanged := cmd.Flags().Changed("skills-enabled")
+	disabledChanged := cmd.Flags().Changed("skills-disabled")
+	allow, _ := cmd.Flags().GetStringArray("allow-skill")
+	deny, _ := cmd.Flags().GetStringArray("deny-skill")
+
+	if !enabledChanged && !disabledChanged && len(allow) == 0 && len(deny) == 0 {
+		return nil
+	}
+
+	overrides := &agent.SkillOverrides{Allow: allow, Deny: deny}
+	if enabledChanged {
+		v := true
+		overrides.Enabled = &v
+	}
+	if disabledChanged {
+		v := false
+		overrides.Enabled = &v
+	}
+	return overrides
 }
 
 // bindRunFlags binds the run command's flags to Viper keys so that env vars
@@ -309,8 +349,18 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Bool("json", false, "Force JSON output format (composed agents only)")
 	cmd.Flags().String("resume", "", "Resume a prior session by id (see ./.squad/sessions/)")
 	cmd.Flags().String("isolate", "", "Isolation mode: 'worktree' (separate dir + branch), 'branch' (new branch in-place), 'commit' (snapshot dirty tree), 'staged' (commit index, stash rest), 'unstaged' (work as-is), or 'none' (default: from manifest/config)")
+	cmd.Flags().Bool("skills-enabled", false, "Force-enable the Agent Skills catalog for this run (overrides agent.yaml)")
+	cmd.Flags().Bool("skills-disabled", false, "Force-disable the Agent Skills catalog for this run (overrides agent.yaml)")
+	cmd.Flags().StringArray("allow-skill", nil, "Restrict the skill catalog to this name (can be repeated; when set, overrides the agent.yaml allow list)")
+	cmd.Flags().StringArray("deny-skill", nil, "Remove a skill from the catalog by name (can be repeated; when set, overrides the agent.yaml deny list)")
+	cmd.Flags().String("auto-confirm", "", "How the Confirm tool resolves in non-TTY runs: yes (auto-approve), no (auto-decline), or abort (default; fail loudly)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
+	cmd.MarkFlagsMutuallyExclusive("skills-enabled", "skills-disabled")
+
+	_ = cmd.RegisterFlagCompletionFunc("auto-confirm", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"yes", "no", "abort"}, cobra.ShellCompDirectiveNoFileComp
+	})
 
 	// Dynamic completions for --agent (scan agents directories).
 	_ = cmd.RegisterFlagCompletionFunc("agent", completeAgentNames)

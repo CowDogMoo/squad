@@ -136,3 +136,19 @@ func AgentsCacheDir() (string, error) {
 
 	return cacheDir, nil
 }
+
+// SkillsCacheDir returns the directory for caching cloned skill catalog
+// repositories. Mirrors AgentsCacheDir so the two stay in lockstep.
+func SkillsCacheDir() (string, error) {
+	cacheHome := getCacheHome()
+	if cacheHome == "" {
+		return "", os.ErrNotExist
+	}
+
+	cacheDir := filepath.Join(cacheHome, "squad", "skills")
+	if err := os.MkdirAll(cacheDir, DirPermReadWriteExec); err != nil {
+		return "", err
+	}
+
+	return cacheDir, nil
+}

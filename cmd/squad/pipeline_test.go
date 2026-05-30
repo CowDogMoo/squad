@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/cowdogmoo/squad/config"
+	"github.com/cowdogmoo/squad/mcp"
 	pl "github.com/cowdogmoo/squad/pipeline"
 	"github.com/cowdogmoo/squad/runner"
 	"github.com/spf13/cobra"
@@ -765,6 +766,102 @@ func TestBuildRunAgentFunc_InlineBuildError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to build inline agent") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestBuildRunAgentFunc_StageMCPOverrideErrorSurfaces verifies that a
+// stage with a malformed MCP override template produces a wrapped error
+// before InvokeModel is reached. This exercises the cmd-layer wiring
+// (StageByName lookup + ApplyMCPOverride) end-to-end.
+func TestBuildRunAgentFunc_StageMCPOverrideErrorSurfaces(t *testing.T) {
+	t.Parallel()
+
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, "test-leaf")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"),
+		[]byte("name: test-leaf\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("sys"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrap"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &pl.Pipeline{
+		Name: "stage-override-error",
+		Stages: []pl.Stage{
+			{
+				Name:  "broken-stage",
+				Agent: "test-leaf",
+				MCPServers: []mcp.ServerConfig{
+					{Name: "bad", Command: "{{.NonexistentField}}"},
+				},
+			},
+		},
+	}
+	pRunner := &pl.Runner{Pipeline: p, InlineAgents: make(map[string]*pl.InlineConfig)}
+
+	fn := buildRunAgentFunc(&runner.RunOptions{Provider: "test", Model: "test-model"},
+		agentsDir, "", &config.Config{}, nil, pRunner)
+
+	vars := map[string]string{pl.PipelineStageNameVar: "broken-stage"}
+	_, _, err := fn(context.Background(), "test-leaf", "prompt", t.TempDir(), "edit", vars)
+	if err == nil {
+		t.Fatal("expected error from broken MCP override template")
+	}
+	if !strings.Contains(err.Error(), "mcp override") || !strings.Contains(err.Error(), "broken-stage") {
+		t.Fatalf("expected wrapped 'mcp override' error mentioning stage name, got: %v", err)
+	}
+}
+
+// TestBuildRunAgentFunc_NoStageOverrideDoesNotApply verifies that when a
+// stage has no MCPServers override, the cmd-layer does not touch the
+// bundle's MCP list. We assert by leaving the override nil and confirming
+// the call reaches InvokeModel (not the override path) — same pattern
+// the other tests use.
+func TestBuildRunAgentFunc_NoStageOverrideDoesNotApply(t *testing.T) {
+	t.Parallel()
+
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, "test-leaf")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"),
+		[]byte("name: test-leaf\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("sys"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.md"), []byte("wrap"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &pl.Pipeline{
+		Name: "no-override",
+		Stages: []pl.Stage{
+			{Name: "plain-stage", Agent: "test-leaf"}, // nil MCPServers
+		},
+	}
+	pRunner := &pl.Runner{Pipeline: p, InlineAgents: make(map[string]*pl.InlineConfig)}
+
+	fn := buildRunAgentFunc(&runner.RunOptions{Provider: "test", Model: "test-model"},
+		agentsDir, "", &config.Config{}, nil, pRunner)
+
+	vars := map[string]string{pl.PipelineStageNameVar: "plain-stage"}
+	_, _, err := fn(context.Background(), "test-leaf", "prompt", t.TempDir(), "edit", vars)
+	if err == nil {
+		t.Fatal("expected error from InvokeModel (no real provider)")
+	}
+	// Failure must come from invocation, not the override path.
+	if strings.Contains(err.Error(), "mcp override") {
+		t.Fatalf("override path triggered unexpectedly: %v", err)
 	}
 }
 

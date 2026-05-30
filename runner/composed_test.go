@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/mcp"
 )
 
 func TestManifestToPipeline_Basic(t *testing.T) {
@@ -267,6 +268,70 @@ func TestManifestToPipeline_InlineConfig(t *testing.T) {
 	}
 	if len(s.InlineConfig.Models) != 1 || s.InlineConfig.Models[0].Model != "gpt-4" {
 		t.Fatalf("expected model gpt-4, got %v", s.InlineConfig.Models)
+	}
+}
+
+func TestManifestToPipeline_StageMCPServers(t *testing.T) {
+	t.Parallel()
+
+	m := &agent.Manifest{
+		Name: "stage-mcp",
+		MCPServers: []mcp.ServerConfig{
+			{Name: "manifest-level", Command: "echo"},
+		},
+		Stages: []agent.ComposedStage{
+			{
+				Name:  "parse",
+				Agent: "parser",
+				// Empty (non-nil) MCPServers should still copy through —
+				// the cmd-layer treats nil as "inherit", []{} as "no MCP".
+				MCPServers: []mcp.ServerConfig{},
+			},
+			{
+				Name:  "shop",
+				Agent: "shopper",
+				MCPServers: []mcp.ServerConfig{
+					{Name: "chrome", Command: "npx", Args: []string{"chrome-devtools-mcp@latest"}},
+				},
+			},
+			{
+				Name:  "inherit",
+				Agent: "other",
+				// No MCPServers field — stage should inherit from manifest.
+			},
+		},
+	}
+
+	p, err := ManifestToPipeline(m)
+	if err != nil {
+		t.Fatalf("ManifestToPipeline: %v", err)
+	}
+
+	parse := p.StageByName("parse")
+	if parse == nil {
+		t.Fatal("parse stage missing")
+	}
+	if parse.MCPServers == nil {
+		t.Fatal("parse stage: expected non-nil empty slice, got nil")
+	}
+	if len(parse.MCPServers) != 0 {
+		t.Fatalf("parse stage: expected 0 MCP servers, got %d", len(parse.MCPServers))
+	}
+
+	shop := p.StageByName("shop")
+	if shop == nil {
+		t.Fatal("shop stage missing")
+	}
+	if len(shop.MCPServers) != 1 || shop.MCPServers[0].Name != "chrome" {
+		t.Fatalf("shop stage: expected chrome MCP server, got %+v", shop.MCPServers)
+	}
+
+	inherit := p.StageByName("inherit")
+	if inherit == nil {
+		t.Fatal("inherit stage missing")
+	}
+	if inherit.MCPServers != nil {
+		t.Fatalf("inherit stage: expected nil MCPServers (signal to inherit), got %+v", inherit.MCPServers)
 	}
 }
 

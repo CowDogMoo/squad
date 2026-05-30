@@ -195,3 +195,63 @@ func TestLoadConfigWithViperSetupError(t *testing.T) {
 		t.Fatalf("error = %q, want config load failed", err.Error())
 	}
 }
+
+// TestLoadFromPath_SkillsLocalPathsListForm is a regression test for the
+// schema flip that briefly required skills.local_paths to be a map. The
+// canonical form is a YAML list — the same shape users have been writing
+// since the field shipped — and Load must accept it without error.
+func TestLoadFromPath_SkillsLocalPathsListForm(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := "" +
+		"skills:\n" +
+		"  repositories:\n" +
+		"    personal: https://github.com/CowDogMoo/squad-skills.git\n" +
+		"  local_paths:\n" +
+		"    - /Users/l/cowdogmoo/squad-skills\n" +
+		"    - /opt/shared/skills\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, _, err := LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadFromPath: %v", err)
+	}
+
+	want := []string{"/Users/l/cowdogmoo/squad-skills", "/opt/shared/skills"}
+	if len(cfg.Skills.LocalPaths) != len(want) {
+		t.Fatalf("LocalPaths = %v, want %v", cfg.Skills.LocalPaths, want)
+	}
+	for i, p := range want {
+		if cfg.Skills.LocalPaths[i] != p {
+			t.Errorf("LocalPaths[%d] = %q, want %q", i, cfg.Skills.LocalPaths[i], p)
+		}
+	}
+	if cfg.Skills.Repositories["personal"] != "https://github.com/CowDogMoo/squad-skills.git" {
+		t.Errorf("Repositories[personal] = %q", cfg.Skills.Repositories["personal"])
+	}
+}
+
+// TestLoadFromPath_TypeMismatchSurfacesError is a regression test for the
+// silent-fallback bug that previously hid type mismatches from the user.
+// model.max_tokens expects an int; writing a YAML mapping there forces
+// mapstructure to fail at decode time. Load must surface that error
+// rather than silently falling back to defaults — which would discard
+// the user's entire configuration on one bad field.
+func TestLoadFromPath_TypeMismatchSurfacesError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := "model:\n  max_tokens:\n    nested: 5\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, _, err := LoadFromPath(path)
+	if err == nil {
+		t.Fatalf("expected error from type-mismatched field, got nil")
+	}
+	if !strings.Contains(err.Error(), "unmarshal") {
+		t.Fatalf("error = %q, want one mentioning unmarshal", err.Error())
+	}
+}

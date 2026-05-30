@@ -401,6 +401,7 @@ environment:
 - **[MCP Servers](docs/mcp-servers.md)** - Connect agents to external tools via Model Context Protocol
 - **[Observability](docs/observability.md)** - Streaming output, OpenTelemetry tracing, cost budgeting, and grading
 - **[Routines](docs/routines.md)** - Scheduled unattended runs via OS-native daemons
+- **[Skills](docs/skills.md)** - On-demand capabilities a running agent loads — Anthropic Agent Skills format
 
 ### Agents
 

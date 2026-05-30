@@ -762,6 +762,16 @@ func TestInitConfigWithConfigPath(t *testing.T) {
 	}
 }
 
+// TestInitConfigMissingConfigFile asserts that an explicitly-supplied
+// --config path that does not exist is a loud error, not a silent
+// fall-back to defaults. The previous behaviour discarded the user's
+// requested config when any load failure occurred — including type
+// mismatches like skills.local_paths shape errors — which led to
+// confusing "why is my config ignored?" reports.
+//
+// The no-config-file-at-all path (no flag, no file in any XDG dir) is
+// still handled by config.Load swallowing ConfigFileNotFoundError; it is
+// covered by TestLoadMissingFileReturnsDefaults in the config package.
 func TestInitConfigMissingConfigFile(t *testing.T) {
 	baseDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", baseDir)
@@ -774,16 +784,12 @@ func TestInitConfigMissingConfigFile(t *testing.T) {
 		t.Fatalf("Set config: %v", err)
 	}
 
-	if err := initConfig(root, nil); err != nil {
-		t.Fatalf("initConfig() error = %v", err)
+	err := initConfig(root, nil)
+	if err == nil {
+		t.Fatalf("initConfig() with missing --config path must error, got nil")
 	}
-	loaded := configFromContext(root)
-	if loaded == nil {
-		t.Fatalf("expected config in context")
-	}
-	defaults := config.Defaults()
-	if loaded.Log.Level != defaults.Log.Level {
-		t.Fatalf("Log.Level = %q, want %q", loaded.Log.Level, defaults.Log.Level)
+	if !strings.Contains(err.Error(), "failed to load config") {
+		t.Fatalf("error = %q, want it to mention failed to load config", err.Error())
 	}
 }
 
@@ -1696,5 +1702,82 @@ stages:
 	err := cmd.RunE(cmd, nil)
 	if err != nil {
 		t.Fatalf("RunE: %v", err)
+	}
+}
+
+func TestResolveSkillOverridesUnset(t *testing.T) {
+	cmd := newRunCmd()
+	if got := resolveSkillOverrides(cmd); got != nil {
+		t.Fatalf("expected nil when no skill flags set, got %+v", got)
+	}
+}
+
+func TestResolveSkillOverridesEnabled(t *testing.T) {
+	cmd := newRunCmd()
+	if err := cmd.Flags().Set("skills-enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	got := resolveSkillOverrides(cmd)
+	if got == nil || got.Enabled == nil || !*got.Enabled {
+		t.Fatalf("expected Enabled=true, got %+v", got)
+	}
+}
+
+func TestResolveSkillOverridesDisabled(t *testing.T) {
+	cmd := newRunCmd()
+	if err := cmd.Flags().Set("skills-disabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	got := resolveSkillOverrides(cmd)
+	if got == nil || got.Enabled == nil || *got.Enabled {
+		t.Fatalf("expected Enabled=false, got %+v", got)
+	}
+}
+
+func TestResolveSkillOverridesAllowDeny(t *testing.T) {
+	cmd := newRunCmd()
+	if err := cmd.Flags().Set("allow-skill", "groceries"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("deny-skill", "debug"); err != nil {
+		t.Fatal(err)
+	}
+	got := resolveSkillOverrides(cmd)
+	if got == nil {
+		t.Fatal("expected non-nil overrides")
+	}
+	if len(got.Allow) != 1 || got.Allow[0] != "groceries" {
+		t.Errorf("Allow = %v, want [groceries]", got.Allow)
+	}
+	if len(got.Deny) != 1 || got.Deny[0] != "debug" {
+		t.Errorf("Deny = %v, want [debug]", got.Deny)
+	}
+}
+
+func TestAutoConfirmMode(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"", ""},
+		{"yes", "yes"},
+		{" YES ", "yes"},
+		{"no", "no"},
+		{"abort", "abort"},
+		{"weird", "weird"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			cmd := newRunCmd()
+			if tc.raw != "" {
+				if err := cmd.Flags().Set("auto-confirm", tc.raw); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := autoConfirmMode(cmd)
+			if string(got) != tc.want {
+				t.Fatalf("autoConfirmMode = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

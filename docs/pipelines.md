@@ -52,6 +52,19 @@ stages:
     vars:
       COVERAGE_TARGET: "85"
 
+  # Stage-scoped MCP servers — overrides the parent agent's mcp_servers
+  # for this stage only. Use to keep tool surface minimal per stage
+  # (e.g. a deterministic parse stage gets no MCP; a chrome-driving
+  # stage gets just chrome). An empty list (`mcp_servers: []`) disables
+  # all MCP for that stage; omitting the field inherits from the parent.
+  - name: shop
+    agent: amazon-shop
+    depends_on: [parse]
+    mcp_servers:
+      - name: chrome
+        command: npx
+        args: [chrome-devtools-mcp@latest, --userDataDir={{.BrowserProfile "amazon"}}]
+
 # Regression gates run shell commands after a stage completes
 gates:
   - after: review
@@ -73,6 +86,11 @@ gates:
 - **Structured output**: JSON or Markdown reports with per-stage results
 - **Unified entry point**: `squad run --agent <name>` works for both leaf
   and composed agents
+- **Stage-scoped MCP servers**: a stage's `mcp_servers` replaces the
+  sub-agent's manifest list for that stage only. Lets one composed
+  manifest combine stages with different tool surfaces (e.g. a
+  no-MCP parse stage followed by a chrome+gdrive stage) without
+  splitting them into separate agent directories.
 
 ## Leaf vs Composed Manifests
 

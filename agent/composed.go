@@ -1,6 +1,10 @@
 package agent
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/cowdogmoo/squad/mcp"
+)
 
 // ComposedStage defines a unit of work in a composed agent.
 // It mirrors pipeline.Stage but lives in the agent package to avoid
@@ -29,6 +33,12 @@ type ComposedStage struct {
 	Task       string            `yaml:"task,omitempty"`
 	Models     []ModelPreference `yaml:"models,omitempty"`
 	References []string          `yaml:"references,omitempty"`
+
+	// MCPServers, when non-empty, replaces the parent manifest's
+	// MCP server list for this stage only. Used to scope tool surface
+	// per stage (e.g. stage 1 has no MCP, stage 2 has chrome+gdrive).
+	// Empty means "inherit from the parent manifest".
+	MCPServers []mcp.ServerConfig `yaml:"mcp_servers,omitempty"`
 }
 
 // IsInline returns true if the stage defines an inline agent.

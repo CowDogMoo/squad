@@ -2,10 +2,12 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,8 +19,11 @@ import (
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/ollama"
 	"github.com/cowdogmoo/squad/responses"
+	"github.com/cowdogmoo/squad/session"
+	"github.com/cowdogmoo/squad/skill"
 	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/cowdogmoo/squad/tools"
+	"github.com/mattn/go-isatty"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
 	"github.com/tmc/langchaingo/llms/googleai"
@@ -27,6 +32,101 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// buildConfirmRuntime wires os.Stdin / os.Stderr / the resolved --auto-confirm
+// policy into a ConfirmRuntime for the Confirm tool. Always returns a non-nil
+// runtime so the tool is registered for every run; the runtime's AutoConfirm
+// + isStdinTTY decide whether each call prompts a human or resolves against
+// the policy.
+func buildConfirmRuntime(opts *RunOptions) *tools.ConfirmRuntime {
+	mode := opts.AutoConfirm
+	if mode != "" && !mode.IsValid() {
+		logging.Warn("ignoring invalid --auto-confirm value %q", mode)
+		mode = tools.AutoConfirmUnset
+	}
+	return &tools.ConfirmRuntime{
+		In:          os.Stdin,
+		Out:         os.Stderr,
+		IsTTY:       isStdinTTY,
+		AutoConfirm: mode,
+	}
+}
+
+// isStdinTTY reports whether stdin is connected to a terminal. The mattn
+// isatty pull is already an indirect dep, so this stays a single file.
+func isStdinTTY() bool {
+	return isatty.IsTerminal(os.Stdin.Fd())
+}
+
+// buildSkillRuntime constructs the per-run Skill tool runtime from the
+// bundle's filtered entries. Returns nil when no skills are visible so
+// RunWithToolsConfig treats this as "no Skill tool".
+//
+// The returned stack is empty for a fresh run; when ctx carries a session
+// logger that is replaying a prior run (via --resume), any `skill_loaded`
+// events already logged are pushed back onto the stack so loaded skills
+// remain reachable to Read/Bash after the resume.
+func buildSkillRuntime(ctx context.Context, bundle *agent.Bundle, _ *RunOptions) *tools.SkillRuntime {
+	if bundle == nil || len(bundle.SkillEntries) == 0 {
+		return nil
+	}
+	rt := &tools.SkillRuntime{
+		Entries: bundle.SkillEntries,
+		Stack:   skill.NewStack(),
+	}
+	rehydrateSkillStack(rt, bundle.WorkDir, session.FromContext(ctx))
+	logger := session.FromContext(ctx)
+	rt.OnLoad = func(e skill.Entry) {
+		logging.InfoContext(ctx, "skill loaded: name=%s scope=%s dir=%s",
+			e.Name(), e.Scope.String(), e.Dir)
+		_ = logger.Append(session.EventSkillLoaded, map[string]any{
+			"name":  e.Name(),
+			"scope": e.Scope.String(),
+			"dir":   e.Dir,
+		})
+	}
+	return rt
+}
+
+// rehydrateSkillStack replays the events.jsonl of the active session and
+// re-pushes any skill that was previously loaded onto the fresh stack. It
+// is a no-op when there is no session logger, when the log can't be read,
+// or when the agent's filtered Entries no longer include a previously
+// loaded skill (the agent.yaml may have changed between runs).
+func rehydrateSkillStack(rt *tools.SkillRuntime, workingDir string, logger *session.Logger) {
+	if rt == nil || logger == nil {
+		return
+	}
+	events, err := os.ReadFile(filepath.Join(logger.Dir(), "events.jsonl"))
+	if err != nil {
+		return
+	}
+	byName := make(map[string]skill.Entry, len(rt.Entries))
+	for _, e := range rt.Entries {
+		byName[e.Name()] = e
+	}
+	for _, line := range strings.Split(string(events), "\n") {
+		if line == "" {
+			continue
+		}
+		var ev struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Name string `json:"name"`
+			} `json:"payload"`
+		}
+		if jsonErr := json.Unmarshal([]byte(line), &ev); jsonErr != nil {
+			continue
+		}
+		if ev.Type != session.EventSkillLoaded {
+			continue
+		}
+		if entry, ok := byName[ev.Payload.Name]; ok {
+			rt.Stack.Push(entry)
+		}
+	}
+	_ = workingDir // reserved for future use if absolute paths need rebasing
+}
 
 // InvokeModel resolves provider settings and calls the appropriate model backend.
 // It is exported so the pipeline runner can call it directly.
@@ -163,7 +263,9 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 		taskCfg.ParentMetrics = m
 	}
 	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
-	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, opts.ResumeResponseID, temperature, maxTokens, opts.MaxIterations, bundle.EditDeadline, reasoningPrefixes(opts), taskCfg, m, ex)
+	skillRuntime := buildSkillRuntime(ctx, bundle, opts)
+	confirmRuntime := buildConfirmRuntime(opts)
+	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, opts.ResumeResponseID, temperature, maxTokens, opts.MaxIterations, bundle.EditDeadline, reasoningPrefixes(opts), taskCfg, m, ex, skillRuntime, confirmRuntime)
 	m.Finish()
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
@@ -243,6 +345,8 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		Executor:           ex,
 		UseCacheControl:    useCacheControl,
 		ForceFirstToolCall: forceFirstTool,
+		Skill:              buildSkillRuntime(ctx, bundle, opts),
+		Confirm:            buildConfirmRuntime(opts),
 		MaxRetries:         opts.MaxRetries,
 	}, callOpts...)
 	m.Finish()
@@ -494,7 +598,9 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		AgentName:     opts.AgentName,
 	}
 	cfg.CallModel = func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
-		childBundle, err := agent.BuildBundle(agentsDir, agentName, prompt, workingDir, mode, opts.Vars)
+		childBundle, err := agent.BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode, opts.Vars, &agent.BundleOptions{
+			SkillOverrides: opts.SkillOverrides,
+		})
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to build child agent bundle: %w", err)
 		}

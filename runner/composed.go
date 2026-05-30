@@ -44,6 +44,7 @@ func ManifestToPipeline(m *agent.Manifest) (*pl.Pipeline, error) {
 			MaxCost:         s.MaxCost,
 			Summarize:       s.Summarize,
 			SummarizePrompt: s.SummarizePrompt,
+			MCPServers:      s.MCPServers,
 		}
 
 		// Carry inline agent config through to the pipeline stage.
