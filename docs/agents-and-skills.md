@@ -1,8 +1,10 @@
 # Agent and Skill Concepts in Squad
 
-A reference guide for Squad practitioners. Covers how Squad defines agents, skills, the Task tool, and pipelines: when to reach for each, how they relate, and decision heuristics grounded in Squad's actual design and Anthropic's published taxonomy.
+A reference guide for Squad practitioners. Covers how Squad defines agents, skills, the Task tool, and pipelines: when to reach for each, how they relate, and decision heuristics grounded in Squad's actual design, Anthropic's published taxonomy, and the open [Agent Skills standard](https://agentskills.io) now adopted by Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, VS Code, Goose, and others.
 
 For the canonical reference on writing agent prompts, see [`creating-agents.md`](./creating-agents.md). For pipeline engineering depth, see [`agents-engineering-pipeline-basics.md`](./agents-engineering-pipeline-basics.md). This document covers the taxonomy layer above both.
+
+> **Scope.** Squad ships four concepts you author directly (Agent, Skill, Task tool, Pipeline). They sit inside a larger six-primitive landscape that practitioners coming from Claude Code or the Claude Agent SDK will recognize: **tools** (atomic verbs like Read/Bash), **MCP servers** (remote tool surfaces), **skills** (filesystem-loaded procedures), **subagents** (forked-context child runs — Squad's Task tool), **agents** (the whole run), and **workflows/pipelines** (orchestrated multi-stage control flow). Tools are described in [`creating-agents.md`](./creating-agents.md); MCP servers in [`mcp-servers.md`](./mcp-servers.md). The four below are what this guide covers.
 
 ---
 
@@ -20,6 +22,8 @@ Anthropic draws one foundational distinction in [Building Effective Agents](http
 
 Anthropic also places these on a complexity spectrum: augmented LLM → workflow patterns → autonomous agents. Squad's Pipeline sits at the workflow end; a single leaf agent using Task and Skill at runtime sits toward the autonomous end.
 
+Anthropic names five canonical workflow patterns in the same post: **prompt chaining**, **routing**, **parallelization**, **orchestrator-worker**, and **evaluator-optimizer**. Squad's pipelines implement orchestrator-worker (a deterministic orchestrator delegates to specialized worker agents over a stage DAG); parallel agents within one stage are the parallelization pattern (sectioning); gates with `on_failure: revert` form an evaluator-optimizer loop when the gate failure drives a re-run.
+
 > **Note:** What Squad calls an "agent" (a named unit invoked with `--agent`) includes both workflows (pipeline manifests) and agents (leaf agents that reason dynamically). The distinction matters when communicating with practitioners who've read Anthropic's docs. Clarify that "agent" in Squad is a deployment unit, not a claim about autonomy level.
 
 ---
@@ -36,6 +40,8 @@ Squad has four distinct concepts for composing AI work, each with a different sc
 | **Pipeline** | User (`squad run --agent`) on a composed manifest | Multiple runs coordinated as stages | `agent.yaml` with `stages:` block |
 
 The choice comes down to **who triggers it**, **when**, and **what it produces** (not raw capability).
+
+> **Naming note.** Squad's tool is named `Task` for historical reasons and to match the long-standing Claude Code convention. Claude Code v2.1.63 renamed their equivalent to **Agent tool** (the SDK class is now `AgentDefinition`, invoked via the `Agent` tool). Squad keeps the `Task` name in code and in this doc; readers coming from current Claude Code docs should mentally translate "Agent tool" ↔ "Task tool". The semantics are the same.
 
 ---
 
@@ -92,7 +98,7 @@ Mode is a cross-cutting dimension. It applies to every agent, and also affects h
 
 ## Skills
 
-A skill is an on-demand capability a running agent loads mid-task. It follows [Anthropic's open Agent Skills standard](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview), the same format Claude Code and other compliant runtimes consume.
+A skill is an on-demand capability a running agent loads mid-task. It follows the open [Agent Skills standard](https://agentskills.io) — originated by Anthropic, [documented here](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview), and now consumed by Claude Code, Codex CLI, Cursor, Gemini CLI, GitHub Copilot, VS Code, Goose, OpenHands, and other compliant runtimes.
 
 **Unlike agents:** skills are never invoked by the user. The agent reads the description in its system prompt, decides the current task matches, and calls `Skill(name)` itself.
 
@@ -128,7 +134,7 @@ description: |
 
 > **Description field guidance (from Anthropic's spec):** The `description` should say both *what* the skill does and *when* to use it. This is the only information the agent has at boot. If it's ambiguous about trigger conditions, the agent will either miss the skill or call it for the wrong task. Write it as: "Do X when the user asks about Y or mentions Z."
 
-Only `name` and `description` are injected into the agent's system prompt at boot. The full body loads lazily when the agent calls `Skill(name)`. This is **level-2 progressive disclosure**: keep the context window small at start; expand only what the current task needs.
+Only `name` and `description` are injected into the agent's system prompt at boot. The full body loads lazily when the agent calls `Skill(name)`. This is the standard's **three-tier progressive disclosure** model (metadata → instructions → resources): keep the context window small at start; expand only what the current task needs.
 
 ### Three-tier loading and token costs
 
@@ -234,6 +240,27 @@ Anthropic also maintains an open-source skills repository at [github.com/anthrop
 
 Anthropic's own platform excludes Skills from Zero Data Retention (ZDR) arrangements. Skill definitions and execution data are retained under standard policy. If your team operates under a ZDR agreement with Anthropic, be aware that any skills invoked via the API are subject to standard retention. This is an Anthropic platform constraint, not a Squad constraint.
 
+### Skills vs MCP servers
+
+This is the most asked question in the 2026 ecosystem and worth answering directly. A **skill** tells the agent *what* to do — the playbook, conventions, and definition-of-done. An **MCP server** gives the agent stable access to *do* something — call an API, query a DB, drive a browser. They are complementary, not alternatives.
+
+| | Skill | MCP server |
+|---|---|---|
+| Answers | "What's the playbook?" | "How do I reach this system?" |
+| Lives | In a filesystem directory (in-process) | A long-lived process speaking JSON-RPC (out-of-process) |
+| Credentials | None — inherits agent's tools | Its own credentials and sandbox |
+| Trust model | Trusted with same privileges as the agent | Treated as a tool surface; gateable per agent |
+| Survives between runs | Yes, as files | Yes, as a configured server entry |
+| Example | `cart-checkout/SKILL.md` describing the buying procedure | `chrome-devtools-mcp` exposing browser-driving tools |
+
+A common pattern: a `cart-checkout` skill calls `chrome-devtools-mcp` tools to do the actual clicking, and uses Squad's `Confirm` tool to gate the irreversible "place order" step. If you're tempted to inline procedural knowledge into an MCP server's prompt context, write a skill instead. If you're tempted to inline a network call into a skill, write an MCP server instead. See [`mcp-servers.md`](./mcp-servers.md) for the MCP side.
+
+### Compatibility with Claude Code's skill extensions
+
+The open-standard core that Squad implements is `name`, `description`, and the SKILL.md body — the format that travels between runtimes. Claude Code has extended the same file format with product-specific frontmatter: `when_to_use`, `disable-model-invocation`, `user-invocable`, `allowed-tools`, `disallowed-tools`, `argument-hint`, `arguments`, `model`, `effort`, `context: fork`, `agent`, `hooks`, `paths`, `shell`. Claude Code also now exposes custom slash commands as skills.
+
+Squad treats these extensions as forward-compatible: skills that use them still parse (we do not reject unknown fields), but Squad honors only the open-standard core plus its own per-agent gating in `agent.yaml`. Practical implication: an open-standard-only skill runs everywhere; a skill that depends on `context: fork` or `` !`<command>` `` dynamic injection will work in Claude Code and behave as a plain SKILL.md elsewhere.
+
 ### When a skill is the right choice
 
 - The capability is one **piece** of a larger task, not the whole task
@@ -245,7 +272,7 @@ Anthropic's own platform excludes Skills from Zero Data Retention (ZDR) arrangem
 
 ## The Task tool
 
-`Task` is an LLM-facing tool that lets a running agent spawn a child agent run. It is a runtime delegation call made from within an agent's reasoning loop, not a pipeline.
+`Task` is an LLM-facing tool that lets a running agent spawn a child agent run with its own isolated context window. It is a runtime delegation call made from within an agent's reasoning loop, not a pipeline. This is the **subagent** primitive in Anthropic's multi-agent literature; Claude Code calls the equivalent the **Agent tool** (with `AgentDefinition` describing the child) — Squad keeps the historical `Task` name.
 
 ```
 # From inside the agent's context:
@@ -439,15 +466,19 @@ flowchart TD
 
 ---
 
-## Interop with the Anthropic Agent Skills standard
+## Interop with the open Agent Skills standard
 
-Squad implements the [Anthropic open Agent Skills standard](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview) without modification. A skill written for Claude Code works in Squad and vice versa:
+Squad implements the open [Agent Skills standard](https://agentskills.io) — the vendor-neutral spec originated by Anthropic and now adopted by Claude Code, Codex CLI, Cursor, Gemini CLI, GitHub Copilot, VS Code, Goose, OpenHands, and others. A skill that uses the open-standard core (`name`, `description`, and the SKILL.md body) travels between any of these runtimes:
 
 - Drop it into `$XDG_CONFIG_HOME/squad/skills/` for global scope
 - Drop it into `.squad/skills/` for repo scope
-- Squad does not add squad-specific frontmatter fields. The `name` and `description` fields are the standard fields.
+- Squad does not add Squad-specific frontmatter fields
 
-Squad intentionally does not adopt the `allowed-tools` frontmatter field that some Claude Code skills carry. Squad's per-agent tool gating handles that at a coarser level via `agent.yaml`.
+**Where the runtimes diverge.** The standard guarantees only the core fields above. Anthropic's own first-party platform does not sync skills between surfaces (claude.ai vs API vs Claude Code each have their own catalog), and Claude Code's product-specific extensions (`context: fork`, `argument-hint`, `` !`<command>` `` dynamic injection, etc.) are not portable. The honest summary: **a SKILL.md that uses only the open-standard core runs everywhere; product-specific frontmatter is ignored where unsupported.**
+
+Squad intentionally does not honor the `allowed-tools` frontmatter field that some Claude Code skills carry. Squad's per-agent tool gating handles that at a coarser level via `agent.yaml`.
+
+**OpenAI Codex** also consumes the same standard via [Codex Skills](https://developers.openai.com/codex/skills/) — a skill checked into your repo can be run by Codex against the same SKILL.md file.
 
 ---
 
@@ -455,8 +486,14 @@ Squad intentionally does not adopt the `allowed-tools` frontmatter field that so
 
 - [`docs/creating-agents.md`](./creating-agents.md): Agent directory layout, template variables, mode conditionals
 - [`docs/pipelines.md`](./pipelines.md): Composed agent manifest reference
+- [`docs/mcp-servers.md`](./mcp-servers.md): MCP server configuration and the Skills-vs-MCP boundary
 - [`docs/agents-engineering-pipeline-basics.md`](./agents-engineering-pipeline-basics.md): When and why to use pipelines, anti-patterns, artifact handoff design
-- [Anthropic: Building Effective Agents](https://www.anthropic.com/research/building-effective-agents): Anthropic's canonical agent/workflow taxonomy and complexity spectrum
-- [Anthropic: Agent Skills overview](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview): Anthropic's official Skill spec, three-tier loading details, platform constraints
-- [Anthropic: Equipping agents for the real world with Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills): Engineering blog: design rationale for progressive disclosure
+- [Open Agent Skills standard (agentskills.io)](https://agentskills.io): Vendor-neutral spec adopted across the ecosystem
+- [Anthropic: Building Effective Agents](https://www.anthropic.com/research/building-effective-agents): Canonical agent/workflow taxonomy, complexity spectrum, and the five workflow patterns
+- [Anthropic: Agent Skills overview](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview): Official spec, three-tier loading details, platform constraints
+- [Anthropic: Equipping agents for the real world with Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills): Design rationale for progressive disclosure
+- [Anthropic: Code execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp): How MCP tool loading and skills converge
+- [Anthropic: Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents): Context rot, compaction, just-in-time retrieval
 - [Anthropic open-source skills repo](https://github.com/anthropics/skills): Reference skills compatible with Squad's catalog scope
+- [Claude Agent SDK: Subagents](https://code.claude.com/docs/en/agent-sdk/subagents): The Agent tool (formerly Task), `AgentDefinition`, and subagent fields
+- [OpenAI Codex Skills](https://developers.openai.com/codex/skills/): Codex's adoption of the open Agent Skills standard
