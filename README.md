@@ -390,6 +390,7 @@ environment:
 
 ### Getting Started
 
+- **[Agent and Skill Concepts](docs/agents-and-skills.md)** - Taxonomy guide: agents, skills, Task tool, and pipelines and when to reach for each
 - **[Configuration](docs/configuration.md)** - Providers, environment variables, and config file reference
 - **[Creating Agents](docs/creating-agents.md)** - Build your own agents from scratch or from templates
 - **[Prompt Engineering Basics](docs/prompt-engineering-basics.md)** - LLM fundamentals, context windows, and how to write effective agent prompts
