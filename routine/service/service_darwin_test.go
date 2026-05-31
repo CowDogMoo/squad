@@ -161,6 +161,87 @@ func TestPlistContainsExpectedFields(t *testing.T) {
 	}
 }
 
+// New tests below mutate PATH to inject a fake launchctl. Subtests share PATH — do not add t.Parallel().
+
+func TestLaunchdInstallAndUninstall_HappyPath(t *testing.T) {
+	// Tests mutate PATH — do not add t.Parallel().
+	s := newTestService(t)
+	binary := mockBinary(t)
+
+	// Fake launchctl: bootstrap succeeds, bootout fails (ignored), print unused.
+	dir := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"  bootstrap) echo bootstrapped; exit 0;;\n" +
+		"  bootout) echo not-loaded; exit 1;;\n" +
+		"  print) echo state = running; exit 0;;\n" +
+		"  *) exit 0;;\n" +
+		"esac\n"
+	lc := filepath.Join(dir, "launchctl")
+	if err := os.WriteFile(lc, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Prepend fake to PATH so exec.Command finds it first.
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := s.Install(binary, InstallOptions{WakeSystem: true}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	// Plist should exist after install.
+	if _, err := os.Stat(s.plistPath); err != nil {
+		t.Fatalf("plist not written: %v", err)
+	}
+
+	// Now uninstall; plist should be removed even if bootout fails.
+	if err := s.Uninstall(); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if _, err := os.Stat(s.plistPath); !os.IsNotExist(err) {
+		t.Fatalf("expected plist to be removed, stat err=%v", err)
+	}
+}
+
+func TestLaunchdStatus_StatesFromLaunchctl(t *testing.T) {
+	// Tests mutate PATH — do not add t.Parallel().
+	cases := []struct {
+		name string
+		out  string
+		want State
+	}{
+		{"running", "state = running", StateInstalledRunning},
+		{"waiting", "state = waiting", StateInstalledRunning},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService(t)
+			binary := mockBinary(t)
+			if err := writePlist(s.plistPath, binary, s.logPath, s.home, false); err != nil {
+				t.Fatal(err)
+			}
+
+			dir := t.TempDir()
+			script := "#!/bin/sh\n" +
+				"case \"$1\" in\n" +
+				"  print) echo " + tc.out + "; exit 0;;\n" +
+				"  *) exit 0;;\n" +
+				"esac\n"
+			lc := filepath.Join(dir, "launchctl")
+			if err := os.WriteFile(lc, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			st, err := s.Status()
+			if err != nil {
+				t.Fatalf("Status: %v", err)
+			}
+			if st.State != tc.want {
+				t.Fatalf("state = %v, want %v", st.State, tc.want)
+			}
+		})
+	}
+}
+
 // newTestService builds a launchdService rooted at a temp dir so tests never
 // touch the user's real ~/Library/LaunchAgents.
 func newTestService(t *testing.T) *launchdService {
