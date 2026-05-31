@@ -84,11 +84,12 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 func buildAgentBundle(agentName, prompt, wd, mode string, mergedVars map[string]string, agentsDir, composedAgentDir string, cfg *config.Config, pipelineRunner *pl.Runner) (*agent.Bundle, error) {
 	if inlineCfg, ok := pipelineRunner.InlineAgents[agentName]; ok && inlineCfg != nil {
 		inlineAgent := &agent.InlineAgentConfig{
-			Name:       agentName,
-			EntryPoint: inlineCfg.EntryPoint,
-			Wrapper:    inlineCfg.Wrapper,
-			Task:       inlineCfg.Task,
-			References: inlineCfg.References,
+			Name:          agentName,
+			EntryPoint:    inlineCfg.EntryPoint,
+			Wrapper:       inlineCfg.Wrapper,
+			Task:          inlineCfg.Task,
+			References:    inlineCfg.References,
+			TemplatesRoot: agentsDir,
 		}
 		for _, m := range inlineCfg.Models {
 			inlineAgent.Models = append(inlineAgent.Models, agent.ModelPreference{
@@ -214,19 +215,14 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 	apiVersion := flagOrViper(cmd, "api-version", v, "provider.api_version")
 	apiType := flagOrViper(cmd, "api-type", v, "provider.api_type")
 
-	openAICompatMax, _ := cmd.Flags().GetBool("openai-compat-max-tokens")
-	temp, _ := cmd.Flags().GetFloat64("temperature")
-	maxTokens, _ := cmd.Flags().GetInt("max-tokens")
-	numCtx, _ := cmd.Flags().GetInt("num-ctx")
-
-	maxIter, _ := cmd.Flags().GetInt("max-iterations")
-	if maxIter < 10 {
-		maxIter = 10
-	} else if maxIter > 1000 {
-		maxIter = 1000
-	}
-
-	maxCost, _ := cmd.Flags().GetFloat64("max-cost")
+	// Configuration-style flags follow the same precedence: explicit flag,
+	// then Viper if set, then the flag's default.
+	openAICompatMax := flagOrViperBool(cmd, "openai-compat-max-tokens", v, "provider.openai_compat_max_tokens")
+	temp := flagOrViperFloat(cmd, "temperature", v, "model.temperature")
+	maxTokens := flagOrViperInt(cmd, "max-tokens", v, "model.max_tokens")
+	numCtx := flagOrViperInt(cmd, "num-ctx", v, "provider.num_ctx")
+	maxIter := clampInt(flagOrViperInt(cmd, "max-iterations", v, "run.max_iterations"), 10, 1000)
+	maxCost := flagOrViperFloat(cmd, "max-cost", v, "run.max_cost")
 	if maxCost < 0 {
 		maxCost = 0
 	}
@@ -262,6 +258,77 @@ func flagOrViper(cmd *cobra.Command, flagName string, v interface{ GetString(str
 		return v.GetString(viperKey)
 	}
 	return ""
+}
+
+// viperBool is the structural subset of *viper.Viper used by flagOrViperBool.
+type viperBool interface {
+	IsSet(string) bool
+	GetBool(string) bool
+}
+
+// viperFloat is the structural subset of *viper.Viper used by flagOrViperFloat.
+type viperFloat interface {
+	IsSet(string) bool
+	GetFloat64(string) float64
+}
+
+// viperInt is the structural subset of *viper.Viper used by flagOrViperInt.
+type viperInt interface {
+	IsSet(string) bool
+	GetInt(string) int
+}
+
+// flagOrViperBool picks the explicit flag value if set, else the Viper value
+// when present, else the flag's default.
+func flagOrViperBool(cmd *cobra.Command, flagName string, v viperBool, viperKey string) bool {
+	if cmd.Flags().Changed(flagName) {
+		b, _ := cmd.Flags().GetBool(flagName)
+		return b
+	}
+	if v != nil && v.IsSet(viperKey) {
+		return v.GetBool(viperKey)
+	}
+	b, _ := cmd.Flags().GetBool(flagName)
+	return b
+}
+
+// flagOrViperFloat picks the explicit flag value if set, else the Viper value
+// when present, else the flag's default.
+func flagOrViperFloat(cmd *cobra.Command, flagName string, v viperFloat, viperKey string) float64 {
+	if cmd.Flags().Changed(flagName) {
+		f, _ := cmd.Flags().GetFloat64(flagName)
+		return f
+	}
+	if v != nil && v.IsSet(viperKey) {
+		return v.GetFloat64(viperKey)
+	}
+	f, _ := cmd.Flags().GetFloat64(flagName)
+	return f
+}
+
+// flagOrViperInt picks the explicit flag value if set, else the Viper value
+// when present, else the flag's default.
+func flagOrViperInt(cmd *cobra.Command, flagName string, v viperInt, viperKey string) int {
+	if cmd.Flags().Changed(flagName) {
+		i, _ := cmd.Flags().GetInt(flagName)
+		return i
+	}
+	if v != nil && v.IsSet(viperKey) {
+		return v.GetInt(viperKey)
+	}
+	i, _ := cmd.Flags().GetInt(flagName)
+	return i
+}
+
+// clampInt clamps v into [lo, hi].
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // mergeVars combines base and override variable maps, with override taking precedence.

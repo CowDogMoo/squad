@@ -976,12 +976,13 @@ func buildInlineSystemMessage(manifest *Manifest, displayMode, workingDir, promp
 // InlineAgentConfig holds the configuration for an agent defined inline
 // within a composed agent's stage.
 type InlineAgentConfig struct {
-	Name       string            // stage name, used as the agent identity
-	EntryPoint string            // path to system prompt, relative to base dir
-	Wrapper    string            // path to wrapper prompt, relative to base dir
-	Task       string            // path to task prompt, relative to base dir
-	Models     []ModelPreference // model preferences
-	References []string          // paths to reference files, relative to base dir
+	Name          string            // stage name, used as the agent identity
+	EntryPoint    string            // path to system prompt, relative to base dir
+	Wrapper       string            // path to wrapper prompt, relative to base dir
+	Task          string            // path to task prompt, relative to base dir
+	Models        []ModelPreference // model preferences
+	References    []string          // paths to reference files, relative to base dir
+	TemplatesRoot string            // dir holding _templates/ for {{include}}; empty = baseDir
 }
 
 // resolveInlinePromptDir returns the directory containing the inline agent's
@@ -998,9 +999,15 @@ func resolveInlinePromptDir(baseDir, name, entryPoint string) string {
 // BuildBundleInline assembles a bundle from inline agent config.
 // baseDir is the composed agent's directory where prompt files live.
 // Files are resolved with progressive lookup: stages/<name>/ first, then baseDir.
+// {{include}} resolves against cfg.TemplatesRoot/_templates/ when set, else baseDir/_templates/.
 func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDir, mode string, vars map[string]string) (*Bundle, error) {
 	// Resolve the prompt directory: check stages/<name>/ first, then baseDir.
 	promptDir := resolveInlinePromptDir(baseDir, cfg.Name, cfg.EntryPoint)
+
+	includeRoot := cfg.TemplatesRoot
+	if includeRoot == "" {
+		includeRoot = baseDir
+	}
 
 	manifest := &Manifest{
 		Name:       cfg.Name,
@@ -1015,7 +1022,7 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 	displayMode := resolveDisplayMode(mode)
 
 	data := TemplateData{Mode: displayMode, Vars: vars, AgentDir: promptDir}
-	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(promptDir, baseDir, manifest, data)
+	systemContent, wrapperContent, taskContent, err := loadAndProcessPrompts(promptDir, includeRoot, manifest, data)
 	if err != nil {
 		return nil, err
 	}

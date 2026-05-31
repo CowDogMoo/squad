@@ -491,6 +491,53 @@ func TestBuildBundleInline_MissingEntrypoint(t *testing.T) {
 	}
 }
 
+// TestBuildBundleInline_IncludeFromTemplatesRoot verifies that {{include "..."}}
+// in an inline-stage system template resolves against cfg.TemplatesRoot/_templates/
+// rather than baseDir/_templates/ — needed for composed agents whose stages live
+// one level inside the shared agents directory.
+func TestBuildBundleInline_IncludeFromTemplatesRoot(t *testing.T) {
+	t.Parallel()
+	templatesRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(templatesRoot, "_templates", "severity"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(templatesRoot, "_templates", "severity", "standard.md"),
+		[]byte("shared severity rubric"), 0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	baseDir := filepath.Join(templatesRoot, "composed-agent")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(baseDir, "system.md"),
+		[]byte(`prelude {{include "severity/standard.md"}} postlude`), 0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(baseDir, "agent.md"), []byte("wrapper"), 0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &InlineAgentConfig{
+		Name:          "stage",
+		EntryPoint:    "system.md",
+		Wrapper:       "agent.md",
+		TemplatesRoot: templatesRoot,
+	}
+	bundle, err := BuildBundleInline(baseDir, cfg, "go", "/tmp", "edit", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(bundle.System, "shared severity rubric") {
+		t.Errorf("system prompt did not pick up shared template; got %q", bundle.System)
+	}
+}
+
 // TestProcessTemplate_NowFunction exercises the {{now}} template helper.
 // Default layout is time.RFC3339; a custom layout argument is honored.
 func TestProcessTemplate_NowFunction(t *testing.T) {
