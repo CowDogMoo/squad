@@ -491,23 +491,23 @@ func TestBuildBundleInline_MissingEntrypoint(t *testing.T) {
 	}
 }
 
-// TestBuildBundleInline_IncludeFromTemplatesRoot verifies that {{include "..."}}
-// in an inline-stage system template resolves against cfg.TemplatesRoot/_templates/
-// rather than baseDir/_templates/ — needed for composed agents whose stages live
+// TestBuildBundleInline_IncludeFromIncludesRoot verifies that {{include "..."}}
+// in an inline-stage system template resolves against cfg.IncludesRoot/_includes/
+// rather than baseDir/_includes/ — needed for composed agents whose stages live
 // one level inside the shared agents directory.
-func TestBuildBundleInline_IncludeFromTemplatesRoot(t *testing.T) {
+func TestBuildBundleInline_IncludeFromIncludesRoot(t *testing.T) {
 	t.Parallel()
-	templatesRoot := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(templatesRoot, "_templates", "severity"), 0o755); err != nil {
+	includesRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(includesRoot, "_includes", "severity"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(templatesRoot, "_templates", "severity", "standard.md"),
+		filepath.Join(includesRoot, "_includes", "severity", "standard.md"),
 		[]byte("shared severity rubric"), 0o644,
 	); err != nil {
 		t.Fatal(err)
 	}
-	baseDir := filepath.Join(templatesRoot, "composed-agent")
+	baseDir := filepath.Join(includesRoot, "composed-agent")
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -524,17 +524,17 @@ func TestBuildBundleInline_IncludeFromTemplatesRoot(t *testing.T) {
 	}
 
 	cfg := &InlineAgentConfig{
-		Name:          "stage",
-		EntryPoint:    "system.md",
-		Wrapper:       "agent.md",
-		TemplatesRoot: templatesRoot,
+		Name:         "stage",
+		EntryPoint:   "system.md",
+		Wrapper:      "agent.md",
+		IncludesRoot: includesRoot,
 	}
 	bundle, err := BuildBundleInline(baseDir, cfg, "go", "/tmp", "edit", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(bundle.System, "shared severity rubric") {
-		t.Errorf("system prompt did not pick up shared template; got %q", bundle.System)
+		t.Errorf("system prompt did not pick up shared include; got %q", bundle.System)
 	}
 }
 
@@ -615,12 +615,12 @@ func TestProcessTemplate_ExecuteError(t *testing.T) {
 func TestMakeIncludeFunc_MissingFile(t *testing.T) {
 	t.Parallel()
 	agentsDir := t.TempDir()
-	// Create the _templates dir so OpenInRoot can open the root, but no file inside.
-	if err := os.MkdirAll(filepath.Join(agentsDir, "_templates"), 0o755); err != nil {
+	// Create the _includes dir so OpenInRoot can open the root, but no file inside.
+	if err := os.MkdirAll(filepath.Join(agentsDir, "_includes"), 0o755); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	include := makeIncludeFunc(agentsDir)
-	_, err := include("no-such-template.md")
+	_, err := include("no-such-include.md")
 	if err == nil {
 		t.Fatal("expected error for missing include")
 	}
@@ -634,11 +634,11 @@ func TestMakeIncludeFunc_MissingFile(t *testing.T) {
 func TestMakeIncludeFunc_Success(t *testing.T) {
 	t.Parallel()
 	agentsDir := t.TempDir()
-	templatesDir := filepath.Join(agentsDir, "_templates")
-	if err := os.MkdirAll(templatesDir, 0o755); err != nil {
+	includesDir := filepath.Join(agentsDir, "_includes")
+	if err := os.MkdirAll(includesDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(templatesDir, "rules.md"), []byte("  shared content  "), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(includesDir, "rules.md"), []byte("  shared content  "), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	include := makeIncludeFunc(agentsDir)

@@ -245,14 +245,14 @@ wrapper: wrapper.txt
 }
 
 func TestBuildBundle_IncludeFunction(t *testing.T) {
-	// Create agents directory with _templates
+	// Create agents directory with _includes
 	dir := t.TempDir()
-	templatesDir := filepath.Join(dir, "_templates", "hard-rules")
-	if err := os.MkdirAll(templatesDir, 0o755); err != nil {
-		t.Fatalf("mkdir templates: %v", err)
+	includesDir := filepath.Join(dir, "_includes", "hard-rules")
+	if err := os.MkdirAll(includesDir, 0o755); err != nil {
+		t.Fatalf("mkdir includes: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(templatesDir, "test-rules.md"), []byte("Included rule content"), 0o644); err != nil {
-		t.Fatalf("write template: %v", err)
+	if err := os.WriteFile(filepath.Join(includesDir, "test-rules.md"), []byte("Included rule content"), 0o644); err != nil {
+		t.Fatalf("write include: %v", err)
 	}
 
 	// Create agent with include directive

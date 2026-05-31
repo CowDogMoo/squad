@@ -327,13 +327,13 @@ func (td TemplateData) BrowserProfile(name string) (string, error) {
 	return browser.ProfileDir(name)
 }
 
-// makeIncludeFunc creates an include function that reads from the _templates directory.
+// makeIncludeFunc creates an include function that reads from the _includes directory.
 // Templates can use {{include "hard-rules/universal.md"}} to include shared content.
 // Uses os.OpenInRoot (Go 1.24+) for traversal-resistant file access.
 func makeIncludeFunc(agentsDir string) func(string) (string, error) {
-	templatesDir := filepath.Join(agentsDir, "_templates")
+	includesDir := filepath.Join(agentsDir, "_includes")
 	return func(path string) (string, error) {
-		f, err := os.OpenInRoot(templatesDir, path)
+		f, err := os.OpenInRoot(includesDir, path)
 		if err != nil {
 			return "", fmt.Errorf("failed to include template %s: %w", path, err)
 		}
@@ -976,13 +976,13 @@ func buildInlineSystemMessage(manifest *Manifest, displayMode, workingDir, promp
 // InlineAgentConfig holds the configuration for an agent defined inline
 // within a composed agent's stage.
 type InlineAgentConfig struct {
-	Name          string            // stage name, used as the agent identity
-	EntryPoint    string            // path to system prompt, relative to base dir
-	Wrapper       string            // path to wrapper prompt, relative to base dir
-	Task          string            // path to task prompt, relative to base dir
-	Models        []ModelPreference // model preferences
-	References    []string          // paths to reference files, relative to base dir
-	TemplatesRoot string            // dir holding _templates/ for {{include}}; empty = baseDir
+	Name         string            // stage name, used as the agent identity
+	EntryPoint   string            // path to system prompt, relative to base dir
+	Wrapper      string            // path to wrapper prompt, relative to base dir
+	Task         string            // path to task prompt, relative to base dir
+	Models       []ModelPreference // model preferences
+	References   []string          // paths to reference files, relative to base dir
+	IncludesRoot string            // dir holding _includes/ for {{include}}; empty = baseDir
 }
 
 // resolveInlinePromptDir returns the directory containing the inline agent's
@@ -999,12 +999,12 @@ func resolveInlinePromptDir(baseDir, name, entryPoint string) string {
 // BuildBundleInline assembles a bundle from inline agent config.
 // baseDir is the composed agent's directory where prompt files live.
 // Files are resolved with progressive lookup: stages/<name>/ first, then baseDir.
-// {{include}} resolves against cfg.TemplatesRoot/_templates/ when set, else baseDir/_templates/.
+// {{include}} resolves against cfg.IncludesRoot/_includes/ when set, else baseDir/_includes/.
 func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDir, mode string, vars map[string]string) (*Bundle, error) {
 	// Resolve the prompt directory: check stages/<name>/ first, then baseDir.
 	promptDir := resolveInlinePromptDir(baseDir, cfg.Name, cfg.EntryPoint)
 
-	includeRoot := cfg.TemplatesRoot
+	includeRoot := cfg.IncludesRoot
 	if includeRoot == "" {
 		includeRoot = baseDir
 	}

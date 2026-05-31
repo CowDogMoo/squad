@@ -84,12 +84,12 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 func buildAgentBundle(agentName, prompt, wd, mode string, mergedVars map[string]string, agentsDir, composedAgentDir string, cfg *config.Config, pipelineRunner *pl.Runner) (*agent.Bundle, error) {
 	if inlineCfg, ok := pipelineRunner.InlineAgents[agentName]; ok && inlineCfg != nil {
 		inlineAgent := &agent.InlineAgentConfig{
-			Name:          agentName,
-			EntryPoint:    inlineCfg.EntryPoint,
-			Wrapper:       inlineCfg.Wrapper,
-			Task:          inlineCfg.Task,
-			References:    inlineCfg.References,
-			TemplatesRoot: agentsDir,
+			Name:         agentName,
+			EntryPoint:   inlineCfg.EntryPoint,
+			Wrapper:      inlineCfg.Wrapper,
+			Task:         inlineCfg.Task,
+			References:   inlineCfg.References,
+			IncludesRoot: agentsDir,
 		}
 		for _, m := range inlineCfg.Models {
 			inlineAgent.Models = append(inlineAgent.Models, agent.ModelPreference{
