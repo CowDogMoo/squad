@@ -417,3 +417,35 @@ func TestSetRoutineIDIgnoresEmptyAndNil(t *testing.T) {
 	var nilLogger *Logger
 	nilLogger.SetRoutineID("anything")
 }
+
+// TestPersistenceErrorsAreLogged forces writeMeta() and appendLocked() to
+// fail mid-run and confirms the wrapping methods do not panic and surface
+// the failure via logging.Warn rather than silently swallowing it.
+//
+// Setup: remove the session directory (so writeMeta's WriteFile/Rename
+// errors) and close the underlying events FD without nilling l.events
+// (so appendLocked's Write errors). All four mutators must remain safe.
+func TestPersistenceErrorsAreLogged(t *testing.T) {
+	l, wd := newTestLogger(t)
+	t.Cleanup(func() { _ = l.Close() })
+
+	// Close the events FD but keep l.events non-nil so appendLocked
+	// hits its Write error path instead of the nil-events early return.
+	if err := l.events.Close(); err != nil {
+		t.Fatalf("close events: %v", err)
+	}
+	// Nuke the session dir so writeMeta's tmp WriteFile errors.
+	if err := os.RemoveAll(filepath.Join(wd, SessionsRoot, l.SessionID())); err != nil {
+		t.Fatalf("remove session dir: %v", err)
+	}
+
+	// Each of these must run without panicking, exercising the
+	// logging.Warn branch on writeMeta failure.
+	l.SetLastResponseID("resp-x")
+	l.SetRoutineID("global:any")
+	l.UpdateMetrics(1, 2, 0.5, 3)
+
+	// Finish exercises both the appendLocked failure path and the
+	// trailing writeMeta failure path.
+	l.Finish("failed", "boom")
+}
