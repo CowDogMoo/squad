@@ -1463,7 +1463,7 @@ func TestBuildBundleInline_BaseDirReferenceFallback(t *testing.T) {
 		Wrapper:    "wrapper.md",
 		References: []string{"shared-ref.md"},
 	}
-	bundle, err := BuildBundleInline(baseDir, cfg, "prompt", baseDir, "", nil)
+	bundle, err := BuildBundleInline(baseDir, cfg, "prompt", t.TempDir(), "", nil)
 	if err != nil {
 		t.Fatalf("BuildBundleInline: %v", err)
 	}
@@ -1503,7 +1503,7 @@ func TestBuildBundleInline_ReferenceMissingEverywhere(t *testing.T) {
 		Wrapper:    "wrapper.md",
 		References: []string{"missing.md"},
 	}
-	_, err := BuildBundleInline(baseDir, cfg, "p", baseDir, "", nil)
+	_, err := BuildBundleInline(baseDir, cfg, "p", t.TempDir(), "", nil)
 	if err == nil {
 		t.Fatal("expected error when reference missing in both stage and baseDir")
 	}
