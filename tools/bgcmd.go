@@ -67,7 +67,7 @@ func (r *BgCommandRegistry) Get(id string) (*BgCommand, bool) {
 	return r.commands.Get(id)
 }
 
-// IsDone returns true if the command has finished.
+// IsDone reports whether the command has finished.
 func (bg *BgCommand) IsDone() bool {
 	select {
 	case <-bg.Done:
