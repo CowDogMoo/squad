@@ -141,17 +141,10 @@ func TestBuildLLMVariants(t *testing.T) {
 			"*openai.LLM",
 			false,
 		},
-		{
-			// langchaingo validates key presence at construction; users of keyless
-			// endpoints (e.g. local vLLM) must set OPENAI_COMPAT_API_KEY or OPENAI_API_KEY
-			// to a dummy value. The error is caught here, not at HTTP call time.
-			"openai-compat/no-api-key fails at construction",
-			"openai-compat",
-			"some-model",
-			&RunOptions{BaseURL: "http://localhost:8000/v1"},
-			"",
-			true,
-		},
+		// "openai-compat/no-api-key fails at construction" lives in its own
+		// non-parallel TestBuildLLM_OpenAICompatNoAPIKey because it needs t.Setenv
+		// to clear ambient OPENAI_API_KEY / OPENAI_COMPAT_API_KEY — which
+		// conflicts with this table's parallel subtests.
 		{
 			"openai-compat/missing base-url",
 			"openai-compat",
@@ -189,6 +182,21 @@ func TestBuildOpenAICompatLLM(t *testing.T) {
 	model, err := buildOpenAICompatLLM(opts, "openai", "gpt-4o")
 	if err != nil || model == nil {
 		t.Fatalf("buildOpenAICompatLLM() error = %v", err)
+	}
+}
+
+// TestBuildLLM_OpenAICompatNoAPIKey covers the case where neither an explicit
+// APIKey nor a fallback OPENAI_API_KEY / OPENAI_COMPAT_API_KEY env var is
+// present. langchaingo validates key presence at construction, so the call
+// must error. Lives outside TestBuildLLMVariants because t.Setenv is
+// incompatible with that table's parallel subtests.
+func TestBuildLLM_OpenAICompatNoAPIKey(t *testing.T) {
+	// Setenv requires no t.Parallel.
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_COMPAT_API_KEY", "")
+	opts := &RunOptions{BaseURL: "http://localhost:8000/v1"}
+	if _, err := buildLLM(context.Background(), opts, "openai-compat", "some-model"); err == nil {
+		t.Fatal("expected error when no API key is set")
 	}
 }
 
@@ -690,9 +698,11 @@ func TestInvokeModel_ExecutorError(t *testing.T) {
 }
 
 func TestInvokeModel_SystemOverride(t *testing.T) {
-	t.Parallel()
 	// This tests the system override path in InvokeModel.
 	// It will fail on API call but exercises the system override code path.
+	// Setenv requires no t.Parallel.
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_COMPAT_API_KEY", "")
 	bundle := &agent.Bundle{
 		System:  "base system",
 		User:    "user",
