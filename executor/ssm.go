@@ -102,8 +102,6 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 
 	// Prepend a cd into the working directory when one is configured so
 	// that commands run in the expected location on the remote host.
-	// IMPORTANT: workingDir may be user-controlled from CLI/config; avoid
-	// command injection by quoting it when it contains unsafe characters.
 	if e.workingDir != "" {
 		wd := e.workingDir
 		if !isShellSafePath(wd) {
