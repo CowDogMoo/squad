@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/cowdogmoo/squad/logging"
 )
 
 // SessionsRoot is the directory under workingDir where sessions are stored.
@@ -98,7 +100,7 @@ func New(workingDir, agent, provider, model, prompt string) (*Logger, error) {
 	}
 	dir := filepath.Join(workingDir, SessionsRoot, id)
 	resultDir := filepath.Join(dir, "results")
-	if err := os.MkdirAll(resultDir, 0o755); err != nil {
+	if err := os.MkdirAll(resultDir, 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir session: %w", err)
 	}
 
@@ -132,7 +134,7 @@ func New(workingDir, agent, provider, model, prompt string) (*Logger, error) {
 func Open(workingDir, sessionID string) (*Logger, error) {
 	dir := filepath.Join(workingDir, SessionsRoot, sessionID)
 	resultDir := filepath.Join(dir, "results")
-	if err := os.MkdirAll(resultDir, 0o755); err != nil {
+	if err := os.MkdirAll(resultDir, 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir results: %w", err)
 	}
 
@@ -158,7 +160,7 @@ func Open(workingDir, sessionID string) (*Logger, error) {
 }
 
 func (l *Logger) openEventsFile() error {
-	f, err := os.OpenFile(filepath.Join(l.dir, "events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filepath.Join(l.dir, "events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("open events.jsonl: %w", err)
 	}
@@ -227,7 +229,9 @@ func (l *Logger) SetLastResponseID(id string) {
 	defer l.mu.Unlock()
 	l.meta.LastResponseID = id
 	l.meta.Updated = time.Now().UTC()
-	_ = l.writeMeta()
+	if err := l.writeMeta(); err != nil {
+		logging.Warn("write meta: %v", err)
+	}
 }
 
 // SetRoutineID stamps the meta.json with the qualified routine id that owns
@@ -241,7 +245,9 @@ func (l *Logger) SetRoutineID(id string) {
 	defer l.mu.Unlock()
 	l.meta.RoutineID = id
 	l.meta.Updated = time.Now().UTC()
-	_ = l.writeMeta()
+	if err := l.writeMeta(); err != nil {
+		logging.Warn("write meta: %v", err)
+	}
 }
 
 // UpdateMetrics overwrites the cumulative token + cost fields in meta.json.
@@ -257,7 +263,9 @@ func (l *Logger) UpdateMetrics(inputTokens, outputTokens int64, cost float64, it
 	l.meta.Cost = cost
 	l.meta.Iterations = iterations
 	l.meta.Updated = time.Now().UTC()
-	_ = l.writeMeta()
+	if err := l.writeMeta(); err != nil {
+		logging.Warn("write meta: %v", err)
+	}
 }
 
 // StoreLargeResult writes the full content to results/<id>.txt and returns
@@ -272,7 +280,7 @@ func (l *Logger) StoreLargeResult(content string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(l.resultDir, id+".txt")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return "", fmt.Errorf("write large result: %w", err)
 	}
 	return id, nil
@@ -316,10 +324,14 @@ func (l *Logger) Finish(status string, errMsg string) {
 	if errMsg != "" {
 		payload["error"] = errMsg
 	}
-	_ = l.appendLocked(EventRunEnd, payload)
+	if err := l.appendLocked(EventRunEnd, payload); err != nil {
+		logging.Warn("append run_end event: %v", err)
+	}
 	l.meta.Status = status
 	l.meta.Updated = time.Now().UTC()
-	_ = l.writeMeta()
+	if err := l.writeMeta(); err != nil {
+		logging.Warn("write meta: %v", err)
+	}
 }
 
 // Close flushes the events file. Call after Finish.
@@ -339,7 +351,7 @@ func (l *Logger) writeMeta() error {
 	if err != nil {
 		return fmt.Errorf("marshal meta: %w", err)
 	}
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return fmt.Errorf("write meta: %w", err)
 	}
 	return os.Rename(tmp, final)
