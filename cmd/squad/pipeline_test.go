@@ -890,11 +890,108 @@ func TestOutputReport_FormatError(t *testing.T) {
 	}
 }
 
-// mockViper implements the interface { GetString(string) string } for testing.
+// mockViper implements the structural Viper subsets used by flagOrViper and
+// its typed siblings (flagOrViperBool/Float/Int). Any key present in a
+// values map is reported as IsSet=true.
 type mockViper struct {
-	vals map[string]string
+	vals   map[string]string
+	bools  map[string]bool
+	floats map[string]float64
+	ints   map[string]int
 }
 
-func (m *mockViper) GetString(key string) string {
-	return m.vals[key]
+func (m *mockViper) GetString(key string) string { return m.vals[key] }
+
+func (m *mockViper) IsSet(key string) bool {
+	if _, ok := m.bools[key]; ok {
+		return true
+	}
+	if _, ok := m.floats[key]; ok {
+		return true
+	}
+	if _, ok := m.ints[key]; ok {
+		return true
+	}
+	_, ok := m.vals[key]
+	return ok
+}
+
+func (m *mockViper) GetBool(key string) bool       { return m.bools[key] }
+func (m *mockViper) GetFloat64(key string) float64 { return m.floats[key] }
+func (m *mockViper) GetInt(key string) int         { return m.ints[key] }
+
+func TestFlagOrViperTyped(t *testing.T) {
+	t.Parallel()
+
+	t.Run("bool: flag changed wins over viper", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.Flags().Bool("flag", false, "")
+		_ = cmd.Flags().Set("flag", "true")
+		mv := &mockViper{bools: map[string]bool{"k": false}}
+		if got := flagOrViperBool(cmd, "flag", mv, "k"); !got {
+			t.Fatalf("expected true from explicit flag, got %v", got)
+		}
+	})
+
+	t.Run("bool: viper used when flag unset", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.Flags().Bool("flag", false, "")
+		mv := &mockViper{bools: map[string]bool{"k": true}}
+		if got := flagOrViperBool(cmd, "flag", mv, "k"); !got {
+			t.Fatalf("expected true from viper fallback, got %v", got)
+		}
+	})
+
+	t.Run("bool: flag default when neither set", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.Flags().Bool("flag", true, "")
+		if got := flagOrViperBool(cmd, "flag", nil, "k"); !got {
+			t.Fatalf("expected flag default true, got %v", got)
+		}
+	})
+
+	t.Run("float: flag changed wins over viper", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.Flags().Float64("flag", 0, "")
+		_ = cmd.Flags().Set("flag", "1.5")
+		mv := &mockViper{floats: map[string]float64{"k": 9.9}}
+		if got := flagOrViperFloat(cmd, "flag", mv, "k"); got != 1.5 {
+			t.Fatalf("expected 1.5 from flag, got %v", got)
+		}
+	})
+
+	t.Run("float: viper used when flag unset", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.Flags().Float64("flag", 0, "")
+		mv := &mockViper{floats: map[string]float64{"k": 2.5}}
+		if got := flagOrViperFloat(cmd, "flag", mv, "k"); got != 2.5 {
+			t.Fatalf("expected 2.5 from viper, got %v", got)
+		}
+	})
+
+	t.Run("int: flag changed wins over viper", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.Flags().Int("flag", 0, "")
+		_ = cmd.Flags().Set("flag", "7")
+		mv := &mockViper{ints: map[string]int{"k": 99}}
+		if got := flagOrViperInt(cmd, "flag", mv, "k"); got != 7 {
+			t.Fatalf("expected 7 from flag, got %v", got)
+		}
+	})
+
+	t.Run("int: viper used when flag unset", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.Flags().Int("flag", 0, "")
+		mv := &mockViper{ints: map[string]int{"k": 42}}
+		if got := flagOrViperInt(cmd, "flag", mv, "k"); got != 42 {
+			t.Fatalf("expected 42 from viper, got %v", got)
+		}
+	})
 }
