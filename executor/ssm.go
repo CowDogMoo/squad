@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -100,8 +102,14 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 
 	// Prepend a cd into the working directory when one is configured so
 	// that commands run in the expected location on the remote host.
+	// IMPORTANT: workingDir may be user-controlled from CLI/config; avoid
+	// command injection by quoting it when it contains unsafe characters.
 	if e.workingDir != "" {
-		command = fmt.Sprintf("mkdir -p %s && cd %s && %s", e.workingDir, e.workingDir, command)
+		wd := e.workingDir
+		if !isShellSafePath(wd) {
+			wd = shellSingleQuote(wd)
+		}
+		command = fmt.Sprintf("mkdir -p %s && cd %s && %s", wd, wd, command)
 	}
 
 	sendOut, err := e.client.SendCommand(ctx, &ssm.SendCommandInput{
@@ -225,4 +233,36 @@ func (e *SSMExecutor) EnvironmentDescription() string {
 		"If tools are installed inside Docker containers on the host, " +
 		"you must use 'docker exec <container> <command>' to reach them."
 	return desc
+}
+
+// isShellSafePath reports whether s contains only shell-safe path characters
+// that don't need quoting in a POSIX shell context.
+func isShellSafePath(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r == '/' || r == '.' || r == '-' || r == '_' || unicode.IsDigit(r) || unicode.IsLetter(r) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// shellSingleQuote returns s wrapped in single quotes with embedded single
+// quotes escaped for POSIX shells: ' becomes '\”
+func shellSingleQuote(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('\'')
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\'' {
+			b.WriteString("'\\''")
+		} else {
+			b.WriteByte(s[i])
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
 }
