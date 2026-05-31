@@ -530,6 +530,89 @@ func TestSSMExecutor_Execute_ContextCancelled(t *testing.T) {
 	}
 }
 
+func TestIsShellSafePath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"", false},
+		{"/opt/app", true},
+		{"relative/path", true},
+		{"with-dash_and.dot", true},
+		{"alpha123", true},
+		{"has space", false},
+		{"semi;colon", false},
+		{"dollar$sign", false},
+		{"back\\slash", false},
+		{"pipe|char", false},
+		{"quote'mark", false},
+	}
+	for _, c := range cases {
+		if got := isShellSafePath(c.in); got != c.want {
+			t.Errorf("isShellSafePath(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestShellSingleQuote(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in, want string
+	}{
+		{"", "''"},
+		{"plain", "'plain'"},
+		{"with space", "'with space'"},
+		{"a'b", `'a'\''b'`},
+		{"a'b'c", `'a'\''b'\''c'`},
+		{"$dangerous;`stuff`", "'$dangerous;`stuff`'"},
+	}
+	for _, c := range cases {
+		if got := shellSingleQuote(c.in); got != c.want {
+			t.Errorf("shellSingleQuote(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestSSMExecutor_Execute_QuotesUnsafeWorkingDir asserts that a workingDir
+// containing shell metacharacters is wrapped in single quotes before being
+// composed into the remote command, blocking CWE-77 command injection.
+func TestSSMExecutor_Execute_QuotesUnsafeWorkingDir(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeSSMClient{
+		sendCommandFn: func(_ context.Context, params *ssm.SendCommandInput) (*ssm.SendCommandOutput, error) {
+			return &ssm.SendCommandOutput{Command: &ssmtypes.Command{CommandId: aws.String("cid")}}, nil
+		},
+		getCommandInvocation: func(_ context.Context, _ *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			return &ssm.GetCommandInvocationOutput{
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: aws.String("ok"),
+			}, nil
+		},
+	}
+
+	ex := &SSMExecutor{
+		instanceID: "i-abc123",
+		workingDir: "/opt/app; rm -rf /",
+		timeout:    defaultSSMTimeout,
+		client:     client,
+	}
+
+	if _, err := ex.Execute(context.Background(), "ls"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if len(client.sendCalls) != 1 {
+		t.Fatalf("expected 1 SendCommand call, got %d", len(client.sendCalls))
+	}
+	got := client.sendCalls[0].Parameters["commands"][0]
+	want := "mkdir -p '/opt/app; rm -rf /' && cd '/opt/app; rm -rf /' && ls"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
 func TestSSMExecutor_Execute_CancelledStatus(t *testing.T) {
 	t.Parallel()
 
