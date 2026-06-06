@@ -72,12 +72,17 @@ type OtelConfig struct {
 type AgentsConfig struct {
 	// CacheDir is where cloned git repositories are cached.
 	CacheDir string `mapstructure:"cache_dir" yaml:"cache_dir"`
-	// Repositories maps repository names to Git URLs.
+	// Repositories maps repository names to Git sources. Each entry is
+	// either a plain URL (the legacy form, tracks the default branch) or
+	// a {url, ref} mapping that pins the source to a specific commit,
+	// tag, or branch. See [RepoSpec].
 	// Example:
 	//   repositories:
 	//     official: https://github.com/cowdogmoo/squad-agents.git
-	//     private: git@github.com:myorg/private-agents.git
-	Repositories map[string]string `mapstructure:"repositories" yaml:"repositories"`
+	//     private:
+	//       url: git@github.com:myorg/private-agents.git
+	//       ref: v1.2.0
+	Repositories map[string]RepoSpec `mapstructure:"repositories" yaml:"repositories"`
 	// LocalPaths lists local directories to search for agents.
 	// Example:
 	//   local_paths:
@@ -95,9 +100,11 @@ type SkillsConfig struct {
 	// CacheDir is where cloned skill catalog repositories are cached.
 	// Empty falls through to config.SkillsCacheDir().
 	CacheDir string `mapstructure:"cache_dir" yaml:"cache_dir"`
-	// Repositories maps a catalog alias to its Git URL. squad skill add /
-	// update operate on this map.
-	Repositories map[string]string `mapstructure:"repositories" yaml:"repositories"`
+	// Repositories maps a catalog alias to its Git source. Like
+	// [AgentsConfig.Repositories], entries accept either a plain URL
+	// string or a {url, ref} mapping that pins the catalog to a commit,
+	// tag, or branch.
+	Repositories map[string]RepoSpec `mapstructure:"repositories" yaml:"repositories"`
 	// LocalPaths lists additional directories to search for skill
 	// subdirectories. Each path is treated as a catalog root and its
 	// immediate subdirectories are scanned for SKILL.md files.
@@ -156,7 +163,7 @@ func Defaults() *Config {
 	v := viper.New()
 	SetDefaults(v)
 	cfg := &Config{}
-	_ = v.Unmarshal(cfg)
+	_ = v.Unmarshal(cfg, DecodeHooks())
 	return cfg
 }
 
@@ -210,7 +217,7 @@ func loadConfigWithViper(setup func(*viper.Viper) error) (*Config, *viper.Viper,
 	}
 
 	cfg := &Config{}
-	if err := v.Unmarshal(cfg); err != nil {
+	if err := v.Unmarshal(cfg, DecodeHooks()); err != nil {
 		return nil, nil, fmt.Errorf("config unmarshal failed: %w", err)
 	}
 

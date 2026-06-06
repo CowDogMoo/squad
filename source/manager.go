@@ -62,24 +62,38 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	}, nil
 }
 
-// AddRepository adds a git repository as an agent source.
-func (m *Manager) AddRepository(name, gitURL string) error {
+// AddRepository adds a git repository as an agent source. An empty ref
+// tracks the default branch; a non-empty ref pins the source to that
+// commit SHA, tag, or branch.
+func (m *Manager) AddRepository(name, gitURL, ref string) error {
 	if !IsGitURL(gitURL) {
 		return fmt.Errorf("invalid git URL: %s", gitURL)
 	}
 
 	if m.cfg.Agents.Repositories == nil {
-		m.cfg.Agents.Repositories = make(map[string]string)
+		m.cfg.Agents.Repositories = make(map[string]config.RepoSpec)
 	}
 
 	if existing, ok := m.cfg.Agents.Repositories[name]; ok {
-		if existing == gitURL {
+		if existing.URL == gitURL && existing.Ref == ref {
 			return fmt.Errorf("repository %q already configured with URL %s", name, gitURL)
 		}
-		return fmt.Errorf("repository %q already exists with URL %s (use remove first)", name, existing)
+		return fmt.Errorf("repository %q already exists with URL %s (use remove first)", name, existing.URL)
 	}
 
-	m.cfg.Agents.Repositories[name] = gitURL
+	m.cfg.Agents.Repositories[name] = config.RepoSpec{URL: gitURL, Ref: ref}
+	return m.saveConfig()
+}
+
+// PinRepository sets or replaces the pinned ref for an existing repository.
+// An empty ref unpins (returns to tracking the default branch).
+func (m *Manager) PinRepository(name, ref string) error {
+	spec, ok := m.cfg.Agents.Repositories[name]
+	if !ok {
+		return fmt.Errorf("repository not found: %s", name)
+	}
+	spec.Ref = ref
+	m.cfg.Agents.Repositories[name] = spec
 	return m.saveConfig()
 }
 
@@ -131,12 +145,19 @@ func (m *Manager) RemoveSource(nameOrPath string) error {
 	return fmt.Errorf("source not found: %s", nameOrPath)
 }
 
-// UpdateRepositories pulls latest from all configured git repositories.
-func (m *Manager) UpdateRepositories() error {
+// UpdateRepositories pulls latest from configured git repositories.
+// Pinned repositories (Ref != "") are skipped unless force is true, in
+// which case the ref is re-resolved against the remote (useful when a
+// tag has been re-pointed or a branch has advanced).
+func (m *Manager) UpdateRepositories(force bool) error {
 	var errs []string
-	for name, url := range m.cfg.Agents.Repositories {
-		fmt.Printf("Updating %s (%s)...\n", name, url)
-		if _, err := m.gitOps.CloneOrUpdate(url); err != nil {
+	for name, spec := range m.cfg.Agents.Repositories {
+		if spec.IsPinned() && !force {
+			fmt.Printf("Skipping %s (pinned to %s) — use --force to re-resolve\n", name, spec.Ref)
+			continue
+		}
+		fmt.Printf("Updating %s (%s)...\n", name, spec.URL)
+		if _, err := m.gitOps.CloneOrUpdate(spec.URL, spec.Ref); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
 		}
 	}
@@ -169,8 +190,8 @@ func (m *Manager) GetSearchPaths() ([]string, error) {
 	}
 
 	// 3. Cached git repositories (use local cache only, no network access)
-	for _, url := range m.cfg.Agents.Repositories {
-		if repoPath, ok := m.gitOps.CachePath(url); ok {
+	for _, spec := range m.cfg.Agents.Repositories {
+		if repoPath, ok := m.gitOps.CachePath(spec.URL); ok {
 			paths = append(paths, repoPath)
 		}
 	}

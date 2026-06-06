@@ -54,6 +54,12 @@ var agentsListCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 }
 
+var (
+	agentsAddRef       string
+	agentsUpdateForce  bool
+	agentsPinUnsetFlag bool
+)
+
 var agentsAddCmd = &cobra.Command{
 	Use:   "add [name] <url-or-path>",
 	Short: "Add an agent source",
@@ -63,9 +69,26 @@ For git repositories:
   squad agents add https://github.com/user/agents.git
   squad agents add myrepo https://github.com/user/agents.git
 
+Pin a repository to a specific commit, tag, or branch with --ref so
+unattended runs always resolve the same source content:
+
+  squad agents add official https://github.com/cowdogmoo/squad-agents.git --ref v0.4.2
+  squad agents add official https://github.com/cowdogmoo/squad-agents.git --ref 7a3fe6cf
+
 For local directories:
   squad agents add /path/to/agents`,
 	RunE: runAgentsAdd,
+	Args: cobra.RangeArgs(1, 2),
+}
+
+var agentsPinCmd = &cobra.Command{
+	Use:   "pin <name> <ref>",
+	Short: "Pin an agent source to a specific ref",
+	Long: `Pin an existing agent repository to a specific commit SHA, tag, or branch.
+
+Subsequent 'squad agents update' calls skip pinned sources unless --force
+is supplied. To unpin, use 'squad agents pin <name> --unset'.`,
+	RunE: runAgentsPin,
 	Args: cobra.RangeArgs(1, 2),
 }
 
@@ -95,11 +118,16 @@ var agentsSourcesCmd = &cobra.Command{
 }
 
 func init() {
+	agentsAddCmd.Flags().StringVar(&agentsAddRef, "ref", "", "Pin to commit SHA, tag, or branch (defaults to tracking the default branch)")
+	agentsUpdateCmd.Flags().BoolVar(&agentsUpdateForce, "force", false, "Re-resolve and update pinned repositories too")
+	agentsPinCmd.Flags().BoolVar(&agentsPinUnsetFlag, "unset", false, "Remove an existing pin (alias for empty ref)")
+
 	agentsCmd.AddCommand(agentsListCmd)
 	agentsCmd.AddCommand(agentsAddCmd)
 	agentsCmd.AddCommand(agentsRemoveCmd)
 	agentsCmd.AddCommand(agentsUpdateCmd)
 	agentsCmd.AddCommand(agentsSourcesCmd)
+	agentsCmd.AddCommand(agentsPinCmd)
 }
 
 // runAgentsList lists available agents from configured sources.
@@ -168,17 +196,60 @@ func runAgentsAdd(cmd *cobra.Command, args []string) error {
 			// Generate name from URL
 			name = guessRepoName(urlOrPath)
 		}
-		if err := manager.AddRepository(name, urlOrPath); err != nil {
+		if err := manager.AddRepository(name, urlOrPath, agentsAddRef); err != nil {
 			return err
 		}
-		logging.InfoContext(ctx, "Added repository %s: %s", name, urlOrPath)
+		if agentsAddRef != "" {
+			logging.InfoContext(ctx, "Added repository %s: %s (pinned to %s)", name, urlOrPath, agentsAddRef)
+		} else {
+			logging.InfoContext(ctx, "Added repository %s: %s", name, urlOrPath)
+		}
 	} else {
+		if agentsAddRef != "" {
+			return fmt.Errorf("--ref only applies to git repositories, not local paths")
+		}
 		if err := manager.AddLocalPath(urlOrPath); err != nil {
 			return err
 		}
 		logging.InfoContext(ctx, "Added local path: %s", urlOrPath)
 	}
 
+	return nil
+}
+
+// runAgentsPin updates the pinned ref on an existing repository.
+func runAgentsPin(cmd *cobra.Command, args []string) error {
+	cfg := configFromContext(cmd)
+	if cfg == nil {
+		return fmt.Errorf("config not available in context")
+	}
+
+	manager, err := source.NewManager(cfg)
+	if err != nil {
+		return err
+	}
+
+	name := args[0]
+	ref := ""
+	switch {
+	case agentsPinUnsetFlag:
+		if len(args) > 1 {
+			return fmt.Errorf("cannot combine --unset with a ref argument")
+		}
+	case len(args) == 2:
+		ref = args[1]
+	default:
+		return fmt.Errorf("usage: squad agents pin <name> <ref> | squad agents pin <name> --unset")
+	}
+
+	if err := manager.PinRepository(name, ref); err != nil {
+		return err
+	}
+	if ref == "" {
+		logging.InfoContext(cmd.Context(), "Unpinned %s (now tracking the default branch)", name)
+	} else {
+		logging.InfoContext(cmd.Context(), "Pinned %s to %s", name, ref)
+	}
 	return nil
 }
 
@@ -214,7 +285,7 @@ func runAgentsUpdate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := manager.UpdateRepositories(); err != nil {
+	if err := manager.UpdateRepositories(agentsUpdateForce); err != nil {
 		return err
 	}
 
@@ -233,9 +304,13 @@ func runAgentsSources(cmd *cobra.Command, args []string) error {
 
 	if len(cfg.Agents.Repositories) > 0 {
 		_, _ = fmt.Fprintln(w, "REPOSITORIES:")
-		_, _ = fmt.Fprintln(w, "NAME\tURL")
-		for name, url := range cfg.Agents.Repositories {
-			_, _ = fmt.Fprintf(w, "%s\t%s\n", name, url)
+		_, _ = fmt.Fprintln(w, "NAME\tURL\tREF")
+		for name, spec := range cfg.Agents.Repositories {
+			ref := spec.Ref
+			if ref == "" {
+				ref = "-"
+			}
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", name, spec.URL, ref)
 		}
 		_, _ = fmt.Fprintln(w)
 	}

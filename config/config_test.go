@@ -228,8 +228,8 @@ func TestLoadFromPath_SkillsLocalPathsListForm(t *testing.T) {
 			t.Errorf("LocalPaths[%d] = %q, want %q", i, cfg.Skills.LocalPaths[i], p)
 		}
 	}
-	if cfg.Skills.Repositories["personal"] != "https://github.com/CowDogMoo/squad-skills.git" {
-		t.Errorf("Repositories[personal] = %q", cfg.Skills.Repositories["personal"])
+	if cfg.Skills.Repositories["personal"].URL != "https://github.com/CowDogMoo/squad-skills.git" {
+		t.Errorf("Repositories[personal] = %+v", cfg.Skills.Repositories["personal"])
 	}
 }
 

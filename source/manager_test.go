@@ -176,15 +176,15 @@ func TestManagerAddRepository(t *testing.T) {
 			cfg := config.Defaults()
 			cfg.Agents.Repositories = nil
 			if tt.existing != nil {
-				cfg.Agents.Repositories = map[string]string{}
+				cfg.Agents.Repositories = map[string]config.RepoSpec{}
 				for key, value := range tt.existing {
-					cfg.Agents.Repositories[key] = value
+					cfg.Agents.Repositories[key] = config.RepoSpec{URL: value}
 				}
 			}
 			cfg.Agents.LocalPaths = []string{}
 
 			manager := newTestManager(t, cfg)
-			err := manager.AddRepository("repo", tt.gitURL)
+			err := manager.AddRepository("repo", tt.gitURL, "")
 
 			if tt.wantErr != "" {
 				if err == nil {
@@ -208,9 +208,9 @@ func TestManagerAddRepository(t *testing.T) {
 			}
 
 			if tt.wantStored != "" {
-				if cfg.Agents.Repositories["repo"] != tt.wantStored {
+				if cfg.Agents.Repositories["repo"].URL != tt.wantStored {
 					t.Fatalf("stored url = %q, want %q",
-						cfg.Agents.Repositories["repo"], tt.wantStored)
+						cfg.Agents.Repositories["repo"].URL, tt.wantStored)
 				}
 			}
 		})
@@ -264,7 +264,7 @@ func TestManagerAddLocalPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := config.Defaults()
-			cfg.Agents.Repositories = map[string]string{}
+			cfg.Agents.Repositories = map[string]config.RepoSpec{}
 			cfg.Agents.LocalPaths = []string{}
 
 			pathValue := tt.setupPath(t)
@@ -321,8 +321,8 @@ func TestManagerRemoveSource(t *testing.T) {
 			name: "remove repository",
 			setup: func(t *testing.T) (*config.Config, string) {
 				cfg := config.Defaults()
-				cfg.Agents.Repositories = map[string]string{
-					"repo": "https://github.com/org/repo.git",
+				cfg.Agents.Repositories = map[string]config.RepoSpec{
+					"repo": {URL: "https://github.com/org/repo.git"},
 				}
 				cfg.Agents.LocalPaths = []string{}
 				return cfg, "repo"
@@ -334,7 +334,7 @@ func TestManagerRemoveSource(t *testing.T) {
 			name: "remove local path",
 			setup: func(t *testing.T) (*config.Config, string) {
 				cfg := config.Defaults()
-				cfg.Agents.Repositories = map[string]string{}
+				cfg.Agents.Repositories = map[string]config.RepoSpec{}
 				localPath := t.TempDir()
 				cfg.Agents.LocalPaths = []string{localPath}
 				return cfg, localPath
@@ -346,7 +346,7 @@ func TestManagerRemoveSource(t *testing.T) {
 			name: "not found",
 			setup: func(t *testing.T) (*config.Config, string) {
 				cfg := config.Defaults()
-				cfg.Agents.Repositories = map[string]string{}
+				cfg.Agents.Repositories = map[string]config.RepoSpec{}
 				cfg.Agents.LocalPaths = []string{}
 				return cfg, "missing"
 			},
@@ -401,18 +401,18 @@ func TestManagerRemoveSource(t *testing.T) {
 
 func TestManagerUpdateRepositoriesEmpty(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.Agents.Repositories = map[string]string{}
+	cfg.Agents.Repositories = map[string]config.RepoSpec{}
 	cfg.Agents.LocalPaths = []string{}
 	manager := newTestManager(t, cfg)
 
-	if err := manager.UpdateRepositories(); err != nil {
+	if err := manager.UpdateRepositories(false); err != nil {
 		t.Fatalf("UpdateRepositories() error = %v", err)
 	}
 }
 
 func TestManagerGetSearchPaths(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.Agents.Repositories = map[string]string{}
+	cfg.Agents.Repositories = map[string]config.RepoSpec{}
 	cfg.Agents.LocalPaths = []string{}
 
 	manager := newTestManager(t, cfg)
@@ -461,7 +461,7 @@ func TestManagerGetSearchPaths(t *testing.T) {
 
 func TestManagerListAgents(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.Agents.Repositories = map[string]string{}
+	cfg.Agents.Repositories = map[string]config.RepoSpec{}
 	cfg.Agents.LocalPaths = []string{}
 
 	manager := newTestManager(t, cfg)
@@ -519,7 +519,7 @@ func TestManagerFindAgent(t *testing.T) {
 			name: "found",
 			setup: func(t *testing.T) (*config.Config, string, string) {
 				cfg := config.Defaults()
-				cfg.Agents.Repositories = map[string]string{}
+				cfg.Agents.Repositories = map[string]config.RepoSpec{}
 				cfg.Agents.LocalPaths = []string{}
 				workDir := t.TempDir()
 				agentsDir := filepath.Join(workDir, "agents")
@@ -542,7 +542,7 @@ func TestManagerFindAgent(t *testing.T) {
 			name: "missing",
 			setup: func(t *testing.T) (*config.Config, string, string) {
 				cfg := config.Defaults()
-				cfg.Agents.Repositories = map[string]string{}
+				cfg.Agents.Repositories = map[string]config.RepoSpec{}
 				cfg.Agents.LocalPaths = []string{}
 				return cfg, t.TempDir(), ""
 			},
@@ -612,13 +612,13 @@ func TestNewManagerConfigPathError(t *testing.T) {
 
 func TestManagerUpdateRepositoriesError(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.Agents.Repositories = map[string]string{
-		"broken": filepath.Join(t.TempDir(), "missing"),
+	cfg.Agents.Repositories = map[string]config.RepoSpec{
+		"broken": {URL: filepath.Join(t.TempDir(), "missing")},
 	}
 	cfg.Agents.LocalPaths = []string{}
 	manager := newTestManager(t, cfg)
 
-	err := manager.UpdateRepositories()
+	err := manager.UpdateRepositories(false)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -632,8 +632,8 @@ func TestManagerUpdateRepositoriesError(t *testing.T) {
 
 func TestManagerGetSearchPathsWithRepoAndConfigDir(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.Agents.Repositories = map[string]string{
-		"broken": filepath.Join(t.TempDir(), "missing"),
+	cfg.Agents.Repositories = map[string]config.RepoSpec{
+		"broken": {URL: filepath.Join(t.TempDir(), "missing")},
 	}
 	cfg.Agents.LocalPaths = []string{}
 
@@ -673,8 +673,8 @@ func TestManagerGetSearchPathsWithRepoAndConfigDir(t *testing.T) {
 
 func TestManagerGetSearchPathsCachedRepo(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.Agents.Repositories = map[string]string{
-		"test-agents": "https://example.com/org/test-agents.git",
+	cfg.Agents.Repositories = map[string]config.RepoSpec{
+		"test-agents": {URL: "https://example.com/org/test-agents.git"},
 	}
 	cfg.Agents.LocalPaths = []string{}
 
@@ -721,7 +721,7 @@ func TestManagerGetSearchPathsCachedRepo(t *testing.T) {
 
 func TestManagerSaveConfigWriteError(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.Agents.Repositories = map[string]string{}
+	cfg.Agents.Repositories = map[string]config.RepoSpec{}
 	cfg.Agents.LocalPaths = []string{}
 	manager := newTestManager(t, cfg)
 
@@ -730,7 +730,7 @@ func TestManagerSaveConfigWriteError(t *testing.T) {
 		t.Fatalf("create config file dir: %v", err)
 	}
 
-	err := manager.AddRepository("repo", "https://example.com/org/repo.git")
+	err := manager.AddRepository("repo", "https://example.com/org/repo.git", "")
 	if err == nil {
 		t.Fatal("expected error")
 	}

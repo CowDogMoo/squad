@@ -241,8 +241,15 @@ squad agents add official https://github.com/cowdogmoo/squad-agents.git
 squad agents add team git@github.com:internal/agents.git
 squad agents add scratch ./local-agents/
 
+# Pin a source to a specific commit, tag, or branch so unattended runs
+# always resolve the same content.
+squad agents add official https://github.com/cowdogmoo/squad-agents.git --ref v0.4.2
+squad agents pin official v0.5.0
+squad agents pin official --unset             # back to tracking the default branch
+
 squad agents list
-squad agents update              # pull all sources
+squad agents update                            # pulls unpinned sources; skips pins
+squad agents update --force                    # re-resolves pinned refs too
 squad agents remove team
 ```
 

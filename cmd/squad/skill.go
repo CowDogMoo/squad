@@ -31,6 +31,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/skill"
 	"github.com/cowdogmoo/squad/source"
@@ -65,6 +66,7 @@ lower-precedence scope.`,
 		newSkillUpdateCmd(),
 		newSkillSourcesCmd(),
 		newSkillNewCmd(),
+		newSkillPinCmd(),
 	)
 	return cmd
 }
@@ -204,7 +206,8 @@ func newSkillValidateCmd() *cobra.Command {
 }
 
 func newSkillAddCmd() *cobra.Command {
-	return &cobra.Command{
+	var ref string
+	cmd := &cobra.Command{
 		Use:   "add <alias> <git-url> | <local-path>",
 		Short: "Register a skill catalog source (git repo or local directory)",
 		Long: `Register a new skills catalog. Two forms are accepted:
@@ -215,7 +218,12 @@ func newSkillAddCmd() *cobra.Command {
 Git repositories require an alias (the short handle used by
 'squad skill remove'). Local paths are identified by the path itself, so no
 alias is needed. Git repositories are cloned into the skills cache on
-registration so the catalog is immediately discoverable.`,
+registration so the catalog is immediately discoverable.
+
+Pin a catalog to a specific commit, tag, or branch with --ref so updates
+are explicit:
+
+  squad skill add myteam https://github.com/me/squad-skills.git --ref v1.2.0`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
@@ -233,6 +241,9 @@ registration so the catalog is immediately discoverable.`,
 				if source.IsGitURL(target) {
 					return fmt.Errorf("git repositories require an alias: squad skill add <alias> %s", target)
 				}
+				if ref != "" {
+					return fmt.Errorf("--ref only applies to git repositories, not local paths")
+				}
 				if err := mgr.AddLocalPath(target); err != nil {
 					return err
 				}
@@ -243,10 +254,14 @@ registration so the catalog is immediately discoverable.`,
 				if !source.IsGitURL(target) {
 					return fmt.Errorf("two-argument form is for git repositories; %q is not a git URL (drop the alias to register a local path)", target)
 				}
-				if err := mgr.AddRepository(alias, target); err != nil {
+				if err := mgr.AddRepository(alias, target, ref); err != nil {
 					return err
 				}
-				logging.InfoContext(cmd.Context(), "registered skill repository %s → %s", alias, target)
+				if ref != "" {
+					logging.InfoContext(cmd.Context(), "registered skill repository %s → %s (pinned to %s)", alias, target, ref)
+				} else {
+					logging.InfoContext(cmd.Context(), "registered skill repository %s → %s", alias, target)
+				}
 				if err := mgr.EnsureRepositoriesCloned(); err != nil {
 					// The config row was written, so registration succeeded and we
 					// exit 0 — but the catalog is empty until the clone lands, so
@@ -265,6 +280,55 @@ registration so the catalog is immediately discoverable.`,
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&ref, "ref", "", "Pin to commit SHA, tag, or branch (defaults to tracking the default branch)")
+	return cmd
+}
+
+func newSkillPinCmd() *cobra.Command {
+	var unset bool
+	cmd := &cobra.Command{
+		Use:   "pin <alias> <ref>",
+		Short: "Pin a skill catalog to a specific ref",
+		Long: `Pin an existing skill repository to a specific commit SHA, tag, or branch.
+
+Subsequent 'squad skill update' calls skip pinned catalogs unless --force
+is supplied. To unpin, run with --unset.`,
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			cfg := configFromContext(cmd)
+			if cfg == nil {
+				return fmt.Errorf("config not available in context")
+			}
+			mgr, err := source.NewSkillsManager(cfg)
+			if err != nil {
+				return err
+			}
+			alias := args[0]
+			ref := ""
+			switch {
+			case unset:
+				if len(args) > 1 {
+					return fmt.Errorf("cannot combine --unset with a ref argument")
+				}
+			case len(args) == 2:
+				ref = args[1]
+			default:
+				return fmt.Errorf("usage: squad skill pin <alias> <ref> | squad skill pin <alias> --unset")
+			}
+			if err := mgr.PinRepository(alias, ref); err != nil {
+				return err
+			}
+			if ref == "" {
+				logging.InfoContext(cmd.Context(), "unpinned %s (now tracking the default branch)", alias)
+			} else {
+				logging.InfoContext(cmd.Context(), "pinned %s to %s", alias, ref)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&unset, "unset", false, "Remove an existing pin (alias for empty ref)")
+	return cmd
 }
 
 func newSkillRemoveCmd() *cobra.Command {
@@ -293,10 +357,15 @@ func newSkillRemoveCmd() *cobra.Command {
 }
 
 func newSkillUpdateCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "git pull every registered skill catalog repository",
-		Args:  cobra.NoArgs,
+		Long: `Pull the latest changes for every registered skill catalog repository.
+
+Pinned catalogs (registered with --ref or 'squad skill pin') are skipped
+by default — use --force to re-resolve their refs against the remote.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 			cfg := configFromContext(cmd)
@@ -307,13 +376,15 @@ func newSkillUpdateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := mgr.UpdateRepositories(); err != nil {
+			if err := mgr.UpdateRepositories(force); err != nil {
 				return err
 			}
 			logging.InfoContext(cmd.Context(), "all skill repositories updated")
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "Re-resolve and update pinned catalogs too")
+	return cmd
 }
 
 func newSkillSourcesCmd() *cobra.Command {
@@ -330,9 +401,14 @@ func newSkillSourcesCmd() *cobra.Command {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			if len(cfg.Skills.Repositories) > 0 {
 				_, _ = fmt.Fprintln(w, "REPOSITORIES:")
-				_, _ = fmt.Fprintln(w, "NAME\tURL")
-				for _, name := range sortedKeys(cfg.Skills.Repositories) {
-					_, _ = fmt.Fprintf(w, "%s\t%s\n", name, cfg.Skills.Repositories[name])
+				_, _ = fmt.Fprintln(w, "NAME\tURL\tREF")
+				for _, name := range sortedRepoKeys(cfg.Skills.Repositories) {
+					spec := cfg.Skills.Repositories[name]
+					ref := spec.Ref
+					if ref == "" {
+						ref = "-"
+					}
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", name, spec.URL, ref)
 				}
 				_, _ = fmt.Fprintln(w)
 			}
@@ -513,7 +589,7 @@ func reportLoadErrors(cmd *cobra.Command, cat *skill.Catalog) {
 	}
 }
 
-func sortedKeys(m map[string]string) []string {
+func sortedRepoKeys(m map[string]config.RepoSpec) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

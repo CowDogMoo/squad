@@ -301,7 +301,7 @@ func newSkillTestCfg(t *testing.T) *config.Config {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(t.TempDir(), ".cache"))
 	return &config.Config{
 		Skills: config.SkillsConfig{
-			Repositories: map[string]string{},
+			Repositories: map[string]config.RepoSpec{},
 			LocalPaths:   nil,
 		},
 	}
@@ -410,7 +410,7 @@ func TestSkillAddRepository(t *testing.T) {
 	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "team", url); err != nil {
 		t.Fatalf("add repo: %v", err)
 	}
-	if cfg.Skills.Repositories["team"] != url {
+	if cfg.Skills.Repositories["team"].URL != url {
 		t.Fatalf("repo not registered: %v", cfg.Skills.Repositories)
 	}
 }
@@ -502,7 +502,7 @@ func TestSkillSourcesEmpty(t *testing.T) {
 
 func TestSkillSourcesPopulated(t *testing.T) {
 	cfg := newSkillTestCfg(t)
-	cfg.Skills.Repositories["team"] = "https://example.com/a.git"
+	cfg.Skills.Repositories["team"] = config.RepoSpec{URL: "https://example.com/a.git"}
 	cfg.Skills.LocalPaths = []string{"/tmp/skills"}
 	out, err := runSkillSubcmd(t, cfg, newSkillSourcesCmd)
 	if err != nil {
@@ -643,7 +643,7 @@ func TestSkillAddDuplicateRepositoryErrors(t *testing.T) {
 
 func TestSkillUpdateBadRepoErrors(t *testing.T) {
 	cfg := newSkillTestCfg(t)
-	cfg.Skills.Repositories["bad"] = "https://example.invalid/no-such-repo.git"
+	cfg.Skills.Repositories["bad"] = config.RepoSpec{URL: "https://example.invalid/no-such-repo.git"}
 	if _, err := runSkillSubcmd(t, cfg, newSkillUpdateCmd); err == nil {
 		t.Fatal("expected error from bad upstream")
 	}
@@ -791,7 +791,7 @@ func TestSkillCatalogPathsManagerError(t *testing.T) {
 	t.Setenv("HOME", "")
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
-			Repositories: map[string]string{},
+			Repositories: map[string]config.RepoSpec{},
 			LocalPaths:   []string{},
 		},
 	}
@@ -809,7 +809,7 @@ func TestSkillAddRepositoryNewMgrError(t *testing.T) {
 	t.Setenv("HOME", "")
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
-			Repositories: map[string]string{},
+			Repositories: map[string]config.RepoSpec{},
 			LocalPaths:   []string{},
 		},
 	}
@@ -825,7 +825,7 @@ func TestSkillRemoveNewMgrError(t *testing.T) {
 	t.Setenv("HOME", "")
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
-			Repositories: map[string]string{},
+			Repositories: map[string]config.RepoSpec{},
 			LocalPaths:   []string{},
 		},
 	}
@@ -841,7 +841,7 @@ func TestSkillUpdateNewMgrError(t *testing.T) {
 	t.Setenv("HOME", "")
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
-			Repositories: map[string]string{},
+			Repositories: map[string]config.RepoSpec{},
 			LocalPaths:   []string{},
 		},
 	}
@@ -860,7 +860,7 @@ func TestSkillAddRepositoryCloneFailureWarns(t *testing.T) {
 	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "team", bogus); err != nil {
 		t.Fatalf("add should not return error even if clone fails (warning path), got %v", err)
 	}
-	if cfg.Skills.Repositories["team"] != bogus {
+	if cfg.Skills.Repositories["team"].URL != bogus {
 		t.Fatalf("repo should still be registered, got %v", cfg.Skills.Repositories)
 	}
 }
@@ -871,7 +871,7 @@ func TestSkillListDiscoverError(t *testing.T) {
 	t.Setenv("HOME", "")
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
-			Repositories: map[string]string{},
+			Repositories: map[string]config.RepoSpec{},
 			LocalPaths:   []string{},
 		},
 	}
@@ -886,7 +886,7 @@ func TestSkillShowDiscoverError(t *testing.T) {
 	t.Setenv("HOME", "")
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
-			Repositories: map[string]string{},
+			Repositories: map[string]config.RepoSpec{},
 			LocalPaths:   []string{},
 		},
 	}
@@ -902,7 +902,7 @@ func TestSkillNew_GlobalResolveError(t *testing.T) {
 	t.Setenv("HOME", "")
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
-			Repositories: map[string]string{},
+			Repositories: map[string]config.RepoSpec{},
 			LocalPaths:   []string{},
 		},
 	}

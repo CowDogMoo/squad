@@ -233,7 +233,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 
 	// Unmarshal back into typed config to preserve structure and tags
 	var newCfg config.Config
-	if err := v.Unmarshal(&newCfg); err != nil {
+	if err := v.Unmarshal(&newCfg, config.DecodeHooks()); err != nil {
 		return fmt.Errorf("failed to unmarshal updated config: %w", err)
 	}
 

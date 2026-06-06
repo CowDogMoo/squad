@@ -164,7 +164,7 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Re-unmarshal so flag/env overrides are reflected in the config struct.
-	if err := v.Unmarshal(cfg); err != nil {
+	if err := v.Unmarshal(cfg, config.DecodeHooks()); err != nil {
 		return fmt.Errorf("failed to apply config overrides: %w", err)
 	}
 
