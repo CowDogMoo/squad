@@ -110,6 +110,14 @@ func TestAgentsPin_unsetWithRefArgRejected(t *testing.T) {
 	}
 }
 
+func TestAgentsPin_missingRepoErrors(t *testing.T) {
+	cfg := newAgentsTestCfg(t)
+	_, err := runAgentsSubcmd(t, cfg, agentsPinCmd, "ghost", "v1.0.0")
+	if err == nil {
+		t.Fatal("expected error when pinning an unknown repository")
+	}
+}
+
 func TestAgentsPin_missingRefArgRejected(t *testing.T) {
 	cfg := newAgentsTestCfg(t)
 	cfg.Agents.Repositories["official"] = config.RepoSpec{URL: "https://x.test/r.git"}
@@ -139,6 +147,91 @@ func TestAgentsUpdate_forceAttemptsPinned(t *testing.T) {
 	_, err := runAgentsSubcmd(t, cfg, agentsUpdateCmd, "--force")
 	if err == nil {
 		t.Fatal("expected --force to attempt the upstream and surface the failure")
+	}
+}
+
+func TestAgentsAdd_singleArgUrlDerivesName(t *testing.T) {
+	cfg := newAgentsTestCfg(t)
+	if _, err := runAgentsSubcmd(t, cfg, agentsAddCmd,
+		"https://github.com/cowdogmoo/squad-agents.git",
+	); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	// guessRepoName strips .git and takes the trailing path component.
+	if _, ok := cfg.Agents.Repositories["squad-agents"]; !ok {
+		t.Fatalf("expected derived name 'squad-agents', got %v",
+			cfg.Agents.Repositories)
+	}
+}
+
+func TestAgentsAdd_twoArgNonURLRejected(t *testing.T) {
+	cfg := newAgentsTestCfg(t)
+	_, err := runAgentsSubcmd(t, cfg, agentsAddCmd, "alias", "/not/a/url")
+	if err == nil {
+		t.Fatal("expected error: alias-form second arg must be a git URL")
+	}
+}
+
+func TestAgentsAdd_localPathSucceeds(t *testing.T) {
+	cfg := newAgentsTestCfg(t)
+	dir := t.TempDir()
+	if _, err := runAgentsSubcmd(t, cfg, agentsAddCmd, dir); err != nil {
+		t.Fatalf("add local path: %v", err)
+	}
+	if len(cfg.Agents.LocalPaths) != 1 || cfg.Agents.LocalPaths[0] != dir {
+		t.Fatalf("LocalPaths = %v, want [%s]", cfg.Agents.LocalPaths, dir)
+	}
+}
+
+func TestAgentsAdd_unpinnedGitSucceeds(t *testing.T) {
+	cfg := newAgentsTestCfg(t)
+	if _, err := runAgentsSubcmd(t, cfg, agentsAddCmd,
+		"team", "https://example.com/agents.git",
+	); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	got := cfg.Agents.Repositories["team"]
+	if got.URL != "https://example.com/agents.git" || got.IsPinned() {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAgentsAdd_duplicateErrors(t *testing.T) {
+	cfg := newAgentsTestCfg(t)
+	cfg.Agents.Repositories["team"] = config.RepoSpec{
+		URL: "https://example.com/agents.git",
+	}
+	_, err := runAgentsSubcmd(t, cfg, agentsAddCmd,
+		"team", "https://example.com/agents.git",
+	)
+	if err == nil {
+		t.Fatal("expected duplicate-add error")
+	}
+}
+
+func TestAgentsSources_emptyMessage(t *testing.T) {
+	cfg := newAgentsTestCfg(t)
+	out, err := runAgentsSubcmd(t, cfg, agentsSourcesCmd)
+	if err != nil {
+		t.Fatalf("sources: %v", err)
+	}
+	if !strings.Contains(out, "No sources configured") {
+		t.Fatalf("expected empty-sources message, got:\n%s", out)
+	}
+}
+
+func TestAgentsSources_localPathsOnly(t *testing.T) {
+	cfg := newAgentsTestCfg(t)
+	cfg.Agents.LocalPaths = []string{"/tmp/local-agents"}
+	out, err := runAgentsSubcmd(t, cfg, agentsSourcesCmd)
+	if err != nil {
+		t.Fatalf("sources: %v", err)
+	}
+	if !strings.Contains(out, "LOCAL PATHS") || !strings.Contains(out, "/tmp/local-agents") {
+		t.Fatalf("expected LOCAL PATHS row, got:\n%s", out)
+	}
+	if strings.Contains(out, "REPOSITORIES") {
+		t.Fatalf("REPOSITORIES section should be omitted, got:\n%s", out)
 	}
 }
 

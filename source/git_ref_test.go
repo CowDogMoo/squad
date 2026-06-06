@@ -166,6 +166,28 @@ func TestCloneOrUpdate_unknownRefIsError(t *testing.T) {
 	}
 }
 
+func TestCloneOrUpdate_corruptCacheDirErrors(t *testing.T) {
+	t.Parallel()
+	fixture, _, _, _, _ := fixtureRepo(t)
+	cacheDir, url, ops := cloneFromFixture(t, fixture)
+
+	// First clone succeeds.
+	repoPath, err := ops.CloneOrUpdate(url, "")
+	if err != nil {
+		t.Fatalf("initial CloneOrUpdate: %v", err)
+	}
+
+	// Corrupt the cache by removing the .git dir; subsequent calls with
+	// a non-empty ref should surface a PlainOpen error from checkoutRef.
+	if err := os.RemoveAll(filepath.Join(repoPath, ".git")); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if _, err := ops.CloneOrUpdate(url, "v0.1.0"); err == nil {
+		t.Fatal("expected PlainOpen failure on corrupt cache dir")
+	}
+	_ = cacheDir
+}
+
 func TestCloneOrUpdate_followupUpdateSwitchesRef(t *testing.T) {
 	t.Parallel()
 	fixture, firstSHA, tag, _, _ := fixtureRepo(t)

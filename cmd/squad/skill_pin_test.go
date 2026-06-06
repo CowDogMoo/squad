@@ -101,6 +101,44 @@ func TestSkillUpdate_forceAttemptsPinned(t *testing.T) {
 	}
 }
 
+func TestSkillUpdate_unpinnedFailureSurfaced(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	cfg.Skills.Repositories["bad"] = config.RepoSpec{
+		URL: "https://example.invalid/no-such-repo.git",
+	}
+	if _, err := runSkillSubcmd(t, cfg, newSkillUpdateCmd); err == nil {
+		t.Fatal("expected error from unpinned bad URL")
+	}
+}
+
+func TestSkillAdd_bogusURLWarnsButRegisters(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	// A URL that fails to clone still registers in config; the warning
+	// goes to stderr and the command exits 0.
+	out, err := runSkillSubcmd(t, cfg, newSkillAddCmd, "team",
+		"https://example.invalid/no-such-repo.git")
+	if err != nil {
+		t.Fatalf("add should succeed even when clone fails, got: %v", err)
+	}
+	if _, ok := cfg.Skills.Repositories["team"]; !ok {
+		t.Fatal("team should be registered despite clone failure")
+	}
+	if !strings.Contains(out, "warning") || !strings.Contains(out, "initial clone failed") {
+		t.Fatalf("expected clone-failure warning, got:\n%s", out)
+	}
+}
+
+func TestSkillAdd_localPathDuplicateRejected(t *testing.T) {
+	cfg := newSkillTestCfg(t)
+	dir := t.TempDir()
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, dir); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	if _, err := runSkillSubcmd(t, cfg, newSkillAddCmd, dir); err == nil {
+		t.Fatal("expected duplicate local-path error")
+	}
+}
+
 func TestSkillSources_rendersRefColumn(t *testing.T) {
 	cfg := newSkillTestCfg(t)
 	cfg.Skills.Repositories["pinned"] = config.RepoSpec{
