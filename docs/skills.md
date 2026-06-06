@@ -70,6 +70,9 @@ Three places skills can live, in precedence order. When the same `name` appears 
 Skill catalogs are git-backed. Register one and squad clones it into the local cache; `squad skill update` pulls the latest.
 
 ```bash
+# Add the official squad-skills catalog.
+squad skill add official https://github.com/cowdogmoo/squad-skills.git
+
 # Add a team-shared skills repo.
 squad skill add myteam https://github.com/example/squad-skills.git
 

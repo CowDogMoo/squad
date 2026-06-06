@@ -447,6 +447,13 @@ squad skill list
 
 Per-agent control lives under `agent.yaml`'s `skills:` block (allow/deny lists, scope filters); CLI flags `--allow-skill`/`--deny-skill`/`--skills-disabled` override per run.
 
+```bash
+# Add the official skills catalog
+squad skill add official https://github.com/cowdogmoo/squad-skills.git
+```
+
+The [official skills repo](https://github.com/CowDogMoo/squad-skills) is the shared home for production-tuned skills, mirroring the layout of the official agents repo.
+
 Full reference: [docs/skills.md](docs/skills.md).
 
 ## Browser Profiles
@@ -631,9 +638,10 @@ CI rejects any commit that fails the hooks.
 - **[Agent Quality Guide](docs/agent-quality.md)** — tuning methodology and grading rubric
 - **[Agents Engineering Pipeline](docs/agents-engineering-pipeline-basics.md)** — agent-engineering CI/CD with squad
 
-### Agents
+### Agents & Skills
 
 - **[Official Agents](https://github.com/CowDogMoo/squad-agents)** — production-ready agents for Go, Python, Ansible, and Molecule
+- **[Official Skills](https://github.com/CowDogMoo/squad-skills)** — shared Agent Skills catalog consumed via `squad skill add`
 
 ## Contributing
 

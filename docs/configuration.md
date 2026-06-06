@@ -145,6 +145,21 @@ squad agents update --force                  # re-resolves and updates pinned on
 The same `--ref` flag and `pin`/`unset` semantics work for
 `squad skill add` and `squad skill pin`.
 
+### skills
+
+| Key | Type | Default | Description |
+| ------------------------- | ----------- | ------- | ------------------------------------------------ |
+| `skills.cache_dir` | string | `~/.cache/squad/skills` | Directory where cloned skill catalog repos are cached |
+| `skills.repositories` | map | `{}` | Named git sources to fetch skills from — same shape as `agents.repositories`, see [Repository pinning](#repository-pinning) |
+| `skills.local_paths` | []string | `[]` | Local catalog directories searched for skills |
+
+The official catalog lives at
+<https://github.com/cowdogmoo/squad-skills>; register it with:
+
+```bash
+squad skill add official https://github.com/cowdogmoo/squad-skills.git
+```
+
 ### otel
 
 | Key | Type | Default | Description |
