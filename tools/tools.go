@@ -2111,21 +2111,63 @@ func (b *FlexBool) UnmarshalJSON(data []byte) error {
 func resolvePathInRun(ctx context.Context, workingDir, input string) (string, error) {
 	abs, err := ResolvePath(workingDir, input)
 	if err == nil {
-		return abs, nil
-	}
-	stack := GetSkillStack(ctx)
-	if stack == nil {
-		return "", err
-	}
-	if abs, ok := stack.Resolve(input); ok {
-		// Resolve confirms lexical containment; this rejects an existing
-		// target that escapes the skill dir through a symlink.
-		if serr := stack.VerifyNoSymlinkEscape(abs); serr != nil {
+		// The working-dir anchor accepted the path. ResolvePath only checks
+		// containment, not existence, so a relative path like
+		// "references/foo.md" "succeeds" here even when no such file exists in
+		// the working directory — which would shadow an identically-named file
+		// inside an active skill directory and break progressive disclosure.
+		// Prefer the working-dir target when it actually exists; otherwise fall
+		// through to the skill stack before giving up.
+		if _, statErr := os.Stat(abs); statErr == nil {
+			return abs, nil
+		}
+		resolved, ok, serr := resolveInSkillStack(ctx, input)
+		if serr != nil {
 			return "", serr
 		}
+		if ok {
+			if _, statErr := os.Stat(resolved); statErr == nil {
+				return resolved, nil
+			}
+		}
+		// Nothing exists in either anchor; return the working-dir path so the
+		// caller's not-found error matches the input the user supplied.
 		return abs, nil
 	}
+	// The working-dir anchor rejected the path (e.g. an absolute path or
+	// traversal outside the working dir). It may still live inside a loaded
+	// skill directory.
+	resolved, ok, serr := resolveInSkillStack(ctx, input)
+	if serr != nil {
+		return "", serr
+	}
+	if ok {
+		return resolved, nil
+	}
 	return "", err
+}
+
+// resolveInSkillStack resolves input against the run's active skill
+// directories. It returns:
+//   - (path, true, nil)  — input is inside an active skill dir and safe;
+//   - ("", false, nil)   — no skill stack, or input is not inside any skill dir;
+//   - ("", false, err)   — input is inside a skill dir but an existing target
+//     escapes it through a symlink (a rejection the caller must surface).
+func resolveInSkillStack(ctx context.Context, input string) (string, bool, error) {
+	stack := GetSkillStack(ctx)
+	if stack == nil {
+		return "", false, nil
+	}
+	abs, ok := stack.Resolve(input)
+	if !ok {
+		return "", false, nil
+	}
+	// Resolve confirms lexical containment; this rejects an existing target
+	// that escapes the skill dir through a symlink.
+	if err := stack.VerifyNoSymlinkEscape(abs); err != nil {
+		return "", false, err
+	}
+	return abs, true, nil
 }
 
 // ResolvePath resolves input against workingDir and verifies the result is
