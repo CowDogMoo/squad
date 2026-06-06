@@ -655,4 +655,4 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ## Security
 
-Please do not file public issues for security vulnerabilities. See [SECURITY.md](SECURITY.md) for the private reporting channel, the Semgrep + govulncheck pipeline, and guidance for running squad safely in production workflows.
+Please do not file public issues for security vulnerabilities. See [SECURITY.md](SECURITY.md) for the private reporting channel and the Semgrep + govulncheck pipeline. For operational guidance on running squad safely in production (cost caps, isolation, secrets, agent-yaml review), see [Running Squad Safely](docs/configuration.md#running-squad-safely) in the configuration docs.

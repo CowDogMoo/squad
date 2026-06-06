@@ -56,18 +56,3 @@ configured to auto-merge low-risk patch upgrades after CI passes.
 - Release binaries are built via `goreleaser` on tagged commits only
 - No `replace` directives are allowed in `go.mod` (enforced by
   [`.hooks/go-no-replacement.sh`](.hooks/go-no-replacement.sh))
-
-## Defensive Use
-
-`squad` is dual-use software: it drives LLM agents through filesystem,
-shell, and network tools. When integrating squad into a production
-workflow, please:
-
-- Set a per-run `--max-cost` cap and an `--auto-confirm` policy
-  appropriate for unattended execution
-- Use the `--isolate worktree` or `environment: docker` execution backends
-  to sandbox file modifications
-- Audit agent prompts and `agent.yaml` manifests in code review the same
-  way you'd audit any code that runs `Bash`
-- Never hard-code API keys in `agent.yaml`; use `$VAR` or `$(command)`
-  substitution to pull from a secret manager

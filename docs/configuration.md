@@ -387,3 +387,15 @@ squad run --agent go-review \
   --base-url https://ollama.example.com/v1 \
   --model qwen2.5-coder:7b-instruct
 ```
+
+## Running Squad Safely
+
+`squad` is dual-use software: it drives LLM agents through filesystem, shell, and network tools. A misbehaving agent (whether hallucinating, prompt-injected, or misconfigured) can mutate files, run shell commands, or burn budget unless you constrain it at config time.
+
+When you integrate squad into a production workflow:
+
+- **Cap cost on every run.** Set `--max-cost` (or `run.max_cost` in the config file) to a sane USD ceiling. A budget cap is the only universally reliable stop.
+- **Pick an explicit `--auto-confirm` policy** for unattended execution. The default `abort` is correct for interactive runs; for routines, choose `yes` only when you've audited the agent's tool surface.
+- **Sandbox writes** with `--isolate worktree` (separate dir + branch) or the `environment: docker` execution backend ([docs/execution-backends.md](./execution-backends.md)) so a bad edit lands in a throwaway tree, not your working copy.
+- **Review `agent.yaml` and the prompt files like code.** The `Bash` tool runs arbitrary shell; treat every manifest change in PR review the same way you'd treat a change to a CI workflow.
+- **Never hard-code API keys** in `agent.yaml` or shell history. Use `$VAR` or `$(command)` token resolution to pull from a secret manager — see [Token resolution](#token-resolution) above.
