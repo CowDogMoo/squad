@@ -56,7 +56,7 @@ func newSkillsCfg(t *testing.T) *config.Config {
 	t.Setenv("HOME", tmp)
 	return &config.Config{
 		Skills: config.SkillsConfig{
-			Repositories: map[string]string{},
+			Repositories: map[string]config.RepoSpec{},
 			LocalPaths:   []string{},
 		},
 	}
@@ -70,7 +70,7 @@ func TestSkillsManager_AddRepositoryClonesAndDiscovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddRepository("team", url); err != nil {
+	if err := mgr.AddRepository("team", url, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.EnsureRepositoriesCloned(); err != nil {
@@ -129,7 +129,7 @@ func TestSkillsManager_UpdateRefetchesNewContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddRepository("team", url); err != nil {
+	if err := mgr.AddRepository("team", url, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.EnsureRepositoriesCloned(); err != nil {
@@ -155,7 +155,7 @@ func TestSkillsManager_UpdateRefetchesNewContent(t *testing.T) {
 		}
 	}
 
-	if err := mgr.UpdateRepositories(); err != nil {
+	if err := mgr.UpdateRepositories(false); err != nil {
 		t.Fatal(err)
 	}
 	cat, err := skill.Discover("", mgr.CatalogPaths()...)
@@ -179,7 +179,7 @@ func TestSkillsManager_RemoveSourceUnregisters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddRepository("team", url); err != nil {
+	if err := mgr.AddRepository("team", url, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.RemoveSource("team"); err != nil {
@@ -212,8 +212,8 @@ func TestSkillsManager_RemoveLocalPathByPath(t *testing.T) {
 func TestSkillsManager_RemoveSourceClearsDualRegistration(t *testing.T) {
 	cfg := newSkillsCfg(t)
 	catalogPath := t.TempDir()
-	cfg.Skills.Repositories = map[string]string{
-		"humanizer": "file://" + catalogPath,
+	cfg.Skills.Repositories = map[string]config.RepoSpec{
+		"humanizer": {URL: "file://" + catalogPath},
 	}
 	cfg.Skills.LocalPaths = []string{catalogPath}
 
@@ -236,8 +236,8 @@ func TestSkillsManager_RemoveSourceClearsDualRegistration(t *testing.T) {
 // the exact registered URL (not the alias) removes the repository entry.
 func TestSkillsManager_RemoveByRepositoryURL(t *testing.T) {
 	cfg := newSkillsCfg(t)
-	cfg.Skills.Repositories = map[string]string{
-		"team": "https://example.com/team-skills.git",
+	cfg.Skills.Repositories = map[string]config.RepoSpec{
+		"team": {URL: "https://example.com/team-skills.git"},
 	}
 	mgr, err := NewSkillsManager(cfg)
 	if err != nil {
@@ -257,13 +257,13 @@ func TestSkillsManager_AddRejectsDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddRepository("team", "https://example.com/a.git"); err != nil {
+	if err := mgr.AddRepository("team", "https://example.com/a.git", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddRepository("team", "https://example.com/a.git"); err == nil {
+	if err := mgr.AddRepository("team", "https://example.com/a.git", ""); err == nil {
 		t.Error("expected error on duplicate same-URL registration")
 	}
-	if err := mgr.AddRepository("team", "https://example.com/b.git"); err == nil {
+	if err := mgr.AddRepository("team", "https://example.com/b.git", ""); err == nil {
 		t.Error("expected error on duplicate alias with different URL")
 	}
 }
@@ -316,7 +316,7 @@ func TestSkillsManager_AddRepositoryRejectsNonGitURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddRepository("local", "/not/a/url"); err == nil {
+	if err := mgr.AddRepository("local", "/not/a/url", ""); err == nil {
 		t.Fatal("expected error for non-git URL")
 	}
 }
@@ -339,10 +339,10 @@ func TestSkillsManager_AddRepoCreatesMapWhenNil(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddRepository("team", "https://example.com/a.git"); err != nil {
+	if err := mgr.AddRepository("team", "https://example.com/a.git", ""); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Skills.Repositories["team"] == "" {
+	if cfg.Skills.Repositories["team"].URL == "" {
 		t.Errorf("expected team registered, got %v", cfg.Skills.Repositories)
 	}
 }
@@ -362,22 +362,22 @@ func TestSkillsManager_NewWithCacheDirOverride(t *testing.T) {
 
 func TestSkillsManager_UpdateBadURLReportsError(t *testing.T) {
 	cfg := newSkillsCfg(t)
-	cfg.Skills.Repositories = map[string]string{
-		"bad": "https://example.invalid/nope.git",
+	cfg.Skills.Repositories = map[string]config.RepoSpec{
+		"bad": {URL: "https://example.invalid/nope.git"},
 	}
 	mgr, err := NewSkillsManager(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.UpdateRepositories(); err == nil {
+	if err := mgr.UpdateRepositories(false); err == nil {
 		t.Fatal("expected error from bad upstream")
 	}
 }
 
 func TestSkillsManager_EnsureClonedBadURLErrors(t *testing.T) {
 	cfg := newSkillsCfg(t)
-	cfg.Skills.Repositories = map[string]string{
-		"bad": "https://example.invalid/nope.git",
+	cfg.Skills.Repositories = map[string]config.RepoSpec{
+		"bad": {URL: "https://example.invalid/nope.git"},
 	}
 	mgr, err := NewSkillsManager(cfg)
 	if err != nil {
@@ -396,7 +396,7 @@ func TestSkillsManager_EnsureClonedSkipsAlreadyCached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddRepository("team", url); err != nil {
+	if err := mgr.AddRepository("team", url, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.EnsureRepositoriesCloned(); err != nil {
@@ -415,7 +415,7 @@ func TestSkillsManager_SaveConfigCreatesDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Drive saveConfig via AddRepository, then check that the config file exists.
-	if err := mgr.AddRepository("team", "https://example.com/a.git"); err != nil {
+	if err := mgr.AddRepository("team", "https://example.com/a.git", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(mgr.configPath); err != nil {
@@ -437,7 +437,7 @@ func TestSkillsManager_SaveConfigFailsWhenParentBlocked(t *testing.T) {
 	if err := os.WriteFile(parent, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.AddRepository("team", "https://example.com/a.git"); err == nil {
+	if err := mgr.AddRepository("team", "https://example.com/a.git", ""); err == nil {
 		t.Fatal("expected save failure when parent dir is a file")
 	}
 }
@@ -450,7 +450,7 @@ func TestNewSkillsManager_FailsWithoutXDG(t *testing.T) {
 	t.Setenv("HOME", "")
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
-			Repositories: map[string]string{},
+			Repositories: map[string]config.RepoSpec{},
 			LocalPaths:   []string{},
 		},
 	}
@@ -470,7 +470,7 @@ func TestNewSkillsManager_SkillsCacheDirError(t *testing.T) {
 	t.Setenv("HOME", "")
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{
-			Repositories: map[string]string{},
+			Repositories: map[string]config.RepoSpec{},
 			LocalPaths:   []string{},
 		},
 	}

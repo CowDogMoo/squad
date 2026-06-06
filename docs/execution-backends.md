@@ -19,7 +19,7 @@ declared in the agent's `agent.yaml` manifest.
 environment:
   type: docker
   options:
-    image: golang:1.23
+    image: golang:1.26
     volumes: ".:/workspace"
     working_dir: /workspace
     shell: /bin/bash

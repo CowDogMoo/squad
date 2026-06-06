@@ -43,11 +43,27 @@ references:
   - references/criteria.md
 task: task.md
 
+# Optional: ranked model preferences. First entry is primary; later entries
+# are fallbacks when their provider credentials are detected.
+models:
+  - model: claude-sonnet-4-6
+    provider: anthropic
+  - model: gpt-4.1-mini
+    provider: openai
+
+# Optional: per-agent run policy
+max_iterations: 100        # iteration cap (0 = use CLI default)
+edit_deadline: 25          # stop after N iterations with no Edit calls
+disable_task: false        # when true, the Task tool is not registered
+comments_only: false       # when true, Edit/MultiEdit reject non-comment changes
+isolation: ""              # "worktree" | "branch" | "commit" | "staged" | ""
+working_dir: ""             # set "none" for remote-only agents (no local FS tools)
+
 # Optional: execution environment (local, docker, ssm, kubectl)
 environment:
   type: docker
   options:
-    image: golang:1.23
+    image: golang:1.26
     volumes: ".:/workspace"
     working_dir: /workspace
 
@@ -78,10 +94,24 @@ mcp_servers:
   - name: mytools
     command: npx
     args: ["@myorg/mcp-server"]
+
+# Optional: Agent Skills catalog control. See docs/skills.md.
+# Omit the whole block to auto-enable whenever any skill is discovered.
+skills:
+  enabled: true                # set false to disable skills for this agent
+  scopes: [repo, catalog]      # which scopes to surface
+  allow: []                    # exclusive allowlist of skill names
+  deny: []                     # remove skills by name (only when allow is empty)
 ```
 
-Only `name`, `entrypoint`, `wrapper`, and `task` are required. Everything
-else is optional.
+Only `name`, `entrypoint`, `wrapper`, and `task` are required. Everything else is optional.
+
+**Notable manifest options:**
+
+- `comments_only` is for cleanup agents (e.g. `go-scrub-comments`). When set, the Edit and MultiEdit tools reject any change that touches non-comment lines, so an LLM hallucinating new code can't silently mutate the codebase.
+- `disable_task` removes the `Task` tool from the agent, useful for leaf agents that shouldn't dispatch child runs.
+- `edit_deadline` enters a grace period after N iterations without an Edit; reads are blocked so the model is forced to commit pending fixes.
+- `isolation` defers to the CLI `--isolate` flag and, ultimately, the config default. `worktree` is the safest for agents that apply diffs.
 
 ### system.md (Main Prompt)
 

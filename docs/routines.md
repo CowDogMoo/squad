@@ -87,7 +87,7 @@ id: nightly-audit             # required, user-supplied slug
 agent: go-security-audit      # required
 schedule: "0 2 * * *"         # required, see schedule syntax above
 prompt: "Audit pending changes since last run"
-working_dir: /Users/l/code/api  # required for global; defaults to repo root for per-repo
+working_dir: ~/code/my-project  # required for global; defaults to repo root for per-repo
 provider: anthropic           # optional, falls back to squad config default
 model: claude-sonnet-4-6      # optional
 max_cost: 5.00                # optional per-fire USD cap

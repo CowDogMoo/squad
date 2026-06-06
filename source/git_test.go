@@ -130,7 +130,7 @@ func TestGitOperationsCloneOrUpdate(t *testing.T) {
 			gitURL, cacheDir, expectedPath := tt.setup(t)
 			ops := source.NewGitOperations(cacheDir)
 
-			path, err := ops.CloneOrUpdate(gitURL)
+			path, err := ops.CloneOrUpdate(gitURL, "")
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Fatalf("expected error containing %q", tt.wantErr)

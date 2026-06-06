@@ -25,12 +25,14 @@ package source
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
@@ -57,19 +59,30 @@ func (g *GitOperations) CachePath(gitURL string) (string, bool) {
 	return "", false
 }
 
-// CloneOrUpdate clones a repository if it doesn't exist, or updates it if it does.
-func (g *GitOperations) CloneOrUpdate(gitURL string) (string, error) {
+// CloneOrUpdate clones a repository if it doesn't exist, or updates it if
+// it does, then checks out ref. An empty ref leaves the working tree on the
+// default branch (the historical behavior).
+func (g *GitOperations) CloneOrUpdate(gitURL, ref string) (string, error) {
 	repoPath := g.getCachePath(gitURL)
 
 	if stat, err := os.Stat(repoPath); err == nil && stat.IsDir() {
-		if err := g.pull(repoPath); err != nil {
-			// Pull failed, but we have a cached copy - use it
-			return repoPath, nil
+		// Re-fetch so any new tags/branches are available for checkout,
+		// then ignore pull errors so a transient network blip still
+		// lets us serve the cached copy.
+		_ = g.pull(repoPath)
+		if err := g.checkoutRef(repoPath, gitURL, ref); err != nil {
+			return repoPath, err
 		}
 		return repoPath, nil
 	}
 
-	return g.clone(gitURL, repoPath)
+	if _, err := g.clone(gitURL, repoPath); err != nil {
+		return "", err
+	}
+	if err := g.checkoutRef(repoPath, gitURL, ref); err != nil {
+		return repoPath, err
+	}
+	return repoPath, nil
 }
 
 // clone clones a repository to the specified path.
@@ -85,6 +98,67 @@ func (g *GitOperations) clone(gitURL, repoPath string) (string, error) {
 	}
 
 	return repoPath, nil
+}
+
+// checkoutRef resolves ref to a commit and checks it out. ref may be a
+// commit SHA (full or abbreviated), an annotated or lightweight tag, or a
+// branch name. An empty ref is a no-op so unpinned repos keep their
+// default-branch HEAD.
+//
+// Resolution order matches `git checkout <ref>` semantics: try as a SHA
+// first, then as a tag, then as a remote-tracking branch, then as a local
+// branch. Returns a wrapped error when ref does not resolve.
+func (g *GitOperations) checkoutRef(repoPath, gitURL, ref string) error {
+	if ref == "" {
+		return nil
+	}
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("open repository for checkout: %w", err)
+	}
+
+	// Fetch tags so freshly-pushed pins resolve without a manual pull.
+	fetchOpts := &git.FetchOptions{
+		RemoteName: "origin",
+		Tags:       git.AllTags,
+		Auth:       httpAuthFromEnv(gitURL),
+	}
+	if err := repo.Fetch(fetchOpts); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		// Fetch failure is non-fatal — the ref may still resolve against
+		// what's already in the cache — but surface it so a pinned ref
+		// that fails to resolve later isn't silently masked.
+		fmt.Fprintf(os.Stderr, "warning: fetch %s for ref %q: %v\n", gitURL, ref, err)
+	}
+
+	hash, err := resolveRef(repo, ref)
+	if err != nil {
+		return err
+	}
+
+	w, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("get worktree for checkout: %w", err)
+	}
+	return w.Checkout(&git.CheckoutOptions{
+		Hash:  hash,
+		Force: true,
+	})
+}
+
+// resolveRef converts a user-supplied ref to a commit hash. go-git's
+// ResolveRevision handles SHA prefixes, tags, and HEAD natively; we add
+// an explicit remote-tracking-branch fallback because a freshly-cloned
+// repository only has `refs/remotes/origin/<branch>` for non-default
+// branches, and `ResolveRevision("<branch>")` does not consult that
+// namespace on its own.
+func resolveRef(repo *git.Repository, ref string) (plumbing.Hash, error) {
+	if h, err := repo.ResolveRevision(plumbing.Revision(ref)); err == nil {
+		return *h, nil
+	}
+	if h, err := repo.ResolveRevision(plumbing.Revision("refs/remotes/origin/" + ref)); err == nil {
+		return *h, nil
+	}
+	return plumbing.ZeroHash, fmt.Errorf("ref %q does not resolve to a commit, tag, or branch", ref)
 }
 
 // remoteURL returns the URL of the named-or-first remote on repo, or empty

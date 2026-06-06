@@ -107,8 +107,43 @@ the corresponding CLI flag.
 | Key | Type | Default | Description |
 | ------------------------- | ----------- | ------------------------------- | ------------------------------------------------ |
 | `agents.cache_dir` | string | `~/.cache/squad/agents` | Directory where cloned agent git repos are cached |
-| `agents.repositories` | map | `{official: <squad-agents>}` | Named git URLs to fetch agents from |
+| `agents.repositories` | map | `{official: <squad-agents>}` | Named git sources to fetch agents from — see [Repository pinning](#repository-pinning) |
 | `agents.local_paths` | []string | `[]` | Local directories searched for agents |
+
+#### Repository pinning
+
+Each entry under `agents.repositories` (and `skills.repositories`) accepts
+two shapes. The plain-string form tracks the default branch, the mapping
+form pins the source to a specific commit, tag, or branch:
+
+```yaml
+agents:
+  repositories:
+    # Legacy form: tracks the default branch (origin/HEAD)
+    official: https://github.com/cowdogmoo/squad-agents.git
+
+    # Pinned form: locked to a specific ref
+    private:
+      url: git@github.com:myorg/private-agents.git
+      ref: v1.2.0
+```
+
+`ref` accepts a commit SHA (full or abbreviated), an annotated or
+lightweight tag, or a branch name. Resolution order is SHA → tag →
+remote-tracking branch → local branch.
+
+Use the CLI to add or change pins without editing YAML by hand:
+
+```bash
+squad agents add official https://github.com/cowdogmoo/squad-agents.git --ref v0.4.2
+squad agents pin official v0.5.0
+squad agents pin official --unset           # back to tracking the default branch
+squad agents update                          # skips pinned repositories
+squad agents update --force                  # re-resolves and updates pinned ones too
+```
+
+The same `--ref` flag and `pin`/`unset` semantics work for
+`squad skill add` and `squad skill pin`.
 
 ### otel
 
@@ -241,7 +276,7 @@ squad run --agent go-review --provider openai --model gpt-4.1-mini
 ### Anthropic
 
 ```bash
-squad run --agent go-review --provider anthropic --model claude-sonnet-4-20250514
+squad run --agent go-review --provider anthropic --model claude-sonnet-4-6
 ```
 
 ### Google AI
@@ -387,3 +422,16 @@ squad run --agent go-review \
   --base-url https://ollama.example.com/v1 \
   --model qwen2.5-coder:7b-instruct
 ```
+
+## Running Squad Safely
+
+`squad` is dual-use software: it drives LLM agents through filesystem, shell, and network tools. A misbehaving agent (whether hallucinating, prompt-injected, or misconfigured) can mutate files, run shell commands, or burn budget unless you constrain it at config time.
+
+When you integrate squad into a production workflow:
+
+- **Cap cost on every run.** Set `--max-cost` (or `run.max_cost` in the config file) to a sane USD ceiling. A budget cap is the only universally reliable stop.
+- **Pick an explicit `--auto-confirm` policy** for unattended execution. The default `abort` is correct for interactive runs; for routines, choose `yes` only when you've audited the agent's tool surface.
+- **Sandbox writes** with `--isolate worktree` (separate dir + branch) or the `environment: docker` execution backend ([docs/execution-backends.md](./execution-backends.md)) so a bad edit lands in a throwaway tree, not your working copy.
+- **Review `agent.yaml` and the prompt files like code.** The `Bash` tool runs arbitrary shell; treat every manifest change in PR review the same way you'd treat a change to a CI workflow.
+- **Never hard-code API keys** in `agent.yaml` or shell history. Use `$VAR` or `$(command)` token resolution to pull from a secret manager — see [Token resolution](#token-resolution) above.
+- **Pin agent and skill sources by SHA when it matters.** Routines fire unattended; an unpinned `agents.repositories` entry runs whatever HEAD happens to be at trigger time. Pass `--ref <sha-or-tag>` to `squad agents add`/`squad skill add` or use `squad agents pin <name> <ref>` to lock in a reviewed version — see [Repository pinning](#repository-pinning).

@@ -43,22 +43,36 @@ func NewSkillsManager(cfg *config.Config) (*SkillsManager, error) {
 	}, nil
 }
 
-// AddRepository registers a git URL under name. Cloning happens on the
-// next call to UpdateRepositories (or implicitly on first list).
-func (m *SkillsManager) AddRepository(name, gitURL string) error {
+// AddRepository registers a git URL under name. An empty ref tracks the
+// default branch; a non-empty ref pins the catalog to a specific commit,
+// tag, or branch. Cloning happens on the next call to UpdateRepositories
+// (or implicitly on first list).
+func (m *SkillsManager) AddRepository(name, gitURL, ref string) error {
 	if !IsGitURL(gitURL) {
 		return fmt.Errorf("invalid git URL: %s", gitURL)
 	}
 	if m.cfg.Skills.Repositories == nil {
-		m.cfg.Skills.Repositories = make(map[string]string)
+		m.cfg.Skills.Repositories = make(map[string]config.RepoSpec)
 	}
 	if existing, ok := m.cfg.Skills.Repositories[name]; ok {
-		if existing == gitURL {
+		if existing.URL == gitURL && existing.Ref == ref {
 			return fmt.Errorf("skill repository %q already configured with URL %s", name, gitURL)
 		}
-		return fmt.Errorf("skill repository %q already exists with URL %s (use remove first)", name, existing)
+		return fmt.Errorf("skill repository %q already exists with URL %s (use remove first)", name, existing.URL)
 	}
-	m.cfg.Skills.Repositories[name] = gitURL
+	m.cfg.Skills.Repositories[name] = config.RepoSpec{URL: gitURL, Ref: ref}
+	return m.saveConfig()
+}
+
+// PinRepository sets or replaces the pinned ref for an existing catalog.
+// An empty ref unpins (returns to tracking the default branch).
+func (m *SkillsManager) PinRepository(name, ref string) error {
+	spec, ok := m.cfg.Skills.Repositories[name]
+	if !ok {
+		return fmt.Errorf("skill repository not found: %s", name)
+	}
+	spec.Ref = ref
+	m.cfg.Skills.Repositories[name] = spec
 	return m.saveConfig()
 }
 
@@ -102,8 +116,8 @@ func (m *SkillsManager) RemoveSource(nameOrPath string) error {
 		delete(m.cfg.Skills.Repositories, nameOrPath)
 		removed++
 	}
-	for name, url := range m.cfg.Skills.Repositories {
-		if url == nameOrPath || url == fileURL {
+	for name, spec := range m.cfg.Skills.Repositories {
+		if spec.URL == nameOrPath || spec.URL == fileURL {
 			delete(m.cfg.Skills.Repositories, name)
 			removed++
 		}
@@ -125,13 +139,18 @@ func (m *SkillsManager) RemoveSource(nameOrPath string) error {
 	return m.saveConfig()
 }
 
-// UpdateRepositories pulls latest from every configured git repository
-// and reports any failures collectively without aborting the batch.
-func (m *SkillsManager) UpdateRepositories() error {
+// UpdateRepositories pulls latest from configured git repositories.
+// Pinned repositories (Ref != "") are skipped unless force is true, in
+// which case the ref is re-resolved against the remote.
+func (m *SkillsManager) UpdateRepositories(force bool) error {
 	var errs []string
-	for name, url := range m.cfg.Skills.Repositories {
-		fmt.Printf("Updating skill repo %s (%s)...\n", name, url)
-		if _, err := m.gitOps.CloneOrUpdate(url); err != nil {
+	for name, spec := range m.cfg.Skills.Repositories {
+		if spec.IsPinned() && !force {
+			fmt.Printf("Skipping skill repo %s (pinned to %s) — use --force to re-resolve\n", name, spec.Ref)
+			continue
+		}
+		fmt.Printf("Updating skill repo %s (%s)...\n", name, spec.URL)
+		if _, err := m.gitOps.CloneOrUpdate(spec.URL, spec.Ref); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
 		}
 	}
@@ -152,8 +171,8 @@ func (m *SkillsManager) CatalogPaths() []string {
 			paths = append(paths, path)
 		}
 	}
-	for _, url := range m.cfg.Skills.Repositories {
-		if repoPath, ok := m.gitOps.CachePath(url); ok {
+	for _, spec := range m.cfg.Skills.Repositories {
+		if repoPath, ok := m.gitOps.CachePath(spec.URL); ok {
 			paths = append(paths, repoPath)
 		}
 	}
@@ -165,11 +184,11 @@ func (m *SkillsManager) CatalogPaths() []string {
 // any single repo is reported but does not abort the batch.
 func (m *SkillsManager) EnsureRepositoriesCloned() error {
 	var errs []string
-	for name, url := range m.cfg.Skills.Repositories {
-		if _, ok := m.gitOps.CachePath(url); ok {
+	for name, spec := range m.cfg.Skills.Repositories {
+		if _, ok := m.gitOps.CachePath(spec.URL); ok {
 			continue
 		}
-		if _, err := m.gitOps.CloneOrUpdate(url); err != nil {
+		if _, err := m.gitOps.CloneOrUpdate(spec.URL, spec.Ref); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
 		}
 	}
