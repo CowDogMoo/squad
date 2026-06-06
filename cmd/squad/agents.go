@@ -130,7 +130,6 @@ func init() {
 	agentsCmd.AddCommand(agentsPinCmd)
 }
 
-// runAgentsList lists available agents from configured sources.
 func runAgentsList(cmd *cobra.Command, args []string) error {
 	cfg := configFromContext(cmd)
 	if cfg == nil {
@@ -166,7 +165,6 @@ func runAgentsList(cmd *cobra.Command, args []string) error {
 	return w.Flush()
 }
 
-// runAgentsAdd adds an agent source from a git repository or local path.
 func runAgentsAdd(cmd *cobra.Command, args []string) error {
 	cfg := configFromContext(cmd)
 	if cfg == nil {
@@ -193,7 +191,6 @@ func runAgentsAdd(cmd *cobra.Command, args []string) error {
 
 	if source.IsGitURL(urlOrPath) {
 		if name == "" {
-			// Generate name from URL
 			name = guessRepoName(urlOrPath)
 		}
 		if err := manager.AddRepository(name, urlOrPath, agentsAddRef); err != nil {
@@ -217,7 +214,6 @@ func runAgentsAdd(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// runAgentsPin updates the pinned ref on an existing repository.
 func runAgentsPin(cmd *cobra.Command, args []string) error {
 	cfg := configFromContext(cmd)
 	if cfg == nil {
@@ -253,7 +249,6 @@ func runAgentsPin(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// runAgentsRemove removes a configured agent source.
 func runAgentsRemove(cmd *cobra.Command, args []string) error {
 	cfg := configFromContext(cmd)
 	if cfg == nil {
@@ -273,7 +268,6 @@ func runAgentsRemove(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// runAgentsUpdate updates all configured git repositories.
 func runAgentsUpdate(cmd *cobra.Command, args []string) error {
 	cfg := configFromContext(cmd)
 	if cfg == nil {
@@ -293,7 +287,6 @@ func runAgentsUpdate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// runAgentsSources lists configured agent sources.
 func runAgentsSources(cmd *cobra.Command, args []string) error {
 	cfg := configFromContext(cmd)
 	if cfg == nil {

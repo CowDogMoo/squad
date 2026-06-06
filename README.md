@@ -67,8 +67,8 @@ Agents run in a deterministic tool loop with per-run cost caps, structured event
                            │           │            │
             ┌──────────────▼─┐  ┌──────▼──────┐ ┌───▼─────────────┐
             │  LLM Providers  │  │  Executor   │ │  MCP Servers    │
-            │ openai · gpt    │  │ local ·     │ │ stdio · sse ·   │
-            │ anthropic       │  │ docker ·    │ │ http (any tool) │
+            │ openai          │  │ local ·     │ │ stdio · sse ·   │
+            │ anthropic       │  │ docker ·    │ │ streamable_http │
             │ gemini · ollama │  │ kubectl ·   │ │                 │
             │ openai-compat   │  │ ssm         │ │                 │
             └─────────────────┘  └─────────────┘ └─────────────────┘
@@ -98,7 +98,7 @@ Agents run in a deterministic tool loop with per-run cost caps, structured event
 
 | Requirement    | Version | Notes                                                                |
 | -------------- | ------- | -------------------------------------------------------------------- |
-| **Go**         | 1.24+   | Required for `go install`                                            |
+| **Go**         | 1.26+   | Required for `go install`                                            |
 | **LLM access** | -       | OpenAI, Anthropic, Google AI, Ollama, or any OpenAI-compatible endpoint |
 | **Git**        | -       | Required for agent-repository fetching and worktree isolation         |
 
@@ -270,9 +270,9 @@ stages:
     agent: summarize
     depends_on: [scan]
 gates:
-  - name: tests-pass
+  - after: report
     command: go test ./...
-    on_error: halt
+    on_failure: stop   # revert | stop
 ```
 
 ```bash
@@ -286,7 +286,7 @@ stages:
   - name: review-files
     agent: go-review
     partition:
-      by: glob
+      by: files
       glob: "**/*.go"
       max_per_partition: 10
 ```
@@ -362,7 +362,7 @@ No `environment` block needed — the agent runs in the current shell.
 environment:
   type: docker
   options:
-    image: golang:1.24
+    image: golang:1.26
     volumes: ".:/workspace"
     working_dir: /workspace
 ```
@@ -374,7 +374,7 @@ environment:
   type: kubectl
   options:
     namespace: default
-    image: golang:1.24
+    image: golang:1.26
     resources:
       requests:
         memory: "512Mi"
@@ -400,10 +400,11 @@ Agents can call any [Model Context Protocol](https://modelcontextprotocol.io/) s
 # agent.yaml
 mcp_servers:
   - name: postgres
-    type: stdio
-    command: ["mcp-server-postgres", "$DATABASE_URL"]
+    transport: stdio
+    command: mcp-server-postgres
+    args: ["$DATABASE_URL"]
   - name: linear
-    type: http
+    transport: streamable_http
     url: https://mcp.linear.app/sse
 ```
 
@@ -411,7 +412,7 @@ Or pass at run time:
 
 ```bash
 squad run --agent my-agent \
-  --mcp-server "postgres:mcp-server-postgres,$DATABASE_URL" \
+  --mcp-server "postgres:mcp-server-postgres:$DATABASE_URL" \
   --mcp-server "linear:http:https://mcp.linear.app/sse"
 
 # Inspect tools a server exposes
@@ -580,7 +581,7 @@ docs/                     # User documentation (linked below)
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.26+
 - [pre-commit](https://pre-commit.com/) (recommended)
 - [golangci-lint](https://golangci-lint.run/) (CI uses v2.11.4)
 
@@ -598,7 +599,7 @@ golangci-lint run --timeout=5m
 
 ### Pre-Commit Hooks
 
-The repository ships with a comprehensive pre-commit pipeline (gofmt, goimports, gocyclo, golangci-lint, gocritic, go-build, go-mod-tidy, govulncheck, yamllint, codespell, markdownlint, actionlint, GoReleaser config check). Install once and the hooks run on every commit:
+Pre-commit hooks cover gofmt, goimports, gocyclo, golangci-lint, gocritic, go-build, go-mod-tidy, govulncheck, yamllint, codespell, markdownlint, actionlint, and the GoReleaser config check. Install once and they run on every commit:
 
 ```bash
 pre-commit install

@@ -125,8 +125,9 @@ func (g *GitOperations) checkoutRef(repoPath, gitURL, ref string) error {
 	}
 	if err := repo.Fetch(fetchOpts); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		// Fetch failure is non-fatal — the ref may still resolve against
-		// what's already in the cache.
-		_ = err
+		// what's already in the cache — but surface it so a pinned ref
+		// that fails to resolve later isn't silently masked.
+		fmt.Fprintf(os.Stderr, "warning: fetch %s for ref %q: %v\n", gitURL, ref, err)
 	}
 
 	hash, err := resolveRef(repo, ref)
@@ -144,24 +145,17 @@ func (g *GitOperations) checkoutRef(repoPath, gitURL, ref string) error {
 	})
 }
 
-// resolveRef walks the standard reference layouts to convert a user-supplied
-// ref to a commit hash. Order: literal SHA → annotated/lightweight tag →
-// remote-tracking branch (origin/<ref>) → local branch.
+// resolveRef converts a user-supplied ref to a commit hash. go-git's
+// ResolveRevision handles SHA prefixes, tags, and HEAD natively; we add
+// an explicit remote-tracking-branch fallback because a freshly-cloned
+// repository only has `refs/remotes/origin/<branch>` for non-default
+// branches, and `ResolveRevision("<branch>")` does not consult that
+// namespace on its own.
 func resolveRef(repo *git.Repository, ref string) (plumbing.Hash, error) {
-	// Try as a literal commit (full or abbreviated SHA).
 	if h, err := repo.ResolveRevision(plumbing.Revision(ref)); err == nil {
 		return *h, nil
 	}
-	// Try as a tag.
-	if h, err := repo.ResolveRevision(plumbing.Revision("refs/tags/" + ref)); err == nil {
-		return *h, nil
-	}
-	// Try as a remote-tracking branch.
 	if h, err := repo.ResolveRevision(plumbing.Revision("refs/remotes/origin/" + ref)); err == nil {
-		return *h, nil
-	}
-	// Try as a local branch.
-	if h, err := repo.ResolveRevision(plumbing.Revision("refs/heads/" + ref)); err == nil {
 		return *h, nil
 	}
 	return plumbing.ZeroHash, fmt.Errorf("ref %q does not resolve to a commit, tag, or branch", ref)

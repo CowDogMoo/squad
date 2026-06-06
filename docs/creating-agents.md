@@ -96,8 +96,9 @@ mcp_servers:
     args: ["@myorg/mcp-server"]
 
 # Optional: Agent Skills catalog control. See docs/skills.md.
+# Omit the whole block to auto-enable whenever any skill is discovered.
 skills:
-  enabled: true                # nil = auto-enable when any skill is discovered
+  enabled: true                # set false to disable skills for this agent
   scopes: [repo, catalog]      # which scopes to surface
   allow: []                    # exclusive allowlist of skill names
   deny: []                     # remove skills by name (only when allow is empty)
