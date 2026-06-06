@@ -345,6 +345,13 @@ type RunWithToolsConfig struct {
 	// MaxRetries is the number of additional attempts after a failed LLM
 	// call for transient errors. Zero falls back to DefaultMaxRetries.
 	MaxRetries int
+	// SplitToolResults, when true, emits one llms.MessageContent per tool
+	// result instead of batching all parts into a single message. Required
+	// for OpenAI chat completions, whose API rejects a single role:"tool"
+	// message with multiple parts ("expected exactly one part for role
+	// tool"). Anthropic requires the single-message form, so leave this
+	// false for the anthropic provider.
+	SplitToolResults bool
 }
 
 // RunWithTools drives the tool-calling loop for a LangChain-compatible LLM.
@@ -718,7 +725,7 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 		// Snapshot cache size before execution to detect new file reads.
 		cacheSizeBefore := readCacheSize(ctx)
 
-		messages = executeToolCalls(ctx, messages, mergedToolCalls, handlers)
+		messages = executeToolCalls(ctx, messages, mergedToolCalls, handlers, cfg.SplitToolResults)
 
 		postResult := trackPostExecution(ctx, messages, mergedToolCalls, editEnforcer, phaseEnforcer, &loopDetector, &grace, cacheSizeBefore)
 		if postResult.stuck {
@@ -998,10 +1005,13 @@ var serialTools = map[string]bool{
 	"Task":           true,
 }
 
-func executeToolCalls(ctx context.Context, messages []llms.MessageContent, toolCalls []llms.ToolCall, handlers map[string]Handler) []llms.MessageContent {
-	// Batch all tool results into a single message.  Anthropic requires every
-	// tool_result to be in the same user message that follows the assistant
-	// message containing the corresponding tool_use blocks.
+func executeToolCalls(ctx context.Context, messages []llms.MessageContent, toolCalls []llms.ToolCall, handlers map[string]Handler, splitResults bool) []llms.MessageContent {
+	// Default form: batch all tool results into a single message. Anthropic
+	// requires every tool_result to be in the same user message that follows
+	// the assistant message containing the corresponding tool_use blocks.
+	// When splitResults is set (OpenAI chat completions), emit one message
+	// per tool result instead — chat-completions rejects multi-part
+	// role:"tool" messages.
 	parts := make([]llms.ContentPart, len(toolCalls))
 
 	// Determine if we can parallelize: only when there are multiple calls
@@ -1031,6 +1041,16 @@ func executeToolCalls(ctx context.Context, messages []llms.MessageContent, toolC
 		for i, toolCall := range toolCalls {
 			parts[i] = executeToolCall(ctx, toolCall, handlers)
 		}
+	}
+
+	if splitResults {
+		for _, part := range parts {
+			messages = append(messages, llms.MessageContent{
+				Role:  llms.ChatMessageTypeTool,
+				Parts: []llms.ContentPart{part},
+			})
+		}
+		return messages
 	}
 
 	return append(messages, llms.MessageContent{
@@ -1584,6 +1604,11 @@ func editTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		content := string(data)
 		if !strings.Contains(content, payload.Old) {
 			return "", fmt.Errorf("text not found in %s", payload.Path)
+		}
+		if IsCommentsOnlyMode(ctx) {
+			if err := ValidateCommentsOnly(payload.Old, payload.New); err != nil {
+				return "", err
+			}
 		}
 		var updated string
 		replaced := 1

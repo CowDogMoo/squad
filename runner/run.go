@@ -176,8 +176,7 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 		logging.InfoContext(cmd.Context(), "remote-only agent: disabling require-actionable")
 	}
 
-	ctx := tools.InitEdits(cmd.Context())
-	ctx = tools.InitEditDeadline(ctx)
+	ctx := initRunContext(cmd.Context(), bundle)
 
 	logger, err := openSession(opts, bundle, prompt)
 	if err != nil {
@@ -216,6 +215,20 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	}
 
 	return nil
+}
+
+// initRunContext attaches per-run tool state (edits tracker, edit-deadline
+// counter, and opt-in modes from the manifest) to ctx before the agent
+// invocation. Returning a single helper keeps ExecuteRun's setup linear
+// regardless of how many opt-in modes get added over time.
+func initRunContext(ctx context.Context, bundle *agent.Bundle) context.Context {
+	ctx = tools.InitEdits(ctx)
+	ctx = tools.InitEditDeadline(ctx)
+	if bundle.CommentsOnly {
+		ctx = tools.InitCommentsOnlyMode(ctx)
+		logging.InfoContext(ctx, "comments-only mode: Edit/MultiEdit will reject non-comment changes")
+	}
+	return ctx
 }
 
 // handleBudgetExceeded reports a budget-exceeded run and applies any partial
