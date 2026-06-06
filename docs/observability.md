@@ -38,7 +38,7 @@ Each line is a JSON object with a timestamp, an event type, and a payload:
 ```jsonl
 {"ts":"2026-05-07T14:30:22Z","type":"run_start","payload":{"agent":"go-review","model":"gpt-4o","provider":"openai"}}
 {"ts":"2026-05-07T14:30:23Z","type":"prompt","payload":{"content":"Review the authentication changes in this PR..."}}
-{"ts":"2026-05-07T14:30:25Z","type":"tool_call","payload":{"name":"read_file","input":{"path":"auth/middleware.go"}}}
+{"ts":"2026-05-07T14:30:25Z","type":"tool_call","payload":{"name":"Read","input":{"path":"auth/middleware.go"}}}
 {"ts":"2026-05-07T14:30:25Z","type":"tool_result","payload":{"tool_call_id":"tc_01","content":"package auth\n..."}}
 {"ts":"2026-05-07T14:30:48Z","type":"iteration","payload":{"iteration":1}}
 {"ts":"2026-05-07T14:31:10Z","type":"run_end","payload":{"status":"completed"}}
@@ -152,9 +152,9 @@ Spans are created for each layer of execution. A typical run produces a tree lik
 ```
 agent.run (go-review)
 ├── model.invoke
-├── tool.call (read_file)
+├── tool.call (Read)
 ├── model.invoke
-├── tool.call (bash)
+├── tool.call (Bash)
 │   └── executor.local
 ├── model.invoke
 └── tool.call (mcp/filesystem/read)

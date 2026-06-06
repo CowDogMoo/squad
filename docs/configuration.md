@@ -241,7 +241,7 @@ squad run --agent go-review --provider openai --model gpt-4.1-mini
 ### Anthropic
 
 ```bash
-squad run --agent go-review --provider anthropic --model claude-sonnet-4-20250514
+squad run --agent go-review --provider anthropic --model claude-sonnet-4-6
 ```
 
 ### Google AI
