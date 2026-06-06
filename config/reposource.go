@@ -83,8 +83,10 @@ func DecodeHooks() viper.DecoderConfigOption {
 
 // repoSpecDecodeHook lets viper / mapstructure consume both the legacy
 // `string` form and the `{url, ref}` mapping form when decoding YAML into a
-// Config. Wired into viper.Unmarshal calls via [DecodeHooks].
-func repoSpecDecodeHook() mapstructure.DecodeHookFunc {
+// Config. Wired into viper.Unmarshal calls via [DecodeHooks]. Returns the
+// concrete DecodeHookFuncType so tests can invoke it without a sloppy
+// type assertion.
+func repoSpecDecodeHook() mapstructure.DecodeHookFuncType {
 	target := reflect.TypeOf(RepoSpec{})
 	return func(from reflect.Type, to reflect.Type, data any) (any, error) {
 		if to != target {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -161,6 +162,55 @@ skills:
 	}
 	if got.Ref != "v1.2.0" {
 		t.Errorf("Ref = %q, want v1.2.0", got.Ref)
+	}
+}
+
+func TestRepoSpec_unmarshalMappingPropagatesInnerError(t *testing.T) {
+	t.Parallel()
+	// url must decode into a string; a sequence here forces yaml.Node.Decode
+	// to fail, exercising the mapping-form error path.
+	input := `repositories:
+  bad:
+    url: [/not, /a, /string]
+`
+	var got struct {
+		Repositories map[string]RepoSpec `yaml:"repositories"`
+	}
+	if err := yaml.Unmarshal([]byte(input), &got); err == nil {
+		t.Fatal("expected error when mapping fields have wrong inner types")
+	}
+}
+
+// callHook invokes the repo-spec decode hook directly.
+func callHook(t *testing.T, from, to reflect.Type, data any) any {
+	t.Helper()
+	got, err := repoSpecDecodeHook()(from, to, data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return got
+}
+
+func TestRepoSpecDecodeHook_fallsThroughForOtherTypes(t *testing.T) {
+	t.Parallel()
+	// The hook only converts string and map[string]any into RepoSpec.
+	// Other source types must pass through untouched so other hooks can
+	// see them.
+	intVal := 42
+	got := callHook(t, reflect.TypeOf(intVal), reflect.TypeOf(RepoSpec{}), intVal)
+	if got != intVal {
+		t.Fatalf("got %v, want %v", got, intVal)
+	}
+}
+
+func TestRepoSpecDecodeHook_noopWhenTargetIsNotRepoSpec(t *testing.T) {
+	t.Parallel()
+	// When the destination is not RepoSpec, the hook must hand the data
+	// back untouched even when the source type is string.
+	other := reflect.TypeOf("")
+	got := callHook(t, other, other, "passthrough")
+	if got != "passthrough" {
+		t.Fatalf("got %v (%T)", got, got)
 	}
 }
 
