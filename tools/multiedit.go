@@ -107,6 +107,16 @@ func multiEditTool(workingDir string) func(ctx context.Context, rawArgs []byte) 
 				})
 				continue
 			}
+			if IsCommentsOnlyMode(ctx) {
+				if err := ValidateCommentsOnly(edit.Old, edit.New); err != nil {
+					failed = append(failed, FailedEdit{
+						Index: i,
+						Old:   edit.Old,
+						Error: err.Error(),
+					})
+					continue
+				}
+			}
 			if bool(edit.ReplaceAll) {
 				content = strings.ReplaceAll(content, edit.Old, edit.New)
 			} else {

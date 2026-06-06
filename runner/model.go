@@ -336,6 +336,12 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	// tool_choice:"required" so the model must explore before answering.
 	// Regular openai users rely on the auto behavior; only restrict compat endpoints.
 	forceFirstTool := provider == "openai-compat"
+	// langchaingo's OpenAI chat-completions integration rejects a single
+	// role:"tool" message with multiple parts ("expected exactly one part
+	// for role tool, got N"). Emit one message per tool result for those
+	// providers; Anthropic, Responses API, gemini, ollama keep the
+	// single-message form.
+	splitToolResults := provider == "openai" || provider == "openai-compat"
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
 	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, tools.RunWithToolsConfig{
 		MaxIterations:      opts.MaxIterations,
@@ -345,6 +351,7 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		Executor:           ex,
 		UseCacheControl:    useCacheControl,
 		ForceFirstToolCall: forceFirstTool,
+		SplitToolResults:   splitToolResults,
 		Skill:              buildSkillRuntime(ctx, bundle, opts),
 		Confirm:            buildConfirmRuntime(opts),
 		MaxRetries:         opts.MaxRetries,

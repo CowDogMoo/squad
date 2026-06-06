@@ -93,6 +93,12 @@ type Manifest struct {
 	DisableTask   bool               `yaml:"disable_task,omitempty"`
 	MaxIterations int                `yaml:"max_iterations,omitempty"` // iteration cap for this agent (0 = use CLI default)
 	EditDeadline  int                `yaml:"edit_deadline,omitempty"`  // stop after N iterations with no Edit calls (0 = disabled)
+	// CommentsOnly, when true, restricts Edit and MultiEdit calls to
+	// changes that only add or remove comment lines or blank lines.
+	// Edits that modify, add, or remove non-comment code are rejected.
+	// Use for comment-cleanup agents (e.g. go-scrub-comments) so an LLM
+	// hallucinating new code cannot silently break the codebase.
+	CommentsOnly bool `yaml:"comments_only,omitempty"`
 	// Isolation declares the recommended isolation mode: "" (none) or
 	// "worktree" to run inside a fresh git worktree on a new branch.
 	// CLI --isolate and config run.isolation override this.
@@ -247,6 +253,9 @@ type Bundle struct {
 	// filesystem tools are not registered and the runner skips
 	// working-dir resolution / repo-summary injection.
 	RemoteOnly bool
+	// CommentsOnly mirrors Manifest.CommentsOnly. Restricts Edit/MultiEdit
+	// to comment-only changes when true.
+	CommentsOnly bool
 	// SkillEntries is the filtered set of skills surfaced in the system
 	// prompt's "Available skills" block. The runner uses these to build
 	// the Skill tool's runtime so the names the agent sees are exactly
@@ -924,6 +933,7 @@ func BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode strin
 		MaxIterations: manifest.MaxIterations,
 		EditDeadline:  manifest.EditDeadline,
 		RemoteOnly:    manifest.IsRemoteOnly(),
+		CommentsOnly:  manifest.CommentsOnly,
 		SkillEntries:  skillEntries,
 	}, nil
 }

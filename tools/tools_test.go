@@ -2224,7 +2224,7 @@ func TestExecuteToolCallsParallel(t *testing.T) {
 		{ID: "2", FunctionCall: &llms.FunctionCall{Name: "Glob", Arguments: `{"pattern":"*.go"}`}},
 	}
 
-	messages := executeToolCalls(context.Background(), nil, toolCalls, handlers)
+	messages := executeToolCalls(context.Background(), nil, toolCalls, handlers, false)
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(messages))
 	}
@@ -2261,13 +2261,61 @@ func TestExecuteToolCallsSerialWhenMutating(t *testing.T) {
 		{ID: "2", FunctionCall: &llms.FunctionCall{Name: "Bash", Arguments: `{"command":"echo hi"}`}},
 	}
 
-	messages := executeToolCalls(context.Background(), nil, toolCalls, handlers)
+	messages := executeToolCalls(context.Background(), nil, toolCalls, handlers, false)
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(messages))
 	}
 	// Sequential execution: order should be preserved.
 	if len(callOrder) != 2 || callOrder[0] != "Read" || callOrder[1] != "Bash" {
 		t.Fatalf("callOrder = %v, want [Read Bash]", callOrder)
+	}
+}
+
+// TestExecuteToolCallsSplitResults checks both branches of the
+// splitResults parameter. When false (Anthropic, Responses API, gemini,
+// ollama), all N tool results are batched into one role:"tool" message
+// with N parts. When true (OpenAI chat completions and openai-compat),
+// the same N results become N separate messages with 1 part each — the
+// shape langchaingo's OpenAI integration needs to avoid the
+// "expected exactly one part for role tool, got N" error.
+func TestExecuteToolCallsSplitResults(t *testing.T) {
+	t.Parallel()
+	handlers := map[string]Handler{
+		"Read": {
+			Def: llms.Tool{Function: &llms.FunctionDefinition{Name: "Read"}},
+			Call: func(_ context.Context, _ []byte) (string, error) {
+				return "ok", nil
+			},
+		},
+	}
+	toolCalls := make([]llms.ToolCall, 6)
+	for i := range toolCalls {
+		toolCalls[i] = llms.ToolCall{
+			ID: fmt.Sprintf("%d", i+1),
+			FunctionCall: &llms.FunctionCall{
+				Name:      "Read",
+				Arguments: fmt.Sprintf(`{"path":"%c.go"}`, 'a'+i),
+			},
+		}
+	}
+
+	batched := executeToolCalls(context.Background(), nil, toolCalls, handlers, false)
+	if len(batched) != 1 || len(batched[0].Parts) != 6 {
+		t.Fatalf("batched shape: want 1 message * 6 parts, got %d messages",
+			len(batched))
+	}
+
+	split := executeToolCalls(context.Background(), nil, toolCalls, handlers, true)
+	if len(split) != 6 {
+		t.Fatalf("split shape: want 6 messages, got %d", len(split))
+	}
+	for i, msg := range split {
+		if len(msg.Parts) != 1 {
+			t.Fatalf("split message %d has %d parts, want 1", i, len(msg.Parts))
+		}
+		if msg.Role != llms.ChatMessageTypeTool {
+			t.Fatalf("split message %d has role %q, want tool", i, msg.Role)
+		}
 	}
 }
 
@@ -2285,7 +2333,7 @@ func TestExecuteToolCallsSingleCallNoParallel(t *testing.T) {
 		{ID: "1", FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{}`}},
 	}
 
-	messages := executeToolCalls(context.Background(), nil, toolCalls, handlers)
+	messages := executeToolCalls(context.Background(), nil, toolCalls, handlers, false)
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(messages))
 	}
