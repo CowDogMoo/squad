@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
 
@@ -92,6 +93,74 @@ func TestRepoSpec_marshalsPinnedAsMapping(t *testing.T) {
 	}
 	if !strings.Contains(got, "ref: v1.2.0") {
 		t.Fatalf("expected mapping form with ref:, got:\n%s", got)
+	}
+}
+
+func TestRepoSpec_unmarshalRejectsSequence(t *testing.T) {
+	t.Parallel()
+	// A sequence node is neither the legacy string form nor the pinned
+	// mapping form; UnmarshalYAML must surface that as an error.
+	input := `repositories:
+  bad:
+    - https://example.com/a.git
+    - https://example.com/b.git
+`
+	var got struct {
+		Repositories map[string]RepoSpec `yaml:"repositories"`
+	}
+	err := yaml.Unmarshal([]byte(input), &got)
+	if err == nil {
+		t.Fatal("expected error for sequence-shaped RepoSpec")
+	}
+}
+
+func TestDecodeHooks_acceptsStringForm(t *testing.T) {
+	t.Parallel()
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(strings.NewReader(`
+agents:
+  repositories:
+    official: https://github.com/cowdogmoo/squad-agents.git
+`)); err != nil {
+		t.Fatalf("ReadConfig: %v", err)
+	}
+	var cfg Config
+	if err := v.Unmarshal(&cfg, DecodeHooks()); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	got := cfg.Agents.Repositories["official"]
+	if got.URL != "https://github.com/cowdogmoo/squad-agents.git" {
+		t.Errorf("URL = %q", got.URL)
+	}
+	if got.Ref != "" {
+		t.Errorf("plain-string form should not pin, got Ref=%q", got.Ref)
+	}
+}
+
+func TestDecodeHooks_acceptsMappingForm(t *testing.T) {
+	t.Parallel()
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(strings.NewReader(`
+skills:
+  repositories:
+    team:
+      url: https://example.com/team-skills.git
+      ref: v1.2.0
+`)); err != nil {
+		t.Fatalf("ReadConfig: %v", err)
+	}
+	var cfg Config
+	if err := v.Unmarshal(&cfg, DecodeHooks()); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	got := cfg.Skills.Repositories["team"]
+	if got.URL != "https://example.com/team-skills.git" {
+		t.Errorf("URL = %q", got.URL)
+	}
+	if got.Ref != "v1.2.0" {
+		t.Errorf("Ref = %q, want v1.2.0", got.Ref)
 	}
 }
 
