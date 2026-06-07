@@ -15,6 +15,7 @@ import (
 
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/skill"
 	"github.com/cowdogmoo/squad/tools"
 	openai "github.com/openai/openai-go/v3"
@@ -1238,4 +1239,26 @@ func TestRunWithToolsRegistersSkillAndConfirm(t *testing.T) {
 			t.Errorf("Confirm tool MISSING from Responses API request; tools=%+v", got.Tools)
 		}
 	})
+}
+
+func TestLogEvent_NilLogger(t *testing.T) {
+	t.Parallel()
+	// logEvent with nil logger should not panic.
+	logEvent(nil, "test_event", map[string]any{"key": "val"})
+}
+
+func TestLogEvent_WithLogger(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	l, err := session.New(dir, "test-agent", "openai", "gpt-4o", "test prompt")
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	defer func() {
+		if err := l.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+	// Should not panic or error.
+	logEvent(l, session.EventRunStart, map[string]any{"agent": "test"})
 }

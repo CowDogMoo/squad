@@ -14,6 +14,7 @@ import (
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -1163,6 +1164,62 @@ func writeTestAgent(t *testing.T, agentName string) string {
 		t.Fatalf("WriteFile wrapper.md: %v", err)
 	}
 	return agentsDir
+}
+
+func TestHandleBudgetExceeded_NonBudgetError(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetErr(&buf)
+	opts := &RunOptions{MaxCost: 1.0}
+	m := &metrics.Metrics{}
+	// A non-budget error should be a no-op.
+	handleBudgetExceeded(cmd, opts, m, "", "", fmt.Errorf("some other error"))
+	if buf.Len() != 0 {
+		t.Errorf("expected no output for non-budget error, got %q", buf.String())
+	}
+}
+
+func TestHandleBudgetExceeded_BudgetError(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetErr(&buf)
+	opts := &RunOptions{MaxCost: 0.5}
+	m := &metrics.Metrics{}
+	handleBudgetExceeded(cmd, opts, m, "", "", metrics.ErrBudgetExceeded)
+	if !strings.Contains(buf.String(), "cost budget") {
+		t.Errorf("expected budget message, got %q", buf.String())
+	}
+}
+
+func TestApplyChildIterationCap_ManifestCap(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	childOpts := &RunOptions{}
+	cfg := &tools.TaskConfig{}
+	childBundle := &agent.Bundle{MaxIterations: 10}
+	applyChildIterationCap(ctx, childOpts, cfg, childBundle, "my-agent")
+	if childOpts.MaxIterations != 10 {
+		t.Errorf("MaxIterations = %d, want 10", childOpts.MaxIterations)
+	}
+}
+
+func TestApplyChildIterationCap_CallbackOverridesManifest(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	childOpts := &RunOptions{}
+	cfg := &tools.TaskConfig{
+		ChildMaxIter: func(name string) int { return 5 },
+	}
+	childBundle := &agent.Bundle{MaxIterations: 10}
+	applyChildIterationCap(ctx, childOpts, cfg, childBundle, "my-agent")
+	// Callback returns 5, manifest says 10; manifest wins only if smaller.
+	// 5 < 10, so manifest would override to 10 — but callback set 5 first,
+	// then manifest check: 10 > 5, so no override.
+	if childOpts.MaxIterations != 5 {
+		t.Errorf("MaxIterations = %d, want 5", childOpts.MaxIterations)
+	}
 }
 
 func writeTestAgentNoModels(t *testing.T, agentName string) string {

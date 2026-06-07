@@ -114,6 +114,67 @@ func TestCopyAgent_CopiesAndUpdates(t *testing.T) {
 	}
 }
 
+func TestCreateAgent_Success(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ctx := context.Background()
+	opts := scaffold.CreateOptions{
+		Name:      "my-agent",
+		Lang:      "go",
+		AgentsDir: dir,
+	}
+	if err := scaffold.CreateAgent(ctx, opts); err != nil {
+		t.Fatalf("CreateAgent() unexpected error: %v", err)
+	}
+	agentPath := filepath.Join(dir, "my-agent")
+	for _, f := range []string{"agent.yaml", "system.md", "agent.md", "task.md", "README.md"} {
+		if _, err := os.Stat(filepath.Join(agentPath, f)); err != nil {
+			t.Errorf("expected file %s to exist: %v", f, err)
+		}
+	}
+}
+
+func TestCreateAgent_Force(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ctx := context.Background()
+	opts := scaffold.CreateOptions{
+		Name:      "my-agent",
+		Lang:      "go",
+		AgentsDir: dir,
+	}
+	if err := scaffold.CreateAgent(ctx, opts); err != nil {
+		t.Fatalf("first CreateAgent() error: %v", err)
+	}
+	opts.Force = true
+	if err := scaffold.CreateAgent(ctx, opts); err != nil {
+		t.Fatalf("second CreateAgent() with force error: %v", err)
+	}
+}
+
+func TestCopyAgent_SourceNotFound(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ctx := context.Background()
+	err := scaffold.CopyAgent(ctx, dir, "nonexistent", "new-agent", false)
+	if err == nil {
+		t.Fatal("expected error for missing source agent")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error %q should mention 'not found'", err.Error())
+	}
+}
+
+func TestCopyAgent_InvalidDestName(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ctx := context.Background()
+	err := scaffold.CopyAgent(ctx, dir, "src", "INVALID NAME", false)
+	if err == nil {
+		t.Fatal("expected error for invalid dest name")
+	}
+}
+
 func TestCreatePipeline_CreateAndOverwrite(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

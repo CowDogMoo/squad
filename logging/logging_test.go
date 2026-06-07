@@ -294,3 +294,70 @@ func TestWithPrefix(t *testing.T) {
 		t.Fatalf("WithPrefix should return a new logger, not the same pointer")
 	}
 }
+
+func TestFormatMessage_Prefix(t *testing.T) {
+	t.Parallel()
+	l := &CustomLogger{Prefix: "pfx: ", OutputType: PlainOutput}
+	got := l.formatMessage(InfoLevel, "hello %s", "world")
+	if got != "pfx: hello world" {
+		t.Errorf("formatMessage = %q, want %q", got, "pfx: hello world")
+	}
+}
+
+func TestFormatMessage_UnknownLevel(t *testing.T) {
+	t.Parallel()
+	l := &CustomLogger{OutputType: ColorOutput}
+	// LogLevel 99 has no color func — should return plain message.
+	got := l.formatMessage(LogLevel(99), "plain")
+	if got != "plain" {
+		t.Errorf("formatMessage unknown level = %q, want %q", got, "plain")
+	}
+}
+
+func TestShouldShowOnConsole(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		l     CustomLogger
+		level LogLevel
+		want  bool
+	}{
+		{"quiet hides info", CustomLogger{Quiet: true}, InfoLevel, false},
+		{"quiet shows error", CustomLogger{Quiet: true}, ErrorLevel, true},
+		{"error always shown", CustomLogger{}, ErrorLevel, true},
+		{"warn always shown", CustomLogger{}, WarnLevel, true},
+		{"info shown at info level", CustomLogger{LogLevel: slog.LevelInfo}, InfoLevel, true},
+		{"debug hidden at info level", CustomLogger{LogLevel: slog.LevelInfo}, DebugLevel, false},
+		{"debug shown when verbose", CustomLogger{Verbose: true, LogLevel: slog.LevelDebug}, DebugLevel, true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := tt.l.shouldShowOnConsole(tt.level)
+			if got != tt.want {
+				t.Errorf("shouldShowOnConsole(%v) = %v, want %v", tt.level, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnsureLogger(t *testing.T) {
+	// Not parallel — touches global logger.
+	loggerMu.Lock()
+	prev := logger
+	logger = nil
+	loggerMu.Unlock()
+	t.Cleanup(func() {
+		loggerMu.Lock()
+		logger = prev
+		loggerMu.Unlock()
+	})
+	ensureLogger()
+	loggerMu.Lock()
+	got := logger
+	loggerMu.Unlock()
+	if got == nil {
+		t.Fatal("ensureLogger() left logger nil")
+	}
+}

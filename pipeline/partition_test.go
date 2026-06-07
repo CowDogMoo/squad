@@ -386,3 +386,68 @@ stages:
 		t.Fatalf("summarize_prompt = %q", s.SummarizePrompt)
 	}
 }
+
+func TestPartitionGlobToRegex(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		pattern string
+		match   []string
+		noMatch []string
+	}{
+		{
+			pattern: "*.go",
+			match:   []string{"foo.go", "bar.go"},
+			noMatch: []string{"foo/bar.go", "foo.txt"},
+		},
+		{
+			pattern: "**/*.go",
+			match:   []string{"foo/bar.go", "a/b/c.go"},
+			noMatch: []string{"foo.txt"},
+		},
+		{
+			pattern: "cmd/?.go",
+			match:   []string{"cmd/a.go"},
+			noMatch: []string{"cmd/ab.go"},
+		},
+		{
+			pattern: "path/to/file.go",
+			match:   []string{"path/to/file.go"},
+			noMatch: []string{"path/to/other.go"},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.pattern, func(t *testing.T) {
+			t.Parallel()
+			re, err := partitionGlobToRegex(tt.pattern)
+			if err != nil {
+				t.Fatalf("partitionGlobToRegex(%q) error: %v", tt.pattern, err)
+			}
+			for _, m := range tt.match {
+				if !re.MatchString(m) {
+					t.Errorf("pattern %q should match %q", tt.pattern, m)
+				}
+			}
+			for _, nm := range tt.noMatch {
+				if re.MatchString(nm) {
+					t.Errorf("pattern %q should NOT match %q", tt.pattern, nm)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatReport_InvalidFormat(t *testing.T) {
+	t.Parallel()
+	p := &Pipeline{Name: "test-pipe", Output: &Output{Format: "xml"}}
+	runner := &Runner{Pipeline: p}
+	report := &Report{Pipeline: "test-pipe", Status: "success"}
+	// Unknown format falls back to markdown.
+	out, err := runner.FormatReport(report)
+	if err != nil {
+		t.Fatalf("FormatReport() error: %v", err)
+	}
+	if out == "" {
+		t.Error("FormatReport() returned empty string")
+	}
+}
