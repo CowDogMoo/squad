@@ -7,11 +7,11 @@ snapshot:
   version_template: "{{ .Version }}-next"
 
 builds:
-  - id: "warpgate"
+  - id: "squad"
 
-    binary: warpgate
+    binary: squad
 
-    main: ./cmd/warpgate
+    main: ./cmd/squad
 
     # Inject version info via ldflags
     # Use {{.Summary}} to get git describe format (e.g., v3.0.0-1-gc1b0525)
