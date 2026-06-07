@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -106,6 +107,25 @@ func TestIsAbsExecutableRejectsRelative(t *testing.T) {
 	}
 }
 
+func TestFindChromeEnvBareNameResolves(t *testing.T) {
+	// When SQUAD_BROWSER_BIN is a bare name present on PATH, findChrome
+	// should resolve it via exec.LookPath.
+	path, err := exec_LookPath_true()
+	if err != nil {
+		t.Skip("no `true` binary; skipping bare-name resolve test")
+	}
+	// Set env to the bare filename, not the absolute path.
+	base := filepath.Base(path)
+	t.Setenv("SQUAD_BROWSER_BIN", base)
+	resolved, err := findChrome()
+	if err != nil {
+		t.Fatalf("findChrome error: %v", err)
+	}
+	if resolved == base {
+		t.Fatalf("findChrome should resolve to absolute path, got bare name %q", resolved)
+	}
+}
+
 func TestLaunchWithStderrAndWaitFailure(t *testing.T) {
 	withRoot(t)
 	// `/usr/bin/false` exits 1 — exercises Stderr wiring and the Wait error path.
@@ -137,5 +157,21 @@ func TestLaunchDetachReturnsImmediately(t *testing.T) {
 	// Wait:false exercises the goroutine-reap branch.
 	if err := Launch("amazon", LaunchOptions{Wait: false}); err != nil {
 		t.Fatalf("Launch (detach): %v", err)
+	}
+}
+
+func TestFilepathIsAbsAndIsAbsExecutable(t *testing.T) {
+	// Absolute posix path should be treated as absolute.
+	if !filepathIsAbs("/tmp") {
+		t.Fatal("filepathIsAbs should return true for absolute posix paths")
+	}
+	// Windows-looking path on non-Windows should be treated as non-absolute.
+	if runtime.GOOS != "windows" && filepathIsAbs("C:/Windows") {
+		t.Fatal("filepathIsAbs should be false for Windows-style paths on non-Windows")
+	}
+	// Non-existent absolute file is not an executable file.
+	tmp := filepath.Join(t.TempDir(), "nope")
+	if isAbsExecutable(tmp) {
+		t.Fatalf("isAbsExecutable should be false for non-existent absolute path: %s", tmp)
 	}
 }
