@@ -1,0 +1,39 @@
+# {{.NameTitle}} Agent
+
+{{.Description}}
+
+## Usage
+
+```bash
+# Edit mode (default) - agent can make changes
+squad run --agent {{.Name}}
+
+# Readonly mode - analysis only, no modifications
+squad run --agent {{.Name}} --mode readonly
+
+# With custom instructions
+squad run --agent {{.Name}} "Focus on the src/ directory"
+```
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `agent.yaml` | Agent manifest with metadata and references |
+| `system.md` | Core system prompt (identity, rules, workflow) |
+| `agent.md` | Execution wrapper with mode-specific rules |
+| `task.md` | Default task instructions |
+| `references/{{.Name}}-guide.md` | Domain knowledge base |
+
+## Modes
+
+This agent supports conditional prompts via Go template syntax:
+
+- **Edit mode** (`--mode edit`, default): Agent can modify files
+- **Readonly mode** (`--mode readonly`): Agent only analyzes and reports
+
+## Customization
+
+1. Edit `system.md` to adjust identity, hard rules, and workflow
+2. Edit `references/{{.Name}}-guide.md` to add domain expertise
+3. Edit `task.md` to change default task instructions

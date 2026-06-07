@@ -1,0 +1,452 @@
+# Configuration
+
+Configuration uses XDG paths with environment variable and CLI flag overrides.
+
+## Precedence (highest to lowest)
+
+1. CLI flags
+2. Environment variables (`SQUAD_*`)
+3. Configuration file
+4. Built-in defaults
+
+## File locations
+
+Squad searches for `config.yaml` in the following order (first match wins):
+
+1. `--config <path>` flag (explicit path, highest priority)
+2. `$XDG_CONFIG_HOME/squad/config.yaml` (typically `~/.config/squad/config.yaml`)
+3. `~/.squad/config.yaml` (legacy fallback)
+4. Linux/BSD only: `$XDG_CONFIG_DIRS/squad/config.yaml` (typically `/etc/xdg/squad/config.yaml`)
+5. `./config.yaml` (current working directory)
+
+Run `squad config path` to see which file is active.
+
+## Commands
+
+```bash
+# Initialize config file at the default XDG location
+squad config init
+
+# Show current configuration (all sources merged)
+squad config show
+
+# Show the path of the active config file
+squad config path
+
+# Set a value
+squad config set provider.default openai
+squad config set model.default gpt-4.1-mini
+
+# Get a value
+squad config get provider.default
+```
+
+## Token resolution
+
+The `provider.token` field (and only this field) supports dynamic value
+resolution, so you never have to store secrets in plaintext YAML.
+
+| Syntax | Behavior |
+| -------------------------------- | --------------------------------------- |
+| `$VAR` or `${VAR}` | Replaced by the environment variable |
+| `$(command args)` | Replaced by the command's stdout output |
+| `$$` | Literal `$` character |
+
+Commands run via `sh -c` with a 10-second timeout. An unset variable or a
+failed command is a hard error; squad will not start with an empty token.
+
+```yaml
+provider:
+  # Read from environment variable
+  token: $OPENAI_API_KEY
+
+  # Read from a secrets manager at startup
+  token: $(aws secretsmanager get-secret-value --secret-id my-key | jq -r .SecretString)
+
+  # Short-lived OAuth token for Databricks
+  token: $(databricks auth token --host https://<workspace-url> 2>/dev/null | jq -r .access_token)
+```
+
+## Configuration reference
+
+All keys can be set in the config file, overridden by the matching `SQUAD_*`
+environment variable (replace `.` → `_`, uppercase), and further overridden by
+the corresponding CLI flag.
+
+### log
+
+| Key | Type | Default | Description |
+| ------------ | ------ | ------- | --------------------------------------------- |
+| `log.level` | string | `info` | Minimum log level: `debug`, `info`, `warn`, `error` |
+| `log.format` | string | `text` | Output format: `text`, `json`, `color` |
+
+### provider
+
+| Key | Type | Default | Description |
+| ------------------------------------ | ------ | ------- | --------------------------------------------------------- |
+| `provider.default` | string | `openai` | Provider name when none is specified on the CLI or in an agent manifest |
+| `provider.token` | string | `""` | API key or bearer token; supports `$VAR` and `$(cmd)` resolution |
+| `provider.base_url` | string | `""` | Override the provider's default API endpoint URL |
+| `provider.organization` | string | `""` | OpenAI organization ID |
+| `provider.api_version` | string | `""` | API version for Azure OpenAI and other versioned APIs |
+| `provider.api_type` | string | `""` | API variant: `openai` or `azure` |
+| `provider.openai_compat_max_tokens` | bool | `false` | Enforce `max_tokens` in requests for OpenAI-compatible endpoints that require it |
+| `provider.num_ctx` | int | `32768` | Context window size for Ollama models |
+
+### model
+
+| Key | Type | Default | Description |
+| ---------------------------- | ------- | ----------- | -------------------------------------------------------- |
+| `model.default` | string | `""` | Model identifier (**no built-in default; must be set**) |
+| `model.temperature` | float | `0.2` | Sampling randomness: `0.0` = deterministic, `1.0` = creative |
+| `model.max_tokens` | int | `1024` | Output token budget per request |
+| `model.reasoning_prefixes` | []string | `["gpt-5"]` | Model name prefixes that receive extended reasoning token budgets |
+
+### agents
+
+| Key | Type | Default | Description |
+| ------------------------- | ----------- | ------------------------------- | ------------------------------------------------ |
+| `agents.cache_dir` | string | `~/.cache/squad/agents` | Directory where cloned agent git repos are cached |
+| `agents.repositories` | map | `{official: <squad-agents>}` | Named git sources to fetch agents from — see [Repository pinning](#repository-pinning) |
+| `agents.local_paths` | []string | `[]` | Local directories searched for agents |
+
+#### Repository pinning
+
+Each entry under `agents.repositories` (and `skills.repositories`) accepts
+two shapes. The plain-string form tracks the default branch, the mapping
+form pins the source to a specific commit, tag, or branch:
+
+```yaml
+agents:
+  repositories:
+    # Legacy form: tracks the default branch (origin/HEAD)
+    official: https://github.com/cowdogmoo/squad-agents.git
+
+    # Pinned form: locked to a specific ref
+    private:
+      url: git@github.com:myorg/private-agents.git
+      ref: v1.2.0
+```
+
+`ref` accepts a commit SHA (full or abbreviated), an annotated or
+lightweight tag, or a branch name. Resolution order is SHA → tag →
+remote-tracking branch → local branch.
+
+Use the CLI to add or change pins without editing YAML by hand:
+
+```bash
+squad agents add official https://github.com/cowdogmoo/squad-agents.git --ref v0.4.2
+squad agents pin official v0.5.0
+squad agents pin official --unset           # back to tracking the default branch
+squad agents update                          # skips pinned repositories
+squad agents update --force                  # re-resolves and updates pinned ones too
+```
+
+The same `--ref` flag and `pin`/`unset` semantics work for
+`squad skill add` and `squad skill pin`.
+
+### skills
+
+| Key | Type | Default | Description |
+| ------------------------- | ----------- | ------- | ------------------------------------------------ |
+| `skills.cache_dir` | string | `~/.cache/squad/skills` | Directory where cloned skill catalog repos are cached |
+| `skills.repositories` | map | `{}` | Named git sources to fetch skills from — same shape as `agents.repositories`, see [Repository pinning](#repository-pinning) |
+| `skills.local_paths` | []string | `[]` | Local catalog directories searched for skills |
+
+The official catalog lives at
+<https://github.com/cowdogmoo/squad-skills>; register it with:
+
+```bash
+squad skill add official https://github.com/cowdogmoo/squad-skills.git
+```
+
+### otel
+
+| Key | Type | Default | Description |
+| --------------- | ------ | ------- | ------------------------------------------------------ |
+| `otel.endpoint` | string | `""` | OTLP/HTTP endpoint (e.g., `localhost:4318`); empty disables telemetry |
+
+### run
+
+These options can be persisted in the config file under the `run:` key,
+overridden by `SQUAD_RUN_*` environment variables, and further overridden
+by the corresponding `squad run` flags.
+
+> `run.dry_run` and `run.apply` are mutually exclusive.
+
+| Key | Type | Default | Description |
+| ----------------------------- | ------- | ------- | --------------------------------------------------------- |
+| `run.agent` | string | `""` | Agent name to run |
+| `run.agents_dir` | string | `""` | Agents directory override |
+| `run.working_dir` | string | `""` | Working directory (defaults to current directory) |
+| `run.system` | string | `""` | System prompt override |
+| `run.out` | string | `""` | Write response to a file |
+| `run.print` | bool | `true` | Print response to stdout |
+| `run.bundle_out` | string | `""` | Write agent bundle to a file |
+| `run.print_bundle` | bool | `false` | Print agent bundle to stdout |
+| `run.dry_run` | bool | `false` | Build bundle without calling the model |
+| `run.require_actionable` | bool | `true` | Require actionable output (diff/files/no changes) |
+| `run.apply` | bool | `false` | Apply unified diff from response to the working directory |
+| `run.apply_fallback` | bool | `false` | Fallback to `patch(1)` if `git apply` fails (may create `.rej`/`.orig` files) |
+| `run.mode` | string | `""` | Agent mode override (e.g., `readonly`) |
+| `run.max_iterations` | int | `100` | Max tool-calling iterations, clamped to 10–1000 |
+| `run.max_cost` | float | `5.0` | Max cost budget in USD; `0` = unlimited |
+| `run.stream` | bool | `false` | Stream model output tokens to stderr as they arrive |
+| `run.max_concurrent_tasks` | int | `0` (→4) | Max concurrent background child tasks; `0` uses default of 4 |
+| `run.resume` | string | `""` | Resume a prior session by ID (see `./.squad/sessions/`) |
+
+## Environment variables
+
+All `SQUAD_*` variables follow the rule: config key with `.` replaced by `_`,
+uppercased, prefixed with `SQUAD_`.
+
+| Variable | Config Key | Description |
+| ----------------------------------------------- | ----------------------------------- | --------------------------------------- |
+| `SQUAD_LOG_LEVEL` | `log.level` | Log level |
+| `SQUAD_LOG_FORMAT` | `log.format` | Log format |
+| `SQUAD_PROVIDER_DEFAULT` | `provider.default` | Default provider |
+| `SQUAD_PROVIDER_TOKEN` | `provider.token` | API key or bearer token |
+| `SQUAD_PROVIDER_BASE_URL` | `provider.base_url` | Base URL override |
+| `SQUAD_PROVIDER_ORGANIZATION` | `provider.organization` | OpenAI organization ID |
+| `SQUAD_PROVIDER_API_VERSION` | `provider.api_version` | API version |
+| `SQUAD_PROVIDER_API_TYPE` | `provider.api_type` | API type (`openai` or `azure`) |
+| `SQUAD_PROVIDER_OPENAI_COMPAT_MAX_TOKENS` | `provider.openai_compat_max_tokens` | Enforce `max_tokens` for compat endpoints |
+| `SQUAD_PROVIDER_NUM_CTX` | `provider.num_ctx` | Ollama context window size |
+| `SQUAD_MODEL_DEFAULT` | `model.default` | Default model |
+| `SQUAD_MODEL_TEMPERATURE` | `model.temperature` | Sampling temperature |
+| `SQUAD_MODEL_MAX_TOKENS` | `model.max_tokens` | Output token budget |
+| `SQUAD_MODEL_REASONING_PREFIXES` | `model.reasoning_prefixes` | Reasoning model name prefixes |
+| `SQUAD_AGENTS_CACHE_DIR` | `agents.cache_dir` | Agent repo cache directory |
+| `SQUAD_AGENTS_LOCAL_PATHS` | `agents.local_paths` | Local agent search paths |
+| `SQUAD_OTEL_ENDPOINT` | `otel.endpoint` | OTLP endpoint |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel.endpoint` | Standard OTEL endpoint (alias) |
+| `SQUAD_RUN_MAX_ITERATIONS` | `run.max_iterations` | Max tool-calling iterations |
+| `SQUAD_RUN_MAX_COST` | `run.max_cost` | Max cost budget in USD |
+| `SQUAD_RUN_STREAM` | `run.stream` | Stream output tokens |
+| `SQUAD_RUN_REQUIRE_ACTIONABLE` | `run.require_actionable` | Require actionable output |
+| `SQUAD_RUN_APPLY` | `run.apply` | Apply diff to working directory |
+| `SQUAD_RUN_DRY_RUN` | `run.dry_run` | Build bundle without calling the model |
+| `SQUAD_RUN_MAX_CONCURRENT_TASKS` | `run.max_concurrent_tasks` | Concurrent background task limit |
+
+## Example config
+
+`~/.config/squad/config.yaml`:
+
+```yaml
+log:
+  level: info
+  format: color
+
+provider:
+  default: ollama
+  base_url: http://localhost:11434/v1
+
+model:
+  default: qwen2.5-coder:7b-instruct
+  temperature: 0.3
+
+agents:
+  repositories:
+    official: https://github.com/cowdogmoo/squad-agents.git
+    private: git@github.com:myorg/private-agents.git
+  local_paths:
+    - ~/dev/my-agents
+
+otel:
+  endpoint: localhost:4318
+```
+
+Persisting common `run` options:
+
+```yaml
+run:
+  max_iterations: 50
+  max_cost: 2.0
+  stream: true
+  require_actionable: false
+```
+
+## Providers
+
+Providers are OpenAI-compatible by default. Configure with flags, environment
+variables, or config file.
+
+### Provider matrix
+
+| Provider | Status | Base URL | API Key | Notes |
+| ---------------------- | --------- | --------------------------------------------- | -------- | -------------------------------------------- |
+| OpenAI | supported | `https://api.openai.com/v1` (default) | required | Supports `--api-type azure` for Azure OpenAI |
+| OpenAI Responses | supported | `https://api.openai.com/v1` (default) | required | Uses the Responses API instead of Chat Completions |
+| Anthropic | supported | `https://api.anthropic.com/v1` | required | Claude models via LangChainGo |
+| Google AI | supported | Google AI endpoints | required | Gemini models via LangChainGo |
+| Ollama | supported | `http://localhost:11434/v1` (default) | optional | Local models; use `--num-ctx` for context size |
+| OpenAI-compatible | supported | provider-specific (required) | optional | Any `/v1/chat/completions` endpoint; use `--base-url` |
+
+### OpenAI
+
+```bash
+squad run --agent go-review --provider openai --model gpt-4.1-mini
+```
+
+### Anthropic
+
+```bash
+squad run --agent go-review --provider anthropic --model claude-sonnet-4-6
+```
+
+### Google AI
+
+```bash
+squad run --agent go-review --provider gemini --model gemini-2.5-flash
+```
+
+### OpenAI-compatible endpoints
+
+The `openai-compat` provider works with any service that exposes a
+`/v1/chat/completions` API — NVIDIA NIM, Databricks AI Gateway, DeepInfra,
+Together AI, Fireworks, Groq, Perplexity, LM Studio, vLLM, and more. Only
+`--base-url` and (optionally) `--api-key` are required; no per-service provider
+name is needed.
+
+```bash
+# DeepInfra
+squad run --agent go-review \
+  --provider openai-compat \
+  --base-url "https://api.deepinfra.com/v1/openai" \
+  --api-key "$DEEPINFRA_API_KEY" \
+  --model "meta-llama/Meta-Llama-3-70B-Instruct"
+
+# Together AI
+squad run --agent go-review \
+  --provider openai-compat \
+  --base-url "https://api.together.xyz/v1" \
+  --api-key "$TOGETHER_API_KEY" \
+  --model "mistralai/Mixtral-8x7B-Instruct-v0.1"
+
+# LM Studio (local, no auth)
+squad run --agent go-review \
+  --provider openai-compat \
+  --base-url "http://localhost:1234/v1" \
+  --model "lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF"
+
+# vLLM self-hosted
+squad run --agent go-review \
+  --provider openai-compat \
+  --base-url "http://my-vllm-host:8000/v1" \
+  --model "mistral-7b-instruct"
+```
+
+#### NVIDIA NIM
+
+```bash
+squad run --agent go-review \
+  --provider openai-compat \
+  --base-url https://integrate.api.nvidia.com/v1 \
+  --api-key $NVIDIA_API_KEY \
+  --model meta/llama-3.1-8b-instruct
+```
+
+#### Databricks AI Gateway
+
+Databricks AI Gateway is an OpenAI-compatible proxy that routes requests to
+foundation models hosted on Databricks. It is currently in **beta** (no charges
+during beta; unavailable on GovCloud/Azure Government).
+
+The base URL uses the `ai-gateway` subdomain, not the workspace URL. The path is
+always `/mlflow/v1` regardless of which model you target; langchaingo appends
+`/chat/completions` automatically:
+
+```
+https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1
+```
+
+Send a Databricks PAT (`dapi-` prefix) or OAuth access token via `--api-key` /
+`SQUAD_PROVIDER_TOKEN`. The `--model` value is the name of the deployed gateway
+endpoint (e.g. `databricks-gpt-5-5-pro`), not a model family.
+
+Rate limiting is configured on the Databricks side per endpoint, per user, and
+per group, not in squad.
+
+```bash
+# CLI flags
+squad run --agent go-review \
+  --provider openai-compat \
+  --base-url "https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1" \
+  --api-key "dapi-your-databricks-token" \
+  --model databricks-gpt-5-5-pro
+
+# Environment variables
+export SQUAD_PROVIDER_DEFAULT=openai-compat
+export SQUAD_PROVIDER_BASE_URL=https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1
+export SQUAD_PROVIDER_TOKEN=dapi-your-databricks-token
+export SQUAD_MODEL_DEFAULT=databricks-gpt-5-5-pro
+squad run --agent go-review
+```
+
+Config file with short-lived OAuth token via shell substitution:
+
+```yaml
+provider:
+  default: openai-compat
+  base_url: https://<id>.ai-gateway.cloud.databricks.com/mlflow/v1
+  token: $(databricks auth token --host https://<workspace-url> 2>/dev/null | jq -r .access_token)
+model:
+  default: databricks-gpt-5-5-pro
+```
+
+Example Databricks endpoint names: `databricks-gpt-5-5-pro`,
+`databricks-claude-sonnet-4-5`, `databricks-meta-llama-3-3-70b-instruct`.
+
+#### Agent manifest with base_url
+
+Include `base_url` in the manifest so agents that require a specific endpoint
+are self-contained — no `--base-url` flag needed at runtime:
+
+```yaml
+models:
+  - provider: openai-compat
+    model: meta-llama/Meta-Llama-3-70B-Instruct
+    base_url: https://api.deepinfra.com/v1/openai
+```
+
+Only `--api-key` (or the env var) is still required at runtime; keys are never
+stored in manifests.
+
+### Ollama
+
+Use `--num-ctx` (or `SQUAD_PROVIDER_NUM_CTX`) to control the context window size.
+The default is 32768 tokens. Increase it for agents that process large files.
+
+```bash
+# Local Ollama
+squad run --agent go-review \
+  --provider ollama \
+  --base-url http://localhost:11434/v1 \
+  --model qwen2.5-coder:7b-instruct
+
+# Local Ollama with larger context window
+squad run --agent go-review \
+  --provider ollama \
+  --base-url http://localhost:11434/v1 \
+  --model qwen2.5-coder:7b-instruct \
+  --num-ctx 65536
+
+# Remote Ollama (Kubernetes ingress)
+squad run --agent go-review \
+  --provider ollama \
+  --base-url https://ollama.example.com/v1 \
+  --model qwen2.5-coder:7b-instruct
+```
+
+## Running Squad Safely
+
+`squad` is dual-use software: it drives LLM agents through filesystem, shell, and network tools. A misbehaving agent (whether hallucinating, prompt-injected, or misconfigured) can mutate files, run shell commands, or burn budget unless you constrain it at config time.
+
+When you integrate squad into a production workflow:
+
+- **Cap cost on every run.** Set `--max-cost` (or `run.max_cost` in the config file) to a sane USD ceiling. A budget cap is the only universally reliable stop.
+- **Pick an explicit `--auto-confirm` policy** for unattended execution. The default `abort` is correct for interactive runs; for routines, choose `yes` only when you've audited the agent's tool surface.
+- **Sandbox writes** with `--isolate worktree` (separate dir + branch) or the `environment: docker` execution backend ([docs/execution-backends.md](./execution-backends.md)) so a bad edit lands in a throwaway tree, not your working copy.
+- **Review `agent.yaml` and the prompt files like code.** The `Bash` tool runs arbitrary shell; treat every manifest change in PR review the same way you'd treat a change to a CI workflow.
+- **Never hard-code API keys** in `agent.yaml` or shell history. Use `$VAR` or `$(command)` token resolution to pull from a secret manager — see [Token resolution](#token-resolution) above.
+- **Pin agent and skill sources by SHA when it matters.** Routines fire unattended; an unpinned `agents.repositories` entry runs whatever HEAD happens to be at trigger time. Pass `--ref <sha-or-tag>` to `squad agents add`/`squad skill add` or use `squad agents pin <name> <ref>` to lock in a reviewed version — see [Repository pinning](#repository-pinning).

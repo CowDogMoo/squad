@@ -1,0 +1,49 @@
+---
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 0%
+        base: auto
+    patch:
+      default:
+        target: 90%
+        threshold: 0%
+
+# Files excluded from coverage. The two cases here are:
+#
+# 1. Tests themselves — coverage of test code is not meaningful.
+# 2. Pure exec-wrappers / main entrypoints — these functions are thin
+#    wrappers around exec.Command (launchctl / systemctl / loginctl /
+#    powershell.exe) or os.Exit-based main loops, neither of which can be
+#    meaningfully unit-tested without mocking the host's service manager.
+#    Their value is exercised end-to-end via `squad routine repair` against
+#    a real OS service. The testable halves of each installer (template
+#    rendering, file parsing, status decoding) live in their non-_install.go
+#    siblings and ARE covered.
+ignore:
+  - "**/*_test.go"
+  - "cmd/squad-routined/main.go"
+  - "cmd/squad/routine_install.go"
+  - "routine/service/service_linux_install.go"
+  # storage_watch.go contains the fsnotify watcher loop — goroutines plus
+  # debounced kernel events make deterministic coverage prohibitive. The
+  # supporting helpers it calls (routineChanged / stringMapEqual /
+  # entryKey / sendOrDrop) live in storage.go and ARE unit-tested. The
+  # whole loop is exercised end-to-end by `squad routined` manifest churn.
+  - "routine/storage_watch.go"
+  # daemon_run.go is the daemon's blocking lifecycle wrapper (signal
+  # handling + watch goroutine + sched.Start/Shutdown loop). Same rationale
+  # as storage_watch.go: unit tests can only assert it doesn't deadlock,
+  # which is covered by Run's higher-level tests.
+  - "routine/daemon/daemon_run.go"
+  # *_io.go files isolate the atomic-write (temp file + rename) IO half of
+  # each on-disk artifact. The branches are os.CreateTemp / os.WriteFile /
+  # os.Rename error paths that need fault injection on the os package to
+  # cover. The load + validate halves stay in their main files and ARE
+  # unit-tested; the happy-path round-trip is exercised by the round-trip
+  # tests in routine_test.go / state_test.go.
+  - "routine/manifest_io.go"
+  - "routine/state_io.go"
+  - "routine/roots_io.go"
