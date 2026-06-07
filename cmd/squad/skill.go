@@ -164,14 +164,36 @@ func newSkillShowCmd() *cobra.Command {
 			if !ok {
 				return fmt.Errorf("skill %q not found", args[0])
 			}
-			out := cmd.OutOrStdout()
-			_, _ = fmt.Fprintf(out, "Name:        %s\n", entry.Manifest.Name)
-			_, _ = fmt.Fprintf(out, "Scope:       %s\n", entry.Scope.String())
-			_, _ = fmt.Fprintf(out, "Directory:   %s\n", entry.Dir)
-			_, _ = fmt.Fprintf(out, "Manifest:    %s\n", entry.ManifestPath)
-			_, _ = fmt.Fprintf(out, "Description: %s\n", entry.Manifest.Description)
-			_, _ = fmt.Fprintln(out, "---")
-			_, _ = fmt.Fprintln(out, entry.Manifest.Body)
+			var sb strings.Builder
+			m := entry.Manifest
+			fmt.Fprintf(&sb, "Name:        %s\nScope:       %s\nDirectory:   %s\nManifest:    %s\nDescription: %s\n",
+				m.Name, entry.Scope.String(), entry.Dir, entry.ManifestPath, m.Description)
+			if m.License != "" {
+				fmt.Fprintf(&sb, "License:     %s\n", m.License)
+			}
+			if m.Compatibility != "" {
+				fmt.Fprintf(&sb, "Compatibility: %s\n", m.Compatibility)
+			}
+			if len(m.AllowedTools) > 0 {
+				fmt.Fprintf(&sb, "AllowedTools: %s\n", strings.Join(m.AllowedTools, ", "))
+			}
+			if len(m.Metadata) > 0 {
+				keys := make([]string, 0, len(m.Metadata))
+				for k := range m.Metadata {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				sb.WriteString("Metadata:\n")
+				for _, k := range keys {
+					fmt.Fprintf(&sb, "  %s: %v\n", k, m.Metadata[k])
+				}
+			}
+			sb.WriteString("---\n")
+			sb.WriteString(m.Body)
+			sb.WriteByte('\n')
+			if _, err := io.WriteString(cmd.OutOrStdout(), sb.String()); err != nil {
+				return fmt.Errorf("write skill output: %w", err)
+			}
 			return nil
 		},
 	}
@@ -181,28 +203,64 @@ func newSkillShowCmd() *cobra.Command {
 
 func newSkillValidateCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "validate <path>",
-		Short: "Run spec-conformance checks on a skill directory",
-		Args:  cobra.ExactArgs(1),
+		Use:   "validate <path>...",
+		Short: "Run spec-conformance checks on one or more skill directories",
+		Long: `Validate every supplied path as an Agent Skill. A path may be the skill
+directory itself or its SKILL.md file (the latter is the form pre-commit
+passes), and multiple paths can be checked in one invocation so a single
+hook run covers an entire staged changeset.`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			report, err := skill.Validate(args[0])
-			if err != nil {
-				return err
+			var sb strings.Builder
+			totalErrors := 0
+			for _, raw := range args {
+				dir, err := resolveSkillDir(raw)
+				if err != nil {
+					fmt.Fprintf(&sb, "%s: %v\n", raw, err)
+					totalErrors++
+					continue
+				}
+				report, err := skill.Validate(dir)
+				if err != nil {
+					fmt.Fprintf(&sb, "%s: %v\n", dir, err)
+					totalErrors++
+					continue
+				}
+				for _, f := range report.Findings {
+					fmt.Fprintf(&sb, "%s: %s: %s: %s\n", dir, f.Severity, f.Path, f.Message)
+				}
+				totalErrors += len(report.Errors())
+				if len(report.Findings) == 0 {
+					fmt.Fprintf(&sb, "%s: OK\n", dir)
+				}
 			}
-			out := cmd.OutOrStdout()
-			for _, f := range report.Findings {
-				_, _ = fmt.Fprintf(out, "%s: %s: %s\n", f.Severity, f.Path, f.Message)
+			if _, err := io.WriteString(cmd.OutOrStdout(), sb.String()); err != nil {
+				return fmt.Errorf("write validation report: %w", err)
 			}
-			if report.HasErrors() {
-				return fmt.Errorf("validation failed: %d error(s)", len(report.Errors()))
-			}
-			if len(report.Warnings()) == 0 {
-				_, _ = fmt.Fprintln(out, "OK")
+			if totalErrors > 0 {
+				return fmt.Errorf("validation failed: %d error(s) across %d path(s)", totalErrors, len(args))
 			}
 			return nil
 		},
 	}
+}
+
+// resolveSkillDir accepts either a skill directory or its SKILL.md and
+// returns the skill directory. Letting pre-commit pass SKILL.md paths
+// straight through avoids a shell wrapper around the hook.
+func resolveSkillDir(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("stat: %w", err)
+	}
+	if info.IsDir() {
+		return path, nil
+	}
+	if filepath.Base(path) != skill.FileName {
+		return "", fmt.Errorf("expected a directory or %s, got %s", skill.FileName, filepath.Base(path))
+	}
+	return filepath.Dir(path), nil
 }
 
 func newSkillAddCmd() *cobra.Command {

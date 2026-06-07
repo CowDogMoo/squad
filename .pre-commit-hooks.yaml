@@ -1,0 +1,14 @@
+---
+- id: squad-skill-validate
+  name: Validate Anthropic Agent Skill manifests
+  description: |
+    Runs `squad skill validate` against every staged SKILL.md (and its
+    skill directory) to enforce open-standard conformance — frontmatter
+    structure, name/description rules, body-size targets, path-traversal
+    guards on bundled references, and script invocability. Single source
+    of truth for skill validation across squad-skills and any other repo
+    consuming the hook.
+  entry: squad skill validate
+  language: golang
+  files: '(^|/)SKILL\.md$'
+  pass_filenames: true
