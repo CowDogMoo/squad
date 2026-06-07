@@ -29,18 +29,19 @@ jobs:
   semgrep:
     name: 🚨 Semgrep Analysis
     runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:1.165.0
 
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Run Semgrep analysis
-        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
-        with:
-          config: >- # more at semgrep.dev/explore
-            p/security-audit
-            p/secrets
-            p/ci
-            p/supply-chain
-            p/golang
-            p/trailofbits-go
+        run: |
+          semgrep scan --error \
+            --config p/security-audit \
+            --config p/secrets \
+            --config p/ci \
+            --config p/supply-chain \
+            --config p/golang \
+            --config p/trailofbits-go

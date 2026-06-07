@@ -259,23 +259,30 @@ func TestStateLabelAliveVsExited(t *testing.T) {
 }
 
 func TestStateFromMeta(t *testing.T) {
+	now := time.Date(2026, 6, 7, 4, 0, 0, 0, time.UTC)
+	fresh := now.Add(-30 * time.Second)
+	stale := now.Add(-staleRunningThreshold - time.Minute)
 	cases := []struct {
+		name      string
 		in        string
+		updated   time.Time
 		wantState sidebar.State
 		wantAlive bool
 	}{
-		{session.StatusRunning, sidebar.StateWorking, true},
-		{session.StatusCompleted, sidebar.StateCompleted, false},
-		{session.StatusError, sidebar.StateFailed, false},
-		{session.StatusBudget, sidebar.StateBudget, false},
-		{"", sidebar.StateConnecting, true},
-		{"unknown-future-state", sidebar.StateCompleted, false},
+		{"running-fresh", session.StatusRunning, fresh, sidebar.StateWorking, true},
+		{"running-stale", session.StatusRunning, stale, sidebar.StateFailed, false},
+		{"running-zero-updated", session.StatusRunning, time.Time{}, sidebar.StateWorking, true},
+		{"completed", session.StatusCompleted, fresh, sidebar.StateCompleted, false},
+		{"error", session.StatusError, fresh, sidebar.StateFailed, false},
+		{"budget", session.StatusBudget, fresh, sidebar.StateBudget, false},
+		{"empty", "", time.Time{}, sidebar.StateConnecting, true},
+		{"unknown", "unknown-future-state", fresh, sidebar.StateCompleted, false},
 	}
 	for _, tc := range cases {
-		state, alive := stateFromMeta(tc.in)
+		state, alive := stateFromMeta(tc.in, tc.updated, now)
 		if state != tc.wantState || alive != tc.wantAlive {
-			t.Errorf("stateFromMeta(%q) = (%v, %v), want (%v, %v)",
-				tc.in, state, alive, tc.wantState, tc.wantAlive)
+			t.Errorf("%s: stateFromMeta(%q) = (%v, %v), want (%v, %v)",
+				tc.name, tc.in, state, alive, tc.wantState, tc.wantAlive)
 		}
 	}
 }

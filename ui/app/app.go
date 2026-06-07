@@ -1099,7 +1099,7 @@ func (a App) tailerStateFor(sessionID string) (watch.State, bool) {
 func runFromTailer(t *watch.Tailer) sidebar.Run {
 	s := t.State()
 	meta := s.Meta
-	state, alive := stateFromMeta(meta.Status)
+	state, alive := stateFromMeta(meta.Status, meta.Updated, time.Now())
 	elapsed := time.Duration(0)
 	if alive && !meta.Created.IsZero() {
 		elapsed = time.Since(meta.Created)
@@ -1120,11 +1120,23 @@ func runFromTailer(t *watch.Tailer) sidebar.Run {
 	}
 }
 
+// staleRunningThreshold is how long meta.Updated can be quiet before a
+// session still marked "running" is presumed dead. A healthy runner bumps
+// Updated every model turn (UpdateMetrics, SetLastResponseID), so anything
+// well beyond that is a runner that crashed before writing terminal status.
+const staleRunningThreshold = 15 * time.Minute
+
 // stateFromMeta maps meta.Status to a sidebar State + alive flag. Empty
-// status (meta.json not yet written) is treated as Connecting.
-func stateFromMeta(status string) (sidebar.State, bool) {
+// status (meta.json not yet written) is treated as Connecting. A "running"
+// status whose Updated timestamp is older than staleRunningThreshold is
+// reaped as Failed — the runner crashed without writing terminal status,
+// and without this gate the row would haunt WORKING forever.
+func stateFromMeta(status string, updated, now time.Time) (sidebar.State, bool) {
 	switch status {
 	case session.StatusRunning:
+		if !updated.IsZero() && now.Sub(updated) > staleRunningThreshold {
+			return sidebar.StateFailed, false
+		}
 		return sidebar.StateWorking, true
 	case session.StatusCompleted:
 		return sidebar.StateCompleted, false

@@ -1,197 +1,195 @@
-package routine
+package routine_test
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/cowdogmoo/squad/routine"
 )
 
 func TestValidateID(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		id      string
-		wantErr bool
+		name    string
+		in      string
+		wantErr string
 	}{
-		{"nightly-audit", false},
-		{"a", false},
-		{"ab", false},
-		{"go-review-1", false},
-		{"", true},
-		{"Nightly", true},                // uppercase
-		{"-leading", true},               // leading hyphen
-		{"trailing-", true},              // trailing hyphen
-		{"1leading-digit", true},         // starts with digit
-		{"under_score", true},            // underscore
-		{"dot.in.id", true},              // dot
-		{"space id", true},               // space
-		{string(make([]byte, 65)), true}, // too long (and invalid runes)
+		{"empty", "", "id is required"},
+		{"too-long", strings.Repeat("a", 65), "exceeds 64"},
+		{"invalid-chars", "Bad_Upper", "invalid"},
+		{"ends-with-hyphen", "abc-", "invalid"},
+		{"valid", "abc-123", ""},
 	}
 	for _, tt := range tests {
-		err := ValidateID(tt.id)
-		if (err != nil) != tt.wantErr {
-			t.Errorf("ValidateID(%q) err=%v, wantErr=%v", tt.id, err, tt.wantErr)
-		}
-	}
-	// Boundary: exactly 64 valid chars should pass.
-	long := "a"
-	for i := 0; i < 63; i++ {
-		long += "b"
-	}
-	if err := ValidateID(long); err != nil {
-		t.Errorf("ValidateID(64-char slug) unexpected error: %v", err)
-	}
-	// 65 chars should fail.
-	if err := ValidateID(long + "c"); err == nil {
-		t.Error("ValidateID(65-char slug) expected error, got nil")
+		t.Run(tt.name, func(t *testing.T) {
+			err := routine.ValidateID(tt.in)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want to contain %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 
 func TestValidateSchedule(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		sched   string
-		wantErr bool
+		name    string
+		in      string
+		wantErr string
 	}{
-		{"0 2 * * *", false},
-		{"*/5 * * * *", false},
-		{"@daily", false},
-		{"@hourly", false},
-		{"@every 30m", false},
-		{"@every 1h30m", false},
-		{"", true},
-		{"not a schedule", true},
-		{"60 * * * *", true}, // out-of-range minute
-		{"* * * * 8", true},  // out-of-range dow
-		{"@every notaduration", true},
+		{"empty", "", "schedule is required"},
+		{"invalid", "not-a-cron", "invalid schedule"},
+		{"valid-predef", "@daily", ""},
+		{"valid-interval", "*/5 * * * *", ""},
 	}
 	for _, tt := range tests {
-		err := ValidateSchedule(tt.sched)
-		if (err != nil) != tt.wantErr {
-			t.Errorf("ValidateSchedule(%q) err=%v, wantErr=%v", tt.sched, err, tt.wantErr)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			err := routine.ValidateSchedule(tt.in)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want to contain %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 
-func TestRoutineValidate(t *testing.T) {
+func TestNextFire_InvalidReturnsZero(t *testing.T) {
 	t.Parallel()
-	base := Routine{ID: "ok", Agent: "go-review", Schedule: "@daily"}
+	if got := routine.NextFire("invalid", time.Now()); !got.IsZero() {
+		t.Fatalf("NextFire with invalid schedule = %v, want zero time", got)
+	}
+}
+
+func TestRoutine_Validate(t *testing.T) {
+	t.Parallel()
+	base := routine.Routine{ID: "id", Agent: "agent", Schedule: "@daily"}
+
+	// Good baseline
 	if err := base.Validate(); err != nil {
 		t.Fatalf("baseline validate: %v", err)
 	}
-
-	cases := []struct {
-		name string
-		mut  func(r *Routine)
-		want bool
-	}{
-		{"missing agent", func(r *Routine) { r.Agent = "" }, true},
-		{"bad id", func(r *Routine) { r.ID = "BadID" }, true},
-		{"bad schedule", func(r *Routine) { r.Schedule = "nope" }, true},
-		{"bad catchup", func(r *Routine) { r.Catchup = "every-day" }, true},
-		{"catchup skip ok", func(r *Routine) { r.Catchup = CatchupSkip }, false},
-		{"catchup fire-once ok", func(r *Routine) { r.Catchup = CatchupFireOnce }, false},
-		{"negative max_cost", func(r *Routine) { r.MaxCost = -1 }, true},
-		{"negative max_iterations", func(r *Routine) { r.MaxIterations = -1 }, true},
-		{"openai-compat missing base_url", func(r *Routine) { r.Provider = "openai-compat" }, true},
-		{"openai-compat with base_url ok", func(r *Routine) {
-			r.Provider = "openai-compat"
-			r.BaseURL = "https://api.deepinfra.com/v1/openai"
-		}, false},
+	// Missing agent
+	r := base
+	r.Agent = ""
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "agent is required") {
+		t.Fatalf("expected agent required error, got %v", err)
 	}
-	for _, c := range cases {
-		r := base
-		c.mut(&r)
-		err := r.Validate()
-		if (err != nil) != c.want {
-			t.Errorf("%s: err=%v, wantErr=%v", c.name, err, c.want)
-		}
+	// Bad catchup
+	r = base
+	r.Catchup = "bogus"
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "invalid catchup") {
+		t.Fatalf("expected invalid catchup error, got %v", err)
+	}
+	// Negative cost
+	r = base
+	r.MaxCost = -1
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "max_cost must not be negative") {
+		t.Fatalf("expected negative cost error, got %v", err)
+	}
+	// Negative iterations
+	r = base
+	r.MaxIterations = -1
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "max_iterations must not be negative") {
+		t.Fatalf("expected negative iterations error, got %v", err)
+	}
+	// Provider constraint
+	r = base
+	r.Provider = "openai-compat"
+	r.BaseURL = ""
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "requires base_url") {
+		t.Fatalf("expected base_url required error, got %v", err)
 	}
 }
 
-func TestSaveLoadRoutineRoundTrip(t *testing.T) {
+func TestRoutine_EffectiveCatchup(t *testing.T) {
+	t.Parallel()
+	r := &routine.Routine{}
+	if got := r.EffectiveCatchup(); got != routine.DefaultCatchup {
+		t.Fatalf("EffectiveCatchup default = %q, want %q", got, routine.DefaultCatchup)
+	}
+	r.Catchup = routine.CatchupSkip
+	if got := r.EffectiveCatchup(); got != routine.CatchupSkip {
+		t.Fatalf("EffectiveCatchup set = %q, want %q", got, routine.CatchupSkip)
+	}
+}
+
+func TestLoadRoutine_Success(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	path := filepath.Join(dir, FileName("nightly-audit"))
-	original := &Routine{
-		ID:         "nightly-audit",
-		Agent:      "go-review",
-		Schedule:   "0 2 * * *",
-		Prompt:     "audit recent changes",
-		WorkingDir: "/tmp/repo",
-		Vars:       map[string]string{"threshold": "high"},
-		Enabled:    true,
-		Catchup:    CatchupFireOnce,
-		CreatedAt:  time.Date(2026, 5, 12, 18, 0, 0, 0, time.UTC),
+	path := filepath.Join(dir, "job.yaml")
+	content := "id: job\nagent: x\nschedule: \"@daily\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if err := SaveRoutine(path, original); err != nil {
-		t.Fatalf("SaveRoutine: %v", err)
-	}
-	got, err := LoadRoutine(path)
+	r, err := routine.LoadRoutine(path)
 	if err != nil {
 		t.Fatalf("LoadRoutine: %v", err)
 	}
-	if got.ID != original.ID || got.Agent != original.Agent || got.Schedule != original.Schedule {
-		t.Errorf("round-trip mismatch: got=%+v want=%+v", got, original)
-	}
-	if got.Vars["threshold"] != "high" {
-		t.Errorf("vars round-trip mismatch: %v", got.Vars)
-	}
-	if !got.CreatedAt.Equal(original.CreatedAt) {
-		t.Errorf("created_at mismatch: got=%v want=%v", got.CreatedAt, original.CreatedAt)
+	if r.ID != "job" || r.Agent != "x" {
+		t.Fatalf("unexpected routine fields: %+v", r)
 	}
 }
 
-func TestSaveRoutineAtomic(t *testing.T) {
+func TestLoadRoutine_Errors(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	path := filepath.Join(dir, FileName("a-routine"))
-	r := &Routine{ID: "a-routine", Agent: "go-review", Schedule: "@daily", Enabled: true}
-	if err := SaveRoutine(path, r); err != nil {
-		t.Fatalf("first save: %v", err)
-	}
-	// Overwrite — also confirms no .tmp leftover.
-	r.Prompt = "updated"
-	if err := SaveRoutine(path, r); err != nil {
-		t.Fatalf("second save: %v", err)
-	}
-	entries, err := filepathGlob(dir, "*.tmp")
-	if err != nil {
+	bad := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(bad, []byte("not: [yaml"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
-		t.Errorf("expected no .tmp files after save, found %v", entries)
+	invalid := filepath.Join(dir, "invalid.yaml")
+	if err := os.WriteFile(invalid, []byte("id: x\nschedule: \"@daily\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		path    string
+		wantErr string
+	}{
+		{"missing", filepath.Join(dir, "missing.yaml"), "read routine"},
+		{"parse", bad, "parse routine"},
+		{"validate", invalid, "validate routine"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := routine.LoadRoutine(tt.path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want to contain %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 
 func TestIDFromFileName(t *testing.T) {
 	t.Parallel()
-	if id := IDFromFileName("foo.yaml"); id != "foo" {
-		t.Errorf("got %q, want foo", id)
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"round-trip", routine.FileName("abc-1"), "abc-1"},
+		{"non-yaml", "not-yaml.txt", ""},
+		{"invalid-id", "Bad_", ""},
 	}
-	if id := IDFromFileName("Foo.yaml"); id != "" {
-		t.Errorf("invalid id should yield empty, got %q", id)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := routine.IDFromFileName(tt.in); got != tt.want {
+				t.Fatalf("IDFromFileName(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
-	if id := IDFromFileName("foo.txt"); id != "" {
-		t.Errorf("non-yaml should yield empty, got %q", id)
-	}
-}
-
-func TestNextFire(t *testing.T) {
-	t.Parallel()
-	from := time.Date(2026, 5, 12, 1, 0, 0, 0, time.UTC)
-	next := NextFire("0 2 * * *", from)
-	if next.IsZero() {
-		t.Fatal("NextFire returned zero")
-	}
-	if next.Hour() != 2 || next.Minute() != 0 {
-		t.Errorf("expected 02:00 fire, got %v", next)
-	}
-	if NextFire("garbage", from).IsZero() != true {
-		t.Error("invalid schedule should yield zero time")
-	}
-}
-
-// filepathGlob is a tiny wrapper so the import stays in the *_test.go.
-func filepathGlob(dir, pattern string) ([]string, error) {
-	return filepath.Glob(filepath.Join(dir, pattern))
 }

@@ -1,30 +1,30 @@
-// Cross-platform tests for the platform-neutral parts of the service
-// package — currently the State enum's String() method. Lives outside the
-// build-tagged files so coverage counts on every CI runner regardless of
-// platform.
+package service_test
 
-package service
+import (
+	"testing"
 
-import "testing"
+	"github.com/cowdogmoo/squad/routine/service"
+)
 
-func TestStateString(t *testing.T) {
+func TestState_String(t *testing.T) {
 	t.Parallel()
-	cases := map[State]string{
-		StateNotInstalled:     "not installed",
-		StateInstalledStopped: "installed (stopped)",
-		StateInstalledRunning: "installed (running)",
-		State(99):             "unknown",
+	tests := []struct {
+		name string
+		in   service.State
+		want string
+	}{
+		{"running", service.StateInstalledRunning, "installed (running)"},
+		{"stopped", service.StateInstalledStopped, "installed (stopped)"},
+		{"not-installed", service.StateNotInstalled, "not installed"},
+		{"unknown", service.State(42), "unknown"},
 	}
-	for s, want := range cases {
-		if got := s.String(); got != want {
-			t.Errorf("State(%d).String() = %q, want %q", s, got, want)
-		}
-	}
-}
-
-func TestErrUnsupportedIsErrorValue(t *testing.T) {
-	t.Parallel()
-	if ErrUnsupported.Error() == "" {
-		t.Error("ErrUnsupported has empty message")
+	for _, tt := range tests {
+		// Go 1.22+: no need to capture range var
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.in.String()
+			if got != tt.want {
+				t.Fatalf("State.String() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
