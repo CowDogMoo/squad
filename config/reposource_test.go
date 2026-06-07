@@ -214,6 +214,38 @@ func TestRepoSpecDecodeHook_noopWhenTargetIsNotRepoSpec(t *testing.T) {
 	}
 }
 
+func TestRepoSpecDecodeHook_mappingWithNonStringFieldsSkipsThem(t *testing.T) {
+	t.Parallel()
+	// Both type assertions inside the map branch must tolerate non-string
+	// inputs: missing/typed-wrong fields leave the RepoSpec field empty
+	// instead of panicking. Exercises the ok==false leg of both `if url,
+	// ok := v["url"].(string)` and `if ref, ok := v["ref"].(string)`.
+	got := callHook(t, reflect.TypeOf(map[string]any{}), reflect.TypeOf(RepoSpec{}),
+		map[string]any{
+			"url": 42, // wrong type — should be silently dropped
+			"ref": nil,
+		})
+	spec := got.(RepoSpec) //nolint:gocritic // got is mapstructure-returned any
+	if spec.URL != "" || spec.Ref != "" {
+		t.Errorf("non-string fields should not populate the spec, got %+v", spec)
+	}
+}
+
+func TestRepoSpecDecodeHook_mappingPartialFieldsPopulateAvailable(t *testing.T) {
+	t.Parallel()
+	// One string + one missing: the available field is used, the missing
+	// one stays empty. Exercises ok==true for ref but ok==false for url.
+	got := callHook(t, reflect.TypeOf(map[string]any{}), reflect.TypeOf(RepoSpec{}),
+		map[string]any{"ref": "v9.9.9"})
+	spec := got.(RepoSpec) //nolint:gocritic // got is mapstructure-returned any
+	if spec.URL != "" {
+		t.Errorf("URL should be empty when not provided, got %q", spec.URL)
+	}
+	if spec.Ref != "v9.9.9" {
+		t.Errorf("Ref = %q, want v9.9.9", spec.Ref)
+	}
+}
+
 func TestRepoSpec_roundTrip(t *testing.T) {
 	t.Parallel()
 	original := map[string]RepoSpec{

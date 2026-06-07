@@ -47,6 +47,10 @@ const MaxNameLen = 64
 // MaxDescriptionLen is the per-spec upper bound on a skill description.
 const MaxDescriptionLen = 1024
 
+// MaxCompatibilityLen is the per-spec upper bound on the compatibility field
+// (Reference B of the Skills guide: 1–500 characters).
+const MaxCompatibilityLen = 500
+
 // MaxBodyBytes caps the on-disk size of a SKILL.md body. The spec targets
 // <5k tokens for L2 content. Empirically the largest first-party skill
 // Anthropic ships (skill-creator) is ~32 KiB, so the hard cap sits at 64
@@ -77,9 +81,87 @@ type Manifest struct {
 	// Description is the prose summary used at Level 1 to decide whether the
 	// skill matches a task. Required.
 	Description string `yaml:"description"`
+	// License is the optional SPDX-style license identifier (e.g. "MIT") for
+	// open-source skills. Spec: free-form string.
+	License string `yaml:"license,omitempty"`
+	// Compatibility describes environment requirements — intended platform,
+	// system packages, network access. Optional, 1–500 chars.
+	Compatibility string `yaml:"compatibility,omitempty"`
+	// AllowedTools restricts which tools the agent may call while this skill
+	// is on the stack. Empty means no restriction. See AllowedTools for the
+	// accepted YAML shapes and the matching semantics squad implements.
+	AllowedTools AllowedTools `yaml:"allowed-tools,omitempty"`
+	// Metadata holds the spec's free-form key/value bag (author, version,
+	// mcp-server, tags, etc.). Preserved verbatim for callers that want to
+	// surface it via `squad skill list` without re-reading the file.
+	Metadata map[string]any `yaml:"metadata,omitempty"`
 	// Body is the markdown content after the frontmatter block, with leading
 	// and trailing whitespace trimmed. Returned by the Skill tool at L2.
 	Body string `yaml:"-"`
+}
+
+// AllowedTools is the list of tool names a skill is permitted to invoke. In
+// YAML it may appear as a space-separated string (the form shown in the
+// Skills guide example: `"Bash(python:*) Bash(npm:*) WebFetch"`) or as a
+// sequence of scalars. squad enforces tool-name matching only — the Claude
+// Code permission-pattern syntax (`Bash(python:*)`) is normalized to the
+// bare tool name preceding the parenthesis. Authors who need finer-grained
+// constraints should bundle a script rather than rely on the field.
+type AllowedTools []string
+
+// UnmarshalYAML accepts either a scalar (space-separated tool names) or a
+// sequence of scalars. Anything else is a parse error.
+func (a *AllowedTools) UnmarshalYAML(value *yaml.Node) error {
+	if value == nil {
+		return nil
+	}
+	switch value.Kind {
+	case yaml.ScalarNode:
+		*a = parseAllowedToolsString(value.Value)
+		return nil
+	case yaml.SequenceNode:
+		out := AllowedTools{}
+		for _, n := range value.Content {
+			if n.Kind != yaml.ScalarNode {
+				return fmt.Errorf("allowed-tools entries must be strings (line %d)", n.Line)
+			}
+			out = append(out, parseAllowedToolsString(n.Value)...)
+		}
+		*a = out
+		return nil
+	default:
+		return fmt.Errorf("allowed-tools must be a string or list of strings (line %d)", value.Line)
+	}
+}
+
+// Allows reports whether toolName is permitted. An empty/unset allow-list
+// imposes no restriction.
+func (a AllowedTools) Allows(toolName string) bool {
+	if len(a) == 0 {
+		return true
+	}
+	for _, n := range a {
+		if n == toolName {
+			return true
+		}
+	}
+	return false
+}
+
+// parseAllowedToolsString splits a Claude-Code-style allow string into bare
+// tool names. `"Bash(python:*) Bash(npm:*) WebFetch"` → `["Bash","Bash","WebFetch"]`.
+// The duplicate is left in place; Allows treats the list as a set.
+func parseAllowedToolsString(s string) []string {
+	out := make([]string, 0, 4)
+	for _, tok := range strings.Fields(s) {
+		if i := strings.IndexByte(tok, '('); i >= 0 {
+			tok = tok[:i]
+		}
+		if tok = strings.TrimSpace(tok); tok != "" {
+			out = append(out, tok)
+		}
+	}
+	return out
 }
 
 // ValidateName reports whether s is a syntactically valid skill name per the
@@ -129,6 +211,18 @@ func ValidateDescription(d string) error {
 	return nil
 }
 
+// ValidateCompatibility reports whether c satisfies the per-spec 1–500
+// character bound. Empty is allowed (the field itself is optional).
+func ValidateCompatibility(c string) error {
+	if c == "" {
+		return nil
+	}
+	if len(c) > MaxCompatibilityLen {
+		return fmt.Errorf("compatibility exceeds %d characters (got %d)", MaxCompatibilityLen, len(c))
+	}
+	return nil
+}
+
 // Validate runs every spec-required check on the manifest's frontmatter and
 // body. It does not touch the filesystem; callers that load from disk should
 // use LoadManifest, which calls Validate after parsing.
@@ -138,6 +232,14 @@ func (m *Manifest) Validate() error {
 	}
 	if err := ValidateDescription(m.Description); err != nil {
 		return err
+	}
+	if err := ValidateCompatibility(m.Compatibility); err != nil {
+		return err
+	}
+	for _, tool := range m.AllowedTools {
+		if strings.TrimSpace(tool) == "" {
+			return errors.New("allowed-tools contains an empty entry")
+		}
 	}
 	if len(m.Body) > MaxBodyBytes {
 		return fmt.Errorf("body exceeds %d bytes (got %d)", MaxBodyBytes, len(m.Body))
@@ -161,6 +263,12 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	if err := yaml.Unmarshal(fm, m); err != nil {
 		return nil, fmt.Errorf("parse frontmatter: %w", err)
 	}
+	// Normalize whitespace in fields the L1 prompt block renders inline.
+	// Trailing whitespace from YAML block scalars (e.g. `description: >`)
+	// would otherwise leak into the rendered system prompt.
+	m.Description = strings.TrimSpace(m.Description)
+	m.License = strings.TrimSpace(m.License)
+	m.Compatibility = strings.TrimSpace(m.Compatibility)
 	m.Body = strings.TrimSpace(string(body))
 	if err := m.Validate(); err != nil {
 		return nil, err

@@ -164,8 +164,8 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Re-unmarshal so flag/env overrides are reflected in the config struct.
-	if err := v.Unmarshal(cfg, config.DecodeHooks()); err != nil {
-		return fmt.Errorf("failed to apply config overrides: %w", err)
+	if err := applyConfigOverrides(v, cfg); err != nil {
+		return err
 	}
 
 	// Re-initialize telemetry if --otel-endpoint was explicitly provided.
@@ -187,6 +187,19 @@ func initConfig(cmd *cobra.Command, _ []string) error {
 	ctx = logging.WithLogger(ctx, logger)
 	cmd.SetContext(ctx)
 
+	return nil
+}
+
+// applyConfigOverrides re-runs viper.Unmarshal so flag and env overrides
+// reach the config struct. Declared as a var so a test can swap it out
+// and exercise initConfig's error-return branch — driving the second
+// Unmarshal to fail via a real cobra invocation would otherwise require
+// engineering viper state that diverges between Load and re-unmarshal,
+// which the current code path makes deterministic.
+var applyConfigOverrides = func(v *viper.Viper, cfg *config.Config) error {
+	if err := v.Unmarshal(cfg, config.DecodeHooks()); err != nil {
+		return fmt.Errorf("failed to apply config overrides: %w", err)
+	}
 	return nil
 }
 

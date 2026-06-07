@@ -404,3 +404,91 @@ func TestSkillTool_InvalidJSONArgs(t *testing.T) {
 		t.Fatal("expected JSON parse error")
 	}
 }
+
+func TestSkillRuntime_AllowsToolNoStack(t *testing.T) {
+	var r *SkillRuntime
+	if !r.AllowsTool("Read") {
+		t.Error("nil runtime should permit any tool")
+	}
+	r = &SkillRuntime{}
+	if !r.AllowsTool("Read") {
+		t.Error("runtime with nil stack should permit any tool")
+	}
+}
+
+func TestSkillRuntime_AllowsToolEnforcesAllowList(t *testing.T) {
+	stack := skill.NewStack()
+	stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:         "restricted",
+			Description:  "x",
+			AllowedTools: skill.AllowedTools{"Read", "Bash"},
+		},
+		Dir: t.TempDir(),
+	})
+	r := &SkillRuntime{Stack: stack}
+	if !r.AllowsTool("Read") {
+		t.Error("Read should be allowed")
+	}
+	if r.AllowsTool("WebFetch") {
+		t.Error("WebFetch should be denied")
+	}
+	if !r.AllowsTool("Skill") {
+		t.Error("Skill loader must always be allowed even under restriction")
+	}
+}
+
+func TestSkillRuntime_AllowsToolIntersectsStack(t *testing.T) {
+	stack := skill.NewStack()
+	stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:         "a",
+			Description:  "x",
+			AllowedTools: skill.AllowedTools{"Read", "Bash", "WebFetch"},
+		},
+		Dir: t.TempDir(),
+	})
+	stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:         "b",
+			Description:  "x",
+			AllowedTools: skill.AllowedTools{"Read"},
+		},
+		Dir: t.TempDir(),
+	})
+	r := &SkillRuntime{Stack: stack}
+	if !r.AllowsTool("Read") {
+		t.Error("Read should pass both skills")
+	}
+	if r.AllowsTool("Bash") {
+		t.Error("Bash allowed by 'a' but denied by 'b' — intersection should deny")
+	}
+}
+
+func TestSkillRuntime_AllowsToolSkipsUnrestrictedSkill(t *testing.T) {
+	stack := skill.NewStack()
+	stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{Name: "unrestricted", Description: "x"},
+		Dir:      t.TempDir(),
+	})
+	r := &SkillRuntime{Stack: stack}
+	if !r.AllowsTool("AnythingGoes") {
+		t.Error("skill without allowed-tools should impose no restriction")
+	}
+}
+
+func TestSkillTool_RejectsOversizedBody(t *testing.T) {
+	dir := t.TempDir()
+	entry := skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:        "huge",
+			Description: "x",
+			Body:        strings.Repeat("x", skill.MaxBodyBytes+1),
+		},
+		Dir: dir,
+	}
+	rt := &SkillRuntime{Entries: []skill.Entry{entry}, Stack: skill.NewStack()}
+	if _, err := skillTool(rt)(context.Background(), []byte(`{"name":"huge"}`)); err == nil {
+		t.Fatal("expected oversize-body rejection")
+	}
+}

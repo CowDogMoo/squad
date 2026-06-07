@@ -41,6 +41,30 @@ func (r *SkillRuntime) HasCatalog() bool {
 	return r != nil && len(r.Entries) > 0
 }
 
+// AllowsTool reports whether the tool named name is permitted under the
+// active skill stack. The Skill tool itself is always allowed — otherwise a
+// restrictive skill would lock the agent out of loading other skills. When
+// multiple skills are stacked, every skill's allowed-tools list must permit
+// the call (intersection semantics): a skill without a list imposes no
+// restriction, but a single restrictive skill is enough to deny.
+func (r *SkillRuntime) AllowsTool(name string) bool {
+	if r == nil || r.Stack == nil {
+		return true
+	}
+	if name == "Skill" {
+		return true
+	}
+	for _, e := range r.Stack.Entries() {
+		if e.Manifest == nil {
+			continue
+		}
+		if !e.Manifest.AllowedTools.Allows(name) {
+			return false
+		}
+	}
+	return true
+}
+
 // find returns the runtime entry matching name, or ok=false. Walks Entries
 // linearly — the catalog is small (typically <50 skills) so the simple
 // loop beats a map allocation per run.
@@ -153,6 +177,16 @@ func skillTool(runtime *SkillRuntime) func(ctx context.Context, rawArgs []byte) 
 		if !ok {
 			return "", fmt.Errorf("skill: %q is not in the catalog", args.Name)
 		}
+		// Defense in depth: re-check the body size against the spec cap at
+		// delivery time. Parse already enforces this for entries loaded via
+		// LoadManifest, but tests and future callers can construct Manifests
+		// directly, and a SKILL.md that grew on disk past the cap should
+		// never reach the agent.
+		body := entry.Manifest.Body
+		if len(body) > skill.MaxBodyBytes {
+			return "", fmt.Errorf("skill: body for %q exceeds %d bytes (got %d)",
+				args.Name, skill.MaxBodyBytes, len(body))
+		}
 		if runtime.Stack != nil {
 			runtime.Stack.Push(entry)
 		}
@@ -161,6 +195,6 @@ func skillTool(runtime *SkillRuntime) func(ctx context.Context, rawArgs []byte) 
 		}
 		logging.DebugContext(ctx, "Skill loaded: name=%s scope=%s dir=%s",
 			entry.Name(), entry.Scope.String(), entry.Dir)
-		return entry.Manifest.Body, nil
+		return body, nil
 	}
 }
