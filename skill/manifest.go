@@ -60,7 +60,10 @@ const MaxBodyBytes = 64 * 1024
 
 // WarnBodyBytes is the soft cap surfaced by Validate as a warning. Skills
 // past this size still load but the author is told to consider splitting.
-const WarnBodyBytes = 5 * 1024
+// The guide's "<5,000 word" target maps to roughly 25 KiB by char count;
+// 24 KiB rounds to that without being so tight that every real-world
+// procedural skill (~7–16 KiB) trips a warning on every validate run.
+const WarnBodyBytes = 24 * 1024
 
 // reservedSubstrings carry the spec's anti-impersonation hint. We do not
 // reject names containing them — Anthropic's own `claude-api` skill
@@ -149,11 +152,19 @@ func (a AllowedTools) Allows(toolName string) bool {
 }
 
 // parseAllowedToolsString splits a Claude-Code-style allow string into bare
-// tool names. `"Bash(python:*) Bash(npm:*) WebFetch"` → `["Bash","Bash","WebFetch"]`.
-// The duplicate is left in place; Allows treats the list as a set.
+// tool names. Both space-separated (the form shown in the Skills guide) and
+// comma-separated (the form most authors actually write — including every
+// first-party squad-skills entry) are accepted.
+//
+//	"Bash(python:*) Bash(npm:*) WebFetch" → ["Bash","Bash","WebFetch"]
+//	"Read, Glob, Edit"                     → ["Read","Glob","Edit"]
+//
+// Duplicates are left in place; Allows treats the list as a set.
 func parseAllowedToolsString(s string) []string {
 	out := make([]string, 0, 4)
-	for _, tok := range strings.Fields(s) {
+	for _, tok := range strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	}) {
 		if i := strings.IndexByte(tok, '('); i >= 0 {
 			tok = tok[:i]
 		}

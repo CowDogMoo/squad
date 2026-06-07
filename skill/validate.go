@@ -130,7 +130,7 @@ func Validate(path string) (*ValidationReport, error) {
 
 	if len(m.Body) > WarnBodyBytes {
 		report.add(SeverityWarning, FileName,
-			fmt.Sprintf("body is %d bytes; spec target is <5 KiB — consider splitting into references/", len(m.Body)))
+			fmt.Sprintf("body is %d bytes; guide target is <5,000 words (~%d KiB) — consider splitting into references/", len(m.Body), WarnBodyBytes/1024))
 	}
 
 	for _, link := range findMarkdownLinks(m.Body) {
