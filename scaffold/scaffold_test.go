@@ -175,6 +175,144 @@ func TestCopyAgent_InvalidDestName(t *testing.T) {
 	}
 }
 
+func TestCreateAgent_GeneratedDescriptionPerLang(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cases := []struct {
+		lang     string
+		contains string
+	}{
+		{"go", "for Go codebases"},
+		{"python", "for Python codebases"},
+		{"bash", "for Bash scripts"},
+		{"ansible", "for Ansible playbooks and roles"},
+		{"generic", "Autonomous My Agent agent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.lang, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			opts := scaffold.CreateOptions{
+				Name:      "my-agent",
+				Lang:      tc.lang,
+				AgentsDir: dir,
+			}
+			if err := scaffold.CreateAgent(ctx, opts); err != nil {
+				t.Fatalf("CreateAgent(%s) error: %v", tc.lang, err)
+			}
+			b, err := os.ReadFile(filepath.Join(dir, "my-agent", "agent.yaml"))
+			if err != nil {
+				t.Fatalf("read agent.yaml: %v", err)
+			}
+			if !strings.Contains(string(b), tc.contains) {
+				t.Fatalf("agent.yaml for lang %q missing %q:\n%s", tc.lang, tc.contains, string(b))
+			}
+		})
+	}
+}
+
+func TestCreateAgent_ExistsWithoutForce(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ctx := context.Background()
+	opts := scaffold.CreateOptions{
+		Name:      "dup-agent",
+		Lang:      "go",
+		AgentsDir: dir,
+	}
+	if err := scaffold.CreateAgent(ctx, opts); err != nil {
+		t.Fatalf("first CreateAgent() error: %v", err)
+	}
+	err := scaffold.CreateAgent(ctx, opts)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected already-exists error, got %v", err)
+	}
+}
+
+func TestCopyAgent_ForceOverwrites(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	from := filepath.Join(dir, "from")
+	if err := os.MkdirAll(from, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(from, "agent.yaml"), []byte("name: from\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-create dst with a stale file that should disappear after force overwrite.
+	dst := filepath.Join(dir, "to")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "stale.txt"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := scaffold.CopyAgent(ctx, dir, "from", "to", true); err != nil {
+		t.Fatalf("CopyAgent(force) error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "stale.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected stale.txt to be removed by force overwrite, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "agent.yaml")); err != nil {
+		t.Fatalf("expected agent.yaml after force overwrite: %v", err)
+	}
+}
+
+func TestCopyAgent_DestExistsWithoutForce(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	from := filepath.Join(dir, "from")
+	if err := os.MkdirAll(from, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(from, "agent.yaml"), []byte("name: from\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "to"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := scaffold.CopyAgent(ctx, dir, "from", "to", false)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected already-exists error, got %v", err)
+	}
+}
+
+func TestCopyAgent_MissingManifest(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	from := filepath.Join(dir, "from")
+	if err := os.MkdirAll(from, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Note: no agent.yaml in source — copy succeeds but manifest read fails.
+	if err := os.WriteFile(filepath.Join(from, "README.md"), []byte("docs"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := scaffold.CopyAgent(ctx, dir, "from", "to", false)
+	if err == nil || !strings.Contains(err.Error(), "failed to read manifest") {
+		t.Fatalf("expected manifest read error, got %v", err)
+	}
+}
+
+func TestCreatePipeline_DefaultDescription(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := scaffold.CreatePipeline(ctx, scaffold.CreatePipelineOptions{
+		Name:      "default-desc",
+		OutputDir: dir,
+	}); err != nil {
+		t.Fatalf("CreatePipeline error: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "default-desc.yaml"))
+	if err != nil {
+		t.Fatalf("read pipeline yaml: %v", err)
+	}
+	if !strings.Contains(string(b), "Pipeline for Default Desc") {
+		t.Fatalf("expected default description in output:\n%s", string(b))
+	}
+}
+
 func TestCreatePipeline_CreateAndOverwrite(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
