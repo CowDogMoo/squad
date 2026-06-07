@@ -477,6 +477,29 @@ func TestSkillRuntime_AllowsToolSkipsUnrestrictedSkill(t *testing.T) {
 	}
 }
 
+func TestSkillRuntime_AllowsToolSkipsNilManifestEntry(t *testing.T) {
+	// Stack entries with a nil Manifest must be skipped rather than crash —
+	// can happen if a catalog row is half-populated by a bug or a future
+	// async-loading code path.
+	stack := skill.NewStack()
+	stack.Push(skill.Entry{Manifest: nil, Dir: t.TempDir()})
+	stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:         "restricted",
+			Description:  "x",
+			AllowedTools: skill.AllowedTools{"Read"},
+		},
+		Dir: t.TempDir(),
+	})
+	r := &SkillRuntime{Stack: stack}
+	if !r.AllowsTool("Read") {
+		t.Error("nil-manifest entry should be skipped, not deny")
+	}
+	if r.AllowsTool("Bash") {
+		t.Error("restriction from non-nil entry should still apply")
+	}
+}
+
 // TestSkillRuntime_AllowsTool_RealManifestRoundTrip wires ParseManifest into
 // SkillRuntime to cover the seam unit tests miss. Every hand-built Manifest
 // test bypasses the parser, so a parser bug (e.g. a comma sticking to a tool

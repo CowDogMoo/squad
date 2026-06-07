@@ -352,3 +352,34 @@ func TestParseManifestTrimsDescriptionWhitespace(t *testing.T) {
 		t.Errorf("description = %q, want %q", m.Description, "padded with spaces")
 	}
 }
+
+func TestAllowedToolsUnmarshalYAMLNilNode(t *testing.T) {
+	var a AllowedTools
+	if err := a.UnmarshalYAML(nil); err != nil {
+		t.Fatalf("nil node should be a no-op, got %v", err)
+	}
+	if len(a) != 0 {
+		t.Errorf("expected empty slice, got %v", a)
+	}
+}
+
+func TestParseManifestAllowedToolsSequenceWithNonScalar(t *testing.T) {
+	// A mapping inside the sequence (`- key: value`) must be rejected, not
+	// silently flattened — otherwise a typo'd manifest produces an empty
+	// allow-list that denies everything.
+	raw := []byte("---\nname: ok\ndescription: ok\nallowed-tools:\n  - Read\n  - key: val\n---\n")
+	if _, err := ParseManifest(raw); err == nil {
+		t.Fatal("expected error for non-scalar sequence entry")
+	}
+}
+
+func TestValidateRejectsEmptyAllowedToolsEntry(t *testing.T) {
+	m := &Manifest{
+		Name:         "ok",
+		Description:  "ok",
+		AllowedTools: AllowedTools{"Read", "   "},
+	}
+	if err := m.Validate(); err == nil {
+		t.Fatal("expected error for whitespace-only allowed-tools entry")
+	}
+}
