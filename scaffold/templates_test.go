@@ -50,3 +50,14 @@ func TestRenderAndListTemplates(t *testing.T) {
 		t.Fatalf("rendered output missing references path: \n%s", out)
 	}
 }
+
+func TestRender_TemplateNotFound(t *testing.T) {
+	t.Parallel()
+	_, err := Render("nonexistent.tmpl", AgentData{Name: "x", NameTitle: "X"})
+	if err == nil {
+		t.Fatal("expected error for missing template, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to read template") {
+		t.Fatalf("expected 'failed to read template' in error, got %v", err)
+	}
+}
