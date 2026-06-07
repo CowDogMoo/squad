@@ -1,0 +1,40 @@
+---
+name: {{.Name}}
+version: v1
+description: {{.Description}}
+
+stages:
+  - name: review
+    agent: go-review
+
+  # Parallel stage example:
+  # - name: analysis
+  #   agents:
+  #     - go-review
+  #     - go-security-audit
+
+  # Stage with dependencies:
+  # - name: testing
+  #   agent: go-tests
+  #   depends_on: [review]
+
+  # Stage with variables and mode:
+  # - name: documentation
+  #   agent: go-doc-comments
+  #   mode: edit
+  #   vars:
+  #     COVERAGE_TARGET: "85"
+  #   depends_on: [testing]
+
+# Regression gates run after a stage completes:
+# gates:
+#   - after: review
+#     command: "go build ./..."
+#     on_failure: revert   # revert | stop (default: stop)
+#   - after: testing
+#     command: "go test ./..."
+#     on_failure: stop
+
+# Output format for the pipeline report:
+# output:
+#   format: json  # json | markdown (default: markdown)

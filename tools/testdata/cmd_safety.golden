@@ -1,0 +1,7 @@
+ls -la → safe=true blocked=false
+git status → safe=true blocked=false
+sudo rm -rf / → safe=false blocked=true (blocked command: sudo  commands are not allowed)
+go test ./... → safe=false blocked=false
+nmap 192.168.1.0/24 → safe=false blocked=true (blocked command: nmap  commands are not allowed)
+echo hello → safe=true blocked=false
+pip install requests → safe=false blocked=true (blocked command: pip install  commands are not allowed)

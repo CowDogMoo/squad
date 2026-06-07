@@ -1,0 +1,65 @@
+# Code coverage output files
+coverage-all.out
+coverage.out
+*.cov
+
+# Local Claude Code config (keep .claude/agents/ tracked)
+.claude/*
+!.claude/agents/
+
+# Distribution directory for binaries
+dist/
+
+# Generated binaries (local development)
+/squad
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Generated directories
+builds/
+
+# Generated logs
+*.log
+
+# Custom attributes files created by macOS
+.DS_Store
+.secrets
+
+# Taskfile
+.task
+
+# Pre-commit artifacts
+node_modules
+
+# Packer artifacts
+manifest.json
+
+# Template discovery artifacts
+discovered-templates.json
+template-matrix.json
+
+# Development artifacts
+TODO
+FIXME.md
+
+# Test output files (but keep *_test.go files!)
+*.test
+test-results/
+testdata/tmp/
+
+# Secrets and environment files
+.env
+.env.*
+*.key
+*.pem
+
+# Tool version files (machine-specific)
+.tool-versions
+
+# Session logs (per-run event traces)
+.squad/
+
+# Go vendor directory
+vendor/

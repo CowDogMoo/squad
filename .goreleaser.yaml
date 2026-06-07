@@ -1,0 +1,70 @@
+---
+version: 2
+
+# Snapshot configuration for non-release builds
+# Use git describe format for version strings
+snapshot:
+  version_template: "{{ .Version }}-next"
+
+builds:
+  - id: "squad"
+
+    binary: squad
+
+    main: ./cmd/squad
+
+    # Inject version info via ldflags
+    # Use {{.Summary}} to get git describe format (e.g., v3.0.0-1-gc1b0525)
+    ldflags:
+      - -s -w
+      - -X main.version={{.Summary}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+    goos:
+      - linux
+      - darwin
+      # - windows
+
+    goarch:
+      - amd64
+      - arm
+      - arm64
+
+    # GOARM to build for when GOARCH is arm.
+    goarm:
+      - 6
+      - 7
+
+    # GOAMD64 to build when GOARCH is amd64.
+    goamd64:
+      - v2
+      - v3
+
+    hooks:
+      pre: go mod tidy
+
+  # Windows-only GUI-subsystem build of the routines daemon. -H=windowsgui
+  # marks the PE file as a GUI subsystem program so Task Scheduler can
+  # restart the daemon without flashing a console window. On other
+  # platforms the daemon runs from the main squad binary via `squad routined`,
+  # so this build entry is intentionally Windows-only.
+  - id: "squad-routined"
+
+    binary: squad-routined
+
+    main: ./cmd/squad-routined
+
+    ldflags:
+      - -s -w
+      - -H=windowsgui
+      - -X main.version={{.Summary}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+    goos:
+      - windows
+
+    goarch:
+      - amd64
+      - arm64
