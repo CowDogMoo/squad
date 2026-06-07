@@ -49,6 +49,17 @@ type Config struct {
 // visible response, so the model exhausts its budget on thinking alone.
 const DefaultMaxOutputTokens = 16384
 
+// MaxResponsesInputTokens caps server-billed input tokens per iteration.
+// OpenAI re-bills the full previous_response_id chain on every call, so
+// unbounded server-side context translates directly to unbounded cost.
+// When a response reports more input tokens than this, the loop returns
+// with [ErrInputTokenCapReached].
+const MaxResponsesInputTokens = 250_000
+
+// ErrInputTokenCapReached signals the input-token watchdog tripped in the
+// Responses API tool loop.
+var ErrInputTokenCapReached = errors.New("input token cap reached")
+
 func (rc *Config) applyOptionals(params *oairesponses.ResponseNewParams) {
 	if rc.Temperature >= 0 && !IsReasoningModel(rc.Model, rc.ReasoningPrefixes) {
 		params.Temperature = openai.Float(rc.Temperature)
@@ -212,7 +223,12 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 		}
 
 		logEvent(logger, session.EventIteration, map[string]any{"index": i + 1, "tool_calls": len(calls)})
-		logging.InfoContext(ctx, "responses API: iteration %d with %d tool call(s)", i+1, len(calls))
+		if m != nil {
+			logging.InfoContext(ctx, "responses API: iteration %d/%d with %d tool call(s) (cost=$%.4f, tokens=%d/%d)",
+				i+1, maxIter, len(calls), m.TotalCostWithChildren(), m.InputTokens(), m.OutputTokens())
+		} else {
+			logging.InfoContext(ctx, "responses API: iteration %d/%d with %d tool call(s)", i+1, maxIter, len(calls))
+		}
 		if checkRepeat(ctx, &repeat, calls) {
 			break
 		}
@@ -259,6 +275,12 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 			logging.InfoContext(ctx, "responses API: budget exceeded ($%.4f >= $%.4f max), stopping", m.TotalCostWithChildren(), m.MaxCost)
 			text := resp.OutputText()
 			return resp, text, metrics.ErrBudgetExceeded
+		}
+
+		if resp.Usage.InputTokens > MaxResponsesInputTokens {
+			logging.InfoContext(ctx, "responses API: input token cap reached (%d > %d), stopping", resp.Usage.InputTokens, MaxResponsesInputTokens)
+			text := resp.OutputText()
+			return resp, text, ErrInputTokenCapReached
 		}
 	}
 
@@ -546,7 +568,7 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			}
 		}
 
-		output = tools.TruncateToolOutputHeadTail(output, 32*1024)
+		output = tools.TruncateToolOutputHeadTail(output, 16*1024)
 
 		logEvent(logger, session.EventToolResult, map[string]any{
 			"call_id":     call.CallID,

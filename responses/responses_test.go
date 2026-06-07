@@ -887,6 +887,82 @@ func TestRunWithToolsBudgetExceededDuringLoop(t *testing.T) {
 	_ = text
 }
 
+func TestRunWithToolsInputTokenCapReached(t *testing.T) {
+	t.Parallel()
+
+	callCount := int32(0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count := atomic.AddInt32(&callCount, 1)
+		w.Header().Set("Content-Type", "application/json")
+		var payload map[string]any
+		switch count {
+		case 1:
+			payload = map[string]any{
+				"id": "resp-1", "object": "response", "created_at": 0,
+				"model": "gpt-4o", "parallel_tool_calls": false,
+				"temperature": 0, "tool_choice": "auto", "tools": []any{},
+				"top_p":              1,
+				"error":              map[string]any{"code": "server_error", "message": ""},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"output": []map[string]any{
+					{
+						"id": "fc-1", "type": "function_call",
+						"call_id": "call-1", "name": "Echo", "arguments": `{"msg":"hi"}`,
+					},
+				},
+			}
+		default:
+			payload = map[string]any{
+				"id": "resp-2", "object": "response", "created_at": 0,
+				"model": "gpt-4o", "parallel_tool_calls": false,
+				"temperature": 0, "tool_choice": "auto", "tools": []any{},
+				"top_p":              1,
+				"error":              map[string]any{"code": "server_error", "message": ""},
+				"incomplete_details": map[string]any{"reason": ""},
+				"instructions":       "system",
+				"metadata":           map[string]any{},
+				"usage":              map[string]any{"input_tokens": MaxResponsesInputTokens + 1, "output_tokens": 1000},
+				"output": []map[string]any{
+					{
+						"id": "fc-2", "type": "function_call",
+						"call_id": "call-2", "name": "Echo", "arguments": `{"msg":"again"}`,
+					},
+				},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer server.Close()
+
+	td := t.TempDir()
+	_, err := RunWithTools(
+		context.Background(),
+		"key",
+		server.URL,
+		"gpt-4o",
+		"system",
+		"user",
+		td,
+		"",
+		"",
+		0.4,
+		0,
+		10,
+		0,
+		nil,
+		nil,
+		nil,
+		&executor.LocalExecutor{WorkingDir: td},
+		nil,
+		nil,
+	)
+	if !errors.Is(err, ErrInputTokenCapReached) {
+		t.Fatalf("expected ErrInputTokenCapReached, got: %v", err)
+	}
+}
+
 func TestExecuteAndBuildOutputsWithResultAndError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
