@@ -187,8 +187,13 @@ func skillTool(runtime *SkillRuntime) func(ctx context.Context, rawArgs []byte) 
 			return "", fmt.Errorf("skill: body for %q exceeds %d bytes (got %d)",
 				args.Name, skill.MaxBodyBytes, len(body))
 		}
-		if runtime.Stack != nil {
-			runtime.Stack.Push(entry)
+		if runtime.Stack != nil && !runtime.Stack.Push(entry) {
+			// Entries here come from runtime.find, which only returns
+			// catalog-loaded rows that always have Dir set. A drop here
+			// signals a catalog-loading bug worth surfacing rather than
+			// silently dispatching an unscoped skill.
+			logging.WarnContext(ctx, "skill: dropped from stack (invalid entry): name=%s dir=%q",
+				entry.Name(), entry.Dir)
 		}
 		if runtime.OnLoad != nil {
 			runtime.OnLoad(entry)

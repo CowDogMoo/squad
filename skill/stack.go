@@ -31,20 +31,25 @@ func NewStack() *Stack {
 	return &Stack{}
 }
 
-// Push adds an entry to the stack. Idempotent: re-pushing a skill already on
-// the stack is a no-op.
-func (s *Stack) Push(e Entry) {
+// Push adds an entry to the stack and reports whether it is now on the
+// stack. Idempotent: re-pushing a skill already on the stack returns true
+// without adding a duplicate. Returns false only when the entry is invalid
+// (nil receiver or empty Dir) — Dir anchors the Read/Bash scope expansion,
+// so an entry without one would be unusable. Callers that don't care about
+// the result can discard it; tests should assert it to catch silent drops.
+func (s *Stack) Push(e Entry) bool {
 	if s == nil || e.Dir == "" {
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, existing := range s.dirs {
 		if existing.Dir == e.Dir {
-			return
+			return true
 		}
 	}
 	s.dirs = append(s.dirs, e)
+	return true
 }
 
 // Top returns the most recently pushed entry. ok is false when the stack

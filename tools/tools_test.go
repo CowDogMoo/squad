@@ -3464,14 +3464,16 @@ func TestExecuteToolCallDeniesUnallowedTool(t *testing.T) {
 	}
 
 	stack := skill.NewStack()
-	stack.Push(skill.Entry{
+	if !stack.Push(skill.Entry{
 		Manifest: &skill.Manifest{
 			Name:         "restricted",
 			Description:  "x",
 			AllowedTools: skill.AllowedTools{"Read"},
 		},
-		Dir: t.TempDir(), // Stack.Push silently drops entries with no Dir.
-	})
+		Dir: t.TempDir(),
+	}) {
+		t.Fatal("stack push failed")
+	}
 	ctx := WithSkillRuntime(context.Background(), &SkillRuntime{Stack: stack})
 
 	resp := executeToolCall(ctx, llms.ToolCall{
