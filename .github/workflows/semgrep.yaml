@@ -43,5 +43,4 @@ jobs:
             --config p/secrets \
             --config p/ci \
             --config p/supply-chain \
-            --config p/golang \
-            --config p/trailofbits-go
+            --config p/golang
