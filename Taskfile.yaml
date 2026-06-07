@@ -102,6 +102,7 @@ tasks:
     silent: true
     vars:
       COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
+      COST_BUDGET: '{{.COST_BUDGET | default "5"}}'
     cmds:
       - |
         go run ./cmd/squad run -v \
@@ -114,6 +115,7 @@ tasks:
           --require-actionable=true \
           --temperature 0.3 \
           --max-iterations 200 \
+          --max-cost {{.COST_BUDGET}} \
           --var COVERAGE_TARGET={{.COVERAGE_TARGET}} \
           --out {{.OUT_DIR}}/squad-go-tests.txt
       - echo "Test coverage output written to {{.OUT_DIR}}/squad-go-tests.txt"

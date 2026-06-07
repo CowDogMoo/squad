@@ -236,3 +236,40 @@ func TestCacheDirEmptyEnv(t *testing.T) {
 		t.Fatalf("expected empty cache dir, got %q", got)
 	}
 }
+
+// New tests to cover success paths for ConfigFile/CacheFile and CacheDir with env.
+func TestConfigAndCacheFileCreatePaths(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, "cfg"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(base, "cache"))
+
+	cfgPath, err := ConfigFile("app.yaml")
+	if err != nil {
+		t.Fatalf("ConfigFile: %v", err)
+	}
+	if want := filepath.Join(base, "cfg", "squad", "app.yaml"); cfgPath != want {
+		t.Fatalf("ConfigFile path=%q, want %q", cfgPath, want)
+	}
+	if _, err := os.Stat(filepath.Dir(cfgPath)); err != nil {
+		t.Fatalf("config dir not created: %v", err)
+	}
+
+	cachePath, err := CacheFile("cache.json")
+	if err != nil {
+		t.Fatalf("CacheFile: %v", err)
+	}
+	if want := filepath.Join(base, "cache", "squad", "cache.json"); cachePath != want {
+		t.Fatalf("CacheFile path=%q, want %q", cachePath, want)
+	}
+	if _, err := os.Stat(filepath.Dir(cachePath)); err != nil {
+		t.Fatalf("cache dir not created: %v", err)
+	}
+}
+
+func TestCacheDirWithEnv(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(base, "cache"))
+	if got := CacheDir(); got != filepath.Join(base, "cache", "squad") {
+		t.Fatalf("CacheDir=%q, want %q", got, filepath.Join(base, "cache", "squad"))
+	}
+}
