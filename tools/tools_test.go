@@ -14,6 +14,7 @@ import (
 
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/skill"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -3445,4 +3446,51 @@ func TestReadCacheSize(t *testing.T) {
 			t.Errorf("readCacheSize = %d, want 3", got)
 		}
 	})
+}
+
+func TestExecuteToolCallDeniesUnallowedTool(t *testing.T) {
+	// When a skill on the stack restricts allowed-tools, executeToolCall
+	// must short-circuit before invoking the handler — returning an error
+	// payload the model sees in the tool_result. Sentinel handler asserts
+	// it never ran.
+	called := false
+	handlers := map[string]Handler{
+		"Bash": {
+			Call: func(_ context.Context, _ []byte) (string, error) {
+				called = true
+				return "should not be reached", nil
+			},
+		},
+	}
+
+	stack := skill.NewStack()
+	if !stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:         "restricted",
+			Description:  "x",
+			AllowedTools: skill.AllowedTools{"Read"},
+		},
+		Dir: t.TempDir(),
+	}) {
+		t.Fatal("stack push failed")
+	}
+	ctx := WithSkillRuntime(context.Background(), &SkillRuntime{Stack: stack})
+
+	resp := executeToolCall(ctx, llms.ToolCall{
+		ID: "call_1",
+		FunctionCall: &llms.FunctionCall{
+			Name:      "Bash",
+			Arguments: `{"command":"ls"}`,
+		},
+	}, handlers)
+
+	if called {
+		t.Fatal("handler ran despite skill's allowed-tools restriction")
+	}
+	if !strings.Contains(resp.Content, "not permitted") {
+		t.Errorf("response should explain denial, got %q", resp.Content)
+	}
+	if resp.Name != "Bash" {
+		t.Errorf("response Name = %q, want Bash", resp.Name)
+	}
 }

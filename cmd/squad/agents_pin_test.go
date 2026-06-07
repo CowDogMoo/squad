@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -233,6 +234,56 @@ func TestAgentsSources_localPathsOnly(t *testing.T) {
 	if strings.Contains(out, "REPOSITORIES") {
 		t.Fatalf("REPOSITORIES section should be omitted, got:\n%s", out)
 	}
+}
+
+func TestAgentsAdd_localPathDuplicateRejected(t *testing.T) {
+	cfg := newAgentsTestCfg(t)
+	dir := t.TempDir()
+	if _, err := runAgentsSubcmd(t, cfg, agentsAddCmd, dir); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	if _, err := runAgentsSubcmd(t, cfg, agentsAddCmd, dir); err == nil {
+		t.Fatal("expected duplicate local-path error from manager.AddLocalPath")
+	}
+}
+
+func TestAgentsPin_nilCfgErrors(t *testing.T) {
+	// Bypass runAgentsSubcmd's withConfig so cmd.Context() returns no cfg.
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	if err := runAgentsPin(cmd, []string{"any", "v1"}); err == nil {
+		t.Fatal("expected error when context lacks a config")
+	}
+}
+
+func TestAgentsPin_managerConstructionErrorSurfaced(t *testing.T) {
+	// Force source.NewManager to fail by pointing XDG_CONFIG_HOME at a
+	// regular file: config.ConfigFile will try MkdirAll on that path's
+	// parent and trip ENOTDIR. Exercises the NewManager-error branch of
+	// runAgentsPin without inventing a mock.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := writeFile(blocker, "x"); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", blocker)
+	t.Setenv("XDG_CACHE_HOME", blocker)
+	t.Setenv("HOME", blocker)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Repositories: map[string]config.RepoSpec{"x": {URL: "https://example.com/r.git"}},
+		},
+	}
+	cmd := &cobra.Command{}
+	cmd.SetContext(withConfig(context.Background(), cfg))
+	if err := runAgentsPin(cmd, []string{"x", "v1"}); err == nil {
+		t.Fatal("expected NewManager construction failure to surface as error")
+	}
+}
+
+// writeFile is a small helper that fails the test on error.
+func writeFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 func TestAgentsSources_rendersRefColumn(t *testing.T) {

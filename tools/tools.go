@@ -367,7 +367,6 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	)
 	defer span.End()
 
-	// Initialize efficiency features on context.
 	ctx = InitReadCache(ctx)
 	ctx = InitIterationCounter(ctx)
 	ctx = InitTokenCalibration(ctx)
@@ -1076,6 +1075,17 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 	}
 
 	toolName := toolCall.FunctionCall.Name
+
+	// Honor the active skill's allowed-tools restriction. When a skill on the
+	// stack lists a non-empty allowed-tools field, only those tools (plus the
+	// Skill loader itself) may run; everything else is denied without
+	// invoking the handler.
+	if rt := GetSkillRuntime(ctx); rt != nil && !rt.AllowsTool(toolName) {
+		toolResponse.Name = toolName
+		toolResponse.Content = fmt.Sprintf("error: tool %q is not permitted by the active skill's allowed-tools", toolName)
+		logging.InfoContext(ctx, "  ✗ %s denied by allowed-tools", toolName)
+		return toolResponse
+	}
 	ctx, span := telemetry.Tracer().Start(ctx, "tool."+toolName,
 		trace.WithAttributes(
 			attribute.String("squad.tool.name", toolName),

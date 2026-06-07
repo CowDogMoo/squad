@@ -50,10 +50,33 @@ func TestStackPushTopLen(t *testing.T) {
 
 func TestStackPushIdempotent(t *testing.T) {
 	s := NewStack()
-	s.Push(entry("a", "/tmp/a"))
-	s.Push(entry("a", "/tmp/a"))
+	if !s.Push(entry("a", "/tmp/a")) {
+		t.Fatal("first push should succeed")
+	}
+	if !s.Push(entry("a", "/tmp/a")) {
+		t.Error("duplicate push should report success (already on stack)")
+	}
 	if s.Len() != 1 {
 		t.Errorf("duplicate push grew stack to %d", s.Len())
+	}
+}
+
+func TestStackPushReturnsFalseForInvalidEntry(t *testing.T) {
+	// Dir anchors Read/Bash scope expansion at runtime, so an entry with
+	// no Dir is unusable and gets dropped. Push must report that drop so
+	// tests don't quietly proceed against an empty stack — the exact bug
+	// that masked the allowed-tools denial test before this contract.
+	s := NewStack()
+	if s.Push(Entry{Manifest: &Manifest{Name: "no-dir"}}) {
+		t.Error("Push of entry with empty Dir should return false")
+	}
+	if s.Len() != 0 {
+		t.Errorf("stack should remain empty, got len=%d", s.Len())
+	}
+
+	var nilStack *Stack
+	if nilStack.Push(entry("a", "/tmp/a")) {
+		t.Error("Push on nil receiver should return false")
 	}
 }
 

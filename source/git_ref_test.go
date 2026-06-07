@@ -188,6 +188,79 @@ func TestCloneOrUpdate_corruptCacheDirErrors(t *testing.T) {
 	_ = cacheDir
 }
 
+func TestCloneOrUpdate_fetchFailureWarnsButResolvesFromCache(t *testing.T) {
+	t.Parallel()
+	fixture, _, tag, _, _ := fixtureRepo(t)
+	_, url, ops := cloneFromFixture(t, fixture)
+
+	// First clone populates the cache and brings the tag into local refs.
+	repoPath, err := ops.CloneOrUpdate(url, "")
+	if err != nil {
+		t.Fatalf("initial CloneOrUpdate: %v", err)
+	}
+
+	// Point origin at a nonexistent path so the next CloneOrUpdate's
+	// fetch attempt fails with something other than NoErrAlreadyUpToDate.
+	// checkoutRef should print a warning and fall back to the local refs
+	// rather than aborting the run.
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
+	}
+	gitCfg, err := repo.Config()
+	if err != nil {
+		t.Fatalf("repo.Config: %v", err)
+	}
+	gitCfg.Remotes["origin"].URLs = []string{"file:///squad-test-nonexistent-" + filepath.Base(fixture) + ".git"}
+	if err := repo.SetConfig(gitCfg); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	// CloneOrUpdate must still succeed because the tag is already in the
+	// local refs. The fetch failure is downgraded to a stderr warning.
+	if _, err := ops.CloneOrUpdate(url, tag); err != nil {
+		t.Fatalf("expected fetch warning to be non-fatal, got: %v", err)
+	}
+}
+
+func TestCloneOrUpdate_bareCacheSurfacesWorktreeError(t *testing.T) {
+	t.Parallel()
+	fixture, _, tag, _, _ := fixtureRepo(t)
+	_, url, ops := cloneFromFixture(t, fixture)
+
+	repoPath, err := ops.CloneOrUpdate(url, "")
+	if err != nil {
+		t.Fatalf("initial CloneOrUpdate: %v", err)
+	}
+
+	// Rearrange the cache into a bare-repository layout: move .git/* up
+	// to the repo root and remove the .git directory. PlainOpen then
+	// reports the path as a bare repo (wt == nil), so checkoutRef's
+	// Worktree() call after resolveRef succeeds returns ErrIsBareRepository.
+	gitDir := filepath.Join(repoPath, ".git")
+	entries, err := os.ReadDir(gitDir)
+	if err != nil {
+		t.Fatalf("ReadDir(.git): %v", err)
+	}
+	for _, e := range entries {
+		src := filepath.Join(gitDir, e.Name())
+		dst := filepath.Join(repoPath, e.Name())
+		if err := os.RemoveAll(dst); err != nil {
+			t.Fatalf("RemoveAll %s: %v", dst, err)
+		}
+		if err := os.Rename(src, dst); err != nil {
+			t.Fatalf("Rename %s -> %s: %v", src, dst, err)
+		}
+	}
+	if err := os.RemoveAll(gitDir); err != nil {
+		t.Fatalf("RemoveAll .git: %v", err)
+	}
+
+	if _, err := ops.CloneOrUpdate(url, tag); err == nil {
+		t.Fatal("expected Worktree() error from bare cache")
+	}
+}
+
 func TestCloneOrUpdate_followupUpdateSwitchesRef(t *testing.T) {
 	t.Parallel()
 	fixture, firstSHA, tag, _, _ := fixtureRepo(t)

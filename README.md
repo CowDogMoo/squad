@@ -454,6 +454,19 @@ squad skill add official https://github.com/cowdogmoo/squad-skills.git
 
 The [official skills repo](https://github.com/CowDogMoo/squad-skills) is the shared home for production-tuned skills, mirroring the layout of the official agents repo.
 
+### Validate skills in any repo
+
+Squad ships a [pre-commit-framework](https://pre-commit.com) hook so any skill catalog (yours, the official repo, a partner's) can enforce open-standard conformance on every commit. Drop three lines into `.pre-commit-config.yaml`:
+
+```yaml
+- repo: https://github.com/cowdogmoo/squad
+  rev: main
+  hooks:
+    - id: squad-skill-validate
+```
+
+The hook runs `squad skill validate` against every staged `SKILL.md` and its skill directory — same rules squad's runtime enforces (frontmatter shape, name/description constraints, body-size targets, path-traversal guards, script invocability), so a skill that passes the hook will load cleanly at agent runtime. When validation rules change, bump `rev`; you don't maintain a parallel implementation.
+
 Full reference: [docs/skills.md](docs/skills.md).
 
 ## Browser Profiles

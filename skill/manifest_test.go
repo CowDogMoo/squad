@@ -253,3 +253,133 @@ func TestConsumeClosingLineNoNewline(t *testing.T) {
 		t.Errorf("expected nil, got %q", got)
 	}
 }
+
+func TestParseManifestOptionalFields(t *testing.T) {
+	raw := []byte("---\n" +
+		"name: ok\n" +
+		"description: ok\n" +
+		"license: MIT\n" +
+		"compatibility: Requires git and bash\n" +
+		"allowed-tools: \"Bash(python:*) Read WebFetch\"\n" +
+		"metadata:\n" +
+		"  author: Acme\n" +
+		"  version: 1.2.3\n" +
+		"---\nbody\n")
+	m, err := ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.License != "MIT" {
+		t.Errorf("license = %q, want MIT", m.License)
+	}
+	if m.Compatibility != "Requires git and bash" {
+		t.Errorf("compatibility = %q", m.Compatibility)
+	}
+	if got, want := []string(m.AllowedTools), []string{"Bash", "Read", "WebFetch"}; !equalSlices(got, want) {
+		t.Errorf("allowed-tools = %v, want %v", got, want)
+	}
+	if m.Metadata["author"] != "Acme" || m.Metadata["version"] != "1.2.3" {
+		t.Errorf("metadata = %v", m.Metadata)
+	}
+}
+
+func TestParseManifestAllowedToolsSequence(t *testing.T) {
+	raw := []byte("---\nname: ok\ndescription: ok\nallowed-tools:\n  - Read\n  - Bash(python:*)\n---\n")
+	m, err := ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := []string(m.AllowedTools), []string{"Read", "Bash"}; !equalSlices(got, want) {
+		t.Errorf("allowed-tools = %v, want %v", got, want)
+	}
+}
+
+func TestParseManifestAllowedToolsCommaSeparated(t *testing.T) {
+	// Real-world skills (the squad-skills repo and most published Claude Code
+	// skills) write the list with commas rather than the bare-space form the
+	// guide example uses. Both must parse to the same set or AllowsTool will
+	// silently deny access to a comma-suffixed entry like "Read,".
+	raw := []byte("---\nname: ok\ndescription: ok\nallowed-tools: Read, Glob, Edit\n---\n")
+	m, err := ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := []string(m.AllowedTools), []string{"Read", "Glob", "Edit"}; !equalSlices(got, want) {
+		t.Errorf("allowed-tools = %v, want %v", got, want)
+	}
+	for _, n := range []string{"Read", "Glob", "Edit"} {
+		if !m.AllowedTools.Allows(n) {
+			t.Errorf("%s should be permitted; trailing comma must not leak into the entry", n)
+		}
+	}
+}
+
+func TestAllowedToolsAllows(t *testing.T) {
+	empty := AllowedTools{}
+	if !empty.Allows("anything") {
+		t.Error("empty allow-list should permit any tool")
+	}
+	a := AllowedTools{"Read", "Bash"}
+	if !a.Allows("Read") || !a.Allows("Bash") {
+		t.Error("listed tools should be allowed")
+	}
+	if a.Allows("WebFetch") {
+		t.Error("unlisted tool should be denied")
+	}
+}
+
+func TestParseManifestCompatibilityTooLong(t *testing.T) {
+	raw := []byte("---\nname: ok\ndescription: ok\ncompatibility: " + strings.Repeat("x", MaxCompatibilityLen+1) + "\n---\n")
+	if _, err := ParseManifest(raw); err == nil {
+		t.Fatal("expected compatibility-length error")
+	}
+}
+
+func TestParseManifestAllowedToolsInvalidShape(t *testing.T) {
+	raw := []byte("---\nname: ok\ndescription: ok\nallowed-tools:\n  Read: yes\n---\n")
+	if _, err := ParseManifest(raw); err == nil {
+		t.Fatal("expected error for mapping shape")
+	}
+}
+
+func TestParseManifestTrimsDescriptionWhitespace(t *testing.T) {
+	raw := []byte("---\nname: ok\ndescription: \"  padded with spaces   \"\n---\n")
+	m, err := ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Description != "padded with spaces" {
+		t.Errorf("description = %q, want %q", m.Description, "padded with spaces")
+	}
+}
+
+func TestAllowedToolsUnmarshalYAMLNilNode(t *testing.T) {
+	var a AllowedTools
+	if err := a.UnmarshalYAML(nil); err != nil {
+		t.Fatalf("nil node should be a no-op, got %v", err)
+	}
+	if len(a) != 0 {
+		t.Errorf("expected empty slice, got %v", a)
+	}
+}
+
+func TestParseManifestAllowedToolsSequenceWithNonScalar(t *testing.T) {
+	// A mapping inside the sequence (`- key: value`) must be rejected, not
+	// silently flattened — otherwise a typo'd manifest produces an empty
+	// allow-list that denies everything.
+	raw := []byte("---\nname: ok\ndescription: ok\nallowed-tools:\n  - Read\n  - key: val\n---\n")
+	if _, err := ParseManifest(raw); err == nil {
+		t.Fatal("expected error for non-scalar sequence entry")
+	}
+}
+
+func TestValidateRejectsEmptyAllowedToolsEntry(t *testing.T) {
+	m := &Manifest{
+		Name:         "ok",
+		Description:  "ok",
+		AllowedTools: AllowedTools{"Read", "   "},
+	}
+	if err := m.Validate(); err == nil {
+		t.Fatal("expected error for whitespace-only allowed-tools entry")
+	}
+}

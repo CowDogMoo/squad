@@ -404,3 +404,179 @@ func TestSkillTool_InvalidJSONArgs(t *testing.T) {
 		t.Fatal("expected JSON parse error")
 	}
 }
+
+func TestSkillRuntime_AllowsToolNoStack(t *testing.T) {
+	var r *SkillRuntime
+	if !r.AllowsTool("Read") {
+		t.Error("nil runtime should permit any tool")
+	}
+	r = &SkillRuntime{}
+	if !r.AllowsTool("Read") {
+		t.Error("runtime with nil stack should permit any tool")
+	}
+}
+
+func TestSkillRuntime_AllowsToolEnforcesAllowList(t *testing.T) {
+	stack := skill.NewStack()
+	stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:         "restricted",
+			Description:  "x",
+			AllowedTools: skill.AllowedTools{"Read", "Bash"},
+		},
+		Dir: t.TempDir(),
+	})
+	r := &SkillRuntime{Stack: stack}
+	if !r.AllowsTool("Read") {
+		t.Error("Read should be allowed")
+	}
+	if r.AllowsTool("WebFetch") {
+		t.Error("WebFetch should be denied")
+	}
+	if !r.AllowsTool("Skill") {
+		t.Error("Skill loader must always be allowed even under restriction")
+	}
+}
+
+func TestSkillRuntime_AllowsToolIntersectsStack(t *testing.T) {
+	stack := skill.NewStack()
+	stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:         "a",
+			Description:  "x",
+			AllowedTools: skill.AllowedTools{"Read", "Bash", "WebFetch"},
+		},
+		Dir: t.TempDir(),
+	})
+	stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:         "b",
+			Description:  "x",
+			AllowedTools: skill.AllowedTools{"Read"},
+		},
+		Dir: t.TempDir(),
+	})
+	r := &SkillRuntime{Stack: stack}
+	if !r.AllowsTool("Read") {
+		t.Error("Read should pass both skills")
+	}
+	if r.AllowsTool("Bash") {
+		t.Error("Bash allowed by 'a' but denied by 'b' — intersection should deny")
+	}
+}
+
+func TestSkillRuntime_AllowsToolSkipsUnrestrictedSkill(t *testing.T) {
+	stack := skill.NewStack()
+	stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{Name: "unrestricted", Description: "x"},
+		Dir:      t.TempDir(),
+	})
+	r := &SkillRuntime{Stack: stack}
+	if !r.AllowsTool("AnythingGoes") {
+		t.Error("skill without allowed-tools should impose no restriction")
+	}
+}
+
+func TestSkillRuntime_AllowsToolSkipsNilManifestEntry(t *testing.T) {
+	// Stack entries with a nil Manifest must be skipped rather than crash —
+	// can happen if a catalog row is half-populated by a bug or a future
+	// async-loading code path.
+	stack := skill.NewStack()
+	stack.Push(skill.Entry{Manifest: nil, Dir: t.TempDir()})
+	stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:         "restricted",
+			Description:  "x",
+			AllowedTools: skill.AllowedTools{"Read"},
+		},
+		Dir: t.TempDir(),
+	})
+	r := &SkillRuntime{Stack: stack}
+	if !r.AllowsTool("Read") {
+		t.Error("nil-manifest entry should be skipped, not deny")
+	}
+	if r.AllowsTool("Bash") {
+		t.Error("restriction from non-nil entry should still apply")
+	}
+}
+
+func TestSkillTool_LogsWhenStackPushDrops(t *testing.T) {
+	// Simulates the catalog-loading-bug case: a runtime Entry without Dir
+	// reaches the loader. The body still has to ship to the model, but the
+	// stack drop must surface — otherwise an unscoped skill silently loads
+	// and Read/Bash scope expansion can't anchor anywhere.
+	rt := &SkillRuntime{
+		Entries: []skill.Entry{
+			{Manifest: &skill.Manifest{Name: "no-dir", Description: "x", Body: "payload"}},
+		},
+		Stack: skill.NewStack(),
+	}
+	body, err := skillTool(rt)(context.Background(), []byte(`{"name":"no-dir"}`))
+	if err != nil {
+		t.Fatalf("loader must still return the body, got error: %v", err)
+	}
+	if body != "payload" {
+		t.Errorf("body = %q, want %q", body, "payload")
+	}
+	if rt.Stack.Len() != 0 {
+		t.Errorf("stack should be empty after a dropped push, got len=%d", rt.Stack.Len())
+	}
+}
+
+// TestSkillRuntime_AllowsTool_RealManifestRoundTrip wires ParseManifest into
+// SkillRuntime to cover the seam unit tests miss. Every hand-built Manifest
+// test bypasses the parser, so a parser bug (e.g. a comma sticking to a tool
+// name) can silently deny every Read call a skill authorized — exactly the
+// regression that surfaced when the official squad-skills catalog landed.
+// The fixture mirrors the real syntax authors use: kebab-case name, comma
+// separators, mixed spacing, Claude-Code-style parens on one entry.
+func TestSkillRuntime_AllowsTool_RealManifestRoundTrip(t *testing.T) {
+	const fixture = `---
+name: doc-comments-discovery-and-fix-loop
+description: Use when scrubbing doc comments from a Go codebase.
+allowed-tools: Read, Glob, Edit, Bash(go:*)
+---
+
+# Doc Comments
+
+body content
+`
+	m, err := skill.ParseManifest([]byte(fixture))
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+
+	stack := skill.NewStack()
+	stack.Push(skill.Entry{Manifest: m, Dir: t.TempDir()})
+	r := &SkillRuntime{Stack: stack}
+
+	for _, name := range []string{"Read", "Glob", "Edit", "Bash"} {
+		if !r.AllowsTool(name) {
+			t.Errorf("declared tool %q denied — parser/runtime seam broke", name)
+		}
+	}
+	for _, name := range []string{"Write", "WebFetch", "Grep"} {
+		if r.AllowsTool(name) {
+			t.Errorf("undeclared tool %q permitted — restriction not honored", name)
+		}
+	}
+	if !r.AllowsTool("Skill") {
+		t.Error("Skill loader must remain callable so the agent can stack more skills")
+	}
+}
+
+func TestSkillTool_RejectsOversizedBody(t *testing.T) {
+	dir := t.TempDir()
+	entry := skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:        "huge",
+			Description: "x",
+			Body:        strings.Repeat("x", skill.MaxBodyBytes+1),
+		},
+		Dir: dir,
+	}
+	rt := &SkillRuntime{Entries: []skill.Entry{entry}, Stack: skill.NewStack()}
+	if _, err := skillTool(rt)(context.Background(), []byte(`{"name":"huge"}`)); err == nil {
+		t.Fatal("expected oversize-body rejection")
+	}
+}
