@@ -477,6 +477,48 @@ func TestSkillRuntime_AllowsToolSkipsUnrestrictedSkill(t *testing.T) {
 	}
 }
 
+// TestSkillRuntime_AllowsTool_RealManifestRoundTrip wires ParseManifest into
+// SkillRuntime to cover the seam unit tests miss. Every hand-built Manifest
+// test bypasses the parser, so a parser bug (e.g. a comma sticking to a tool
+// name) can silently deny every Read call a skill authorized — exactly the
+// regression that surfaced when the official squad-skills catalog landed.
+// The fixture mirrors the real syntax authors use: kebab-case name, comma
+// separators, mixed spacing, Claude-Code-style parens on one entry.
+func TestSkillRuntime_AllowsTool_RealManifestRoundTrip(t *testing.T) {
+	const fixture = `---
+name: doc-comments-discovery-and-fix-loop
+description: Use when scrubbing doc comments from a Go codebase.
+allowed-tools: Read, Glob, Edit, Bash(go:*)
+---
+
+# Doc Comments
+
+body content
+`
+	m, err := skill.ParseManifest([]byte(fixture))
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+
+	stack := skill.NewStack()
+	stack.Push(skill.Entry{Manifest: m, Dir: t.TempDir()})
+	r := &SkillRuntime{Stack: stack}
+
+	for _, name := range []string{"Read", "Glob", "Edit", "Bash"} {
+		if !r.AllowsTool(name) {
+			t.Errorf("declared tool %q denied — parser/runtime seam broke", name)
+		}
+	}
+	for _, name := range []string{"Write", "WebFetch", "Grep"} {
+		if r.AllowsTool(name) {
+			t.Errorf("undeclared tool %q permitted — restriction not honored", name)
+		}
+	}
+	if !r.AllowsTool("Skill") {
+		t.Error("Skill loader must remain callable so the agent can stack more skills")
+	}
+}
+
 func TestSkillTool_RejectsOversizedBody(t *testing.T) {
 	dir := t.TempDir()
 	entry := skill.Entry{
