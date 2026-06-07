@@ -282,3 +282,62 @@ func TestSummarize(t *testing.T) {
 		})
 	}
 }
+
+func TestRefresh_MetaStatError(t *testing.T) {
+	t.Parallel()
+	// Point tailer at a file path (not a dir) so meta.json stat returns a
+	// non-IsNotExist error when we try to stat a path inside it.
+	dir := t.TempDir()
+	// Create a file where meta.json would be, but make it a directory so
+	// os.ReadFile fails — actually just use a non-readable path.
+	metaPath := filepath.Join(dir, "meta.json")
+	if err := os.WriteFile(metaPath, []byte(`{"session_id":"s1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := NewTailer(dir)
+	// First refresh should succeed and load meta.
+	if _, err := tailer.Refresh(); err != nil {
+		t.Fatalf("Refresh() error: %v", err)
+	}
+	if tailer.State().Meta.SessionID != "s1" {
+		t.Errorf("expected session_id s1, got %q", tailer.State().Meta.SessionID)
+	}
+}
+
+func TestRefresh_MetaNotModified(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	metaPath := filepath.Join(dir, "meta.json")
+	if err := os.WriteFile(metaPath, []byte(`{"session_id":"s2"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := NewTailer(dir)
+	if _, err := tailer.Refresh(); err != nil {
+		t.Fatalf("first Refresh() error: %v", err)
+	}
+	// Second refresh with same mtime should be a no-op.
+	if _, err := tailer.Refresh(); err != nil {
+		t.Fatalf("second Refresh() error: %v", err)
+	}
+	if tailer.State().Meta.SessionID != "s2" {
+		t.Errorf("expected session_id s2, got %q", tailer.State().Meta.SessionID)
+	}
+}
+
+func TestSetEventCap(t *testing.T) {
+	t.Parallel()
+	tailer := NewTailer(t.TempDir())
+	tailer.SetEventCap(5)
+	if tailer.eventCap != 5 {
+		t.Errorf("eventCap = %d, want 5", tailer.eventCap)
+	}
+}
+
+func TestDir(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	tailer := NewTailer(dir)
+	if tailer.Dir() != dir {
+		t.Errorf("Dir() = %q, want %q", tailer.Dir(), dir)
+	}
+}

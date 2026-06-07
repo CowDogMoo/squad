@@ -204,3 +204,106 @@ func TestFormatResult(t *testing.T) {
 		t.Error("output should mention finding quality review")
 	}
 }
+
+func TestIsSectionPresent(t *testing.T) {
+	t.Parallel()
+	parsed := &ParsedOutput{
+		HasChangesSummary:  true,
+		HasAnalysisSummary: false,
+		HasFilesTouched:    true,
+		HasValidation:      true,
+		HasIssuesFixed:     true,
+		HasIssuesSkipped:   false,
+		HasFindings:        true,
+	}
+	tests := []struct {
+		section string
+		want    bool
+	}{
+		{"changes_summary", true},
+		{"analysis_summary", false},
+		{"files_touched", true},
+		{"validation", true},
+		{"issues_fixed", true},
+		{"issues_skipped", false},
+		{"findings", true},
+		{"unknown_section", false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.section, func(t *testing.T) {
+			t.Parallel()
+			got := isSectionPresent(parsed, tt.section)
+			if got != tt.want {
+				t.Errorf("isSectionPresent(%q) = %v, want %v", tt.section, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCalculateIterationEfficiency(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		iterations int
+		fileCount  int
+		wantMin    float64
+		wantMax    float64
+	}{
+		{"zero iterations", 0, 10, 0, 0},
+		{"at target", 12, 15, 100, 100},
+		{"below target", 5, 15, 100, 100},
+		{"between target and max", 15, 15, 60, 100},
+		{"beyond max acceptable", 40, 15, 0, 60},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := &GradeResult{}
+			got := calculateIterationEfficiency(tt.iterations, tt.fileCount, result)
+			if got < tt.wantMin || got > tt.wantMax {
+				t.Errorf("calculateIterationEfficiency(%d, %d) = %.1f, want [%.1f, %.1f]",
+					tt.iterations, tt.fileCount, got, tt.wantMin, tt.wantMax)
+			}
+		})
+	}
+}
+
+func TestCalculateReportQuality_MissingSections(t *testing.T) {
+	t.Parallel()
+	parsed := &ParsedOutput{
+		Mode:              "edit",
+		HasChangesSummary: true,
+		HasFilesTouched:   false,
+		HasValidation:     false,
+		HasIssuesFixed:    false,
+	}
+	result := &GradeResult{}
+	score := calculateReportQuality(parsed, result)
+	if score >= 100 {
+		t.Errorf("expected score < 100 with missing sections, got %.1f", score)
+	}
+	if len(result.MissingSections) == 0 {
+		t.Error("expected missing sections to be recorded")
+	}
+}
+
+func TestNewStore_Write_Load(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := NewStoreAt(dir + "/grades.json")
+
+	r := &GradeResult{Agent: "test-agent", Grade: "A", TotalScore: 95}
+	if err := store.Save(r); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	grades, err := store.List("test-agent", 0)
+	if err != nil {
+		t.Fatalf("List() error: %v", err)
+	}
+	if len(grades) != 1 || grades[0].Grade != "A" {
+		t.Errorf("expected 1 grade A, got %v", grades)
+	}
+}

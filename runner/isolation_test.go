@@ -416,3 +416,67 @@ func initGitRepo(t *testing.T) string {
 	run("git", "commit", "-m", "init")
 	return dir
 }
+
+func TestSanitizeForBranch(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"my-agent", "my-agent"},
+		{"My Agent", "my-agent"},
+		{"hello world", "hello-world"},
+		{"---leading", "leading"},
+		{"trailing---", "trailing"},
+		{"UPPER_CASE", "upper_case"},
+		{"special!@#chars", "special---chars"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			got := sanitizeForBranch(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeForBranch(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewIsolationID(t *testing.T) {
+	t.Parallel()
+	id := newIsolationID("my-agent")
+	if id == "" {
+		t.Fatal("newIsolationID returned empty string")
+	}
+	if !strings.HasPrefix(id, "my-agent-") {
+		t.Errorf("newIsolationID(%q) = %q, want prefix %q", "my-agent", id, "my-agent-")
+	}
+	// Empty agent name falls back to "agent"
+	id2 := newIsolationID("!@#")
+	if !strings.HasPrefix(id2, "agent-") {
+		t.Errorf("newIsolationID with empty slug = %q, want prefix %q", id2, "agent-")
+	}
+}
+
+func TestGitRepoRoot(t *testing.T) {
+	t.Parallel()
+	dir := initGitRepo(t)
+	root, err := gitRepoRoot(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("gitRepoRoot() error: %v", err)
+	}
+	if root == "" {
+		t.Error("gitRepoRoot() returned empty string")
+	}
+}
+
+func TestGitRepoRoot_NotGit(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	_, err := gitRepoRoot(context.Background(), dir)
+	if err == nil {
+		t.Error("expected error for non-git directory")
+	}
+}

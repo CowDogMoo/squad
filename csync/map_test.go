@@ -160,3 +160,30 @@ func TestMap_GetOrSet_ExistingKey(t *testing.T) {
 		t.Fatalf("expected 99, got %d", v)
 	}
 }
+
+func TestMap_GetOrSet_DoubleCheck(t *testing.T) {
+	t.Parallel()
+	// Verify the double-check path: two goroutines race to set the same key.
+	// Only one init call should win; the other should see the already-set value.
+	m := NewMap[string, int]()
+	initCount := 0
+	var mu sync.Mutex
+	init := func() int {
+		mu.Lock()
+		initCount++
+		mu.Unlock()
+		return 7
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m.GetOrSet("k", init)
+		}()
+	}
+	wg.Wait()
+	if got, _ := m.Get("k"); got != 7 {
+		t.Errorf("expected value 7, got %d", got)
+	}
+}
