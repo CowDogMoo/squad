@@ -1,6 +1,11 @@
 # Code coverage output files
 coverage-all.out
 coverage.out
+*.cov
+
+# Local Claude Code config (keep .claude/agents/ tracked)
+.claude/*
+!.claude/agents/
 
 # Distribution directory for binaries
 dist/
