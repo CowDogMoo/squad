@@ -262,6 +262,57 @@ func TestExecuteAndBuildOutputs(t *testing.T) {
 	}
 }
 
+func TestExecuteAndBuildOutputsDeniedByAllowedTools(t *testing.T) {
+	t.Parallel()
+	// Active skill on the stack restricts the agent to Read only. Any other
+	// tool call must short-circuit with the structured denial message and
+	// must NOT invoke the handler.
+	stack := skill.NewStack()
+	stack.Push(skill.Entry{
+		Manifest: &skill.Manifest{
+			Name:         "restricted",
+			Description:  "x",
+			AllowedTools: skill.AllowedTools{"Read"},
+		},
+		Dir: t.TempDir(),
+	})
+	ctx := tools.WithSkillRuntime(context.Background(), &tools.SkillRuntime{Stack: stack})
+	var bashInvocations atomic.Int32
+	handlers := map[string]tools.Handler{
+		"Read": {Call: func(context.Context, []byte) (string, error) { return "read-ok", nil }},
+		"Bash": {Call: func(context.Context, []byte) (string, error) {
+			bashInvocations.Add(1)
+			return "should-not-run", nil
+		}},
+	}
+	calls := []FunctionCall{
+		{Name: "Bash", CallID: "call-denied", Arguments: "{}"},
+		{Name: "Read", CallID: "call-allowed", Arguments: "{}"},
+	}
+	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	if len(outputs) != 2 {
+		t.Fatalf("expected 2 outputs, got %d", len(outputs))
+	}
+	deniedOut := outputs[0].OfFunctionCallOutput
+	if deniedOut == nil || deniedOut.CallID != "call-denied" {
+		t.Fatalf("first output should mirror the denied call, got %+v", deniedOut)
+	}
+	wantDenied := `error: tool "Bash" is not permitted by the active skill's allowed-tools`
+	if !reflect.DeepEqual(deniedOut.Output.OfString, openai.String(wantDenied)) {
+		t.Fatalf("denial output = %v, want %q", deniedOut.Output.OfString, wantDenied)
+	}
+	if got := bashInvocations.Load(); got != 0 {
+		t.Fatalf("Bash handler was invoked %d times; denial must short-circuit", got)
+	}
+	allowedOut := outputs[1].OfFunctionCallOutput
+	if allowedOut == nil || allowedOut.CallID != "call-allowed" {
+		t.Fatalf("second output should mirror the allowed call, got %+v", allowedOut)
+	}
+	if !reflect.DeepEqual(allowedOut.Output.OfString, openai.String("read-ok")) {
+		t.Fatalf("allowed output = %v, want %q", allowedOut.Output.OfString, "read-ok")
+	}
+}
+
 func TestLogOutputItems(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
