@@ -294,6 +294,26 @@ func TestParseManifestAllowedToolsSequence(t *testing.T) {
 	}
 }
 
+func TestParseManifestAllowedToolsCommaSeparated(t *testing.T) {
+	// Real-world skills (the squad-skills repo and most published Claude Code
+	// skills) write the list with commas rather than the bare-space form the
+	// guide example uses. Both must parse to the same set or AllowsTool will
+	// silently deny access to a comma-suffixed entry like "Read,".
+	raw := []byte("---\nname: ok\ndescription: ok\nallowed-tools: Read, Glob, Edit\n---\n")
+	m, err := ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := []string(m.AllowedTools), []string{"Read", "Glob", "Edit"}; !equalSlices(got, want) {
+		t.Errorf("allowed-tools = %v, want %v", got, want)
+	}
+	for _, n := range []string{"Read", "Glob", "Edit"} {
+		if !m.AllowedTools.Allows(n) {
+			t.Errorf("%s should be permitted; trailing comma must not leak into the entry", n)
+		}
+	}
+}
+
 func TestAllowedToolsAllows(t *testing.T) {
 	empty := AllowedTools{}
 	if !empty.Allows("anything") {
