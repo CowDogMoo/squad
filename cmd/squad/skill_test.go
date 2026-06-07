@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -195,6 +196,152 @@ func TestSkillValidateOK(t *testing.T) {
 	}
 	if !strings.Contains(out, "OK") {
 		t.Errorf("expected OK, got:\n%s", out)
+	}
+}
+
+func TestSkillValidateAcceptsSkillMDPath(t *testing.T) {
+	// pre-commit passes SKILL.md paths, not directories.
+	dir := makeSkill(t, t.TempDir(), "ok", "A fine skill.", "# Body")
+	out, err := runSkillCmd(t, "validate", filepath.Join(dir, skill.FileName))
+	if err != nil {
+		t.Fatalf("validate: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "OK") {
+		t.Errorf("expected OK, got:\n%s", out)
+	}
+}
+
+func TestSkillValidateRejectsNonSkillFile(t *testing.T) {
+	dir := t.TempDir()
+	stray := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(stray, []byte("ignore"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSkillCmd(t, "validate", stray)
+	if err == nil {
+		t.Fatalf("expected error, got: %s", out)
+	}
+	if !strings.Contains(out, "expected a directory or "+skill.FileName) {
+		t.Errorf("report should explain the rejection, got:\n%s", out)
+	}
+}
+
+func TestSkillValidateNonexistentPath(t *testing.T) {
+	out, err := runSkillCmd(t, "validate", filepath.Join(t.TempDir(), "nope"))
+	if err == nil {
+		t.Fatalf("expected error, got: %s", out)
+	}
+	if !strings.Contains(out, "stat:") {
+		t.Errorf("report should surface stat failure, got:\n%s", out)
+	}
+}
+
+func TestSkillValidateMultiplePathsAccumulatesErrors(t *testing.T) {
+	root := t.TempDir()
+	good := makeSkill(t, root, "good", "Fine.", "# Body")
+	bad := filepath.Join(root, "bad")
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Missing description triggers a real validation error.
+	if err := os.WriteFile(filepath.Join(bad, skill.FileName),
+		[]byte("---\nname: bad\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSkillCmd(t, "validate", good, bad)
+	if err == nil {
+		t.Fatalf("expected aggregated failure, got: %s", out)
+	}
+	if !strings.Contains(err.Error(), "across 2 path(s)") {
+		t.Errorf("error should report the path count, got: %v", err)
+	}
+	if !strings.Contains(out, "good") || !strings.Contains(out, "bad") {
+		t.Errorf("report should mention both paths, got:\n%s", out)
+	}
+}
+
+// failingWriter returns an error on every Write — used to drive the
+// io.WriteString fallback in validate/show.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("pipe broken") }
+
+func TestSkillValidateReportsWriteFailure(t *testing.T) {
+	dir := makeSkill(t, t.TempDir(), "ok", "Fine.", "# Body")
+	cmd := newSkillCmd()
+	cmd.SetOut(failingWriter{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"validate", dir})
+	cmd.SetContext(context.Background())
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected write-failure error")
+	}
+	if !strings.Contains(err.Error(), "write validation report") {
+		t.Errorf("wrong error: %v", err)
+	}
+}
+
+func TestSkillShowReportsWriteFailure(t *testing.T) {
+	xdg := setupXDG(t)
+	globalSkillsDir := filepath.Join(xdg, ".config", "squad", "skills")
+	if err := os.MkdirAll(globalSkillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeSkill(t, globalSkillsDir, "alpha", "An alpha skill.", "# Body")
+
+	cmd := newSkillCmd()
+	cmd.SetOut(failingWriter{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"show", "alpha", "--repo", t.TempDir()})
+	cmd.SetContext(context.Background())
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected write-failure error")
+	}
+	if !strings.Contains(err.Error(), "write skill output") {
+		t.Errorf("wrong error: %v", err)
+	}
+}
+
+func TestSkillShowSurfacesNewFrontmatterFields(t *testing.T) {
+	xdg := setupXDG(t)
+	globalSkillsDir := filepath.Join(xdg, ".config", "squad", "skills")
+	if err := os.MkdirAll(globalSkillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(globalSkillsDir, "rich")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\n" +
+		"name: rich\n" +
+		"description: A rich skill.\n" +
+		"license: MIT\n" +
+		"compatibility: macOS, Linux\n" +
+		"allowed-tools: Read, Glob\n" +
+		"metadata:\n" +
+		"  author: jane\n" +
+		"  version: 1.2.3\n" +
+		"---\n# Body\n"
+	if err := os.WriteFile(filepath.Join(dir, skill.FileName), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSkillCmd(t, "show", "rich", "--repo", t.TempDir())
+	if err != nil {
+		t.Fatalf("show: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"License:     MIT",
+		"Compatibility: macOS, Linux",
+		"AllowedTools: Read, Glob",
+		"Metadata:",
+		"author: jane",
+		"version: 1.2.3",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in show output:\n%s", want, out)
+		}
 	}
 }
 

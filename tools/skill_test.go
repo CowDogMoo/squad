@@ -500,6 +500,29 @@ func TestSkillRuntime_AllowsToolSkipsNilManifestEntry(t *testing.T) {
 	}
 }
 
+func TestSkillTool_LogsWhenStackPushDrops(t *testing.T) {
+	// Simulates the catalog-loading-bug case: a runtime Entry without Dir
+	// reaches the loader. The body still has to ship to the model, but the
+	// stack drop must surface — otherwise an unscoped skill silently loads
+	// and Read/Bash scope expansion can't anchor anywhere.
+	rt := &SkillRuntime{
+		Entries: []skill.Entry{
+			{Manifest: &skill.Manifest{Name: "no-dir", Description: "x", Body: "payload"}},
+		},
+		Stack: skill.NewStack(),
+	}
+	body, err := skillTool(rt)(context.Background(), []byte(`{"name":"no-dir"}`))
+	if err != nil {
+		t.Fatalf("loader must still return the body, got error: %v", err)
+	}
+	if body != "payload" {
+		t.Errorf("body = %q, want %q", body, "payload")
+	}
+	if rt.Stack.Len() != 0 {
+		t.Errorf("stack should be empty after a dropped push, got len=%d", rt.Stack.Len())
+	}
+}
+
 // TestSkillRuntime_AllowsTool_RealManifestRoundTrip wires ParseManifest into
 // SkillRuntime to cover the seam unit tests miss. Every hand-built Manifest
 // test bypasses the parser, so a parser bug (e.g. a comma sticking to a tool
