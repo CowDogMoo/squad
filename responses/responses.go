@@ -521,6 +521,19 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			continue
 		}
 
+		if rt := tools.GetSkillRuntime(ctx); rt != nil && !rt.AllowsTool(call.Name) {
+			logging.InfoContext(ctx, "responses API: %s denied by allowed-tools (active skill restriction)", call.Name)
+			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
+				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
+					CallID: call.CallID,
+					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
+						OfString: openai.String(fmt.Sprintf("error: tool %q is not permitted by the active skill's allowed-tools", call.Name)),
+					},
+				},
+			})
+			continue
+		}
+
 		callCtx, toolSpan := telemetry.Tracer().Start(ctx, "tool."+call.Name,
 			trace.WithAttributes(
 				attribute.String("squad.tool.name", call.Name),
