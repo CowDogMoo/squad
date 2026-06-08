@@ -181,6 +181,93 @@ func TestRequiresPreflight_UnknownManagerKeyPassedThrough(t *testing.T) {
 	}
 }
 
+// TestRequiresPreflight_AllManagerHints exercises every well-known package
+// manager so installPriority and renderInstallHint stay fully covered as
+// the list grows. Each manager is tested in isolation (one missing tool
+// per case) so the rendered hint appears as the "Install:" line verbatim.
+func TestRequiresPreflight_AllManagerHints(t *testing.T) {
+	cases := []struct {
+		manager  string
+		value    string
+		wantHint string
+	}{
+		{"brew", "gosec", "brew install gosec"},
+		{"pipx", "bandit", "pipx install bandit"},
+		{"pip", "bandit", "pip install bandit"},
+		{"npm", "prettier", "npm install -g prettier"},
+		{"cargo", "ripgrep", "cargo install ripgrep"},
+		{"go", "github.com/securego/gosec/v2/cmd/gosec@latest", "go install github.com/securego/gosec/v2/cmd/gosec@latest"},
+		{"apt", "shellcheck", "sudo apt install shellcheck"},
+		{"dnf", "shellcheck", "sudo dnf install shellcheck"},
+		{"pacman", "shellcheck", "sudo pacman -S shellcheck"},
+		{"url", "https://example.test/install", "https://example.test/install"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.manager, func(t *testing.T) {
+			r := &RequiresConfig{Commands: []RequiredCommand{
+				{
+					Name:    "definitely-not-a-real-binary-xyz123",
+					Install: map[string]string{tc.manager: tc.value},
+				},
+			}}
+			err := r.Preflight()
+			if err == nil {
+				t.Fatalf("expected preflight to fail for missing tool")
+			}
+			if !strings.Contains(err.Error(), "Install: "+tc.wantHint) {
+				t.Fatalf("expected hint %q, got:\n%s", "Install: "+tc.wantHint, err.Error())
+			}
+		})
+	}
+}
+
+// TestInstallPriority covers every branch of installPriority directly.
+// Going through Preflight only exercises priorities for the managers
+// that happen to share a single Install map, so test the function head-on.
+func TestInstallPriority(t *testing.T) {
+	cases := []struct {
+		key      string
+		wantRank int
+	}{
+		{"brew", 0},
+		{"pipx", 1},
+		{"pip", 2},
+		{"npm", 3},
+		{"cargo", 4},
+		{"go", 5},
+		{"apt", 6},
+		{"dnf", 7},
+		{"pacman", 8},
+		{"url", 100},
+		{"snap", 50}, // unknown → default
+		{"", 50},     // empty → default
+		{"something-else", 50},
+	}
+	for _, tc := range cases {
+		if got := installPriority(tc.key); got != tc.wantRank {
+			t.Errorf("installPriority(%q) = %d, want %d", tc.key, got, tc.wantRank)
+		}
+	}
+}
+
+// TestRequiresPreflight_KnownManagerEmptyValue covers the
+// "known manager, no package name" branch of renderInstallHint.
+func TestRequiresPreflight_KnownManagerEmptyValue(t *testing.T) {
+	r := &RequiresConfig{Commands: []RequiredCommand{
+		{
+			Name:    "definitely-not-a-real-binary-xyz123",
+			Install: map[string]string{"brew": ""},
+		},
+	}}
+	err := r.Preflight()
+	if err == nil {
+		t.Fatal("expected preflight to fail")
+	}
+	if !strings.Contains(err.Error(), "brew (no package name provided)") {
+		t.Fatalf("expected placeholder for empty value, got:\n%s", err.Error())
+	}
+}
+
 // TestManifestValidate_InvokesRequires ensures the top-level Validate()
 // surfaces RequiresConfig errors so bad manifests fail at LoadManifest time.
 func TestManifestValidate_InvokesRequires(t *testing.T) {
