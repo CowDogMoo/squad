@@ -106,6 +106,10 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("manifest name is required")
 	}
 
+	if err := m.Requires.Validate(m.Name); err != nil {
+		return err
+	}
+
 	if m.IsComposed() {
 		return m.validateComposed()
 	}

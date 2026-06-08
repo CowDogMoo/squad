@@ -550,6 +550,10 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 		return nil, fmt.Errorf("config not available in context")
 	}
 
+	if err := bundle.Requires.Preflight(); err != nil {
+		return nil, err
+	}
+
 	return bundle, nil
 }
 
