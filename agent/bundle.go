@@ -109,6 +109,12 @@ type Manifest struct {
 	// (catalog enabled, both scopes, no allow/deny). See skill package
 	// and PLAN.md for the progressive-disclosure model.
 	Skills *SkillsConfig `yaml:"skills,omitempty"`
+
+	// Requires declares external CLI dependencies the agent needs at
+	// runtime (e.g. gosec, bandit). The runner verifies each is on PATH
+	// before invoking the model and aborts with install hints on missing
+	// tools so failures surface in milliseconds rather than mid-run.
+	Requires *RequiresConfig `yaml:"requires,omitempty"`
 }
 
 // SkillsConfig controls which Agent Skills are surfaced to this agent via
@@ -261,6 +267,10 @@ type Bundle struct {
 	// the Skill tool's runtime so the names the agent sees are exactly
 	// the names it can load via Skill(name).
 	SkillEntries []skill.Entry
+	// Requires mirrors Manifest.Requires so the runner can invoke
+	// Preflight() without re-reading the manifest. nil means "no
+	// declared external dependencies".
+	Requires *RequiresConfig
 }
 
 // TemplateData holds the data passed to prompt templates.
@@ -935,6 +945,7 @@ func BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode strin
 		RemoteOnly:    manifest.IsRemoteOnly(),
 		CommentsOnly:  manifest.CommentsOnly,
 		SkillEntries:  skillEntries,
+		Requires:      manifest.Requires,
 	}, nil
 }
 

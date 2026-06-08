@@ -102,6 +102,19 @@ skills:
   scopes: [repo, catalog]      # which scopes to surface
   allow: []                    # exclusive allowlist of skill names
   deny: []                     # remove skills by name (only when allow is empty)
+
+# Optional: external CLI dependencies the agent invokes via Bash.
+# The runner verifies each on PATH before invoking the model and aborts
+# with install hints on missing tools. See "Declaring Tool Dependencies".
+requires:
+  commands:
+    - name: gosec
+      install:
+        brew: gosec
+        go: github.com/securego/gosec/v2/cmd/gosec@latest
+    - name: govulncheck
+      install:
+        go: golang.org/x/vuln/cmd/govulncheck@latest
 ```
 
 Only `name`, `entrypoint`, `wrapper`, and `task` are required. Everything else is optional.
@@ -168,6 +181,44 @@ Do NOT modify any files. Report only.
 Agents run commands locally by default. To run in a different environment,
 set the `environment` field in `agent.yaml`. See
 [Execution Backends](./execution-backends.md) for all options and examples.
+
+### Declaring Tool Dependencies
+
+Agents that shell out to external CLIs (linters, scanners, formatters)
+declare them in `requires.commands`. The runner verifies each is on PATH
+before invoking the model — so a missing tool fails in milliseconds with
+an install hint instead of mid-run after burning tokens.
+
+```yaml
+requires:
+  commands:
+    - name: bandit
+      install:
+        brew: bandit
+        pipx: bandit
+        url: https://bandit.readthedocs.io
+    - name: pip-audit
+      install:
+        pipx: pip-audit
+```
+
+**Fields:**
+
+- `name` (required): the bare binary name as it would be invoked. Must not
+  contain slashes or whitespace.
+- `install` (optional): a map from package-manager key to install
+  identifier. The runner does not execute these — they're rendered into
+  the failure message as human-readable hints.
+
+**Recognized install keys** (rendered with the right command prefix and
+ordered by likely availability): `brew`, `pipx`, `pip`, `npm`, `cargo`,
+`go`, `apt`, `dnf`, `pacman`. The special key `url` renders verbatim.
+Unknown keys (e.g. `snap`, `nix`) are passed through as `key: value`.
+
+**Composed agents** should declare the union of all stages' tool
+dependencies at the top level. Sub-agent manifests may also declare
+their own `requires:` block, which is checked when that sub-agent runs
+directly. Dry-runs (`--dry-run`) skip the preflight.
 
 ### MCP Server Integration
 

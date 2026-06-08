@@ -412,6 +412,61 @@ func TestPrepareBundle(t *testing.T) {
 	}
 }
 
+// TestPrepareBundle_RequiresPreflightFails wires an agent with a requires
+// block that points at a tool guaranteed to be absent from PATH and
+// confirms prepareBundle surfaces the preflight error rather than building
+// a runnable bundle.
+func TestPrepareBundle_RequiresPreflightFails(t *testing.T) {
+	t.Parallel()
+	agentsDir := t.TempDir()
+	agentName := "needs-missing-tool"
+	agentDir := filepath.Join(agentsDir, agentName)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := fmt.Sprintf(`name: %s
+version: 0.0.0
+entrypoint: system.md
+wrapper: wrapper.md
+requires:
+  commands:
+    - name: definitely-not-a-real-binary-xyz123
+      install:
+        brew: fake-tool
+`, agentName)
+	for _, f := range []struct{ name, body string }{
+		{"agent.yaml", manifest},
+		{"system.md", "System prompt."},
+		{"wrapper.md", "Wrapper prompt."},
+	} {
+		if err := os.WriteFile(filepath.Join(agentDir, f.name), []byte(f.body), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", f.name, err)
+		}
+	}
+
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	opts := &RunOptions{
+		Agent:           agentName,
+		AgentsDir:       agentsDir,
+		ConfigAvailable: true,
+	}
+	bundle, err := prepareBundle(cmd, opts, "prompt", t.TempDir())
+	if err == nil {
+		t.Fatal("expected prepareBundle to fail when a required tool is missing")
+	}
+	if bundle != nil {
+		t.Fatal("expected nil bundle on preflight failure")
+	}
+	if !strings.Contains(err.Error(), "preflight") {
+		t.Fatalf("expected preflight error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "definitely-not-a-real-binary-xyz123") {
+		t.Fatalf("expected missing-tool name in error, got: %v", err)
+	}
+}
+
 func TestResolveModelPrecedenceNilGuard(t *testing.T) {
 	t.Parallel()
 	// Calling with either argument nil must be a silent no-op rather than a
