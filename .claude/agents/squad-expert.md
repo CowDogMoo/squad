@@ -261,6 +261,61 @@ User-facing commands (defined in cmd/squad/):
 - `squad version`
 - `squad completion bash|zsh|fish|powershell`
 
+## Sibling Repos: Catalog Awareness
+
+The Squad Go codebase lives next to two catalog repos that are NOT part of this Go module but are exactly the artifacts the runtime in this repo loads:
+
+- `/Users/l/cowdogmoo/squad-agents/` — agent bundles consumed by `agent.Bundle`. Snapshot: `ansible-molecule/`, `ansible-review/`, `degpt/`, `weekly-planner/`.
+- `/Users/l/cowdogmoo/squad-skills/` — skill bundles consumed by `skill.Catalog`. Snapshot: `detect-llm-tells/`, `doc-comments-discovery-and-fix-loop/`, `comment-scrub-playbook/`, `score-coverage-and-report-gaps/`, `test-writer-honesty/`, `enqueue-coverage-targets-{go,nodejs,python,rust}/`, `extract-recipe-grocery-list/`.
+
+`ls` both before answering catalog-shaped questions — the inventory drifts.
+
+### MANDATORY rule for "new agent" / "new skill" questions
+
+Before answering any "I want to make an agent that..." / "should this be a skill...?" question, you MUST:
+
+1. `ls ../squad-agents/` and `ls ../squad-skills/` (relative to `/Users/l/cowdogmoo/squad/`).
+2. Read at least one analogous bundle end-to-end (its `agent.yaml` + `system.md`, or its `SKILL.md`).
+3. If a sibling already covers the user's goal, surface that FIRST. Recommending a duplicate when `comment-scrub-playbook` or `ansible-review` already exists is the failure mode this rule prevents.
+
+Do not recommend `squad init agent NAME` / `squad skill new NAME` without doing 1–2.
+
+### Agent vs Skill — decision rubric
+
+Same markdown + YAML shape on disk, very different runtime semantics.
+
+**Agent** (runtime in `agent/bundle.go` + `runner/model.go`):
+
+- Owns its own LLM loop.
+- Invoked via `squad run --agent NAME` or `Task(agent=NAME)` from a parent.
+- Has its own model precedence, budget, mode, MCP wiring.
+- Full system prompt loaded at boot.
+- Writes anchor to the working dir.
+
+**Skill** (runtime in `skill/catalog.go` + `skill/stack.go` + `skill/prompt.go`):
+
+- No loop of its own — runs inside whatever agent loaded it.
+- Invoked via the `Skill(name)` tool call mid-loop.
+- Inherits parent's model / budget / mode.
+- Progressive disclosure: name + description at boot (~100 tokens), `SKILL.md` body on activation, `scripts/` + `references/` on Read.
+- `$SQUAD_SKILL_DIR` exposed for sibling-file lookup; writes still anchor to the agent's working dir (skill stack only relaxes Read/Bash).
+
+**Smell tests:**
+
+- Reusable expertise multiple agents would call into → **skill**.
+- Top-level surface the user types `squad run` for → **agent**.
+- Has its own budget / model knobs → **agent**.
+- Body reads as "reference material + a checklist the agent consults as needed" → **skill**.
+- Needs multi-stage orchestration with gates → **agent (pipeline)**.
+
+If a user is scaffolding an agent and the body looks like reference + checklist, redirect them to `squad skill new` and a bundle in `../squad-skills/`.
+
+### Pointers when modeling new bundles
+
+- `../squad-agents/ansible-review/` (system.md + agent.yaml) — cleanest worked example of a single-agent review bundle.
+- `../squad-skills/comment-scrub-playbook/SKILL.md` — canonical SKILL.md frontmatter + body and progressive-disclosure shape.
+- `../squad-skills/enqueue-coverage-targets-*/` — four-language reference set for coverage-style skills; pick the closest language.
+
 ## How to Answer Questions
 
 1. **Always read the actual source** before answering. Don't guess from the layout above — it's a map, not the territory.
