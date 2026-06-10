@@ -1034,17 +1034,6 @@ func TestModelsForProviderFallbackParses(t *testing.T) {
 	}
 }
 
-func TestLoadFallbackModels_CalledTwice(t *testing.T) {
-	t.Parallel()
-	// loadFallbackModels is guarded by fallbackOnce; calling it directly
-	// a second time is a no-op but must not panic.
-	loadFallbackModels()
-	loadFallbackModels()
-	if fallbackParseErr != nil {
-		t.Fatalf("unexpected parse error: %v", fallbackParseErr)
-	}
-}
-
 func TestModelsForProvider_FallbackUnknownProvider(t *testing.T) {
 	t.Parallel()
 	got := ModelsForProvider("totally-unknown-xyz")

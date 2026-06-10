@@ -323,6 +323,9 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 
 	maxTokens = inferMaxTokens(maxTokens, taskCfg != nil)
 	logging.DebugContext(ctx, "max_tokens=%d (hasTaskTool=%v)", maxTokens, taskCfg != nil)
+	if modelRequiresTemperatureOne(model) {
+		temperature = 1.0
+	}
 	callOpts := buildCallOpts(opts, provider, temperature, maxTokens)
 
 	if taskCfg != nil {
@@ -510,6 +513,23 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 
 func isOpenAICompatProvider(provider string) bool {
 	return provider == "" || provider == "openai" || provider == "openai-compat"
+}
+
+// modelRequiresTemperatureOne reports whether the model requires
+// `temperature=1` (Anthropic's API default) because it has extended
+// thinking enabled. Claude opus-4-7 and opus-4-8 return HTTP 400 for
+// any other value. Skipping the WithTemperature call would NOT work
+// here: langchaingo's anthropic Temperature field has no `omitempty`,
+// so omitting it sends `temperature: 0`, which still violates the
+// thinking-mode constraint. The caller must explicitly set 1.0.
+func modelRequiresTemperatureOne(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	for _, prefix := range []string{"claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-8", "claude-opus-4.8"} {
+		if strings.HasPrefix(m, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // reasoningPrefixes returns the configured reasoning model prefixes,

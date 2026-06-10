@@ -104,6 +104,34 @@ func TestBuildCallOpts(t *testing.T) {
 	}
 }
 
+func TestModelRequiresTemperatureOne(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"claude-opus-4-7", true},
+		{"claude-opus-4.7", true},
+		{"claude-opus-4-8", true},
+		{"claude-opus-4.8", true},
+		{"  CLAUDE-OPUS-4-7  ", true},
+		{"claude-sonnet-4-6", false},
+		{"claude-opus-4-6", false},
+		{"gpt-5", false},
+		{"gpt-4.1-mini", false},
+		{"qwen3-coder:30b", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			t.Parallel()
+			if got := modelRequiresTemperatureOne(tt.model); got != tt.want {
+				t.Fatalf("modelRequiresTemperatureOne(%q) = %v, want %v", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildLLMVariants(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

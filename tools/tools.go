@@ -1576,6 +1576,11 @@ func writeTool(workingDir string) func(ctx context.Context, rawArgs []byte) (str
 		if err != nil {
 			return "", err
 		}
+		if strings.HasSuffix(path, "_test.go") {
+			if _, statErr := os.Stat(path); statErr == nil {
+				return "", fmt.Errorf("refusing to Write existing test file %s: Write truncates and destroys existing tests (test-writer-honesty §1). Use Edit to add tests, or delete the file first if you truly intend to replace it", filepath.ToSlash(payload.Path))
+			}
+		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return "", err
 		}
