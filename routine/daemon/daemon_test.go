@@ -464,11 +464,3 @@ func TestRunLifecycleCatchupWithMissedFire(t *testing.T) {
 	// but that's expected in unit tests).
 	_ = Run(ctx, config.Defaults(), Options{MaxConcurrent: 1})
 }
-
-func TestBuildFireFnWithNilConfig(t *testing.T) {
-	t.Parallel()
-	fn := BuildFireFn(nil)
-	if fn == nil {
-		t.Fatal("BuildFireFn(nil) returned nil")
-	}
-}

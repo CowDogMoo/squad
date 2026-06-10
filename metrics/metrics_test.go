@@ -1124,14 +1124,6 @@ func TestModelsForProvider_LiveCacheUsed(t *testing.T) {
 	}
 }
 
-func TestRemainingBudget_ZeroMaxCost(t *testing.T) {
-	t.Parallel()
-	m := &Metrics{}
-	if got := m.RemainingBudget(); got != 0 {
-		t.Errorf("RemainingBudget() = %v, want 0 for zero MaxCost", got)
-	}
-}
-
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

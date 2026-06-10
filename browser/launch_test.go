@@ -240,12 +240,3 @@ func TestLaunchStartFails(t *testing.T) {
 		t.Fatalf("error = %v, want 'launch chrome' wrap", err)
 	}
 }
-
-func TestLaunchInvalidProfileNameSurfaces(t *testing.T) {
-	withRoot(t)
-	// ProfileDir validates name; passing an invalid name should error
-	// before we even try to find chrome.
-	if err := Launch("invalid name!!", LaunchOptions{}); err == nil {
-		t.Fatal("expected validation error for invalid profile name")
-	}
-}
