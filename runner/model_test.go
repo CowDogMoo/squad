@@ -104,6 +104,33 @@ func TestBuildCallOpts(t *testing.T) {
 	}
 }
 
+func TestModelRejectsTemperature(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"claude-opus-4-7", true},
+		{"claude-opus-4.7", true},
+		{"  CLAUDE-OPUS-4-7  ", true},
+		{"gpt-5", true},
+		{"gpt-5-mini", true},
+		{"claude-sonnet-4-6", false},
+		{"claude-opus-4-6", false},
+		{"gpt-4.1-mini", false},
+		{"qwen3-coder:30b", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			t.Parallel()
+			if got := modelRejectsTemperature(tt.model); got != tt.want {
+				t.Fatalf("modelRejectsTemperature(%q) = %v, want %v", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildLLMVariants(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

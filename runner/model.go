@@ -323,6 +323,9 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 
 	maxTokens = inferMaxTokens(maxTokens, taskCfg != nil)
 	logging.DebugContext(ctx, "max_tokens=%d (hasTaskTool=%v)", maxTokens, taskCfg != nil)
+	if modelRejectsTemperature(model) {
+		temperature = -1
+	}
 	callOpts := buildCallOpts(opts, provider, temperature, maxTokens)
 
 	if taskCfg != nil {
@@ -510,6 +513,21 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 
 func isOpenAICompatProvider(provider string) bool {
 	return provider == "" || provider == "openai" || provider == "openai-compat"
+}
+
+// modelRejectsTemperature reports whether the API rejects the
+// `temperature` parameter for the given model. Anthropic claude-opus-4-7
+// and the OpenAI gpt-5 family both return HTTP 400 if `temperature` is
+// sent. Returning true here causes the caller to suppress
+// llms.WithTemperature for the LLM call.
+func modelRejectsTemperature(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	for _, prefix := range []string{"claude-opus-4-7", "claude-opus-4.7", "gpt-5"} {
+		if strings.HasPrefix(m, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // reasoningPrefixes returns the configured reasoning model prefixes,
