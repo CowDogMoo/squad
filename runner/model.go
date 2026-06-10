@@ -323,8 +323,8 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 
 	maxTokens = inferMaxTokens(maxTokens, taskCfg != nil)
 	logging.DebugContext(ctx, "max_tokens=%d (hasTaskTool=%v)", maxTokens, taskCfg != nil)
-	if modelRejectsTemperature(model) {
-		temperature = -1
+	if modelRequiresTemperatureOne(model) {
+		temperature = 1.0
 	}
 	callOpts := buildCallOpts(opts, provider, temperature, maxTokens)
 
@@ -515,14 +515,16 @@ func isOpenAICompatProvider(provider string) bool {
 	return provider == "" || provider == "openai" || provider == "openai-compat"
 }
 
-// modelRejectsTemperature reports whether the API rejects the
-// `temperature` parameter for the given model. Anthropic claude-opus-4-7
-// and the OpenAI gpt-5 family both return HTTP 400 if `temperature` is
-// sent. Returning true here causes the caller to suppress
-// llms.WithTemperature for the LLM call.
-func modelRejectsTemperature(model string) bool {
+// modelRequiresTemperatureOne reports whether the model requires
+// `temperature=1` (Anthropic's API default) because it has extended
+// thinking enabled. Claude opus-4-7 and opus-4-8 return HTTP 400 for
+// any other value. Skipping the WithTemperature call would NOT work
+// here: langchaingo's anthropic Temperature field has no `omitempty`,
+// so omitting it sends `temperature: 0`, which still violates the
+// thinking-mode constraint. The caller must explicitly set 1.0.
+func modelRequiresTemperatureOne(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
-	for _, prefix := range []string{"claude-opus-4-7", "claude-opus-4.7", "gpt-5"} {
+	for _, prefix := range []string{"claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-8", "claude-opus-4.8"} {
 		if strings.HasPrefix(m, prefix) {
 			return true
 		}
