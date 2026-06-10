@@ -541,6 +541,55 @@ func TestWriteToolErrors(t *testing.T) {
 	}
 }
 
+func TestWriteToolRefusesExistingTestFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := writeTool(dir)
+	ctx := context.Background()
+	if _, err := write(ctx, []byte(`{"path":"foo_test.go","content":"package foo"}`)); err != nil {
+		t.Fatalf("first Write should succeed (file did not exist): %v", err)
+	}
+	_, err := write(ctx, []byte(`{"path":"foo_test.go","content":"package foo // replaced"}`))
+	if err == nil {
+		t.Fatal("expected Write to refuse overwriting existing _test.go, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to Write existing test file") {
+		t.Fatalf("error = %q, want 'refusing to Write existing test file'", err.Error())
+	}
+	if !strings.Contains(err.Error(), "Use Edit") {
+		t.Fatalf("error = %q, want hint pointing to Edit", err.Error())
+	}
+	data, readErr := os.ReadFile(filepath.Join(dir, "foo_test.go"))
+	if readErr != nil {
+		t.Fatalf("read after refused Write: %v", readErr)
+	}
+	if string(data) != "package foo" {
+		t.Errorf("file was modified by refused Write; got %q, want %q", data, "package foo")
+	}
+}
+
+func TestWriteToolAllowsNonTestFileOverwrite(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := writeTool(dir)
+	ctx := context.Background()
+	if _, err := write(ctx, []byte(`{"path":"notes.md","content":"v1"}`)); err != nil {
+		t.Fatalf("first Write: %v", err)
+	}
+	if _, err := write(ctx, []byte(`{"path":"notes.md","content":"v2"}`)); err != nil {
+		t.Fatalf("overwrite of non-test file should be allowed: %v", err)
+	}
+}
+
+func TestWriteToolAllowsNewTestFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := writeTool(dir)
+	if _, err := write(context.Background(), []byte(`{"path":"new_test.go","content":"package x"}`)); err != nil {
+		t.Fatalf("first Write of new _test.go file should succeed: %v", err)
+	}
+}
+
 func TestEditToolErrors(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
