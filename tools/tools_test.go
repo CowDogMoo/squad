@@ -590,6 +590,103 @@ func TestWriteToolAllowsNewTestFile(t *testing.T) {
 	}
 }
 
+func TestIsLanguageTestFile(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		path string
+		want bool
+	}{
+		// Go
+		{"foo_test.go", true},
+		{"pkg/foo_test.go", true},
+		{"foo.go", false},
+		// Python pytest conventions
+		{"test_foo.py", true},
+		{"tests/test_foo.py", true},
+		{"foo_test.py", true},
+		{"foo.py", false},
+		{"testfoo.py", false},
+		// JS/TS .test.<ext>
+		{"foo.test.ts", true},
+		{"src/foo.test.tsx", true},
+		{"foo.test.js", true},
+		{"foo.test.jsx", true},
+		{"foo.test.mjs", true},
+		{"foo.test.cjs", true},
+		// JS/TS .spec.<ext>
+		{"foo.spec.ts", true},
+		{"foo.spec.tsx", true},
+		{"foo.spec.js", true},
+		{"foo.spec.jsx", true},
+		// Negatives
+		{"foo.ts", false},
+		{"foo.js", false},
+		{"footestbar.ts", false},
+		{"test.ts", false},
+		{"spec.ts", false},
+		// Rust: deliberately NOT matched (inline tests in source files)
+		{"foo_test.rs", false},
+		{"src/lib.rs", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+			if got := isLanguageTestFile(tt.path); got != tt.want {
+				t.Errorf("isLanguageTestFile(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWriteToolRefusesExistingPythonTestFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := writeTool(dir)
+	ctx := context.Background()
+	if _, err := write(ctx, []byte(`{"path":"test_foo.py","content":"def test_x():\n    pass"}`)); err != nil {
+		t.Fatalf("first Write: %v", err)
+	}
+	_, err := write(ctx, []byte(`{"path":"test_foo.py","content":"def test_y():\n    pass"}`))
+	if err == nil {
+		t.Fatal("expected refusal on existing Python test file")
+	}
+	if !strings.Contains(err.Error(), "refusing to Write existing test file") {
+		t.Fatalf("error = %q, want 'refusing to Write existing test file'", err.Error())
+	}
+}
+
+func TestWriteToolRefusesExistingNodeTestFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := writeTool(dir)
+	ctx := context.Background()
+	if _, err := write(ctx, []byte(`{"path":"foo.test.ts","content":"test('x', () => {})"}`)); err != nil {
+		t.Fatalf("first Write: %v", err)
+	}
+	_, err := write(ctx, []byte(`{"path":"foo.test.ts","content":"test('y', () => {})"}`))
+	if err == nil {
+		t.Fatal("expected refusal on existing .test.ts file")
+	}
+	if !strings.Contains(err.Error(), "refusing to Write existing test file") {
+		t.Fatalf("error = %q, want 'refusing to Write existing test file'", err.Error())
+	}
+}
+
+func TestWriteToolAllowsRustSourceWithInlineTests(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := writeTool(dir)
+	ctx := context.Background()
+	if _, err := write(ctx, []byte(`{"path":"lib.rs","content":"pub fn x() {}"}`)); err != nil {
+		t.Fatalf("first Write: %v", err)
+	}
+	// Rust convention: agent re-writes the source file with #[cfg(test)] mod tests appended.
+	// The dispatcher guard must NOT block this — Rust enforces this in the prompt, not here.
+	if _, err := write(ctx, []byte(`{"path":"lib.rs","content":"pub fn x() {}\n\n#[cfg(test)]\nmod tests {}"}`)); err != nil {
+		t.Fatalf("Rust re-Write of source file must be allowed: %v", err)
+	}
+}
+
 func TestEditToolErrors(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
