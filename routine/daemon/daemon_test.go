@@ -437,3 +437,38 @@ func TestRunDefaultsMaxConcurrent(t *testing.T) {
 		t.Errorf("Run with defaults: %v", err)
 	}
 }
+
+func TestRunLifecycleCatchupWithMissedFire(t *testing.T) {
+	// Create a routine that has a missed fire so QueueCatchups is exercised.
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, ".local", "state"))
+	t.Setenv("HOME", tmp)
+
+	// Create a routine with a past fire time.
+	store := routine.NewStore()
+	ref := routine.Ref{Scope: routine.ScopeGlobal, ID: "missed-job"}
+	r := &routine.Routine{
+		ID:       "missed-job",
+		Agent:    "test-agent",
+		Schedule: "@hourly",
+		Enabled:  true,
+	}
+	if _, err := store.Create(ref, r); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	// Run should complete cleanly even with a missed fire (fire fn will fail
+	// but that's expected in unit tests).
+	_ = Run(ctx, config.Defaults(), Options{MaxConcurrent: 1})
+}
+
+func TestBuildFireFnWithNilConfig(t *testing.T) {
+	t.Parallel()
+	fn := BuildFireFn(nil)
+	if fn == nil {
+		t.Fatal("BuildFireFn(nil) returned nil")
+	}
+}

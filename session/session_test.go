@@ -449,3 +449,61 @@ func TestPersistenceErrorsAreLogged(t *testing.T) {
 	// trailing writeMeta failure path.
 	l.Finish("failed", "boom")
 }
+
+func TestStoreLargeResult_NilLogger(t *testing.T) {
+	t.Parallel()
+	var l *Logger
+	_, err := l.StoreLargeResult("content")
+	if err == nil {
+		t.Fatal("expected error for nil logger")
+	}
+}
+
+func TestReadLargeResult_NilLogger(t *testing.T) {
+	t.Parallel()
+	var l *Logger
+	_, _, err := l.ReadLargeResult("id", 0, 0)
+	if err == nil {
+		t.Fatal("expected error for nil logger")
+	}
+}
+
+func TestReadLargeResult_OffsetBeyondEnd(t *testing.T) {
+	t.Parallel()
+	l, _ := newTestLogger(t)
+	t.Cleanup(func() { _ = l.Close() })
+	id, err := l.StoreLargeResult("hello")
+	if err != nil {
+		t.Fatalf("StoreLargeResult: %v", err)
+	}
+	content, total, err := l.ReadLargeResult(id, 9999, 0)
+	if err != nil {
+		t.Fatalf("ReadLargeResult: %v", err)
+	}
+	if content != "" {
+		t.Errorf("expected empty content for offset beyond end, got %q", content)
+	}
+	if total != len("hello") {
+		t.Errorf("total = %d, want %d", total, len("hello"))
+	}
+}
+
+func TestReadLargeResult_WithLimit(t *testing.T) {
+	t.Parallel()
+	l, _ := newTestLogger(t)
+	t.Cleanup(func() { _ = l.Close() })
+	id, err := l.StoreLargeResult("hello world")
+	if err != nil {
+		t.Fatalf("StoreLargeResult: %v", err)
+	}
+	content, total, err := l.ReadLargeResult(id, 0, 5)
+	if err != nil {
+		t.Fatalf("ReadLargeResult: %v", err)
+	}
+	if content != "hello" {
+		t.Errorf("content = %q, want 'hello'", content)
+	}
+	if total != len("hello world") {
+		t.Errorf("total = %d, want %d", total, len("hello world"))
+	}
+}

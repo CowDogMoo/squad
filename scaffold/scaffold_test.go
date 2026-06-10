@@ -394,3 +394,120 @@ func TestCreateAgent_WithDescription(t *testing.T) {
 		t.Errorf("expected custom description in agent.yaml:\n%s", string(b))
 	}
 }
+
+func TestCreatePipeline_Success(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	opts := scaffold.CreatePipelineOptions{
+		Name:      "my-pipeline",
+		OutputDir: dir,
+	}
+	if err := scaffold.CreatePipeline(ctx, opts); err != nil {
+		t.Fatalf("CreatePipeline error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "my-pipeline.yaml")); err != nil {
+		t.Fatalf("pipeline file not created: %v", err)
+	}
+}
+
+func TestCreatePipeline_InvalidName(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	opts := scaffold.CreatePipelineOptions{
+		Name:      "INVALID NAME",
+		OutputDir: dir,
+	}
+	if err := scaffold.CreatePipeline(ctx, opts); err == nil {
+		t.Fatal("expected error for invalid pipeline name")
+	}
+}
+
+func TestCreatePipeline_AlreadyExists_NoForce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	opts := scaffold.CreatePipelineOptions{
+		Name:      "existing-pipe",
+		OutputDir: dir,
+	}
+	if err := scaffold.CreatePipeline(ctx, opts); err != nil {
+		t.Fatalf("first CreatePipeline: %v", err)
+	}
+	if err := scaffold.CreatePipeline(ctx, opts); err == nil {
+		t.Fatal("expected error when pipeline already exists without force")
+	}
+}
+
+func TestCreatePipeline_Force(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	opts := scaffold.CreatePipelineOptions{
+		Name:      "force-pipe",
+		OutputDir: dir,
+	}
+	if err := scaffold.CreatePipeline(ctx, opts); err != nil {
+		t.Fatalf("first CreatePipeline: %v", err)
+	}
+	opts.Force = true
+	if err := scaffold.CreatePipeline(ctx, opts); err != nil {
+		t.Fatalf("second CreatePipeline with force: %v", err)
+	}
+}
+
+func TestCreatePipeline_WithDescription(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	opts := scaffold.CreatePipelineOptions{
+		Name:        "desc-pipe",
+		Description: "My pipeline description",
+		OutputDir:   dir,
+	}
+	if err := scaffold.CreatePipeline(ctx, opts); err != nil {
+		t.Fatalf("CreatePipeline: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "desc-pipe.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "My pipeline description") {
+		t.Errorf("expected description in pipeline yaml:\n%s", string(b))
+	}
+}
+
+func TestCopyAgent_DestExists_Force(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	srcOpts := scaffold.CreateOptions{Name: "src-agent-force", Lang: "go", AgentsDir: dir}
+	if err := scaffold.CreateAgent(ctx, srcOpts); err != nil {
+		t.Fatalf("CreateAgent src: %v", err)
+	}
+	dstOpts := scaffold.CreateOptions{Name: "dst-agent-force", Lang: "go", AgentsDir: dir}
+	if err := scaffold.CreateAgent(ctx, dstOpts); err != nil {
+		t.Fatalf("CreateAgent dst: %v", err)
+	}
+	if err := scaffold.CopyAgent(ctx, dir, "src-agent-force", "dst-agent-force", true); err != nil {
+		t.Fatalf("CopyAgent with force: %v", err)
+	}
+}
+
+func TestCopyAgent_DestExists_NoForce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	srcOpts := scaffold.CreateOptions{Name: "src2-noforce", Lang: "go", AgentsDir: dir}
+	if err := scaffold.CreateAgent(ctx, srcOpts); err != nil {
+		t.Fatalf("CreateAgent src: %v", err)
+	}
+	dstOpts := scaffold.CreateOptions{Name: "dst2-noforce", Lang: "go", AgentsDir: dir}
+	if err := scaffold.CreateAgent(ctx, dstOpts); err != nil {
+		t.Fatalf("CreateAgent dst: %v", err)
+	}
+	if err := scaffold.CopyAgent(ctx, dir, "src2-noforce", "dst2-noforce", false); err == nil {
+		t.Fatal("expected error when destination exists without force")
+	}
+}

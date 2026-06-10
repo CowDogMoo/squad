@@ -341,3 +341,81 @@ func TestDir(t *testing.T) {
 		t.Errorf("Dir() = %q, want %q", tailer.Dir(), dir)
 	}
 }
+
+func TestRefreshEvents_SeekError(t *testing.T) {
+	t.Parallel()
+	// Write a valid events.jsonl, then advance the offset past the file end
+	// so Seek succeeds but there are no new bytes — exercises the no-new-bytes path.
+	dir := t.TempDir()
+	ev := session.Event{Type: session.EventIteration, Ts: time.Now()}
+	writeEvents(t, dir, []session.Event{ev})
+	tailer := NewTailer(dir)
+	// First refresh to advance offset.
+	if _, err := tailer.Refresh(); err != nil {
+		t.Fatalf("first Refresh: %v", err)
+	}
+	// Second refresh with no new bytes — should succeed.
+	if _, err := tailer.Refresh(); err != nil {
+		t.Fatalf("second Refresh: %v", err)
+	}
+}
+
+func TestApplyEvent_LargeResult(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ev := session.Event{Type: session.EventLargeResult, Ts: time.Now()}
+	writeEvents(t, dir, []session.Event{ev})
+	tailer := NewTailer(dir)
+	state, err := tailer.Refresh()
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if state.Counts.LargeResults != 1 {
+		t.Errorf("LargeResults = %d, want 1", state.Counts.LargeResults)
+	}
+}
+
+func TestApplyEvent_ToolCallWithName(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	payload, _ := json.Marshal(map[string]string{"name": "Bash"})
+	ev := session.Event{Type: session.EventToolCall, Ts: time.Now(), Payload: payload}
+	writeEvents(t, dir, []session.Event{ev})
+	tailer := NewTailer(dir)
+	state, err := tailer.Refresh()
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if state.LastTool != "Bash" {
+		t.Errorf("LastTool = %q, want 'Bash'", state.LastTool)
+	}
+}
+
+func TestApplyEvent_ErrorWithMessage(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	payload, _ := json.Marshal(map[string]string{"message": "something went wrong"})
+	ev := session.Event{Type: session.EventError, Ts: time.Now(), Payload: payload}
+	writeEvents(t, dir, []session.Event{ev})
+	tailer := NewTailer(dir)
+	state, err := tailer.Refresh()
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if !strings.Contains(state.LastError, "something went wrong") {
+		t.Errorf("LastError = %q, want 'something went wrong'", state.LastError)
+	}
+}
+
+func TestRefreshMeta_InvalidJSON(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Write invalid JSON to meta.json — should be silently ignored.
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte("{invalid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := NewTailer(dir)
+	if _, err := tailer.Refresh(); err != nil {
+		t.Fatalf("Refresh with invalid meta.json: %v", err)
+	}
+}

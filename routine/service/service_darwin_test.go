@@ -587,6 +587,106 @@ func TestInstallWritesPlistFails(t *testing.T) {
 	}
 }
 
+func TestRenderPlistContainsBinaryAndHome(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	binary := mockBinary(t)
+	data, err := s.renderPlist(binary, false)
+	if err != nil {
+		t.Fatalf("renderPlist: %v", err)
+	}
+	rendered := string(data)
+	if !strings.Contains(rendered, binary) {
+		t.Errorf("plist missing binary %q:\n%s", binary, rendered)
+	}
+	if !strings.Contains(rendered, s.home) {
+		t.Errorf("plist missing home %q:\n%s", s.home, rendered)
+	}
+	if !strings.Contains(rendered, launchdLabel) {
+		t.Errorf("plist missing label %q:\n%s", launchdLabel, rendered)
+	}
+}
+
+func TestUninstallWhenPlistMissing(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	// plist never created — Uninstall should succeed (ErrNotExist is tolerated).
+	if err := s.Uninstall(); err != nil {
+		t.Fatalf("Uninstall with no plist: %v", err)
+	}
+}
+
+func TestStatusPlistExistsButLaunchctlFails(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	binary := mockBinary(t)
+	// Write a plist so os.Stat succeeds.
+	if err := os.MkdirAll(filepath.Dir(s.plistPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := s.renderPlist(binary, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.plistPath, rendered, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// launchctl print will fail (not a real launchd env) → StateInstalledStopped.
+	st, err := s.Status()
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.State != StateInstalledStopped {
+		t.Errorf("expected StateInstalledStopped, got %v", st.State)
+	}
+	if st.DaemonBinary != binary {
+		t.Errorf("DaemonBinary = %q, want %q", st.DaemonBinary, binary)
+	}
+}
+
+func TestDaemonBinaryFromPlistNoStartTag(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	// Write a plist without ProgramArguments key.
+	if err := os.MkdirAll(filepath.Dir(s.plistPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.plistPath, []byte("<plist><dict></dict></plist>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.daemonBinaryFromPlist(); got != "" {
+		t.Errorf("expected empty string for plist without ProgramArguments, got %q", got)
+	}
+}
+
+func TestDaemonBinaryFromPlistMissingCloseTag(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	if err := os.MkdirAll(filepath.Dir(s.plistPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Has ProgramArguments key and opening <string> but no closing </string>.
+	content := "<key>ProgramArguments</key><array><string>/usr/bin/squad"
+	if err := os.WriteFile(s.plistPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.daemonBinaryFromPlist(); got != "" {
+		t.Errorf("expected empty string for truncated plist, got %q", got)
+	}
+}
+
+func TestInstallRejectsEmptyBinaryExplicit(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+	err := s.Install("", InstallOptions{})
+	if err == nil {
+		t.Fatal("expected error for empty binary")
+	}
+	if !strings.Contains(err.Error(), "binary") {
+		t.Errorf("error %q should mention 'binary'", err.Error())
+	}
+}
+
 func newTestService(t *testing.T) *launchdService {
 	t.Helper()
 	tmp := t.TempDir()

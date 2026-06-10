@@ -1088,6 +1088,50 @@ func TestIsChatMode_Variants(t *testing.T) {
 	}
 }
 
+func TestModelsForProvider_LiveCacheUsed(t *testing.T) {
+	t.Parallel()
+	// Inject a fake live cache with one anthropic model.
+	// LiteLLMProvider must be "anthropic" to match modelListingProviders["anthropic"].
+	cache := map[string]liteLLMModel{
+		"anthropic/claude-test": {
+			Mode:              "chat",
+			InputCostPerToken: 0.001,
+			LiteLLMProvider:   "anthropic",
+		},
+	}
+	pricingCacheMu.Lock()
+	old := pricingCache
+	oldFetched := pricingFetched
+	pricingCache = cache
+	pricingFetched = true
+	pricingCacheMu.Unlock()
+	t.Cleanup(func() {
+		pricingCacheMu.Lock()
+		pricingCache = old
+		pricingFetched = oldFetched
+		pricingCacheMu.Unlock()
+	})
+	models := ModelsForProvider("anthropic")
+	found := false
+	for _, m := range models {
+		if m == "claude-test" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'claude-test' in models, got %v", models)
+	}
+}
+
+func TestRemainingBudget_ZeroMaxCost(t *testing.T) {
+	t.Parallel()
+	m := &Metrics{}
+	if got := m.RemainingBudget(); got != 0 {
+		t.Errorf("RemainingBudget() = %v, want 0 for zero MaxCost", got)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
