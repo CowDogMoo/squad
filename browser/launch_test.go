@@ -220,3 +220,23 @@ func TestFilepathIsAbsAndIsAbsExecutable(t *testing.T) {
 		t.Fatalf("isAbsExecutable should be false for non-existent absolute path: %s", tmp)
 	}
 }
+
+func TestLaunchStartFails(t *testing.T) {
+	withRoot(t)
+	// Create a non-executable file. exec.Command("/path/to/file").Start()
+	// will fail with a permission/format error, exercising the
+	// "launch chrome (%s): %w" branch.
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "notexec")
+	if err := os.WriteFile(bin, []byte("#!/nope\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SQUAD_BROWSER_BIN", bin)
+	err := Launch("amazon", LaunchOptions{Wait: true})
+	if err == nil {
+		t.Fatal("expected error launching non-executable file")
+	}
+	if !strings.Contains(err.Error(), "launch chrome") {
+		t.Fatalf("error = %v, want 'launch chrome' wrap", err)
+	}
+}

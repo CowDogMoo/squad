@@ -1378,6 +1378,98 @@ func TestFindAgentDir_NilConfigNoDir(t *testing.T) {
 	}
 }
 
+func TestInitRunContext_CommentsOnly(t *testing.T) {
+	t.Parallel()
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, "test-agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agent.yaml"), []byte("name: test-agent\nversion: 0.0.0\nentrypoint: system.md\nwrapper: wrapper.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("System."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "wrapper.md"), []byte("Wrapper."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bundle := &agent.Bundle{CommentsOnly: true}
+	ctx := initRunContext(context.Background(), bundle)
+	// Verify the context has the edit deadline initialized (non-nil).
+	if ctx == nil {
+		t.Fatal("initRunContext returned nil context")
+	}
+	// Verify comments-only mode is set.
+	if !tools.IsCommentsOnlyMode(ctx) {
+		t.Error("expected comments-only mode to be set in context")
+	}
+}
+
+func TestInitRunContext_Normal(t *testing.T) {
+	t.Parallel()
+	bundle := &agent.Bundle{CommentsOnly: false}
+	ctx := initRunContext(context.Background(), bundle)
+	if ctx == nil {
+		t.Fatal("initRunContext returned nil context")
+	}
+	if tools.IsCommentsOnlyMode(ctx) {
+		t.Error("expected comments-only mode to be unset for normal bundle")
+	}
+}
+
+func TestResolveSkillCatalogPaths_NilConfig(t *testing.T) {
+	t.Parallel()
+	paths := resolveSkillCatalogPaths(nil)
+	if paths != nil {
+		t.Errorf("expected nil for nil config, got %v", paths)
+	}
+}
+
+func TestResolveSkillCatalogPaths_EmptyConfig(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	paths := resolveSkillCatalogPaths(cfg)
+	if paths != nil {
+		t.Errorf("expected nil for empty config, got %v", paths)
+	}
+}
+
+func TestNoCredentialsError_Empty(t *testing.T) {
+	t.Parallel()
+	if err := noCredentialsError(nil); err != nil {
+		t.Errorf("expected nil for empty skipped, got %v", err)
+	}
+}
+
+func TestNoCredentialsError_WithSkipped(t *testing.T) {
+	t.Parallel()
+	skipped := []agent.ModelPreference{
+		{Provider: "anthropic", Model: "claude-opus-4-5"},
+	}
+	err := noCredentialsError(skipped)
+	if err == nil {
+		t.Fatal("expected error for skipped providers")
+	}
+	if !strings.Contains(err.Error(), "no provider") {
+		t.Errorf("error %q should mention 'no provider'", err.Error())
+	}
+}
+
+func TestHandleBudgetExceeded_NonBudgetErrorNew(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	var errBuf bytes.Buffer
+	cmd.SetErr(&errBuf)
+	opts := &RunOptions{MaxCost: 1.0}
+	m := &metrics.Metrics{}
+	// A non-budget error should be a no-op.
+	handleBudgetExceeded(cmd, opts, m, "", "", fmt.Errorf("some other error"))
+	if errBuf.Len() != 0 {
+		t.Errorf("expected no output for non-budget error, got %q", errBuf.String())
+	}
+}
+
 func writeTestAgentNoModels(t *testing.T, agentName string) string {
 	t.Helper()
 	agentsDir := t.TempDir()

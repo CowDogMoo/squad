@@ -1262,3 +1262,32 @@ func TestLogEvent_WithLogger(t *testing.T) {
 	// Should not panic or error.
 	logEvent(l, session.EventRunStart, map[string]any{"agent": "test"})
 }
+
+func TestFormatLargeResultPlaceholderContent(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		resultID   string
+		toolName   string
+		totalBytes int
+		wantSubs   []string
+	}{
+		{
+			name:       "basic",
+			resultID:   "res-123",
+			toolName:   "Bash",
+			totalBytes: 4096,
+			wantSubs:   []string{"res-123", "4096", "Bash"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatLargeResultPlaceholder(tt.resultID, tt.toolName, tt.totalBytes)
+			for _, sub := range tt.wantSubs {
+				if !strings.Contains(got, sub) {
+					t.Errorf("formatLargeResultPlaceholder() = %q, missing %q", got, sub)
+				}
+			}
+		})
+	}
+}

@@ -294,3 +294,80 @@ func TestStoreLoadAllSkipsInvalidManifest(t *testing.T) {
 		t.Errorf("expected only the valid routine, got %v", entries)
 	}
 }
+
+func TestStoreDeleteNotFound(t *testing.T) {
+	setupTempXDG(t)
+	s := NewStore()
+	if err := s.Delete(Ref{Scope: ScopeGlobal, ID: "ghost"}); err == nil {
+		t.Error("expected error deleting non-existent routine")
+	}
+}
+
+func TestStoreLoadAndSaveState(t *testing.T) {
+	setupTempXDG(t)
+	s := NewStore()
+	ref := Ref{Scope: ScopeGlobal, ID: "state-test"}
+	if _, err := s.Create(ref, newRoutine("state-test")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	st := &State{LastStatus: StatusOK}
+	if err := s.SaveState(ref, st); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	loaded, err := s.LoadState(ref)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if loaded.LastStatus != StatusOK {
+		t.Errorf("LastStatus = %v, want %v", loaded.LastStatus, StatusOK)
+	}
+}
+
+func TestStoreLoadStateNotFound(t *testing.T) {
+	setupTempXDG(t)
+	s := NewStore()
+	if _, err := s.LoadState(Ref{Scope: ScopeGlobal, ID: "ghost"}); err == nil {
+		t.Error("expected error loading state for non-existent routine")
+	}
+}
+
+func TestStoreSaveStateNotFound(t *testing.T) {
+	setupTempXDG(t)
+	s := NewStore()
+	if err := s.SaveState(Ref{Scope: ScopeGlobal, ID: "ghost"}, &State{}); err == nil {
+		t.Error("expected error saving state for non-existent routine")
+	}
+}
+
+func TestStoreCreateRepoScoped(t *testing.T) {
+	setupTempXDG(t)
+	root := t.TempDir()
+	s := NewStore()
+	ref := Ref{Scope: ScopeRepo, Root: root, ID: "repo-job"}
+	if _, err := s.Create(ref, newRoutine("repo-job")); err != nil {
+		t.Fatalf("Create repo-scoped: %v", err)
+	}
+	got, ok := s.Find(ref)
+	if !ok {
+		t.Fatal("Find: not found after Create")
+	}
+	if got.Ref.Root != root {
+		t.Errorf("Root = %q, want %q", got.Ref.Root, root)
+	}
+}
+
+func TestStoreDeleteRepoScoped(t *testing.T) {
+	setupTempXDG(t)
+	root := t.TempDir()
+	s := NewStore()
+	ref := Ref{Scope: ScopeRepo, Root: root, ID: "repo-del"}
+	if _, err := s.Create(ref, newRoutine("repo-del")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.Delete(ref); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, ok := s.Find(ref); ok {
+		t.Error("expected routine to be gone after Delete")
+	}
+}

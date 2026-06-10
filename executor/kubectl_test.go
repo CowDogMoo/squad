@@ -357,3 +357,78 @@ func TestBuildRestConfig_EmptyPath(t *testing.T) {
 	// Either outcome is acceptable — we just verify no panic.
 	_, _ = buildRestConfig("", "")
 }
+
+func TestNewKubeExecutor_MissingPodOption(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Type:    "kubectl",
+		Options: map[string]string{},
+	}
+	_, err := NewKubeExecutor(cfg)
+	if err == nil {
+		t.Fatal("expected error for missing pod option")
+	}
+	if !strings.Contains(err.Error(), "pod") {
+		t.Errorf("error %q should mention 'pod'", err.Error())
+	}
+}
+
+func TestNewKubeExecutorInternal_DefaultsApplied(t *testing.T) {
+	t.Parallel()
+	client := fake.NewSimpleClientset()
+	cfg := &Config{
+		Type:    "kubectl",
+		Options: map[string]string{"pod": "mypod"},
+	}
+	ex := newKubeExecutor(client, testRestConfig, cfg, newFakeSPDYCreator("", "", nil))
+	if ex.namespace != "default" {
+		t.Errorf("namespace = %q, want 'default'", ex.namespace)
+	}
+	if ex.shell != "/bin/sh" {
+		t.Errorf("shell = %q, want '/bin/sh'", ex.shell)
+	}
+	if ex.pod != "mypod" {
+		t.Errorf("pod = %q, want 'mypod'", ex.pod)
+	}
+}
+
+func TestKubeExecutor_ExecuteContainerSet(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Type: "kubectl",
+		Options: map[string]string{
+			"pod":       "mypod",
+			"container": "mycontainer",
+			"namespace": "mynamespace",
+		},
+	}
+	ex := newKubeExecutor(testClient(t), testRestConfig, cfg, newFakeSPDYCreator("hello", "", nil))
+	out, err := ex.Execute(context.Background(), "echo hello")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(string(out), "hello") {
+		t.Errorf("output = %q, want 'hello'", string(out))
+	}
+}
+
+func TestKubeExecutor_EnvironmentDescriptionContainerField(t *testing.T) {
+	t.Parallel()
+	client := fake.NewSimpleClientset()
+	cfg := &Config{
+		Type: "kubectl",
+		Options: map[string]string{
+			"pod":       "testpod",
+			"container": "testcontainer",
+			"namespace": "testns",
+		},
+	}
+	ex := newKubeExecutor(client, testRestConfig, cfg, newFakeSPDYCreator("", "", nil))
+	desc := ex.EnvironmentDescription()
+	if !strings.Contains(desc, "testcontainer") {
+		t.Errorf("EnvironmentDescription = %q, want 'testcontainer'", desc)
+	}
+	if !strings.Contains(desc, "testns") {
+		t.Errorf("EnvironmentDescription = %q, want 'testns'", desc)
+	}
+}

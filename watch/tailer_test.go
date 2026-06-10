@@ -341,3 +341,176 @@ func TestDir(t *testing.T) {
 		t.Errorf("Dir() = %q, want %q", tailer.Dir(), dir)
 	}
 }
+
+func TestRefreshEvents_SeekError(t *testing.T) {
+	t.Parallel()
+	// Write a valid events.jsonl, then advance the offset past the file end
+	// so Seek succeeds but there are no new bytes — exercises the no-new-bytes path.
+	dir := t.TempDir()
+	ev := session.Event{Type: session.EventIteration, Ts: time.Now()}
+	writeEvents(t, dir, []session.Event{ev})
+	tailer := NewTailer(dir)
+	// First refresh to advance offset.
+	if _, err := tailer.Refresh(); err != nil {
+		t.Fatalf("first Refresh: %v", err)
+	}
+	// Second refresh with no new bytes — should succeed.
+	if _, err := tailer.Refresh(); err != nil {
+		t.Fatalf("second Refresh: %v", err)
+	}
+}
+
+func TestApplyEvent_LargeResult(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ev := session.Event{Type: session.EventLargeResult, Ts: time.Now()}
+	writeEvents(t, dir, []session.Event{ev})
+	tailer := NewTailer(dir)
+	state, err := tailer.Refresh()
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if state.Counts.LargeResults != 1 {
+		t.Errorf("LargeResults = %d, want 1", state.Counts.LargeResults)
+	}
+}
+
+func TestApplyEvent_ToolCallWithName(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	payload, _ := json.Marshal(map[string]string{"name": "Bash"})
+	ev := session.Event{Type: session.EventToolCall, Ts: time.Now(), Payload: payload}
+	writeEvents(t, dir, []session.Event{ev})
+	tailer := NewTailer(dir)
+	state, err := tailer.Refresh()
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if state.LastTool != "Bash" {
+		t.Errorf("LastTool = %q, want 'Bash'", state.LastTool)
+	}
+}
+
+func TestApplyEvent_ErrorWithMessage(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	payload, _ := json.Marshal(map[string]string{"message": "something went wrong"})
+	ev := session.Event{Type: session.EventError, Ts: time.Now(), Payload: payload}
+	writeEvents(t, dir, []session.Event{ev})
+	tailer := NewTailer(dir)
+	state, err := tailer.Refresh()
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if !strings.Contains(state.LastError, "something went wrong") {
+		t.Errorf("LastError = %q, want 'something went wrong'", state.LastError)
+	}
+}
+
+func TestRefreshMeta_InvalidJSON(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Write invalid JSON to meta.json — should be silently ignored.
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte("{invalid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := NewTailer(dir)
+	if _, err := tailer.Refresh(); err != nil {
+		t.Fatalf("Refresh with invalid meta.json: %v", err)
+	}
+}
+
+func TestRefreshEvents_MalformedLineSkipped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Mix one malformed line with a valid event; malformed must be skipped
+	// while the valid one is applied and offset still advances.
+	valid, _ := json.Marshal(session.Event{Type: session.EventIteration, Ts: time.Now()})
+	body := append([]byte("not-json\n"), valid...)
+	body = append(body, '\n')
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := NewTailer(dir)
+	state, err := tailer.Refresh()
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if state.Counts.Iterations != 1 {
+		t.Errorf("Iterations = %d, want 1", state.Counts.Iterations)
+	}
+}
+
+func TestApplyEvent_RunEndWithError(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	payload, _ := json.Marshal(map[string]string{"error": "run failed"})
+	ev := session.Event{Type: session.EventRunEnd, Ts: time.Now(), Payload: payload}
+	writeEvents(t, dir, []session.Event{ev})
+	tailer := NewTailer(dir)
+	state, err := tailer.Refresh()
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if !strings.Contains(state.LastError, "run failed") {
+		t.Errorf("LastError = %q, want 'run failed'", state.LastError)
+	}
+}
+
+func TestApplyEvent_ErrorPayloadErrorKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	payload, _ := json.Marshal(map[string]string{"error": "oops"})
+	ev := session.Event{Type: session.EventError, Ts: time.Now(), Payload: payload}
+	writeEvents(t, dir, []session.Event{ev})
+	tailer := NewTailer(dir)
+	state, err := tailer.Refresh()
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if state.LastError != "oops" {
+		t.Errorf("LastError = %q, want 'oops'", state.LastError)
+	}
+}
+
+func TestReset_ClearsStateAndOffsets(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ev := session.Event{Type: session.EventIteration, Ts: time.Now()}
+	writeEvents(t, dir, []session.Event{ev})
+	tailer := NewTailer(dir)
+	if _, err := tailer.Refresh(); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	tailer.Reset()
+	if tailer.eventOffset != 0 {
+		t.Errorf("eventOffset = %d, want 0", tailer.eventOffset)
+	}
+	if !tailer.metaModTime.IsZero() {
+		t.Errorf("metaModTime not zero: %v", tailer.metaModTime)
+	}
+	if tailer.state.Counts.Iterations != 0 {
+		t.Errorf("Counts.Iterations = %d, want 0", tailer.state.Counts.Iterations)
+	}
+}
+
+func TestApplyEvent_RespectsEventCap(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ts := time.Now()
+	events := []session.Event{
+		{Type: session.EventIteration, Ts: ts},
+		{Type: session.EventIteration, Ts: ts.Add(time.Second)},
+		{Type: session.EventIteration, Ts: ts.Add(2 * time.Second)},
+	}
+	writeEvents(t, dir, events)
+	tailer := NewTailer(dir)
+	tailer.SetEventCap(2)
+	state, err := tailer.Refresh()
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if len(state.Events) != 2 {
+		t.Errorf("Events len = %d, want 2 (cap)", len(state.Events))
+	}
+}

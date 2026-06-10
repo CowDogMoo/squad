@@ -1297,6 +1297,42 @@ func definitionRead() llms.Tool {
 	}
 }
 
+// isLanguageTestFile reports whether the path matches a per-language test
+// file convention. Used by writeTool to refuse Write on existing test files
+// — Write truncates, which has destroyed thousands of lines of tests in
+// prior runs (test-writer-honesty §1).
+//
+// Conventions matched (filename-based, no path-component checks):
+//   - Go      : *_test.go
+//   - Python  : test_*.py, *_test.py
+//   - JS/TS   : *.test.{js,jsx,mjs,cjs,ts,tsx}, *.spec.{js,jsx,mjs,cjs,ts,tsx}
+//
+// Rust is deliberately NOT matched: Rust unit tests live in
+// #[cfg(test)] mod tests blocks INSIDE source files, so the Write-vs-Edit
+// discipline is enforced in the rust-tests agent prompt (Hard Rule 23a),
+// not at this layer — a path-based guard would either miss the case
+// entirely or block legitimate writes to source.
+func isLanguageTestFile(path string) bool {
+	base := filepath.Base(path)
+	// Go
+	if strings.HasSuffix(base, "_test.go") {
+		return true
+	}
+	// Python
+	if strings.HasSuffix(base, ".py") {
+		if strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test.py") {
+			return true
+		}
+	}
+	// JS/TS (vitest/jest convention: file.{test,spec}.<ext>)
+	for _, ext := range []string{".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"} {
+		if strings.HasSuffix(base, ".test"+ext) || strings.HasSuffix(base, ".spec"+ext) {
+			return true
+		}
+	}
+	return false
+}
+
 func definitionWrite() llms.Tool {
 	return llms.Tool{
 		Type: "function",
@@ -1576,7 +1612,7 @@ func writeTool(workingDir string) func(ctx context.Context, rawArgs []byte) (str
 		if err != nil {
 			return "", err
 		}
-		if strings.HasSuffix(path, "_test.go") {
+		if isLanguageTestFile(path) {
 			if _, statErr := os.Stat(path); statErr == nil {
 				return "", fmt.Errorf("refusing to Write existing test file %s: Write truncates and destroys existing tests (test-writer-honesty §1). Use Edit to add tests, or delete the file first if you truly intend to replace it", filepath.ToSlash(payload.Path))
 			}
