@@ -181,6 +181,80 @@ func TestLoadRejectsMalformedYAML(t *testing.T) {
 	}
 }
 
+func TestSaveWriteFailsWhenParentIsReadOnly(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("chmod ineffective as root")
+	}
+	// Create a store whose path lives inside a read-only dir so WriteFile fails.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "presets.yaml")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Add a preset so save() is called.
+	if err := s.Set(Preset{Name: "x", Agent: "y"}); err != nil {
+		t.Fatal(err)
+	}
+	// Now make the dir read-only so the next write fails.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	// Mutate and try to save again — should fail.
+	if err := s.Set(Preset{Name: "z", Agent: "w"}); err == nil {
+		t.Error("expected error writing to read-only dir, got nil")
+	}
+}
+
+func TestDefaultPathUsesHomeDir(t *testing.T) {
+	// Clear XDG_CONFIG_HOME so DefaultPath falls back to UserHomeDir.
+	t.Setenv("XDG_CONFIG_HOME", "")
+	p, err := DefaultPath()
+	if err != nil {
+		t.Fatalf("DefaultPath: %v", err)
+	}
+	if p == "" {
+		t.Error("DefaultPath returned empty string")
+	}
+}
+
+func TestLoadUnreadableFileReturnsError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("chmod ineffective as root")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "presets.yaml")
+	if err := os.WriteFile(path, []byte("presets: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unreadable file, got nil")
+	}
+}
+
+func TestSaveRenameFailsWhenTargetIsDir(t *testing.T) {
+	// Make the final path a directory so Rename fails.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "presets.yaml")
+	// Create a directory at the target path.
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := Load(filepath.Join(dir, "other.yaml"))
+	// Manually set path to the dir-blocked path.
+	s.path = path
+	err := s.Set(Preset{Name: "x", Agent: "y"})
+	if err == nil {
+		t.Fatal("expected error when rename target is a directory, got nil")
+	}
+}
+
 func TestSaveCreatesMissingDir(t *testing.T) {
 	// Use a nested path whose parent dir doesn't exist yet.
 	path := filepath.Join(t.TempDir(), "deep", "nested", "presets.yaml")

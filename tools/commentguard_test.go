@@ -350,3 +350,54 @@ const (
 		t.Fatal("file mutated despite rejection")
 	}
 }
+
+func TestIsCommentMarker_Variants(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"// Go comment", true},
+		{"# Python comment", true},
+		{"-- SQL comment", true},
+		{"/* block open", true},
+		{"*/ block close", true},
+		{"* continuation", true},
+		{"code line", false},
+		{"  code with indent", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		got := isCommentMarker(strings.TrimSpace(tt.line))
+		if got != tt.want {
+			t.Errorf("isCommentMarker(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestValidateCommentsOnly_HashComment(t *testing.T) {
+	t.Parallel()
+	old := "# old comment\ncode = 1"
+	new := "code = 1"
+	if err := ValidateCommentsOnly(old, new); err != nil {
+		t.Errorf("removing hash comment should be allowed: %v", err)
+	}
+}
+
+func TestValidateCommentsOnly_SQLComment(t *testing.T) {
+	t.Parallel()
+	old := "-- old comment\nSELECT 1"
+	new := "SELECT 1"
+	if err := ValidateCommentsOnly(old, new); err != nil {
+		t.Errorf("removing SQL comment should be allowed: %v", err)
+	}
+}
+
+func TestValidateCommentsOnly_AddCodeRejected(t *testing.T) {
+	t.Parallel()
+	old := "x := 1"
+	new := "x := 1\ny := 2"
+	if err := ValidateCommentsOnly(old, new); err == nil {
+		t.Error("adding code should be rejected")
+	}
+}

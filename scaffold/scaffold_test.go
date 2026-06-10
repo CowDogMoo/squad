@@ -350,3 +350,47 @@ func TestCreatePipeline_CreateAndOverwrite(t *testing.T) {
 		t.Fatalf("CreatePipeline(force) error: %v", err)
 	}
 }
+
+func TestCopyDir_NestedFiles(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	from := filepath.Join(dir, "src")
+	if err := os.MkdirAll(filepath.Join(from, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(from, "agent.yaml"), []byte("name: src\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(from, "sub", "nested.md"), []byte("nested"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := scaffold.CopyAgent(ctx, dir, "src", "dst", false); err != nil {
+		t.Fatalf("CopyAgent: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dst", "sub", "nested.md")); err != nil {
+		t.Errorf("expected nested file to be copied: %v", err)
+	}
+}
+
+func TestCreateAgent_WithDescription(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ctx := context.Background()
+	opts := scaffold.CreateOptions{
+		Name:        "desc-agent",
+		Lang:        "go",
+		Description: "My custom description",
+		AgentsDir:   dir,
+	}
+	if err := scaffold.CreateAgent(ctx, opts); err != nil {
+		t.Fatalf("CreateAgent error: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "desc-agent", "agent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "My custom description") {
+		t.Errorf("expected custom description in agent.yaml:\n%s", string(b))
+	}
+}

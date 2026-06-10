@@ -192,3 +192,88 @@ func TestStore_Path(t *testing.T) {
 		t.Errorf("expected path /tmp/test.json, got %s", store.Path())
 	}
 }
+
+func TestStore_LoadCorruptJSON(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "grades.json")
+	if err := os.WriteFile(path, []byte("{not valid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStoreAt(path)
+	_, err := store.List("", 10)
+	if err == nil {
+		t.Error("expected error loading corrupt JSON")
+	}
+}
+
+func TestStore_WriteAndReload(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := NewStoreAt(filepath.Join(dir, "grades.json"))
+	now := time.Now().UTC().Truncate(time.Second)
+	r := &GradeResult{
+		Agent:               "test-agent",
+		Timestamp:           now,
+		Grade:               "B",
+		TotalScore:          80,
+		ReportQuality:       75,
+		IterationEfficiency: 85,
+		RunID:               "run-001",
+	}
+	if err := store.Save(r); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	store2 := NewStoreAt(filepath.Join(dir, "grades.json"))
+	grades, err := store2.List("test-agent", 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(grades) != 1 {
+		t.Fatalf("expected 1 grade, got %d", len(grades))
+	}
+	if grades[0].Grade != "B" {
+		t.Errorf("grade: got %q want %q", grades[0].Grade, "B")
+	}
+	if grades[0].RunID != "run-001" {
+		t.Errorf("RunID: got %q want %q", grades[0].RunID, "run-001")
+	}
+}
+
+func TestStore_LoadMissingFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := NewStoreAt(filepath.Join(dir, "nonexistent.json"))
+	grades, err := store.List("", 0)
+	if err != nil {
+		t.Fatalf("expected no error for missing file, got: %v", err)
+	}
+	if len(grades) != 0 {
+		t.Errorf("expected empty list, got %d", len(grades))
+	}
+}
+
+func TestStore_WriteFailsOnUnwritablePath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Use a directory as the path — os.WriteFile will fail.
+	store := NewStoreAt(dir)
+	err := store.Save(&GradeResult{Agent: "x", Timestamp: time.Now()})
+	if err == nil {
+		t.Error("expected error writing to a directory path")
+	}
+}
+
+func TestNewStore_DefaultPath(t *testing.T) {
+	// NewStore uses os.UserCacheDir — verify it returns a non-nil store.
+	store, err := NewStore()
+	if err != nil {
+		t.Skipf("UserCacheDir unavailable: %v", err)
+	}
+	if store == nil {
+		t.Fatal("expected non-nil store")
+	}
+	if store.Path() == "" {
+		t.Error("expected non-empty path")
+	}
+}
