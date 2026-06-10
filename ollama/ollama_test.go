@@ -586,6 +586,35 @@ func TestGenerateContentCanceledContext(t *testing.T) {
 	}
 }
 
+func TestConvertMessages_AssistantWithToolCallsBeforeToolResponse(t *testing.T) {
+	t.Parallel()
+	// Verifies the "flush pending assistant msg before tool response" branch:
+	// when a ToolCall has been accumulated on msg and the next part is a
+	// ToolCallResponse, the function emits the assistant msg first and
+	// resets msg before appending the tool message.
+	messages := []llms.MessageContent{{
+		Role: llms.ChatMessageTypeAI,
+		Parts: []llms.ContentPart{
+			llms.ToolCall{FunctionCall: &llms.FunctionCall{Name: "Do", Arguments: `{"x":1}`}},
+			llms.ToolCallResponse{Content: "ok"},
+		},
+	}}
+	out, err := convertMessages(messages)
+	if err != nil {
+		t.Fatalf("convertMessages err = %v", err)
+	}
+	// Expect: 1 assistant message with tool calls, then 1 tool message.
+	if len(out) != 2 {
+		t.Fatalf("got %d messages, want 2: %#v", len(out), out)
+	}
+	if out[0].Role != "assistant" || len(out[0].ToolCalls) != 1 {
+		t.Errorf("first message = %#v, want assistant w/ tool call", out[0])
+	}
+	if out[1].Role != "tool" || out[1].Content != "ok" {
+		t.Errorf("second message = %#v, want tool 'ok'", out[1])
+	}
+}
+
 func TestGenerateContentStreaming(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

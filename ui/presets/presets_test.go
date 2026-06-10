@@ -255,6 +255,65 @@ func TestSaveRenameFailsWhenTargetIsDir(t *testing.T) {
 	}
 }
 
+func TestSet_EmptyNameReturnsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "presets.yaml")
+	s, _ := Load(path)
+	if err := s.Set(Preset{Name: "", Agent: "x"}); err == nil {
+		t.Fatal("expected error for empty preset name")
+	}
+}
+
+func TestRemove_NonexistentReturnsFalse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "presets.yaml")
+	s, _ := Load(path)
+	ok, err := s.Remove("nope")
+	if err != nil {
+		t.Fatalf("Remove returned error: %v", err)
+	}
+	if ok {
+		t.Error("Remove of missing preset should return false")
+	}
+}
+
+func TestRemove_Existing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "presets.yaml")
+	s, _ := Load(path)
+	if err := s.Set(Preset{Name: "a", Agent: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := s.Remove("a")
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if !ok {
+		t.Error("Remove existing should return true")
+	}
+	if _, ok := s.Get("a"); ok {
+		t.Error("Get after Remove should return false")
+	}
+}
+
+func TestSet_UpdatesExistingPreset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "presets.yaml")
+	s, _ := Load(path)
+	if err := s.Set(Preset{Name: "p", Agent: "v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set(Preset{Name: "p", Agent: "v2"}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.Get("p")
+	if !ok {
+		t.Fatal("Get returned !ok")
+	}
+	if got.Agent != "v2" {
+		t.Errorf("Agent after update = %q, want v2", got.Agent)
+	}
+	if len(s.All()) != 1 {
+		t.Errorf("All() len = %d, want 1 (update should not append)", len(s.All()))
+	}
+}
+
 func TestSaveCreatesMissingDir(t *testing.T) {
 	// Use a nested path whose parent dir doesn't exist yet.
 	path := filepath.Join(t.TempDir(), "deep", "nested", "presets.yaml")

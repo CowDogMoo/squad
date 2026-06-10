@@ -495,6 +495,73 @@ func TestCopyAgent_DestExists_Force(t *testing.T) {
 	}
 }
 
+// TestCreateAgent_AgentsDirIsFile exercises the os.MkdirAll error path
+// when the agent path collision is itself a regular file (mkdir fails).
+func TestCreateAgent_AgentsDirIsFile(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	// Make AgentsDir a regular file so MkdirAll(agentPath/references) fails.
+	if err := os.WriteFile(filepath.Join(dir, "not-a-dir"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := scaffold.CreateAgent(ctx, scaffold.CreateOptions{
+		Name:      "newagent",
+		Lang:      "go",
+		AgentsDir: filepath.Join(dir, "not-a-dir"),
+	})
+	if err == nil {
+		t.Fatal("expected error when AgentsDir is a file")
+	}
+	if !strings.Contains(err.Error(), "failed to create agent directory") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestCopyAgent_MissingManifestAfterCopy exercises the manifestPath read
+// error after a successful copy: source has no agent.yaml, so copy
+// succeeds but reading the manifest fails.
+func TestCopyAgent_MissingManifestAfterCopy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	from := filepath.Join(dir, "noyaml")
+	if err := os.MkdirAll(from, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(from, "README.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := scaffold.CopyAgent(ctx, dir, "noyaml", "dest", false)
+	if err == nil {
+		t.Fatal("expected error when manifest missing")
+	}
+	if !strings.Contains(err.Error(), "failed to read manifest") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestCreatePipeline_OutputDirIsFile exercises the MkdirAll error path
+// for CreatePipeline when OutputDir cannot be created.
+func TestCreatePipeline_OutputDirIsFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bogus := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(bogus, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := scaffold.CreatePipeline(context.Background(), scaffold.CreatePipelineOptions{
+		Name:      "pipe",
+		OutputDir: filepath.Join(bogus, "sub"),
+	})
+	if err == nil {
+		t.Fatal("expected error when OutputDir cannot be created")
+	}
+	if !strings.Contains(err.Error(), "failed to create output directory") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestCopyAgent_DestExists_NoForce(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
