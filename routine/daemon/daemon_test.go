@@ -369,6 +369,60 @@ func TestNewStoreAndSchedulerHappyPath(t *testing.T) {
 	}
 }
 
+func TestRunLifecycleWatchError(t *testing.T) {
+	// runLifecycle should propagate the error from store.Watch when the
+	// watch directory cannot be created (XDG_STATE_HOME is a file, not a dir).
+	tmp := t.TempDir()
+	// Make XDG_STATE_HOME a file so Watch's MkdirAll fails.
+	stateFile := filepath.Join(tmp, "state-file")
+	if err := os.WriteFile(stateFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	t.Setenv("XDG_STATE_HOME", stateFile)
+	t.Setenv("HOME", tmp)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := Run(ctx, config.Defaults(), Options{MaxConcurrent: 1})
+	if err == nil {
+		t.Error("expected error when watch dir cannot be created, got nil")
+	}
+}
+
+func TestRunLifecycleCatchupFires(t *testing.T) {
+	// Verify runLifecycle runs without error when there are no missed fires
+	// (the common case) — exercises the FindMissedFires branch with empty result.
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, ".local", "state"))
+	t.Setenv("HOME", tmp)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := Run(ctx, config.Defaults(), Options{MaxConcurrent: 1}); err != nil {
+		t.Errorf("Run: %v", err)
+	}
+}
+
+func TestNewStoreAndSchedulerSyncError(t *testing.T) {
+	// Make LoadAll fail by pointing XDG_STATE_HOME at a file so the
+	// store's state directory cannot be created.
+	tmp := t.TempDir()
+	stateFile := filepath.Join(tmp, "state-file")
+	if err := os.WriteFile(stateFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	t.Setenv("XDG_STATE_HOME", stateFile)
+	t.Setenv("HOME", tmp)
+	_, _, err := newStoreAndScheduler(config.Defaults(), Options{MaxConcurrent: 1})
+	if err == nil {
+		t.Error("expected error when state dir is a file, got nil")
+	}
+}
+
 func TestRunDefaultsMaxConcurrent(t *testing.T) {
 	// MaxConcurrent=0 should default to 2 — exercised by running a Run with
 	// no explicit concurrency and confirming clean shutdown.

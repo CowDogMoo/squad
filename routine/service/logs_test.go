@@ -29,6 +29,51 @@ func TestTailFile_NotExist(t *testing.T) {
 	}
 }
 
+func TestTailFile_OpenError(t *testing.T) {
+	// Exercises the non-ErrNotExist open error branch by pointing at a path
+	// inside a file (not a directory).
+	t.Parallel()
+	dir := t.TempDir()
+	// Create a file where a directory should be.
+	blockFile := filepath.Join(dir, "notadir")
+	if err := os.WriteFile(blockFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Path inside a file — Open will fail with a non-ErrNotExist error.
+	badPath := filepath.Join(blockFile, "daemon.log")
+	var buf bytes.Buffer
+	ctx := context.Background()
+	err := tailFile(ctx, &buf, badPath, false)
+	if err == nil {
+		t.Fatal("expected error for unreadable path, got nil")
+	}
+	// Should NOT be the "daemon log not found" message.
+	if strings.Contains(err.Error(), "daemon log not found") {
+		t.Errorf("expected non-ErrNotExist error, got: %v", err)
+	}
+}
+
+func TestTailFile_Follow_ContextCancel(t *testing.T) {
+	// Exercises the follow=true ctx.Done() branch.
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "daemon.log")
+	if err := os.WriteFile(p, []byte("line1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		cancel()
+	}()
+	if err := tailFile(ctx, &buf, p, true); err != nil {
+		t.Fatalf("tailFile(follow=true) returned error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "line1") {
+		t.Errorf("output %q missing 'line1'", buf.String())
+	}
+}
+
 func TestTailFile_Copy_NoFollow(t *testing.T) {
 	t.Parallel()
 	d := t.TempDir()

@@ -53,6 +53,50 @@ func TestRunExitsCleanlyWithNoRoutines(t *testing.T) {
 	}
 }
 
+func TestRunBadConfigExitsNonZero(t *testing.T) {
+	// Point XDG at a malformed config file so config.Load fails.
+	if os.Getuid() == 0 {
+		t.Skip("can't make /proc unreadable as root")
+	}
+	resetFlagsForTest()
+	tmp := t.TempDir()
+	cfgDir := filepath.Join(tmp, ".config", "squad")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile := filepath.Join(cfgDir, "config.yaml")
+	if err := os.WriteFile(cfgFile, []byte(": invalid: yaml: ["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, ".local", "state"))
+	t.Setenv("HOME", tmp)
+	os.Args = []string{"squad-routined"}
+	rc := run()
+	if rc != 1 {
+		t.Errorf("expected rc=1 for bad config, got %d", rc)
+	}
+}
+
+func TestRunDaemonErrorExitsNonZero(t *testing.T) {
+	// Make daemon.Run fail by pointing XDG_STATE_HOME at a file so Watch
+	// cannot create its directory.
+	resetFlagsForTest()
+	tmp := t.TempDir()
+	stateFile := filepath.Join(tmp, "state-file")
+	if err := os.WriteFile(stateFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	t.Setenv("XDG_STATE_HOME", stateFile)
+	t.Setenv("HOME", tmp)
+	os.Args = []string{"squad-routined"}
+	rc := run()
+	if rc != 1 {
+		t.Errorf("expected rc=1 when daemon.Run fails, got %d", rc)
+	}
+}
+
 func TestRunRedirectStdioFailureExitsNonZero(t *testing.T) {
 	// Passing an unwriteable log path makes RedirectStdio fail; run() should
 	// return 1 without ever invoking daemon.Run.

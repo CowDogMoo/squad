@@ -114,3 +114,33 @@ func TestLogHistoryNilMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadHistoryCorrupt(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	histDir := filepath.Join(dir, "cost-history")
+	if err := os.MkdirAll(histDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(histDir, "bad-agent.json"), []byte("{bad json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadHistory(dir, "bad-agent")
+	if err == nil {
+		t.Fatal("expected error for corrupt history file")
+	}
+}
+
+func TestLogRunHistory_MkdirFails(t *testing.T) {
+	t.Parallel()
+	// Pass a path that cannot be created (file used as dir parent).
+	dir := t.TempDir()
+	blockPath := filepath.Join(dir, "block")
+	if err := os.WriteFile(blockPath, []byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	m := New("openai", "gpt-4o")
+	m.Finish()
+	// Should not panic; error is logged internally.
+	LogRunHistory(blockPath, "agent", m)
+}

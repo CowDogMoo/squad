@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/cowdogmoo/squad/session"
+	"github.com/cowdogmoo/squad/tools"
 	oairesponses "github.com/openai/openai-go/v3/responses"
 )
 
@@ -189,5 +190,36 @@ func TestRunWithToolsForwardsResumeResponseID(t *testing.T) {
 	}
 	if out != "hi" {
 		t.Fatalf("response = %q, want hi", out)
+	}
+}
+
+func TestCheckRepeat_NotExceeded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	var repeat tools.RepeatTracker
+	calls := []FunctionCall{
+		{Name: "Read", Arguments: `{"path":"a.go"}`},
+		{Name: "Write", Arguments: `{"path":"b.go"}`},
+	}
+	if checkRepeat(ctx, &repeat, calls) {
+		t.Error("expected checkRepeat to return false for non-repeating calls")
+	}
+}
+
+func TestCheckRepeat_Exceeded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	var repeat tools.RepeatTracker
+	// Repeat the same call enough times to exceed the threshold.
+	calls := []FunctionCall{{Name: "Read", Arguments: `{"path":"a.go"}`}}
+	exceeded := false
+	for i := 0; i < 20; i++ {
+		if checkRepeat(ctx, &repeat, calls) {
+			exceeded = true
+			break
+		}
+	}
+	if !exceeded {
+		t.Error("expected checkRepeat to return true after repeated identical calls")
 	}
 }

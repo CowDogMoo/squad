@@ -719,6 +719,115 @@ func TestChildMaxCost_NilBudget(t *testing.T) {
 	}
 }
 
+func TestLoadAndProcessPrompts_MissingWrapper(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Write system.md but no wrapper.md
+	if err := os.WriteFile(filepath.Join(agentDir, "system.md"), []byte("system"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manifest{EntryPoint: "system.md", Wrapper: "wrapper.md"}
+	_, _, _, err := loadAndProcessPrompts(agentDir, dir, m, TemplateData{})
+	if err == nil {
+		t.Fatal("expected error for missing wrapper")
+	}
+	if !strings.Contains(err.Error(), "wrapper") {
+		t.Errorf("error %q should mention 'wrapper'", err.Error())
+	}
+}
+
+func TestLoadAndProcessPrompts_MissingSystem(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manifest{EntryPoint: "system.md", Wrapper: "wrapper.md"}
+	_, _, _, err := loadAndProcessPrompts(agentDir, dir, m, TemplateData{})
+	if err == nil {
+		t.Fatal("expected error for missing system prompt")
+	}
+	if !strings.Contains(err.Error(), "system prompt") {
+		t.Errorf("error %q should mention 'system prompt'", err.Error())
+	}
+}
+
+func TestBuildSystemMessage_WithTask(t *testing.T) {
+	t.Parallel()
+	m := &Manifest{Name: "test-agent", Version: "1.0.0"}
+	buf := buildSystemMessage(m, "edit", "/wd", "wrapper", "system", "do the thing", "", nil)
+	got := buf.String()
+	if !strings.Contains(got, "## Task") {
+		t.Errorf("expected ## Task section, got:\n%s", got)
+	}
+	if !strings.Contains(got, "do the thing") {
+		t.Errorf("expected task content, got:\n%s", got)
+	}
+}
+
+func TestBuildSystemMessage_WithRefs(t *testing.T) {
+	t.Parallel()
+	m := &Manifest{Name: "test-agent", Version: "1.0.0"}
+	refs := []string{"## Reference: foo.md\n\ncontent\n"}
+	buf := buildSystemMessage(m, "edit", "/wd", "wrapper", "system", "", "", refs)
+	got := buf.String()
+	if !strings.Contains(got, "## References") {
+		t.Errorf("expected ## References section, got:\n%s", got)
+	}
+}
+
+func TestBuildInlineSystemMessage_RemoteOnly(t *testing.T) {
+	t.Parallel()
+	// Use a manifest with no executor — IsRemoteOnly returns false.
+	// Test that Working Directory is included for local agents.
+	m := &Manifest{Name: "local-agent", Version: "0.1.0"}
+	buf := buildInlineSystemMessage(m, "edit", "/wd", "inline prompt", "")
+	got := buf.String()
+	if !strings.Contains(got, "Working Directory") {
+		t.Errorf("local agent should include Working Directory, got:\n%s", got)
+	}
+	if !strings.Contains(got, "inline prompt") {
+		t.Errorf("expected prompt content, got:\n%s", got)
+	}
+}
+
+func TestResolveSkills_DisabledByManifest(t *testing.T) {
+	t.Parallel()
+	disabled := false
+	cfg := &SkillsConfig{Enabled: &disabled}
+	entries, block, err := resolveSkills(t.TempDir(), cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected no entries when disabled, got %d", len(entries))
+	}
+	if block != "" {
+		t.Errorf("expected empty block when disabled, got %q", block)
+	}
+}
+
+func TestResolveSkills_DisabledByOverride(t *testing.T) {
+	t.Parallel()
+	disabled := false
+	overrides := &SkillOverrides{Enabled: &disabled}
+	entries, block, err := resolveSkills(t.TempDir(), nil, overrides, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected no entries when override disabled, got %d", len(entries))
+	}
+	if block != "" {
+		t.Errorf("expected empty block when override disabled, got %q", block)
+	}
+}
+
 // fakeDirEntry implements fs.DirEntry for testing.
 type fakeDirEntry struct {
 	fname string

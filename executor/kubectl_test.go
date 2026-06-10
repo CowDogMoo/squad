@@ -328,3 +328,32 @@ func TestKubeExecutor_EnvironmentDescriptionWithContainer(t *testing.T) {
 		t.Fatalf("expected shell in description, got: %q", desc)
 	}
 }
+
+func TestNewKubeExecutor_DefaultsApplied(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Type: "kubectl",
+		Options: map[string]string{
+			"pod": "mypod",
+			// namespace and shell intentionally omitted to test defaults
+		},
+	}
+	ex := newKubeExecutor(fake.NewSimpleClientset(), testRestConfig, cfg, newFakeSPDYCreator("", "", nil))
+	if ex.namespace != "default" {
+		t.Errorf("namespace = %q, want 'default'", ex.namespace)
+	}
+	if ex.shell != "/bin/sh" {
+		t.Errorf("shell = %q, want '/bin/sh'", ex.shell)
+	}
+	if ex.pod != "mypod" {
+		t.Errorf("pod = %q, want 'mypod'", ex.pod)
+	}
+}
+
+func TestBuildRestConfig_EmptyPath(t *testing.T) {
+	t.Parallel()
+	// Empty path + no in-cluster env falls back to default loading rules.
+	// On a dev machine with ~/.kube/config this may succeed; on CI it fails.
+	// Either outcome is acceptable — we just verify no panic.
+	_, _ = buildRestConfig("", "")
+}

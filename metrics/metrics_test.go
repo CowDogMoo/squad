@@ -1034,6 +1034,71 @@ func TestModelsForProviderFallbackParses(t *testing.T) {
 	}
 }
 
+func TestLoadFallbackModels_CalledTwice(t *testing.T) {
+	t.Parallel()
+	// loadFallbackModels is guarded by fallbackOnce; calling it directly
+	// a second time is a no-op but must not panic.
+	loadFallbackModels()
+	loadFallbackModels()
+	if fallbackParseErr != nil {
+		t.Fatalf("unexpected parse error: %v", fallbackParseErr)
+	}
+}
+
+func TestModelsForProvider_FallbackUnknownProvider(t *testing.T) {
+	t.Parallel()
+	got := ModelsForProvider("totally-unknown-xyz")
+	if len(got) != 0 {
+		t.Errorf("expected empty for unknown provider, got %v", got)
+	}
+}
+
+func TestModelsForProvider_FallbackEmptyIsSorted(t *testing.T) {
+	t.Parallel()
+	got := ModelsForProvider("")
+	for i := 1; i < len(got); i++ {
+		if got[i-1] > got[i] {
+			t.Errorf("result not sorted at index %d: %q > %q", i, got[i-1], got[i])
+		}
+	}
+}
+
+func TestGetPricing_OllamaAlwaysFree(t *testing.T) {
+	t.Parallel()
+	p := GetPricing("ollama", "llama3")
+	if p.InputPerMillion != 0 || p.OutputPerMillion != 0 {
+		t.Errorf("ollama pricing should be zero, got %+v", p)
+	}
+}
+
+func TestGetPricing_UnknownModelZero(t *testing.T) {
+	t.Parallel()
+	p := GetPricing("openai", "totally-nonexistent-model-xyz-999")
+	if p.InputPerMillion != 0 || p.OutputPerMillion != 0 {
+		t.Errorf("unknown model pricing should be zero, got %+v", p)
+	}
+}
+
+func TestIsChatMode_Variants(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		mode string
+		want bool
+	}{
+		{"", true},
+		{"chat", true},
+		{"responses", true},
+		{"embedding", false},
+		{"image_generation", false},
+	}
+	for _, tt := range tests {
+		got := isChatMode(tt.mode)
+		if got != tt.want {
+			t.Errorf("isChatMode(%q) = %v, want %v", tt.mode, got, tt.want)
+		}
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

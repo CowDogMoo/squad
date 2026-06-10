@@ -63,6 +63,51 @@ func exec_LookPath_true() (string, error) {
 	return "", errors.New("true not found")
 }
 
+func TestChromeCandidatesLinux(t *testing.T) {
+	// Simulate Linux by checking the function returns non-nil on darwin/linux.
+	// We can't change runtime.GOOS, but we can verify the env override path
+	// and the default path don't panic.
+	t.Setenv("SQUAD_BROWSER_BIN", "")
+	got := chromeCandidates()
+	// On darwin or linux we expect candidates; on other platforms nil is fine.
+	_ = got
+}
+
+func TestDeleteProfileNotFound(t *testing.T) {
+	withRoot(t)
+	err := Delete("nonexistent-profile-xyz")
+	if !errors.Is(err, ErrProfileNotFound) {
+		t.Fatalf("Delete missing profile: got %v, want ErrProfileNotFound", err)
+	}
+}
+
+func TestDeleteStatError(t *testing.T) {
+	// Create a root where the profile path is inside a file (not a dir).
+	root := withRoot(t)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Create a file at the profile path so Stat returns a non-ErrNotExist error.
+	profilePath := filepath.Join(root, "myprofile")
+	if err := os.WriteFile(profilePath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Now make it a directory so Delete's "not a directory" branch fires.
+	// Actually the file IS there, so Delete should hit the "not a directory" error.
+	err := Delete("myprofile")
+	if err == nil {
+		t.Fatal("expected error when profile path is a file, got nil")
+	}
+}
+
+func TestRootFallsBackToHomeWhenXDGUnset(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "")
+	got := Root()
+	if got == "" {
+		t.Error("Root() returned empty string")
+	}
+}
+
 func TestChromeCandidatesHonorsEnv(t *testing.T) {
 	t.Setenv("SQUAD_BROWSER_BIN", "/custom/chrome")
 	got := chromeCandidates()

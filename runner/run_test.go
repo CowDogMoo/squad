@@ -1277,6 +1277,107 @@ func TestApplyChildIterationCap_CallbackOverridesManifest(t *testing.T) {
 	}
 }
 
+func TestReadPrompt_FromArgs(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	got, err := readPrompt(cmd, []string{"hello", "world"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "hello world" {
+		t.Errorf("got %q, want %q", got, "hello world")
+	}
+}
+
+func TestReadPrompt_NoArgsNoStdin(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	got, err := readPrompt(cmd, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestReportIsolationTeardown_Nil(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	var buf bytes.Buffer
+	cmd.SetErr(&buf)
+	// Should be a no-op and not panic.
+	reportIsolationTeardown(cmd, nil)
+	if buf.Len() != 0 {
+		t.Errorf("expected no output for nil isolation, got %q", buf.String())
+	}
+}
+
+func TestManifestIsolation_NoAgent(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{Agent: ""}
+	got := manifestIsolation(opts)
+	if got != "" {
+		t.Errorf("expected empty isolation for empty agent, got %q", got)
+	}
+}
+
+func TestManifestIsolation_AgentNotFound(t *testing.T) {
+	t.Parallel()
+	opts := &RunOptions{
+		Agent:     "nonexistent-agent-xyz",
+		AgentsDir: t.TempDir(),
+	}
+	got := manifestIsolation(opts)
+	if got != "" {
+		t.Errorf("expected empty isolation when agent not found, got %q", got)
+	}
+}
+
+func TestHandleBudgetExceeded_BudgetErrorWithResponse(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cmd := &cobra.Command{}
+	var errBuf bytes.Buffer
+	cmd.SetErr(&errBuf)
+	opts := &RunOptions{
+		MaxCost:    0.5,
+		WorkingDir: dir,
+		Output:     "",
+	}
+	m := &metrics.Metrics{}
+	// Passing a non-empty response exercises the handleResponse branch.
+	handleBudgetExceeded(cmd, opts, m, "partial response", dir, metrics.ErrBudgetExceeded)
+	if !strings.Contains(errBuf.String(), "cost budget") {
+		t.Errorf("expected budget message in stderr, got %q", errBuf.String())
+	}
+}
+
+func TestFindAgentDir_ExplicitDir(t *testing.T) {
+	t.Parallel()
+	agentsDir := t.TempDir()
+	agentName := "my-agent"
+	got, err := FindAgentDir(agentName, agentsDir, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := filepath.Join(agentsDir, agentName)
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFindAgentDir_NilConfigNoDir(t *testing.T) {
+	t.Parallel()
+	_, err := FindAgentDir("some-agent", "", nil)
+	if err == nil {
+		t.Fatal("expected error when no config and no explicit dir")
+	}
+	if !strings.Contains(err.Error(), "no config") {
+		t.Errorf("error %q should mention 'no config'", err.Error())
+	}
+}
+
 func writeTestAgentNoModels(t *testing.T, agentName string) string {
 	t.Helper()
 	agentsDir := t.TempDir()
