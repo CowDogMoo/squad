@@ -41,16 +41,21 @@ import (
 // buildRunAgentFunc creates the callback used by the pipeline runner to execute
 // individual agents. It handles agent resolution, bundle building, budget
 // propagation, and model invocation.
+// effectiveStageMode resolves the mode a composed sub-agent runs in. A
+// top-level `--mode readonly` overrides any per-stage mode so no stage can opt
+// back into edit mode; otherwise the stage's declared mode wins.
+func effectiveStageMode(topMode, stageMode string) string {
+	if topMode == "readonly" {
+		return "readonly"
+	}
+	return stageMode
+}
+
 func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentDir string, cfg *config.Config, vars map[string]string, pipelineRunner *pl.Runner) func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
 	return func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
 		mergedVars := mergeVars(vars, stageVars)
 
-		// A top-level `--mode readonly` overrides each stage's declared mode:
-		// readonly is a safety constraint the operator imposed on the whole
-		// composed run, so no stage may opt back into edit mode.
-		if opts.Mode == "readonly" {
-			mode = "readonly"
-		}
+		mode = effectiveStageMode(opts.Mode, mode)
 
 		bundle, err := buildAgentBundle(agentName, agentPrompt, wd, mode, mergedVars, agentsDir, composedAgentDir, cfg, pipelineRunner)
 		if err != nil {

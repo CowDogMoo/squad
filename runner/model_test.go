@@ -23,6 +23,19 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
+func TestApplyReadOnlyMode(t *testing.T) {
+	t.Parallel()
+	if tools.IsReadOnlyMode(applyReadOnlyMode(context.Background(), "edit")) {
+		t.Fatal("edit mode must not enable the readonly gate")
+	}
+	if tools.IsReadOnlyMode(applyReadOnlyMode(context.Background(), "")) {
+		t.Fatal("empty mode must not enable the readonly gate")
+	}
+	if !tools.IsReadOnlyMode(applyReadOnlyMode(context.Background(), "readonly")) {
+		t.Fatal("readonly mode must enable the readonly gate")
+	}
+}
+
 func TestNormalizeProvider(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

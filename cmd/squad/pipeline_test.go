@@ -162,6 +162,24 @@ func TestBuildComposedRunOpts(t *testing.T) {
 
 }
 
+// TestEffectiveStageMode asserts a top-level readonly mode overrides any
+// per-stage mode, while otherwise the stage's mode is preserved.
+func TestEffectiveStageMode(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ top, stage, want string }{
+		{"readonly", "edit", "readonly"},
+		{"readonly", "", "readonly"},
+		{"edit", "edit", "edit"},
+		{"", "readonly", "readonly"},
+		{"", "", ""},
+	}
+	for _, c := range cases {
+		if got := effectiveStageMode(c.top, c.stage); got != c.want {
+			t.Errorf("effectiveStageMode(%q, %q) = %q, want %q", c.top, c.stage, got, c.want)
+		}
+	}
+}
+
 // TestBuildComposedRunOptsMode asserts the top-level --mode flag flows into the
 // composed RunOptions so buildRunAgentFunc can force sub-agents readonly.
 func TestBuildComposedRunOptsMode(t *testing.T) {
