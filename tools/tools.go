@@ -1097,9 +1097,6 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 		return toolResponse
 	}
 
-	// Readonly mode is a hard gate: deny the mutating file tools before the
-	// handler runs so an analysis-only run cannot modify the working tree,
-	// regardless of whether the agent's prompt honors the mode.
 	if IsReadOnlyMode(ctx) && IsMutatingTool(toolName) {
 		toolResponse.Name = toolName
 		toolResponse.Content = fmt.Sprintf("error: %s is not permitted in readonly mode (this run is analysis-only and must not modify files)", toolName)

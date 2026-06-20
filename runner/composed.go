@@ -8,12 +8,8 @@ import (
 )
 
 // ComposedFlags lists flags that are incompatible with composed agents.
-// Used by the run command to validate flag usage.
-//
-// `require-actionable` is intentionally absent: it is a leaf-only flag with no
-// effect on the pipeline path, so the composed runner tolerates (and ignores)
-// it rather than rejecting the run. This lets a single task definition pass
-// `--require-actionable` to both leaf and composed agents.
+// `require-actionable` is deliberately omitted: it is leaf-only and a no-op on
+// the pipeline path, so it is tolerated rather than rejected.
 var ComposedFlags = []string{
 	"system",
 	"print-bundle",
