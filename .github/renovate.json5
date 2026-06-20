@@ -4,10 +4,14 @@
     'config:recommended',
     ':automergeDigest',
     ':automergeMinor',
+    ':enablePreCommit',
   ],
   postUpdateOptions: [
     'gomodTidy',
   ],
+  'pre-commit': {
+    enabled: true,
+  },
   packageRules: [
     {
       matchManagers: [

@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   pre-commit:
-    name: Update pre-commit hooks and run pre-commit
+    name: Run pre-commit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout git repository
@@ -102,4 +102,4 @@ jobs:
 
       - name: Run pre-commit
         run: |
-          task -y pre-commit:run-pre-commit
+          task -y pre-commit:run-hooks
