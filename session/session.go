@@ -345,33 +345,15 @@ func (l *Logger) Close() error {
 }
 
 func (l *Logger) writeMeta() error {
-	final := filepath.Join(l.dir, "meta.json")
 	b, err := json.MarshalIndent(l.meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal meta: %w", err)
 	}
-	// Create the temp file with a random name (CWE-377): a fixed
-	// "meta.json.tmp" path is predictable and races with anything else in the
-	// session dir. os.CreateTemp opens it exclusively.
-	tmpFile, err := os.CreateTemp(l.dir, ".meta-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp meta: %w", err)
-	}
-	tmp := tmpFile.Name()
-	if _, werr := tmpFile.Write(b); werr != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("write meta: %w", werr)
-	}
-	if cerr := tmpFile.Close(); cerr != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close meta: %w", cerr)
-	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("chmod meta: %w", err)
-	}
-	return os.Rename(tmp, final)
+	// Atomic temp-file + rename keeps a concurrent reader from seeing a partial
+	// meta.json. The random temp name avoids the TOCTOU race a fixed
+	// "meta.json.tmp" would invite (CWE-377). The IO half lives in
+	// atomicWriteData (session_io.go).
+	return atomicWriteData(l.dir, filepath.Join(l.dir, "meta.json"), ".meta-*.json.tmp", b, 0o600)
 }
 
 func newSessionID() (string, error) {

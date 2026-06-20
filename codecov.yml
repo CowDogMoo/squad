@@ -47,3 +47,5 @@ ignore:
   - "routine/manifest_io.go"
   - "routine/state_io.go"
   - "routine/roots_io.go"
+  - "session/session_io.go"
+  - "ui/presets/presets_io.go"
