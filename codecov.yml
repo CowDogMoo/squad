@@ -49,3 +49,4 @@ ignore:
   - "routine/roots_io.go"
   - "session/session_io.go"
   - "ui/presets/presets_io.go"
+  - "tools/transcript_io.go"

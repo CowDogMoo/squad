@@ -36,6 +36,67 @@ func TestApplyReadOnlyMode(t *testing.T) {
 	}
 }
 
+func TestLoadResumeTranscript(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no resume id returns nil", func(t *testing.T) {
+		t.Parallel()
+		if got := loadResumeTranscript(context.Background(), &RunOptions{}); got != nil {
+			t.Fatalf("fresh run must return nil, got %v", got)
+		}
+	})
+
+	t.Run("resume without session logger returns nil", func(t *testing.T) {
+		t.Parallel()
+		if got := loadResumeTranscript(context.Background(), &RunOptions{ResumeID: "s1"}); got != nil {
+			t.Fatalf("no logger on ctx must return nil, got %v", got)
+		}
+	})
+
+	newLoggerCtx := func(t *testing.T) (context.Context, *session.Logger) {
+		t.Helper()
+		logger, err := session.New(t.TempDir(), "agent", "anthropic", "claude", "prompt")
+		if err != nil {
+			t.Fatalf("session.New: %v", err)
+		}
+		t.Cleanup(func() { _ = logger.Close() })
+		return session.WithLogger(context.Background(), logger), logger
+	}
+
+	t.Run("resume replays persisted transcript", func(t *testing.T) {
+		t.Parallel()
+		ctx, logger := newLoggerCtx(t)
+		prior := []llms.MessageContent{
+			{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextContent{Text: "earlier"}}},
+		}
+		if err := tools.SaveTranscript(logger.Dir(), prior); err != nil {
+			t.Fatalf("SaveTranscript: %v", err)
+		}
+		if got := loadResumeTranscript(ctx, &RunOptions{ResumeID: logger.SessionID()}); len(got) != 1 {
+			t.Fatalf("expected 1 replayed message, got %d", len(got))
+		}
+	})
+
+	t.Run("resume with no transcript returns nil", func(t *testing.T) {
+		t.Parallel()
+		ctx, logger := newLoggerCtx(t)
+		if got := loadResumeTranscript(ctx, &RunOptions{ResumeID: logger.SessionID()}); got != nil {
+			t.Fatalf("missing transcript must return nil, got %v", got)
+		}
+	})
+
+	t.Run("resume with corrupt transcript returns nil", func(t *testing.T) {
+		t.Parallel()
+		ctx, logger := newLoggerCtx(t)
+		if err := os.WriteFile(filepath.Join(logger.Dir(), tools.TranscriptFile), []byte("{not json"), 0o600); err != nil {
+			t.Fatalf("seed corrupt transcript: %v", err)
+		}
+		if got := loadResumeTranscript(ctx, &RunOptions{ResumeID: logger.SessionID()}); got != nil {
+			t.Fatalf("corrupt transcript must return nil, got %v", got)
+		}
+	})
+}
+
 func TestNormalizeProvider(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

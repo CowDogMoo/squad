@@ -352,6 +352,10 @@ type RunWithToolsConfig struct {
 	// tool"). Anthropic requires the single-message form, so leave this
 	// false for the anthropic provider.
 	SplitToolResults bool
+	// PriorMessages is a prior run's turns (excluding the system message),
+	// replayed on --resume and spliced before the new user prompt. Nil for a
+	// fresh run; unused by the OpenAI Responses path.
+	PriorMessages []llms.MessageContent
 }
 
 // RunWithTools drives the tool-calling loop for a LangChain-compatible LLM.
@@ -383,7 +387,13 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	}
 
 	messages := buildInitialMessages(systemPrompt, userPrompt, cfg.UseCacheControl)
+	if len(cfg.PriorMessages) > 0 {
+		messages = splicePriorMessages(messages, cfg.PriorMessages)
+		logging.InfoContext(ctx, "resume: replaying %d prior message(s)", len(cfg.PriorMessages))
+	}
 	lastContent, messages, loopErr, done := toolLoop(ctx, llm, messages, handlers, maxIterations, cfg, callOpts)
+	// Persist the conversation (on every exit path) so a later --resume can replay it.
+	persistTranscript(ctx, messages)
 	if done {
 		return lastContent, nil
 	}
