@@ -345,14 +345,31 @@ func (l *Logger) Close() error {
 }
 
 func (l *Logger) writeMeta() error {
-	tmp := filepath.Join(l.dir, "meta.json.tmp")
 	final := filepath.Join(l.dir, "meta.json")
 	b, err := json.MarshalIndent(l.meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal meta: %w", err)
 	}
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return fmt.Errorf("write meta: %w", err)
+	// Create the temp file with a random name (CWE-377): a fixed
+	// "meta.json.tmp" path is predictable and races with anything else in the
+	// session dir. os.CreateTemp opens it exclusively.
+	tmpFile, err := os.CreateTemp(l.dir, ".meta-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp meta: %w", err)
+	}
+	tmp := tmpFile.Name()
+	if _, werr := tmpFile.Write(b); werr != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("write meta: %w", werr)
+	}
+	if cerr := tmpFile.Close(); cerr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("close meta: %w", cerr)
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("chmod meta: %w", err)
 	}
 	return os.Rename(tmp, final)
 }

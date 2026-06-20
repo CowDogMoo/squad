@@ -163,11 +163,29 @@ func (s *Store) save() error {
 	if err != nil {
 		return fmt.Errorf("marshal presets: %w", err)
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", tmp, err)
+	// Create the temp file with a random name (CWE-377): a fixed ".tmp"
+	// sibling path is predictable and race-prone. os.CreateTemp opens it
+	// exclusively in the same dir so the final os.Rename stays atomic.
+	tmpFile, err := os.CreateTemp(dir, ".presets-*.yaml.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp presets: %w", err)
+	}
+	tmp := tmpFile.Name()
+	if _, werr := tmpFile.Write(body); werr != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("write %s: %w", tmp, werr)
+	}
+	if cerr := tmpFile.Close(); cerr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("close %s: %w", tmp, cerr)
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("chmod %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("rename %s -> %s: %w", tmp, s.path, err)
 	}
 	return nil
