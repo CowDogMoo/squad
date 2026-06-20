@@ -362,6 +362,11 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	// providers; Anthropic, Responses API, gemini, ollama keep the
 	// single-message form.
 	splitToolResults := provider == "openai" || provider == "openai-compat"
+	// On --resume, stateless providers have no server-side conversation to
+	// chain (unlike the OpenAI Responses path's PreviousResponseID), so replay
+	// the prior turns from the persisted transcript. Without this, a resumed
+	// run silently starts with no prior context.
+	priorMessages := loadResumeTranscript(ctx, opts)
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
 	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, tools.RunWithToolsConfig{
 		MaxIterations:      opts.MaxIterations,
@@ -375,6 +380,7 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		Skill:              buildSkillRuntime(ctx, bundle, opts),
 		Confirm:            buildConfirmRuntime(opts),
 		MaxRetries:         opts.MaxRetries,
+		PriorMessages:      priorMessages,
 	}, callOpts...)
 	m.Finish()
 	if err != nil {
@@ -385,6 +391,32 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	}
 	logging.InfoContext(ctx, "model call finished in %s (response-bytes=%d)", m.Duration().Round(time.Millisecond), len(response))
 	return response, nil
+}
+
+// loadResumeTranscript returns the prior conversation to replay when this run
+// is a --resume on the stateless (LangChain) path. It returns nil for a fresh
+// run, and warns — rather than silently proceeding context-free — when a
+// resume finds no replayable transcript (e.g. the prior run used the OpenAI
+// Responses path, which persists no transcript).
+func loadResumeTranscript(ctx context.Context, opts *RunOptions) []llms.MessageContent {
+	if opts.ResumeID == "" {
+		return nil
+	}
+	logger := session.FromContext(ctx)
+	if logger == nil {
+		return nil
+	}
+	prior, err := tools.LoadTranscript(logger.Dir())
+	if err != nil {
+		logging.Warn("resume: failed to load transcript for session %s: %v", opts.ResumeID, err)
+		return nil
+	}
+	if len(prior) == 0 {
+		logging.Warn("resume: no transcript for session %s — continuing without prior context", opts.ResumeID)
+		return nil
+	}
+	logging.InfoContext(ctx, "resume: loaded %d prior message(s) for session %s", len(prior), opts.ResumeID)
+	return prior
 }
 
 // buildCallOpts constructs LLM call options from provider settings.

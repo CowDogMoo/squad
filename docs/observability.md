@@ -73,7 +73,9 @@ When a tool result exceeds 8 KiB it is written to `results/<id>.txt` and the inl
 
 Terminal statuses are `completed`, `error`, and `budget_exceeded`. A status of `running` means the session is active or was interrupted.
 
-The `last_response_id` field powers `--resume`: it lets squad chain a new request onto the same conversation via the OpenAI Responses API, without re-sending the full transcript.
+The `last_response_id` field powers `--resume` on the OpenAI Responses API path: it lets squad chain a new request onto the same conversation server-side, without re-sending the full transcript.
+
+Every other provider (Anthropic, openai-compat, gemini, ollama) has a **stateless** API — there is no server-side conversation to chain onto. For those, `--resume` instead replays a locally persisted transcript. Each run on that path writes the full conversation to `transcript.json` alongside `meta.json` and `events.jsonl`; a resume loads it and prepends the prior turns to the new prompt. (`events.jsonl` is a lossy audit log and is **not** used for replay — only `transcript.json` is.)
 
 ---
 
