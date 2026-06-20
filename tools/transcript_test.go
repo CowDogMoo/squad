@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/session"
 	"github.com/tmc/langchaingo/llms"
 )
@@ -141,4 +142,119 @@ func TestPersistTranscriptWritesForActiveSession(t *testing.T) {
 func TestPersistTranscriptNoLoggerIsNoop(t *testing.T) {
 	// Must not panic when no session logger is attached to the context.
 	persistTranscript(context.Background(), sampleConversation())
+}
+
+func TestPersistTranscriptSwallowsWriteFailure(t *testing.T) {
+	t.Parallel()
+	logger, err := session.New(t.TempDir(), "agent", "anthropic", "claude", "prompt")
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	defer func() { _ = logger.Close() }()
+	// Removing the session dir makes the atomic write fail; persistTranscript
+	// must log and return, never panic or propagate.
+	if err := os.RemoveAll(logger.Dir()); err != nil {
+		t.Fatalf("rm session dir: %v", err)
+	}
+	persistTranscript(session.WithLogger(context.Background(), logger), sampleConversation())
+}
+
+func TestSaveTranscriptEmptyDirErrors(t *testing.T) {
+	t.Parallel()
+	if err := SaveTranscript("", sampleConversation()); err == nil {
+		t.Fatal("expected an error for an empty session dir")
+	}
+}
+
+func TestLoadTranscriptCorruptFileErrors(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, TranscriptFile), []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("seed corrupt transcript: %v", err)
+	}
+	if _, err := LoadTranscript(dir); err == nil {
+		t.Fatal("expected a parse error for a corrupt transcript")
+	}
+}
+
+func TestLoadTranscriptReadErrorOnDirectory(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// A directory at the transcript path makes os.ReadFile fail with a
+	// non-NotExist error, which must surface rather than be swallowed.
+	if err := os.Mkdir(filepath.Join(dir, TranscriptFile), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := LoadTranscript(dir); err == nil {
+		t.Fatal("expected a read error when the transcript path is a directory")
+	}
+}
+
+func TestSaveTranscriptSkipsMessagesWithNoEncodableParts(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	msgs := []llms.MessageContent{
+		{Role: llms.ChatMessageTypeHuman, Parts: nil}, // nothing to encode -> skipped
+		{Role: llms.ChatMessageTypeAI, Parts: []llms.ContentPart{llms.TextContent{Text: "kept"}}},
+	}
+	if err := SaveTranscript(dir, msgs); err != nil {
+		t.Fatalf("SaveTranscript: %v", err)
+	}
+	got, err := LoadTranscript(dir)
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected the empty-parts message to be skipped, got %d messages", len(got))
+	}
+}
+
+func TestSplicePriorMessagesEmptyInitialReturnsPrior(t *testing.T) {
+	t.Parallel()
+	prior := []llms.MessageContent{{Role: llms.ChatMessageTypeHuman}}
+	if got := splicePriorMessages(nil, prior); !reflect.DeepEqual(got, prior) {
+		t.Fatalf("empty initial should return prior unchanged, got %#v", got)
+	}
+}
+
+// TestRunWithToolsReplaysAndPersists exercises the resume seam end-to-end with
+// a fake LLM: prior messages are spliced in, and the conversation is persisted
+// so a later --resume can reload it.
+func TestRunWithToolsReplaysAndPersists(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	logger, err := session.New(dir, "agent", "anthropic", "claude", "prompt")
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	defer func() { _ = logger.Close() }()
+	ctx := session.WithLogger(context.Background(), logger)
+
+	llm := &fakeLLM{responses: []*llms.ContentResponse{
+		{Choices: []*llms.ContentChoice{{Content: "done"}}},
+	}}
+	prior := []llms.MessageContent{
+		{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextContent{Text: "earlier"}}},
+		{Role: llms.ChatMessageTypeAI, Parts: []llms.ContentPart{llms.TextContent{Text: "earlier answer"}}},
+	}
+	out, err := RunWithTools(ctx, llm, "sys", "new question", dir, RunWithToolsConfig{
+		MaxIterations: 1,
+		Executor:      &executor.LocalExecutor{WorkingDir: dir},
+		PriorMessages: prior,
+	})
+	if err != nil {
+		t.Fatalf("RunWithTools() error = %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("output = %q, want done", out)
+	}
+
+	saved, err := LoadTranscript(logger.Dir())
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	// Persisted = prior turns + the new user prompt (system is dropped).
+	if len(saved) < len(prior)+1 {
+		t.Fatalf("expected >= %d persisted messages, got %d", len(prior)+1, len(saved))
+	}
 }

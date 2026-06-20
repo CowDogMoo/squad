@@ -78,30 +78,9 @@ func SaveTranscript(dir string, messages []llms.MessageContent) error {
 	if err != nil {
 		return fmt.Errorf("transcript: marshal: %w", err)
 	}
-	final := filepath.Join(dir, TranscriptFile)
-	tmpFile, err := os.CreateTemp(dir, ".transcript-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("transcript: create temp: %w", err)
-	}
-	tmp := tmpFile.Name()
-	if _, werr := tmpFile.Write(data); werr != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("transcript: write: %w", werr)
-	}
-	if cerr := tmpFile.Close(); cerr != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("transcript: close: %w", cerr)
-	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("transcript: chmod: %w", err)
-	}
-	if err := os.Rename(tmp, final); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("transcript: rename: %w", err)
-	}
-	return nil
+	// Atomic temp-file + rename so a concurrent reader never sees a partial
+	// transcript. The IO half lives in atomicWriteTranscript (transcript_io.go).
+	return atomicWriteTranscript(dir, filepath.Join(dir, TranscriptFile), data)
 }
 
 // LoadTranscript reads <dir>/transcript.json and rebuilds the message slice.
