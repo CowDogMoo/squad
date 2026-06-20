@@ -54,8 +54,9 @@ func TestLogEventNilLoggerNoop(t *testing.T) {
 }
 
 func TestLogEventWritesToSession(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
-	l, err := session.New(wd, "a", "p", "m", "")
+	l, err := session.New(wd, "", "a", "p", "m", "")
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}
@@ -77,8 +78,9 @@ func TestRecordResponseNilSafe(t *testing.T) {
 	recordResponse(nil, nil, "label")
 	recordResponse(nil, &oairesponses.Response{ID: "x"}, "label")
 
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
-	l, err := session.New(wd, "a", "p", "m", "")
+	l, err := session.New(wd, "", "a", "p", "m", "")
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}
@@ -87,8 +89,9 @@ func TestRecordResponseNilSafe(t *testing.T) {
 }
 
 func TestRecordResponseSetsLastIDAndAppends(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
-	l, err := session.New(wd, "a", "p", "m", "")
+	l, err := session.New(wd, "", "a", "p", "m", "")
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}

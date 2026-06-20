@@ -120,8 +120,9 @@ func TestSplicePriorMessagesEmptyPriorReturnsInitial(t *testing.T) {
 }
 
 func TestPersistTranscriptWritesForActiveSession(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	dir := t.TempDir()
-	logger, err := session.New(dir, "agent", "anthropic", "claude", "prompt")
+	logger, err := session.New(dir, "", "agent", "anthropic", "claude", "prompt")
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}
@@ -145,8 +146,8 @@ func TestPersistTranscriptNoLoggerIsNoop(t *testing.T) {
 }
 
 func TestPersistTranscriptSwallowsWriteFailure(t *testing.T) {
-	t.Parallel()
-	logger, err := session.New(t.TempDir(), "agent", "anthropic", "claude", "prompt")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger, err := session.New(t.TempDir(), "", "agent", "anthropic", "claude", "prompt")
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}
@@ -221,9 +222,9 @@ func TestSplicePriorMessagesEmptyInitialReturnsPrior(t *testing.T) {
 // a fake LLM: prior messages are spliced in, and the conversation is persisted
 // so a later --resume can reload it.
 func TestRunWithToolsReplaysAndPersists(t *testing.T) {
-	t.Parallel()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	dir := t.TempDir()
-	logger, err := session.New(dir, "agent", "anthropic", "claude", "prompt")
+	logger, err := session.New(dir, "", "agent", "anthropic", "claude", "prompt")
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}

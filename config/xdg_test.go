@@ -273,3 +273,52 @@ func TestCacheDirWithEnv(t *testing.T) {
 		t.Fatalf("CacheDir=%q, want %q", got, filepath.Join(base, "cache", "squad"))
 	}
 }
+
+func TestStateDirWithEnv(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(base, "state"))
+	if got := StateDir(); got != filepath.Join(base, "state", "squad") {
+		t.Fatalf("StateDir=%q, want %q", got, filepath.Join(base, "state", "squad"))
+	}
+}
+
+func TestStateDirFallsBackToHomeLocalState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("HOME", home)
+	if got, want := StateDir(), filepath.Join(home, ".local", "state", "squad"); got != want {
+		t.Fatalf("StateDir=%q, want %q", got, want)
+	}
+}
+
+func TestStateDirEmptyEnv(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("HOME", "")
+	if got := StateDir(); got != "" {
+		t.Fatalf("expected empty state dir, got %q", got)
+	}
+}
+
+func TestStateFileCreatesPath(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(base, "state"))
+
+	got, err := StateFile("index.jsonl")
+	if err != nil {
+		t.Fatalf("StateFile: %v", err)
+	}
+	if want := filepath.Join(base, "state", "squad", "index.jsonl"); got != want {
+		t.Fatalf("StateFile path=%q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Dir(got)); err != nil {
+		t.Fatalf("state dir not created: %v", err)
+	}
+}
+
+func TestStateFileNoHomeErrors(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("HOME", "")
+	if _, err := StateFile("index.jsonl"); err == nil {
+		t.Fatalf("expected error when no state home is available")
+	}
+}

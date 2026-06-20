@@ -24,6 +24,7 @@ func TestOpenSessionNoSessionReturnsNil(t *testing.T) {
 }
 
 func TestOpenSessionFreshWritesRunStart(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
 	opts := &RunOptions{
 		WorkingDir: wd,
@@ -51,8 +52,9 @@ func TestOpenSessionFreshWritesRunStart(t *testing.T) {
 }
 
 func TestOpenSessionResumeRehydratesResponseID(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
-	first, err := session.New(wd, "agent", "openai", "gpt-5", "first prompt")
+	first, err := session.New(wd, "", "agent", "openai", "gpt-5", "first prompt")
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}
@@ -82,6 +84,7 @@ func TestOpenSessionResumeRehydratesResponseID(t *testing.T) {
 }
 
 func TestOpenSessionResumeMissingErrors(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	opts := &RunOptions{WorkingDir: t.TempDir(), ResumeID: "nope"}
 	if _, err := openSession(opts, &agent.Bundle{}, "x"); err == nil {
 		t.Fatalf("expected error resuming missing session")
@@ -94,10 +97,12 @@ func TestCloseSessionNilLoggerNoop(t *testing.T) {
 
 func TestOpenSessionFreshFailsWhenSessionsRootBlocked(t *testing.T) {
 	wd := t.TempDir()
-	// Make .squad a file so session.New's MkdirAll fails.
-	if err := os.WriteFile(filepath.Join(wd, ".squad"), []byte("blocked"), 0o644); err != nil {
+	// Point XDG_STATE_HOME at a regular file so session.New's MkdirAll fails.
+	blocked := filepath.Join(wd, "blocked")
+	if err := os.WriteFile(blocked, []byte("blocked"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+	t.Setenv("XDG_STATE_HOME", filepath.Join(blocked, "state"))
 	opts := &RunOptions{WorkingDir: wd, Agent: "a", Provider: "p", Model: "m"}
 	if _, err := openSession(opts, &agent.Bundle{}, "go"); err == nil {
 		t.Fatalf("expected error when session dir cannot be created")
@@ -116,8 +121,9 @@ func TestCloseSessionStatusMapping(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
 			wd := t.TempDir()
-			l, err := session.New(wd, "agent", "openai", "gpt-5", "p")
+			l, err := session.New(wd, "", "agent", "openai", "gpt-5", "p")
 			if err != nil {
 				t.Fatalf("session.New: %v", err)
 			}

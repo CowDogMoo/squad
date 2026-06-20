@@ -25,8 +25,9 @@ type confirmEventPayload struct {
 // test can read back events.jsonl. The session is closed via t.Cleanup.
 func newSessionForTest(t *testing.T) *session.Logger {
 	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
-	logger, err := session.New(wd, "test", "openai", "gpt-x", "audit")
+	logger, err := session.New(wd, "", "test", "openai", "gpt-x", "audit")
 	if err != nil {
 		t.Fatal(err)
 	}

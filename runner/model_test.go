@@ -37,8 +37,6 @@ func TestApplyReadOnlyMode(t *testing.T) {
 }
 
 func TestLoadResumeTranscript(t *testing.T) {
-	t.Parallel()
-
 	t.Run("no resume id returns nil", func(t *testing.T) {
 		t.Parallel()
 		if got := loadResumeTranscript(context.Background(), &RunOptions{}); got != nil {
@@ -55,7 +53,8 @@ func TestLoadResumeTranscript(t *testing.T) {
 
 	newLoggerCtx := func(t *testing.T) (context.Context, *session.Logger) {
 		t.Helper()
-		logger, err := session.New(t.TempDir(), "agent", "anthropic", "claude", "prompt")
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		logger, err := session.New(t.TempDir(), "", "agent", "anthropic", "claude", "prompt")
 		if err != nil {
 			t.Fatalf("session.New: %v", err)
 		}
@@ -64,7 +63,6 @@ func TestLoadResumeTranscript(t *testing.T) {
 	}
 
 	t.Run("resume replays persisted transcript", func(t *testing.T) {
-		t.Parallel()
 		ctx, logger := newLoggerCtx(t)
 		prior := []llms.MessageContent{
 			{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextContent{Text: "earlier"}}},
@@ -78,7 +76,6 @@ func TestLoadResumeTranscript(t *testing.T) {
 	})
 
 	t.Run("resume with no transcript returns nil", func(t *testing.T) {
-		t.Parallel()
 		ctx, logger := newLoggerCtx(t)
 		if got := loadResumeTranscript(ctx, &RunOptions{ResumeID: logger.SessionID()}); got != nil {
 			t.Fatalf("missing transcript must return nil, got %v", got)
@@ -86,7 +83,6 @@ func TestLoadResumeTranscript(t *testing.T) {
 	})
 
 	t.Run("resume with corrupt transcript returns nil", func(t *testing.T) {
-		t.Parallel()
 		ctx, logger := newLoggerCtx(t)
 		if err := os.WriteFile(filepath.Join(logger.Dir(), tools.TranscriptFile), []byte("{not json"), 0o600); err != nil {
 			t.Fatalf("seed corrupt transcript: %v", err)
@@ -1598,8 +1594,9 @@ func TestRehydrateSkillStackNoOpWhenNilLogger(t *testing.T) {
 }
 
 func TestBuildSkillRuntimeWithEntriesAndOnLoad(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
-	logger, err := session.New(wd, "a", "openai", "gpt-5", "x")
+	logger, err := session.New(wd, "", "a", "openai", "gpt-5", "x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1633,8 +1630,9 @@ func TestBuildSkillRuntimeWithEntriesAndOnLoad(t *testing.T) {
 }
 
 func TestRehydrateSkillStackReplaysEvents(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
-	logger, err := session.New(wd, "a", "openai", "gpt-5", "x")
+	logger, err := session.New(wd, "", "a", "openai", "gpt-5", "x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1669,8 +1667,9 @@ func TestRehydrateSkillStackReplaysEvents(t *testing.T) {
 // and a duplicate skill_loaded event into the log. Rehydration must skip the
 // junk line without crashing and push each known skill exactly once.
 func TestRehydrateSkillStackToleratesMalformedEvents(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
-	logger, err := session.New(wd, "a", "openai", "gpt-5", "x")
+	logger, err := session.New(wd, "", "a", "openai", "gpt-5", "x")
 	if err != nil {
 		t.Fatal(err)
 	}

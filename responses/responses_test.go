@@ -1286,9 +1286,9 @@ func TestLogEvent_NilLogger(t *testing.T) {
 }
 
 func TestLogEvent_WithLogger(t *testing.T) {
-	t.Parallel()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	dir := t.TempDir()
-	l, err := session.New(dir, "test-agent", "openai", "gpt-4o", "test prompt")
+	l, err := session.New(dir, "", "test-agent", "openai", "gpt-4o", "test prompt")
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}

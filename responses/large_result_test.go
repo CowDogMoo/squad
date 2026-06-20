@@ -24,8 +24,9 @@ func TestRegisterLargeResultToolIsIdempotent(t *testing.T) {
 }
 
 func TestGetToolResultPagesContent(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
-	l, err := session.New(wd, "agent", "openai", "gpt-5", "")
+	l, err := session.New(wd, "", "agent", "openai", "gpt-5", "")
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}
@@ -69,8 +70,9 @@ func TestGetToolResultRequiresLogger(t *testing.T) {
 }
 
 func TestGetToolResultRejectsEmptyID(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
-	l, _ := session.New(wd, "a", "p", "m", "")
+	l, _ := session.New(wd, "", "a", "p", "m", "")
 	t.Cleanup(func() { _ = l.Close() })
 	ctx := session.WithLogger(context.Background(), l)
 
@@ -93,8 +95,9 @@ func TestRegisterLargeResultToolNoopOnNilContainers(t *testing.T) {
 }
 
 func TestGetToolResultPropagatesUnknownID(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
-	l, _ := session.New(wd, "a", "p", "m", "")
+	l, _ := session.New(wd, "", "a", "p", "m", "")
 	t.Cleanup(func() { _ = l.Close() })
 	ctx := session.WithLogger(context.Background(), l)
 
