@@ -149,6 +149,16 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 	temperature := opts.Temperature
 	maxTokens := opts.MaxTokens
 
+	// Readonly mode hard-gates the mutating file tools. This is the single
+	// chokepoint for both leaf runs and composed sub-agents (the pipeline
+	// runner dispatches each sub-agent through InvokeModel), so setting it
+	// here guarantees --mode readonly is honored even when a sub-agent's
+	// prompt does not branch on mode.
+	if opts.Mode == "readonly" {
+		ctx = tools.InitReadOnlyMode(ctx)
+		logging.InfoContext(ctx, "readonly mode: Write/Edit/MultiEdit will be rejected")
+	}
+
 	// Create metrics early so partial cost is always available, even if
 	// we fail during executor or MCP setup.
 	m := metrics.New(provider, model)

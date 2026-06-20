@@ -162,6 +162,20 @@ func TestBuildComposedRunOpts(t *testing.T) {
 
 }
 
+// TestBuildComposedRunOptsMode asserts the top-level --mode flag flows into the
+// composed RunOptions so buildRunAgentFunc can force sub-agents readonly.
+func TestBuildComposedRunOptsMode(t *testing.T) {
+	t.Parallel()
+	cmd := newTestRunCmdWithContext(nil)
+	if err := cmd.Flags().Set("mode", "readonly"); err != nil {
+		t.Fatalf("set mode: %v", err)
+	}
+	opts := buildComposedRunOpts(cmd, nil)
+	if opts.Mode != "readonly" {
+		t.Fatalf("expected Mode=readonly to propagate, got %q", opts.Mode)
+	}
+}
+
 // TestBuildComposedRunOptsExplicitFlagBucket asserts that explicit
 // --provider/--model CLI flags populate Model/Provider and leave
 // ConfigModel/ConfigProvider empty, so the manifest precedence logic

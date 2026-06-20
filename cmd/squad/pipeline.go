@@ -45,6 +45,13 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 	return func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
 		mergedVars := mergeVars(vars, stageVars)
 
+		// A top-level `--mode readonly` overrides each stage's declared mode:
+		// readonly is a safety constraint the operator imposed on the whole
+		// composed run, so no stage may opt back into edit mode.
+		if opts.Mode == "readonly" {
+			mode = "readonly"
+		}
+
 		bundle, err := buildAgentBundle(agentName, agentPrompt, wd, mode, mergedVars, agentsDir, composedAgentDir, cfg, pipelineRunner)
 		if err != nil {
 			return "", nil, err
@@ -227,7 +234,13 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 		maxCost = 0
 	}
 
+	// The top-level --mode must reach sub-agents; buildRunAgentFunc forces
+	// each stage readonly when this is "readonly", overriding the per-stage
+	// mode declared in the manifest.
+	mode, _ := cmd.Flags().GetString("mode")
+
 	return &runner.RunOptions{
+		Mode:            mode,
 		APIKey:          apiKey,
 		BaseURL:         baseURL,
 		Org:             org,

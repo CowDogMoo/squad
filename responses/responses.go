@@ -534,6 +534,19 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			continue
 		}
 
+		if tools.IsReadOnlyMode(ctx) && tools.IsMutatingTool(call.Name) {
+			logging.InfoContext(ctx, "responses API: %s denied by readonly mode", call.Name)
+			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
+				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
+					CallID: call.CallID,
+					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
+						OfString: openai.String(fmt.Sprintf("error: %s is not permitted in readonly mode (this run is analysis-only and must not modify files)", call.Name)),
+					},
+				},
+			})
+			continue
+		}
+
 		callCtx, toolSpan := telemetry.Tracer().Start(ctx, "tool."+call.Name,
 			trace.WithAttributes(
 				attribute.String("squad.tool.name", call.Name),
