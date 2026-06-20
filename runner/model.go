@@ -129,8 +129,7 @@ func rehydrateSkillStack(rt *tools.SkillRuntime, workingDir string, logger *sess
 }
 
 // applyReadOnlyMode enables the readonly tool gate on ctx when mode is
-// "readonly", so the mutating file tools (Write/Edit/MultiEdit) are rejected
-// for the rest of the run. Any other mode returns ctx unchanged.
+// "readonly", and returns ctx unchanged otherwise.
 func applyReadOnlyMode(ctx context.Context, mode string) context.Context {
 	if mode != "readonly" {
 		return ctx
@@ -160,10 +159,8 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 	temperature := opts.Temperature
 	maxTokens := opts.MaxTokens
 
-	// Readonly mode hard-gates the mutating file tools. InvokeModel is the
-	// single chokepoint for both leaf runs and composed sub-agents (the
-	// pipeline runner dispatches each sub-agent through here), so this is
-	// honored even when a sub-agent's prompt does not branch on mode.
+	// InvokeModel is the single chokepoint for both leaf and composed
+	// sub-agent runs, so readonly enforcement applies uniformly here.
 	ctx = applyReadOnlyMode(ctx, opts.Mode)
 
 	// Create metrics early so partial cost is always available, even if
