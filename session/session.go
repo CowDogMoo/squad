@@ -345,16 +345,11 @@ func (l *Logger) Close() error {
 }
 
 func (l *Logger) writeMeta() error {
-	tmp := filepath.Join(l.dir, "meta.json.tmp")
-	final := filepath.Join(l.dir, "meta.json")
 	b, err := json.MarshalIndent(l.meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal meta: %w", err)
 	}
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return fmt.Errorf("write meta: %w", err)
-	}
-	return os.Rename(tmp, final)
+	return atomicWriteData(l.dir, filepath.Join(l.dir, "meta.json"), ".meta-*.json.tmp", b, 0o600)
 }
 
 func newSessionID() (string, error) {

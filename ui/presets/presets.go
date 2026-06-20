@@ -163,12 +163,8 @@ func (s *Store) save() error {
 	if err != nil {
 		return fmt.Errorf("marshal presets: %w", err)
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		return fmt.Errorf("rename %s -> %s: %w", tmp, s.path, err)
+	if err := atomicWriteData(dir, s.path, ".presets-*.yaml.tmp", body, 0o644); err != nil {
+		return fmt.Errorf("write presets %s: %w", s.path, err)
 	}
 	return nil
 }
