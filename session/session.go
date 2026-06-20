@@ -349,10 +349,6 @@ func (l *Logger) writeMeta() error {
 	if err != nil {
 		return fmt.Errorf("marshal meta: %w", err)
 	}
-	// Atomic temp-file + rename keeps a concurrent reader from seeing a partial
-	// meta.json. The random temp name avoids the TOCTOU race a fixed
-	// "meta.json.tmp" would invite (CWE-377). The IO half lives in
-	// atomicWriteData (session_io.go).
 	return atomicWriteData(l.dir, filepath.Join(l.dir, "meta.json"), ".meta-*.json.tmp", b, 0o600)
 }
 

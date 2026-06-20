@@ -163,9 +163,6 @@ func (s *Store) save() error {
 	if err != nil {
 		return fmt.Errorf("marshal presets: %w", err)
 	}
-	// Atomic temp-file + rename, with a random temp name to avoid the TOCTOU
-	// race a fixed "<path>.tmp" would invite (CWE-377). The IO half lives in
-	// atomicWriteData (presets_io.go).
 	if err := atomicWriteData(dir, s.path, ".presets-*.yaml.tmp", body, 0o644); err != nil {
 		return fmt.Errorf("write presets %s: %w", s.path, err)
 	}

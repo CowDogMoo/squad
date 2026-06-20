@@ -5,17 +5,12 @@ import (
 	"os"
 )
 
-// This file holds the atomic-write IO half of session persistence: temp file +
-// rename. It is isolated here (and ignored by codecov) because every uncovered
-// branch is an os.CreateTemp / Write / Chmod / Rename error path that would
-// need fault injection on the os package to exercise. The marshal half stays
-// in session.go and is unit-tested; the happy-path round-trip is covered by
-// session_test.go.
+// The atomic-write IO half lives here; codecov ignores this file because its
+// only uncovered branches are os.* failure paths that need fault injection.
 
-// atomicWriteData writes data to final via a randomly-named temp file in dir
-// followed by os.Rename, so a concurrent reader never sees a partial file. The
-// random temp name (CWE-377) avoids the symlink/TOCTOU race a fixed
-// "<final>.tmp" path would invite. pattern is an os.CreateTemp name pattern.
+// atomicWriteData writes data to final via a random-named temp file in dir then
+// os.Rename. The random name avoids the TOCTOU race a fixed "<final>.tmp" would
+// invite (CWE-377); pattern is an os.CreateTemp name pattern.
 func atomicWriteData(dir, final, pattern string, data []byte, perm os.FileMode) error {
 	tmpFile, err := os.CreateTemp(dir, pattern)
 	if err != nil {
