@@ -267,7 +267,7 @@ func (e *EditEnforcer) CheckNames(names []string) bool {
 
 // isEditTool reports whether a tool name is an edit/write tool.
 func isEditTool(name string) bool {
-	return name == "Edit" || name == "MultiEdit" || name == "Write"
+	return IsMutatingTool(name)
 }
 
 // ResetReadProgress resets the read-only iteration counter. Call this
@@ -1084,6 +1084,16 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 		toolResponse.Name = toolName
 		toolResponse.Content = fmt.Sprintf("error: tool %q is not permitted by the active skill's allowed-tools", toolName)
 		logging.InfoContext(ctx, "  ✗ %s denied by allowed-tools", toolName)
+		return toolResponse
+	}
+
+	// Readonly mode is a hard gate: deny the mutating file tools before the
+	// handler runs so an analysis-only run cannot modify the working tree,
+	// regardless of whether the agent's prompt honors the mode.
+	if IsReadOnlyMode(ctx) && IsMutatingTool(toolName) {
+		toolResponse.Name = toolName
+		toolResponse.Content = fmt.Sprintf("error: %s is not permitted in readonly mode (this run is analysis-only and must not modify files)", toolName)
+		logging.InfoContext(ctx, "  ✗ %s denied by readonly mode", toolName)
 		return toolResponse
 	}
 	ctx, span := telemetry.Tracer().Start(ctx, "tool."+toolName,
