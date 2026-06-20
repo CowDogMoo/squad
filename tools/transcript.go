@@ -13,11 +13,10 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
-// TranscriptFile is the per-session file holding the full, provider-faithful
-// conversation for the LangChain (stateless-provider) path. Unlike
-// events.jsonl — which is a lossy audit log of metadata — this file stores the
-// actual message content so a --resume can replay the prior turns. The OpenAI
-// Responses API does not need it: it chains server-side via PreviousResponseID.
+// TranscriptFile holds the full conversation for the stateless (LangChain)
+// path so a --resume can replay it. Unlike the lossy events.jsonl audit log,
+// it stores actual message content. The Responses API chains server-side and
+// does not use it.
 const TranscriptFile = "transcript.json"
 
 // transcriptMessage is the on-disk form of one llms.MessageContent. The role is

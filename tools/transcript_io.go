@@ -5,17 +5,12 @@ import (
 	"os"
 )
 
-// This file holds the atomic-write IO half of transcript persistence: temp
-// file + rename. It is isolated here (and ignored by codecov) because every
-// uncovered branch is an os.CreateTemp / Write / Chmod / Rename error path that
-// would need fault injection on the os package to exercise. The encode/marshal
-// half stays in transcript.go and the happy-path round-trip is covered by
-// transcript_test.go.
+// The atomic-write IO half lives here; codecov ignores this file because its
+// only uncovered branches are os.* failure paths that need fault injection.
 
-// atomicWriteTranscript writes data to final via a randomly-named temp file in
-// dir followed by os.Rename, so a resuming reader never loads a partial
-// transcript. The random temp name (CWE-377) avoids the symlink/TOCTOU race a
-// fixed "<final>.tmp" path would invite.
+// atomicWriteTranscript writes data to final via a random-named temp file in
+// dir then os.Rename. The random name avoids the TOCTOU race a fixed
+// "<final>.tmp" would invite (CWE-377).
 func atomicWriteTranscript(dir, final string, data []byte) error {
 	tmpFile, err := os.CreateTemp(dir, ".transcript-*.json.tmp")
 	if err != nil {

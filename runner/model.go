@@ -362,10 +362,6 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	// providers; Anthropic, Responses API, gemini, ollama keep the
 	// single-message form.
 	splitToolResults := provider == "openai" || provider == "openai-compat"
-	// On --resume, stateless providers have no server-side conversation to
-	// chain (unlike the OpenAI Responses path's PreviousResponseID), so replay
-	// the prior turns from the persisted transcript. Without this, a resumed
-	// run silently starts with no prior context.
 	priorMessages := loadResumeTranscript(ctx, opts)
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
 	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, tools.RunWithToolsConfig{
