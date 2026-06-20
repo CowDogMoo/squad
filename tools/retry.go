@@ -51,13 +51,25 @@ var errorMappings = []errorMapping{
 }
 
 // transientNetworkPatterns are substrings of raw error messages that indicate
-// transient network-level failures worth retrying.
+// transient network-level failures worth retrying. The first group covers raw
+// net errors; the second covers the generic strings langchaingo's OpenAI client
+// substitutes for them in sanitizeHTTPError (which discards the underlying
+// "connection refused" etc. before we ever see it).
 var transientNetworkPatterns = []string{
 	"connection reset",
 	"connection refused",
+	"connection timed out",
 	"broken pipe",
 	"eof",
 	"temporary failure",
+	"no such host",
+	"i/o timeout",
+	"network is unreachable",
+	"tls handshake",
+	// langchaingo sanitizeHTTPError replacements:
+	"network error",   // "network error: failed to reach API server"
+	"failed to reach", // belt-and-suspenders for the same message
+	"request timeout", // "request timeout: ..." (deadline or net timeout)
 }
 
 // classifyError extracts or infers an llms.Error from any error.

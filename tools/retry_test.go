@@ -71,6 +71,15 @@ func TestIsRetryable(t *testing.T) {
 		{"connection reset", errors.New("connection reset by peer"), true},
 		{"broken pipe", errors.New("broken pipe"), true},
 		{"eof", errors.New("unexpected eof"), true},
+		// langchaingo sanitizeHTTPError strips the underlying net error, so we
+		// must recognize its generic substitutes as transient.
+		{"sanitized network error", errors.New("network error: failed to reach API server"), true},
+		{"sanitized net timeout", errors.New("request timeout: network operation exceeded timeout"), true},
+		{"sanitized deadline", errors.New("request timeout: API call exceeded deadline"), true},
+		{"dial no such host", errors.New("dial tcp: lookup api.host: no such host"), true},
+		{"i/o timeout", errors.New("read tcp: i/o timeout"), true},
+		// "request cancelled" is the sanitized ctx-cancel message and must stay fatal.
+		{"sanitized cancelled", errors.New("request cancelled"), false},
 		{"unknown random", errors.New("some unknown error"), false},
 	}
 
