@@ -211,6 +211,35 @@ func TestNewDockerExecutor_StartFailure(t *testing.T) {
 	}
 }
 
+// TestNewDockerExecutor_StartFailureCleanupError covers the path where the
+// post-start-failure cleanup ContainerRemove itself fails: the original start
+// error must still be returned (the cleanup failure is only logged).
+func TestNewDockerExecutor_StartFailureCleanupError(t *testing.T) {
+	t.Parallel()
+	client := &fakeDockerClient{
+		startFn: func(_ context.Context, _ string) error {
+			return fmt.Errorf("cannot start")
+		},
+		removeFn: func(_ context.Context, _ string, _ dockerclient.ContainerRemoveOptions) error {
+			return fmt.Errorf("cannot remove")
+		},
+	}
+
+	_, err := newDockerExecutor(&Config{
+		Options: map[string]string{"image": "ubuntu:22.04"},
+	}, "/tmp", client)
+	if err == nil || !strings.Contains(err.Error(), "failed to start docker container") {
+		t.Fatalf("expected start error to be returned, got: %v", err)
+	}
+	// The original start error must surface, not the cleanup error.
+	if strings.Contains(err.Error(), "cannot remove") {
+		t.Fatalf("cleanup error must not mask the start error, got: %v", err)
+	}
+	if len(client.removeCalls) != 1 {
+		t.Fatalf("expected one cleanup remove call, got %d", len(client.removeCalls))
+	}
+}
+
 func TestDockerExecutor_Execute(t *testing.T) {
 	t.Parallel()
 	client := &fakeDockerClient{

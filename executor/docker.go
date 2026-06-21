@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/moby/moby/api/types/container"
 	dockerclient "github.com/moby/moby/client"
@@ -140,7 +141,9 @@ func newDockerExecutor(cfg *Config, workingDir string, client dockerAPI) (*Docke
 	}
 
 	if err := client.ContainerStart(ctx, resp.ID); err != nil {
-		_ = client.ContainerRemove(ctx, resp.ID, dockerclient.ContainerRemoveOptions{Force: true})
+		if rmErr := client.ContainerRemove(ctx, resp.ID, dockerclient.ContainerRemoveOptions{Force: true}); rmErr != nil {
+			logging.Warn("docker executor cleanup failed: %v", rmErr)
+		}
 		return nil, fmt.Errorf("failed to start docker container: %w", err)
 	}
 
