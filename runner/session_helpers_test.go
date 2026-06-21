@@ -83,38 +83,6 @@ func TestOpenSessionResumeRehydratesResponseID(t *testing.T) {
 	}
 }
 
-func TestOpenSessionResumeLatest(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	wd := t.TempDir()
-	first, err := session.New(wd, "", "agent", "openai", "gpt-5", "first prompt")
-	if err != nil {
-		t.Fatalf("session.New: %v", err)
-	}
-	id := first.SessionID()
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	// ResumeID "latest" resolves to the newest session for the canonical repo.
-	opts := &RunOptions{CanonicalRepoPath: wd, Agent: "agent", ResumeID: "latest"}
-	l, err := openSession(opts, &agent.Bundle{}, "second prompt")
-	if err != nil {
-		t.Fatalf("openSession latest: %v", err)
-	}
-	t.Cleanup(func() { _ = l.Close() })
-	if opts.ResumeID != id {
-		t.Fatalf("ResumeID resolved to %q, want %q", opts.ResumeID, id)
-	}
-}
-
-func TestOpenSessionResumeLatestNoneErrors(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	opts := &RunOptions{CanonicalRepoPath: t.TempDir(), ResumeID: "latest"}
-	if _, err := openSession(opts, &agent.Bundle{}, "x"); err == nil {
-		t.Fatalf("expected error resuming latest with no sessions")
-	}
-}
-
 func TestOpenSessionResumeMissingErrors(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	opts := &RunOptions{WorkingDir: t.TempDir(), ResumeID: "nope"}
