@@ -101,6 +101,33 @@ the corresponding CLI flag.
 | `model.temperature` | float | `0.2` | Sampling randomness: `0.0` = deterministic, `1.0` = creative |
 | `model.max_tokens` | int | `1024` | Output token budget per request |
 | `model.reasoning_prefixes` | []string | `["gpt-5"]` | Model name prefixes that receive extended reasoning token budgets |
+| `model.iteration_factor` | map[string]float | `{}` | Per-model multiplier on an agent's base iteration budget. Keyed by model name; a `default` key applies to unlisted models. See below. |
+
+#### Per-model iteration budgets
+
+An agent's iteration budget has two independent inputs: how big the task is
+(the agent's base) and how efficiently a model converges. `model.iteration_factor`
+scales the base per model so a slow-to-converge model can be given more room (or
+capped tighter) without re-tuning every agent.
+
+The effective cap is resolved as:
+
+```
+effective = clamp( base × factor[model] , 10 , 1000 )
+```
+
+- **base** — the agent manifest's `max_iterations`, or `run.max_iterations` (default `100`) when the manifest leaves it unset.
+- **factor[model]** — `model.iteration_factor[<model>]`, then a `default` entry, then `1.0`. Non-positive values are ignored.
+- An explicit `--max-iterations` flag overrides all of the above and is used verbatim.
+
+```yaml
+model:
+  default: gpt-oss-120b
+  iteration_factor:
+    gpt-oss-120b: 3.0      # slow to converge — give it room
+    claude-sonnet-4-6: 1.0
+    default: 1.0
+```
 
 ### agents
 

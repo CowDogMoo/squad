@@ -406,6 +406,7 @@ func TestCallLangChainLLMWithOllama(t *testing.T) {
 		bundle,
 		0.4,
 		0,
+		opts.MaxIterations,
 		nil,
 		ex,
 		m,
@@ -493,6 +494,7 @@ func TestCallLangChainLLMOpenAICompat(t *testing.T) {
 		bundle,
 		0.4,
 		0,
+		opts.MaxIterations,
 		nil,
 		ex,
 		m,
@@ -593,6 +595,7 @@ func TestCallResponsesAPIRoundTrip(t *testing.T) {
 		bundle,
 		0.4,
 		100,
+		opts.MaxIterations,
 		nil,
 		ex2,
 		m,
@@ -837,6 +840,7 @@ func TestCallLangChainLLMUnknownProvider(t *testing.T) {
 		bundle,
 		0.2,
 		0,
+		opts.MaxIterations,
 		nil,
 		ex,
 		m,
@@ -983,6 +987,7 @@ func TestCallResponsesAPIMissingKey(t *testing.T) {
 		bundle,
 		0.4,
 		100,
+		opts.MaxIterations,
 		nil,
 		ex,
 		m,
@@ -1044,6 +1049,7 @@ func TestCallResponsesAPIOpenAIResponsesProvider(t *testing.T) {
 		bundle,
 		0.4,
 		4096,
+		opts.MaxIterations,
 		nil,
 		ex,
 		m,
@@ -1083,6 +1089,7 @@ func TestCallLangChainLLMWithTaskConfig(t *testing.T) {
 		bundle,
 		0.4,
 		0,
+		opts.MaxIterations,
 		taskCfg,
 		ex,
 		m,
@@ -1214,6 +1221,7 @@ func TestDisableTaskNilsTaskConfig(t *testing.T) {
 		bundle,
 		0.4,
 		0,
+		opts.MaxIterations,
 		taskCfg,
 		ex,
 		m,
@@ -1741,5 +1749,97 @@ func TestResolveSkillCatalogPaths_Local(t *testing.T) {
 	paths := resolveSkillCatalogPaths(cfg)
 	if len(paths) != 1 || paths[0] != local {
 		t.Fatalf("paths = %v, want [%q]", paths, local)
+	}
+}
+
+func factorConfig(m map[string]float64) *config.Config {
+	return &config.Config{Model: config.ModelConfig{IterationFactor: m}}
+}
+
+func TestResolveIterationBudget(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     *RunOptions
+		bundle   *agent.Bundle
+		model    string
+		expected int
+	}{
+		{
+			name:     "explicit flag wins verbatim, ignoring factor and manifest",
+			opts:     &RunOptions{MaxIterations: 50, MaxIterationsExplicit: true, Config: factorConfig(map[string]float64{"m": 3})},
+			bundle:   &agent.Bundle{MaxIterations: 12},
+			model:    "m",
+			expected: 50,
+		},
+		{
+			name:     "no config: manifest base passes through (factor 1.0)",
+			opts:     &RunOptions{MaxIterations: 100},
+			bundle:   &agent.Bundle{MaxIterations: 12},
+			model:    "m",
+			expected: 12,
+		},
+		{
+			name:     "manifest base scaled by per-model factor",
+			opts:     &RunOptions{MaxIterations: 100, Config: factorConfig(map[string]float64{"gpt-oss-120b": 3})},
+			bundle:   &agent.Bundle{MaxIterations: 12},
+			model:    "gpt-oss-120b",
+			expected: 36,
+		},
+		{
+			name:     "falls back to opts base when manifest unset",
+			opts:     &RunOptions{MaxIterations: 20, Config: factorConfig(map[string]float64{"m": 2})},
+			bundle:   &agent.Bundle{},
+			model:    "m",
+			expected: 40,
+		},
+		{
+			name:     "default key applies when model has no entry",
+			opts:     &RunOptions{MaxIterations: 30, Config: factorConfig(map[string]float64{"default": 2})},
+			bundle:   nil,
+			model:    "unlisted",
+			expected: 60,
+		},
+		{
+			name:     "exact model entry beats default key",
+			opts:     &RunOptions{MaxIterations: 30, Config: factorConfig(map[string]float64{"default": 2, "m": 4})},
+			bundle:   nil,
+			model:    "m",
+			expected: 120,
+		},
+		{
+			name:     "result clamps up to the floor",
+			opts:     &RunOptions{MaxIterations: 12, Config: factorConfig(map[string]float64{"m": 0.1})},
+			bundle:   nil,
+			model:    "m",
+			expected: 10,
+		},
+		{
+			name:     "result clamps down to the ceiling",
+			opts:     &RunOptions{MaxIterations: 500, Config: factorConfig(map[string]float64{"m": 10})},
+			bundle:   nil,
+			model:    "m",
+			expected: 1000,
+		},
+		{
+			name:     "non-positive factor is ignored (treated as 1.0)",
+			opts:     &RunOptions{MaxIterations: 40, Config: factorConfig(map[string]float64{"m": 0})},
+			bundle:   nil,
+			model:    "m",
+			expected: 40,
+		},
+		{
+			name:     "rounds to nearest",
+			opts:     &RunOptions{MaxIterations: 15, Config: factorConfig(map[string]float64{"m": 1.5})},
+			bundle:   nil,
+			model:    "m",
+			expected: 23, // 22.5 -> 23
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveIterationBudget(tt.opts, tt.bundle, tt.model); got != tt.expected {
+				t.Fatalf("resolveIterationBudget() = %d, want %d", got, tt.expected)
+			}
+		})
 	}
 }

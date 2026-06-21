@@ -154,6 +154,11 @@ type ModelConfig struct {
 	// ReasoningPrefixes lists model name prefixes that support extended
 	// reasoning; requests to these models use higher token budgets.
 	ReasoningPrefixes []string `mapstructure:"reasoning_prefixes" yaml:"reasoning_prefixes"`
+	// IterationFactor scales an agent's base iteration budget per model, to
+	// account for how efficiently a given model converges. Keyed by model
+	// name (e.g. "gpt-oss-120b": 3.0); a "default" key applies to any model
+	// without its own entry. Missing or non-positive values mean 1.0.
+	IterationFactor map[string]float64 `mapstructure:"iteration_factor" yaml:"iteration_factor"`
 }
 
 // Defaults returns a config populated with sensible defaults.
