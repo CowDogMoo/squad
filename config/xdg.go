@@ -48,6 +48,16 @@ func getCacheHome() string {
 	return ""
 }
 
+func getStateHome() string {
+	if stateHome := os.Getenv("XDG_STATE_HOME"); stateHome != "" {
+		return stateHome
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".local", "state")
+	}
+	return ""
+}
+
 // GetConfigDirs returns all config directories to search in priority order.
 func GetConfigDirs() []string {
 	return getConfigDirs()
@@ -151,4 +161,30 @@ func SkillsCacheDir() (string, error) {
 	}
 
 	return cacheDir, nil
+}
+
+// StateDir returns the squad state directory (e.g., ~/.local/state/squad).
+func StateDir() string {
+	stateHome := getStateHome()
+	if stateHome == "" {
+		return ""
+	}
+	return filepath.Join(stateHome, "squad")
+}
+
+// StateFile returns the path for a state file, creating directories as needed.
+func StateFile(filename string) (string, error) {
+	stateHome := getStateHome()
+	if stateHome == "" {
+		return "", os.ErrNotExist
+	}
+
+	statePath := filepath.Join(stateHome, "squad", filename)
+	stateDir := filepath.Dir(statePath)
+
+	if err := os.MkdirAll(stateDir, DirPermReadWriteExec); err != nil {
+		return "", err
+	}
+
+	return statePath, nil
 }

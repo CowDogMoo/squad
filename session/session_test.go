@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cowdogmoo/squad/config"
 )
 
 // newTestLogger creates a fresh session logger under a per-test temp dir
@@ -14,7 +16,7 @@ import (
 func newTestLogger(t *testing.T) (*Logger, string) {
 	t.Helper()
 	wd := t.TempDir()
-	l, err := New(wd, "go-review", "openai", "gpt-5", "fix the bug")
+	l, err := New(wd, "", "go-review", "openai", "gpt-5", "fix the bug")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -56,12 +58,17 @@ func readEvents(t *testing.T, l *Logger) []Event {
 }
 
 func TestNewSetsSessionLayout(t *testing.T) {
-	l, wd := newTestLogger(t)
+	l, _ := newTestLogger(t)
 	if l.SessionID() == "" {
 		t.Fatalf("session id empty")
 	}
-	if !strings.HasPrefix(l.Dir(), filepath.Join(wd, SessionsRoot)) {
-		t.Fatalf("session dir %q not under %q", l.Dir(), wd)
+	// Sessions live under XDG_STATE_HOME/squad/sessions/<id>, not in-tree.
+	wantPrefix := filepath.Join(config.StateDir(), "sessions")
+	if !strings.HasPrefix(l.Dir(), wantPrefix) {
+		t.Fatalf("session dir %q not under %q", l.Dir(), wantPrefix)
+	}
+	if !strings.HasSuffix(l.Dir(), l.SessionID()) {
+		t.Fatalf("session dir %q does not end with id %q", l.Dir(), l.SessionID())
 	}
 }
 
@@ -104,7 +111,7 @@ func TestAppendWritesEventsJSONL(t *testing.T) {
 
 func TestOpenResumesAndAppends(t *testing.T) {
 	wd := t.TempDir()
-	l, err := New(wd, "agent", "openai", "gpt-5", "go")
+	l, err := New(wd, "", "agent", "openai", "gpt-5", "go")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -140,7 +147,7 @@ func TestOpenResumesAndAppends(t *testing.T) {
 
 func TestStoreAndReadLargeResult(t *testing.T) {
 	wd := t.TempDir()
-	l, err := New(wd, "a", "p", "m", "")
+	l, err := New(wd, "", "a", "p", "m", "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -192,7 +199,7 @@ func TestStoreAndReadLargeResult(t *testing.T) {
 
 func TestContextRoundTrip(t *testing.T) {
 	wd := t.TempDir()
-	l, err := New(wd, "a", "p", "m", "")
+	l, err := New(wd, "", "a", "p", "m", "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -244,14 +251,17 @@ func TestWithLoggerNilLeavesCtxUnchanged(t *testing.T) {
 	}
 }
 
-func TestNewFailsWhenSessionsRootIsAFile(t *testing.T) {
+func TestNewFailsWhenStateDirIsAFile(t *testing.T) {
 	wd := t.TempDir()
-	// Make .squad a regular file so MkdirAll on .squad/sessions/<id> fails.
-	if err := os.WriteFile(filepath.Join(wd, ".squad"), []byte("blocked"), 0o644); err != nil {
+	// Point XDG_STATE_HOME at a regular file so MkdirAll on the session
+	// directory fails.
+	blocked := filepath.Join(wd, "blocked")
+	if err := os.WriteFile(blocked, []byte("blocked"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if _, err := New(wd, "a", "p", "m", ""); err == nil {
-		t.Fatalf("expected mkdir error when .squad is a regular file")
+	t.Setenv("XDG_STATE_HOME", filepath.Join(blocked, "state"))
+	if _, err := New(wd, "", "a", "p", "m", ""); err == nil {
+		t.Fatalf("expected mkdir error when state dir cannot be created")
 	}
 }
 
@@ -375,11 +385,11 @@ func TestAppendAfterCloseIsNoop(t *testing.T) {
 }
 
 func TestSetRoutineIDPersistsToMeta(t *testing.T) {
-	l, wd := newTestLogger(t)
+	l, _ := newTestLogger(t)
 	defer func() { _ = l.Close() }()
 	l.SetRoutineID("global:nightly")
 
-	data, err := os.ReadFile(filepath.Join(wd, SessionsRoot, l.SessionID(), "meta.json"))
+	data, err := os.ReadFile(filepath.Join(l.Dir(), "meta.json"))
 	if err != nil {
 		t.Fatalf("read meta: %v", err)
 	}
@@ -395,12 +405,12 @@ func TestSetRoutineIDPersistsToMeta(t *testing.T) {
 }
 
 func TestSetRoutineIDIgnoresEmptyAndNil(t *testing.T) {
-	l, wd := newTestLogger(t)
+	l, _ := newTestLogger(t)
 	defer func() { _ = l.Close() }()
 	l.SetRoutineID("global:first")
 	l.SetRoutineID("") // no-op, doesn't overwrite
 
-	data, err := os.ReadFile(filepath.Join(wd, SessionsRoot, l.SessionID(), "meta.json"))
+	data, err := os.ReadFile(filepath.Join(l.Dir(), "meta.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +436,7 @@ func TestSetRoutineIDIgnoresEmptyAndNil(t *testing.T) {
 // errors) and close the underlying events FD without nilling l.events
 // (so appendLocked's Write errors). All four mutators must remain safe.
 func TestPersistenceErrorsAreLogged(t *testing.T) {
-	l, wd := newTestLogger(t)
+	l, _ := newTestLogger(t)
 	t.Cleanup(func() { _ = l.Close() })
 
 	// Close the events FD but keep l.events non-nil so appendLocked
@@ -435,7 +445,7 @@ func TestPersistenceErrorsAreLogged(t *testing.T) {
 		t.Fatalf("close events: %v", err)
 	}
 	// Nuke the session dir so writeMeta's tmp WriteFile errors.
-	if err := os.RemoveAll(filepath.Join(wd, SessionsRoot, l.SessionID())); err != nil {
+	if err := os.RemoveAll(l.Dir()); err != nil {
 		t.Fatalf("remove session dir: %v", err)
 	}
 

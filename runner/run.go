@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -137,6 +138,10 @@ type RunOptions struct {
 	// non-TTY runs. Empty (the default) means "abort" so unattended runs
 	// fail loudly when a skill needs a human checkpoint.
 	AutoConfirm tools.AutoConfirmMode
+	// CanonicalRepoPath is the pre-isolation git toplevel of the working dir.
+	CanonicalRepoPath string
+	// WorktreePath is the ephemeral worktree path (if isolation is used).
+	WorktreePath string
 }
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.
@@ -152,11 +157,16 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	}
 	defer cleanup()
 
+	canonicalRepoPath := ResolveGitToplevel(workingDir)
+	opts.CanonicalRepoPath = canonicalRepoPath
+
 	iso, err := setupIsolation(cmd.Context(), opts, workingDir)
 	if err != nil {
 		return err
 	}
 	defer reportIsolationTeardown(cmd, iso)
+
+	recordWorktreePath(opts, iso, workingDir)
 	workingDir = iso.Effective
 
 	bundle, err := prepareBundle(cmd, opts, prompt, workingDir)
@@ -596,7 +606,14 @@ func openSession(opts *RunOptions, bundle *agent.Bundle, prompt string) (*sessio
 		return nil, nil
 	}
 	if opts.ResumeID != "" {
-		l, err := session.Open(opts.WorkingDir, opts.ResumeID)
+		if opts.ResumeID == "latest" {
+			sessions, err := session.List(opts.CanonicalRepoPath)
+			if err != nil || len(sessions) == 0 {
+				return nil, fmt.Errorf("no sessions found to resume for %s", opts.CanonicalRepoPath)
+			}
+			opts.ResumeID = sessions[0].SessionID
+		}
+		l, err := session.Open(opts.CanonicalRepoPath, opts.ResumeID)
 		if err != nil {
 			return nil, err
 		}
@@ -610,7 +627,7 @@ func openSession(opts *RunOptions, bundle *agent.Bundle, prompt string) (*sessio
 		})
 		return l, nil
 	}
-	l, err := session.New(opts.WorkingDir, opts.Agent, opts.Provider, opts.Model, prompt)
+	l, err := session.New(opts.CanonicalRepoPath, opts.WorktreePath, opts.Agent, opts.Provider, opts.Model, prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -803,4 +820,28 @@ func FindAgentDir(agentName, explicitDir string, cfg *config.Config) (string, er
 		return "", fmt.Errorf("agent %q not found: %w", agentName, err)
 	}
 	return agentDir, nil
+}
+
+// recordWorktreePath notes the ephemeral worktree on opts when isolation moved
+// the working directory away from workingDir. Sessions persist this so resume
+// can map a worktree back to its canonical repo. iso is always non-nil here.
+func recordWorktreePath(opts *RunOptions, iso *Isolation, workingDir string) {
+	if iso.Effective != workingDir {
+		opts.WorktreePath = iso.Effective
+	}
+}
+
+// ResolveGitToplevel returns the canonical repository root for dir by asking
+// git for its toplevel. It falls back to dir unchanged when dir is not inside a
+// git repository, so callers always get a usable canonical path. This must be
+// called before worktree isolation rewrites the working directory so sessions
+// are keyed to the real repo, not an ephemeral worktree.
+func ResolveGitToplevel(dir string) string {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return dir // fallback to the original dir if not in a git repo
+	}
+	return strings.TrimSpace(string(out))
 }

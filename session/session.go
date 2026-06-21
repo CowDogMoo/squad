@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
 )
 
@@ -55,15 +56,17 @@ const (
 // Meta holds the per-session metadata kept in meta.json. It is rewritten on
 // every update so a `--resume` can read it without scanning the event log.
 type Meta struct {
-	SessionID      string    `json:"session_id"`
-	Created        time.Time `json:"created"`
-	Updated        time.Time `json:"updated"`
-	Agent          string    `json:"agent"`
-	Provider       string    `json:"provider"`
-	Model          string    `json:"model"`
-	WorkingDir     string    `json:"working_dir"`
-	Prompt         string    `json:"prompt"`
-	LastResponseID string    `json:"last_response_id,omitempty"`
+	SessionID         string    `json:"session_id"`
+	Created           time.Time `json:"created"`
+	Updated           time.Time `json:"updated"`
+	Agent             string    `json:"agent"`
+	Provider          string    `json:"provider"`
+	Model             string    `json:"model"`
+	WorkingDir        string    `json:"working_dir"` // Legacy field for backwards compat
+	CanonicalRepoPath string    `json:"canonical_repo_path"`
+	WorktreePath      string    `json:"worktree_path,omitempty"`
+	Prompt            string    `json:"prompt"`
+	LastResponseID    string    `json:"last_response_id,omitempty"`
 	// RoutineID identifies the routine that produced this session (qualified
 	// form: "global:nightly" / "repo:audit"). Empty for non-routine runs.
 	RoutineID    string  `json:"routine_id,omitempty"`
@@ -91,14 +94,33 @@ type Logger struct {
 	meta      Meta
 }
 
-// New creates a fresh session under <workingDir>/.squad/sessions/<id>/ and
+// New creates a fresh session under XDG_STATE_HOME/squad/sessions/<id>/ and
 // returns a Logger ready to receive events. The caller should defer Close.
-func New(workingDir, agent, provider, model, prompt string) (*Logger, error) {
+func New(canonicalRepoPath, worktreePath, agent, provider, model, prompt string) (*Logger, error) {
 	id, err := newSessionID()
 	if err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(workingDir, SessionsRoot, id)
+
+	var dir string
+	stateDir := config.StateDir()
+	if stateDir != "" {
+		dir = filepath.Join(stateDir, "sessions", id)
+	} else {
+		// Fallback to in-tree if XDG_STATE_HOME is somehow broken or unavailable
+		dir = filepath.Join(canonicalRepoPath, SessionsRoot, id)
+	}
+
+	// Unconditionally try to add .gitignore to in-tree sessions directory if it exists,
+	// to prevent legacy or fallback workflows from committing session data.
+	inTreeSessionsDir := filepath.Join(canonicalRepoPath, SessionsRoot)
+	if info, err := os.Stat(inTreeSessionsDir); err == nil && info.IsDir() {
+		gitignorePath := filepath.Join(inTreeSessionsDir, ".gitignore")
+		if err := os.WriteFile(gitignorePath, []byte("*\n"), 0o644); err != nil {
+			logging.Warn("failed to write %s: %v", gitignorePath, err)
+		}
+	}
+
 	resultDir := filepath.Join(dir, "results")
 	if err := os.MkdirAll(resultDir, 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir session: %w", err)
@@ -109,15 +131,17 @@ func New(workingDir, agent, provider, model, prompt string) (*Logger, error) {
 		dir:       dir,
 		resultDir: resultDir,
 		meta: Meta{
-			SessionID:  id,
-			Created:    now,
-			Updated:    now,
-			Agent:      agent,
-			Provider:   provider,
-			Model:      model,
-			WorkingDir: workingDir,
-			Prompt:     prompt,
-			Status:     StatusRunning,
+			SessionID:         id,
+			Created:           now,
+			Updated:           now,
+			Agent:             agent,
+			Provider:          provider,
+			Model:             model,
+			WorkingDir:        canonicalRepoPath,
+			CanonicalRepoPath: canonicalRepoPath,
+			WorktreePath:      worktreePath,
+			Prompt:            prompt,
+			Status:            StatusRunning,
 		},
 	}
 	if err := l.openEventsFile(); err != nil {
@@ -126,13 +150,32 @@ func New(workingDir, agent, provider, model, prompt string) (*Logger, error) {
 	if err := l.writeMeta(); err != nil {
 		return nil, err
 	}
+
+	if err := appendToIndex(l.meta); err != nil {
+		logging.Warn("failed to update session index: %v", err)
+	}
+
 	return l, nil
+}
+
+// ResolveDir returns the on-disk directory for a session without opening or
+// mutating it. It prefers the XDG state location and falls back to the legacy
+// in-tree path. The returned path is not guaranteed to exist.
+func ResolveDir(canonicalRepoPath, sessionID string) string {
+	if stateDir := config.StateDir(); stateDir != "" {
+		candidate := filepath.Join(stateDir, "sessions", sessionID)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return filepath.Join(canonicalRepoPath, SessionsRoot, sessionID)
 }
 
 // Open loads an existing session for resume. The Logger appends to the same
 // events.jsonl and rewrites meta.json in place.
-func Open(workingDir, sessionID string) (*Logger, error) {
-	dir := filepath.Join(workingDir, SessionsRoot, sessionID)
+func Open(canonicalRepoPath, sessionID string) (*Logger, error) {
+	dir := ResolveDir(canonicalRepoPath, sessionID)
+
 	resultDir := filepath.Join(dir, "results")
 	if err := os.MkdirAll(resultDir, 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir results: %w", err)
