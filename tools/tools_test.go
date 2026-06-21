@@ -427,6 +427,38 @@ func TestGrepSearchPathSingleFile(t *testing.T) {
 	}
 }
 
+// TestGrepSearchPathSkipsBinaryAndOverlongLines guards the regression where a
+// binary file (e.g. a compiled binary in the repo root) or a single overlong
+// line aborted the entire search with "bufio.Scanner: token too long".
+func TestGrepSearchPathSkipsBinaryAndOverlongLines(t *testing.T) {
+	dir := t.TempDir()
+
+	// Normal text file containing the needle — this is the only expected match.
+	if err := os.WriteFile(filepath.Join(dir, "code.go"), []byte("package x\n// NEEDLE here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Binary file: a NUL byte marks it binary. Its "NEEDLE" text must NOT match
+	// because the file is skipped wholesale.
+	if err := os.WriteFile(filepath.Join(dir, "blob.bin"), append([]byte("NEEDLE\x00"), bytes.Repeat([]byte{0}, 16)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Text file with a single line far longer than the scanner buffer. It must
+	// be skipped without aborting the walk.
+	overlong := append(bytes.Repeat([]byte("a"), maxToolOutput+1024), []byte("NEEDLE")...)
+	if err := os.WriteFile(filepath.Join(dir, "huge.txt"), overlong, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	re := regexp.MustCompile("NEEDLE")
+	matches, err := grepSearchPath(dir, dir, re)
+	if err != nil {
+		t.Fatalf("grepSearchPath returned error (binary/overlong files must be skipped, not fatal): %v", err)
+	}
+	if len(matches) != 1 || !strings.Contains(matches[0], "code.go") {
+		t.Fatalf("expected exactly one match in code.go, got: %v", matches)
+	}
+}
+
 func TestBashTool(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
