@@ -608,7 +608,7 @@ func resolveIterationBudget(opts *RunOptions, bundle *agent.Bundle, model string
 	if bundle != nil && bundle.MaxIterations > 0 {
 		base = bundle.MaxIterations
 	}
-	scaled := int(float64(base)*modelIterationFactor(opts.Config, model) + 0.5)
+	scaled := int(float64(base)*resolveModelFactor(bundle, opts.Config, model) + 0.5)
 	if scaled < minIterationBudget {
 		return minIterationBudget
 	}
@@ -618,20 +618,39 @@ func resolveIterationBudget(opts *RunOptions, bundle *agent.Bundle, model string
 	return scaled
 }
 
-// modelIterationFactor returns the per-model iteration multiplier from config,
-// preferring an exact model entry, then a "default" entry, then 1.0.
-// Non-positive factors are ignored so a stray 0 can't zero out the budget.
-func modelIterationFactor(cfg *config.Config, model string) float64 {
-	if cfg == nil || len(cfg.Model.IterationFactor) == 0 {
-		return 1.0
+// resolveModelFactor returns the per-model iteration multiplier for a run,
+// preferring the agent manifest's iteration_factor over the config-level
+// model.iteration_factor, and falling back to 1.0. This lets an agent override
+// the global per-model budget while still inheriting it when the agent is
+// silent.
+func resolveModelFactor(bundle *agent.Bundle, cfg *config.Config, model string) float64 {
+	if bundle != nil {
+		if f, ok := lookupIterationFactor(bundle.IterationFactor, model); ok {
+			return f
+		}
 	}
-	if f, ok := cfg.Model.IterationFactor[model]; ok && f > 0 {
-		return f
-	}
-	if f, ok := cfg.Model.IterationFactor["default"]; ok && f > 0 {
-		return f
+	if cfg != nil {
+		if f, ok := lookupIterationFactor(cfg.Model.IterationFactor, model); ok {
+			return f
+		}
 	}
 	return 1.0
+}
+
+// lookupIterationFactor returns a positive multiplier for the model from the
+// map, preferring an exact model entry, then a "default" entry. Non-positive
+// values are ignored (treated as unset) so a stray 0 can't zero out the budget.
+func lookupIterationFactor(m map[string]float64, model string) (float64, bool) {
+	if len(m) == 0 {
+		return 0, false
+	}
+	if f, ok := m[model]; ok && f > 0 {
+		return f, true
+	}
+	if f, ok := m["default"]; ok && f > 0 {
+		return f, true
+	}
+	return 0, false
 }
 
 // applyChildIterationCap sets the child agent's iteration cap based on
