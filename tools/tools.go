@@ -3,6 +3,7 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,10 @@ import (
 // when no explicit --max-iterations flag is provided.
 const MaxToolIterations = 100
 const maxToolOutput = 64 * 1024
+
+// grepBinarySniffBytes is how many leading bytes the grep walker inspects for
+// a NUL byte to detect (and skip) binary files.
+const grepBinarySniffBytes = 8000
 const maxSameToolRepeat = 10
 const maxMutatingToolRepeat = 50
 
@@ -1842,12 +1847,21 @@ func grepVisitFile(workingDir string, re *regexp.Regexp, matches *[]string) file
 				retErr = cerr
 			}
 		}()
+		// Peek the first chunk without consuming it so the same reader can
+		// still be scanned from the top. A NUL byte marks a binary file (the
+		// heuristic git and ripgrep use); skipping it avoids the scanner
+		// choking on the long no-newline runs in binaries — e.g. a compiled
+		// binary or coverage profile sitting in the repo root.
+		reader := bufio.NewReaderSize(file, maxToolOutput)
+		if sniff, _ := reader.Peek(grepBinarySniffBytes); bytes.IndexByte(sniff, 0) >= 0 {
+			return nil
+		}
 		rel, err := filepath.Rel(workingDir, path)
 		if err != nil {
 			rel = path
 		}
-		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 64*1024), maxToolOutput)
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, maxToolOutput), maxToolOutput)
 		lineNum := 1
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -1856,8 +1870,11 @@ func grepVisitFile(workingDir string, re *regexp.Regexp, matches *[]string) file
 			}
 			lineNum++
 		}
-		if err := scanner.Err(); err != nil {
-			return err
+		if scanner.Err() != nil {
+			// An overlong line (e.g. a minified asset) or a mid-read error
+			// skips just this file rather than aborting the whole search —
+			// the walker is best-effort and already skips files it can't open.
+			return nil
 		}
 		return nil
 	}
