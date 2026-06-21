@@ -20,7 +20,7 @@
 
 `squad` is a framework for building, sharing, and running unattended AI agents from the command line. Define an agent as plain markdown prompts and a YAML manifest, point it at any LLM provider, and let it work through a codebase using a fixed tool surface (Read, Write, Edit, Glob, Grep, Bash, plus any MCP server).
 
-Agents run in a deterministic tool loop with per-run cost caps, structured event logs, and session resume. Multi-agent **pipelines** compose stages with dependency ordering and regression gates. **Routines** schedule unattended runs through OS-native daemons. Provider support includes OpenAI, Anthropic, Google AI, Ollama, and any OpenAI-compatible endpoint (NVIDIA NIM, Databricks, vLLM, LM Studio, Together AI). Execution can target the local machine, a Docker container, a Kubernetes pod, or an EC2 instance over AWS SSM.
+Agents run in a bounded tool loop with per-run cost caps, structured event logs, and session resume. Multi-agent **pipelines** compose stages with dependency ordering and regression gates. **Routines** schedule unattended runs through OS-native daemons. Provider support includes OpenAI, Anthropic, Google AI, Ollama, and any OpenAI-compatible endpoint (NVIDIA NIM, Databricks, vLLM, LM Studio, Together AI). Execution can target the local machine, a Docker container, a Kubernetes pod, or an EC2 instance over AWS SSM.
 
 ## Table of Contents
 
@@ -44,7 +44,7 @@ Agents run in a deterministic tool loop with per-run cost caps, structured event
 
 ## Architecture
 
-`squad` is a single Go binary built around a deterministic tool-calling loop. The CLI assembles an **agent bundle** (system prompt + tool definitions + budget config) from on-disk markdown and YAML, then drives the model through tool calls until it returns a final response or a budget/iteration cap fires.
+`squad` is a single Go binary built around a bounded tool-calling loop. The CLI assembles an **agent bundle** (system prompt + tool definitions + budget config) from on-disk markdown and YAML, then drives the model through tool calls until it returns a final response or a budget/iteration cap fires.
 
 ```text
                         ┌──────────────────────────────────────────────┐
