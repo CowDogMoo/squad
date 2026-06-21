@@ -233,12 +233,18 @@ func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPro
 	)
 	defer span.End()
 
+	// Effective iteration cap: explicit --max-iterations verbatim, else the
+	// agent's base budget scaled by the per-model factor. Computed here (not
+	// written back to opts) so child agents inherit the unscaled base and
+	// scale once against their own model rather than compounding the factor.
+	maxIter := resolveIterationBudget(opts, bundle, model)
+
 	var response string
 	var err error
 	if responses.UseResponsesAPI(provider, model, reasoningPrefixes(opts)) {
-		response, err = callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex, m)
+		response, err = callResponsesAPI(ctx, opts, model, systemPrompt, bundle, temperature, maxTokens, maxIter, taskCfg, ex, m)
 	} else {
-		response, err = callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, taskCfg, ex, m)
+		response, err = callLangChainLLM(ctx, opts, provider, model, systemPrompt, bundle, temperature, maxTokens, maxIter, taskCfg, ex, m)
 	}
 
 	if err != nil {
@@ -255,7 +261,7 @@ func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPro
 }
 
 // callResponsesAPI runs the prompt via the OpenAI Responses API.
-func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor, m *metrics.Metrics) (string, error) {
+func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens, maxIter int, taskCfg *tools.TaskConfig, ex executor.Executor, m *metrics.Metrics) (string, error) {
 	apiKey := opts.APIKey
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_API_KEY")
@@ -279,7 +285,7 @@ func callResponsesAPI(ctx context.Context, opts *RunOptions, model, systemPrompt
 	logging.InfoContext(ctx, "model call started via Responses API (model=%s)", model)
 	skillRuntime := buildSkillRuntime(ctx, bundle, opts)
 	confirmRuntime := buildConfirmRuntime(opts)
-	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, opts.ResumeResponseID, temperature, maxTokens, opts.MaxIterations, bundle.EditDeadline, reasoningPrefixes(opts), taskCfg, m, ex, skillRuntime, confirmRuntime)
+	response, err := responses.RunWithTools(ctx, apiKey, opts.BaseURL, model, systemPrompt, bundle.User, bundle.WorkDir, opts.Org, opts.ResumeResponseID, temperature, maxTokens, maxIter, bundle.EditDeadline, reasoningPrefixes(opts), taskCfg, m, ex, skillRuntime, confirmRuntime)
 	m.Finish()
 	if err != nil {
 		if errors.Is(err, metrics.ErrBudgetExceeded) {
@@ -322,7 +328,7 @@ func inferMaxTokens(maxTokens int, hasTaskTool bool) int {
 }
 
 // callLangChainLLM runs the prompt via a LangChain-compatible LLM.
-func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor, m *metrics.Metrics) (string, error) {
+func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens, maxIter int, taskCfg *tools.TaskConfig, ex executor.Executor, m *metrics.Metrics) (string, error) {
 	llm, err := buildLLM(ctx, opts, provider, model)
 	if err != nil {
 		return "", err
@@ -362,7 +368,7 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	priorMessages := loadResumeTranscript(ctx, opts)
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
 	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, tools.RunWithToolsConfig{
-		MaxIterations:      opts.MaxIterations,
+		MaxIterations:      maxIter,
 		EditDeadline:       bundle.EditDeadline,
 		TaskCfg:            taskCfg,
 		Metrics:            m,
@@ -583,17 +589,66 @@ func reasoningPrefixes(opts *RunOptions) []string {
 	return config.Defaults().Model.ReasoningPrefixes
 }
 
+// Iteration budgets clamp to the same range the --max-iterations flag enforces.
+const (
+	minIterationBudget = 10
+	maxIterationBudget = 1000
+)
+
+// resolveIterationBudget computes the effective iteration cap for a run. An
+// explicit --max-iterations is honored verbatim. Otherwise the agent's base
+// budget — the manifest's max_iterations, or the configured/default cap when
+// the manifest leaves it unset — is scaled by the per-model iteration factor
+// and clamped to [10, 1000].
+func resolveIterationBudget(opts *RunOptions, bundle *agent.Bundle, model string) int {
+	if opts.MaxIterationsExplicit {
+		return opts.MaxIterations
+	}
+	base := opts.MaxIterations
+	if bundle != nil && bundle.MaxIterations > 0 {
+		base = bundle.MaxIterations
+	}
+	scaled := int(float64(base)*modelIterationFactor(opts.Config, model) + 0.5)
+	if scaled < minIterationBudget {
+		return minIterationBudget
+	}
+	if scaled > maxIterationBudget {
+		return maxIterationBudget
+	}
+	return scaled
+}
+
+// modelIterationFactor returns the per-model iteration multiplier from config,
+// preferring an exact model entry, then a "default" entry, then 1.0.
+// Non-positive factors are ignored so a stray 0 can't zero out the budget.
+func modelIterationFactor(cfg *config.Config, model string) float64 {
+	if cfg == nil || len(cfg.Model.IterationFactor) == 0 {
+		return 1.0
+	}
+	if f, ok := cfg.Model.IterationFactor[model]; ok && f > 0 {
+		return f
+	}
+	if f, ok := cfg.Model.IterationFactor["default"]; ok && f > 0 {
+		return f
+	}
+	return 1.0
+}
+
 // applyChildIterationCap sets the child agent's iteration cap based on
 // per-child budget config and manifest settings.
 func applyChildIterationCap(ctx context.Context, childOpts *RunOptions, cfg *tools.TaskConfig, childBundle *agent.Bundle, agentName string) {
 	if cfg.ChildMaxIter != nil {
 		if childIter := cfg.ChildMaxIter(agentName); childIter > 0 {
 			childOpts.MaxIterations = childIter
+			// A deliberate budget cap must not be re-scaled by the per-model
+			// factor downstream; mark it explicit so InvokeModel honors it.
+			childOpts.MaxIterationsExplicit = true
 			logging.InfoContext(ctx, "child agent %s iteration cap: %d (from parent budget)", agentName, childIter)
 		}
 	}
 	if childBundle.MaxIterations > 0 && (childOpts.MaxIterations <= 0 || childBundle.MaxIterations < childOpts.MaxIterations) {
 		childOpts.MaxIterations = childBundle.MaxIterations
+		childOpts.MaxIterationsExplicit = true
 		logging.InfoContext(ctx, "child agent %s iteration cap: %d (from manifest)", agentName, childBundle.MaxIterations)
 	}
 }

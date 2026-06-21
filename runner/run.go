@@ -87,6 +87,11 @@ type RunOptions struct {
 	NumCtx int
 	// MaxIterations caps the number of model iterations (0 = unlimited).
 	MaxIterations int
+	// MaxIterationsExplicit reports whether MaxIterations came from an
+	// explicit --max-iterations flag. When true the value is used verbatim;
+	// when false the runner derives the effective cap from the agent's base
+	// budget and the per-model iteration factor (see resolveIterationBudget).
+	MaxIterationsExplicit bool
 	// MaxCost is the total cost budget in USD (0 = unlimited).
 	MaxCost float64
 	// MaxRetries overrides the per-call LLM retry count for transient
