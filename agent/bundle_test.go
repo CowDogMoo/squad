@@ -1508,3 +1508,17 @@ func TestBuildBundleInline_ReferenceMissingEverywhere(t *testing.T) {
 		t.Fatal("expected error when reference missing in both stage and baseDir")
 	}
 }
+
+func TestManifestIterationFactorParses(t *testing.T) {
+	var m Manifest
+	src := "name: x\niteration_factor:\n  gpt-oss-120b: 3.0\n  default: 1.5\n"
+	if err := yamlPkg.Unmarshal([]byte(src), &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := m.IterationFactor["gpt-oss-120b"]; got != 3.0 {
+		t.Fatalf("iteration_factor[gpt-oss-120b] = %v, want 3.0", got)
+	}
+	if got := m.IterationFactor["default"]; got != 1.5 {
+		t.Fatalf("iteration_factor[default] = %v, want 1.5", got)
+	}
+}

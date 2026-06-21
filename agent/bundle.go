@@ -92,7 +92,11 @@ type Manifest struct {
 	MCPServers    []mcp.ServerConfig `yaml:"mcp_servers,omitempty"`
 	DisableTask   bool               `yaml:"disable_task,omitempty"`
 	MaxIterations int                `yaml:"max_iterations,omitempty"` // iteration cap for this agent (0 = use CLI default)
-	EditDeadline  int                `yaml:"edit_deadline,omitempty"`  // stop after N iterations with no Edit calls (0 = disabled)
+	// IterationFactor overrides the config-level model.iteration_factor for
+	// this agent, keyed by model name (a "default" key applies to any model).
+	// Lets an agent tune its per-model budget independently of global config.
+	IterationFactor map[string]float64 `yaml:"iteration_factor,omitempty"`
+	EditDeadline    int                `yaml:"edit_deadline,omitempty"` // stop after N iterations with no Edit calls (0 = disabled)
 	// CommentsOnly, when true, restricts Edit and MultiEdit calls to
 	// changes that only add or remove comment lines or blank lines.
 	// Edits that modify, add, or remove non-comment code are rejected.
@@ -254,7 +258,10 @@ type Bundle struct {
 	MCPServers    []mcp.ServerConfig // MCP server dependencies declared in agent.yaml
 	DisableTask   bool               // when true, the Task tool is not registered for this agent
 	MaxIterations int                // iteration cap from manifest (0 = use CLI default)
-	EditDeadline  int                // stop after N iterations with no Edit calls (0 = disabled)
+	// IterationFactor is the manifest's per-model iteration multiplier; when
+	// set it overrides the config-level model.iteration_factor for this agent.
+	IterationFactor map[string]float64
+	EditDeadline    int // stop after N iterations with no Edit calls (0 = disabled)
 	// RemoteOnly mirrors Manifest.IsRemoteOnly. When true, local
 	// filesystem tools are not registered and the runner skips
 	// working-dir resolution / repo-summary injection.
@@ -928,24 +935,25 @@ func BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode strin
 	primary := manifest.PrimaryModel()
 
 	return &Bundle{
-		System:        sys.String(),
-		User:          userMessage,
-		Combined:      combined.Bytes(),
-		WorkDir:       workingDir,
-		Model:         primary.Model,
-		Provider:      primary.Provider,
-		BaseURL:       primary.BaseURL,
-		Models:        manifest.Models,
-		Budget:        manifest.Budget,
-		Environment:   manifest.Environment,
-		MCPServers:    resolvedMCP,
-		DisableTask:   manifest.DisableTask,
-		MaxIterations: manifest.MaxIterations,
-		EditDeadline:  manifest.EditDeadline,
-		RemoteOnly:    manifest.IsRemoteOnly(),
-		CommentsOnly:  manifest.CommentsOnly,
-		SkillEntries:  skillEntries,
-		Requires:      manifest.Requires,
+		System:          sys.String(),
+		User:            userMessage,
+		Combined:        combined.Bytes(),
+		WorkDir:         workingDir,
+		Model:           primary.Model,
+		Provider:        primary.Provider,
+		BaseURL:         primary.BaseURL,
+		Models:          manifest.Models,
+		Budget:          manifest.Budget,
+		Environment:     manifest.Environment,
+		MCPServers:      resolvedMCP,
+		DisableTask:     manifest.DisableTask,
+		MaxIterations:   manifest.MaxIterations,
+		IterationFactor: manifest.IterationFactor,
+		EditDeadline:    manifest.EditDeadline,
+		RemoteOnly:      manifest.IsRemoteOnly(),
+		CommentsOnly:    manifest.CommentsOnly,
+		SkillEntries:    skillEntries,
+		Requires:        manifest.Requires,
 	}, nil
 }
 

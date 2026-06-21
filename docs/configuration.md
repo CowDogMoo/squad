@@ -117,7 +117,7 @@ effective = clamp( base × factor[model] , 10 , 1000 )
 ```
 
 - **base** — the agent manifest's `max_iterations`, or `run.max_iterations` (default `100`) when the manifest leaves it unset.
-- **factor[model]** — `model.iteration_factor[<model>]`, then a `default` entry, then `1.0`. Non-positive values are ignored.
+- **factor[model]** — resolved with this precedence: the **agent manifest's** `iteration_factor[<model>]` (then its `default` key), then the global `model.iteration_factor[<model>]` (then its `default` key), then `1.0`. Non-positive values are ignored.
 - An explicit `--max-iterations` flag overrides all of the above and is used verbatim.
 
 ```yaml
@@ -127,6 +127,18 @@ model:
     gpt-oss-120b: 3.0      # slow to converge — give it room
     claude-sonnet-4-6: 1.0
     default: 1.0
+```
+
+An individual agent can override the global factor for specific models in its
+`agent.yaml` manifest — useful when one agent converges faster or slower than
+the global default on a given model:
+
+```yaml
+# agent.yaml
+name: go-review
+max_iterations: 40        # this agent's base budget
+iteration_factor:
+  gpt-oss-120b: 1.5       # overrides the global 3.0 for this agent only
 ```
 
 ### agents

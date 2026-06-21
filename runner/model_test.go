@@ -1834,6 +1834,41 @@ func TestResolveIterationBudget(t *testing.T) {
 			model:    "m",
 			expected: 23, // 22.5 -> 23
 		},
+		{
+			name:     "manifest factor overrides config factor for the model",
+			opts:     &RunOptions{MaxIterations: 100, Config: factorConfig(map[string]float64{"m": 3})},
+			bundle:   &agent.Bundle{IterationFactor: map[string]float64{"m": 0.5}},
+			model:    "m",
+			expected: 50, // manifest 0.5 wins over config 3.0
+		},
+		{
+			name:     "manifest default overrides config exact entry",
+			opts:     &RunOptions{MaxIterations: 100, Config: factorConfig(map[string]float64{"m": 3})},
+			bundle:   &agent.Bundle{IterationFactor: map[string]float64{"default": 2}},
+			model:    "m",
+			expected: 200, // manifest default 2.0 wins over config exact 3.0
+		},
+		{
+			name:     "manifest factor applies with no config",
+			opts:     &RunOptions{MaxIterations: 20},
+			bundle:   &agent.Bundle{IterationFactor: map[string]float64{"m": 2}},
+			model:    "m",
+			expected: 40,
+		},
+		{
+			name:     "manifest non-positive factor falls through to config",
+			opts:     &RunOptions{MaxIterations: 100, Config: factorConfig(map[string]float64{"m": 3})},
+			bundle:   &agent.Bundle{IterationFactor: map[string]float64{"m": 0}},
+			model:    "m",
+			expected: 300, // manifest 0 ignored, config 3.0 applies
+		},
+		{
+			name:     "manifest factor with manifest base, both from bundle",
+			opts:     &RunOptions{MaxIterations: 100},
+			bundle:   &agent.Bundle{MaxIterations: 12, IterationFactor: map[string]float64{"m": 4}},
+			model:    "m",
+			expected: 48, // base 12 (manifest) × 4 (manifest)
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
