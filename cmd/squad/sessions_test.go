@@ -91,4 +91,68 @@ func TestSessionsCmdEmpty(t *testing.T) {
 	if !strings.Contains(out, "No sessions found") {
 		t.Fatalf("expected empty message, got:\n%s", out)
 	}
+
+	// `open` with no sessions is an error.
+	if _, err := runSessionsSubcmd(t, openSessionCmd, nil); err == nil {
+		t.Fatal("expected error opening latest with no sessions")
+	}
+}
+
+func TestSessionsCmdOpenByIDAndNotFound(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := t.TempDir()
+	t.Chdir(repo)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+
+	l, err := session.New(wd, "", "agent", "openai", "gpt-5", "go")
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	id := l.SessionID()
+	dir := l.Dir()
+	_ = l.Close()
+
+	// Open by explicit id prints the directory.
+	out, err := runSessionsSubcmd(t, openSessionCmd, []string{id})
+	if err != nil {
+		t.Fatalf("open %s: %v", id, err)
+	}
+	if got := strings.TrimSpace(out); got != dir {
+		t.Fatalf("open %s printed %q, want %q", id, got, dir)
+	}
+
+	// Unknown id is an error.
+	if _, err := runSessionsSubcmd(t, openSessionCmd, []string{"no-such-id"}); err == nil {
+		t.Fatal("expected error opening unknown session id")
+	}
+}
+
+func TestSessionsCmdRendersWorktreeColumn(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := t.TempDir()
+	t.Chdir(repo)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+
+	// A session whose worktree lives under the repo: the listing shows the
+	// path relative to the repo.
+	worktree := filepath.Join(wd, "wt-1")
+	l, err := session.New(wd, worktree, "agent", "openai", "gpt-5", "go")
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	_ = l.Close()
+
+	out, err := runSessionsSubcmd(t, sessionsCmd, nil)
+	if err != nil {
+		t.Fatalf("sessions: %v", err)
+	}
+	if !strings.Contains(out, "wt-1") {
+		t.Fatalf("expected relative worktree path in listing:\n%s", out)
+	}
 }

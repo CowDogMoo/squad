@@ -322,3 +322,15 @@ func TestStateFileNoHomeErrors(t *testing.T) {
 		t.Fatalf("expected error when no state home is available")
 	}
 }
+
+func TestStateFileMkdirError(t *testing.T) {
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocked, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// State home under a regular file: MkdirAll for the squad subdir fails.
+	t.Setenv("XDG_STATE_HOME", blocked)
+	if _, err := StateFile("index.jsonl"); err == nil {
+		t.Fatalf("expected mkdir error when state dir cannot be created")
+	}
+}

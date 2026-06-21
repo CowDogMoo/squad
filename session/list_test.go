@@ -258,6 +258,150 @@ func TestGitignoreExcludesSessionsUnderGitAddAll(t *testing.T) {
 	}
 }
 
+func TestListRecoversFromIndexWhenSessionDirGone(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := t.TempDir()
+
+	l, err := New(repo, "", "agent", "openai", "gpt-5", "go")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	id := l.SessionID()
+	_ = l.Close()
+
+	// Remove the on-disk session entirely but keep index.jsonl. The meta scan
+	// finds nothing, so List must recover the session from the index.
+	if err := os.RemoveAll(l.Dir()); err != nil {
+		t.Fatalf("remove session dir: %v", err)
+	}
+
+	sessions, err := List(repo)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].SessionID != id {
+		t.Fatalf("expected index recovery of %q, got %+v", id, sessions)
+	}
+}
+
+func TestListSkipsMalformedAndBackfillsLegacy(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := t.TempDir()
+	root := filepath.Join(repo, SessionsRoot)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+
+	// A regular file (not a session dir) must be skipped.
+	if err := os.WriteFile(filepath.Join(root, "stray.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write stray: %v", err)
+	}
+	// A directory with no meta.json must be skipped.
+	if err := os.MkdirAll(filepath.Join(root, "no-meta"), 0o755); err != nil {
+		t.Fatalf("mkdir no-meta: %v", err)
+	}
+	// A directory with malformed meta.json must be skipped.
+	badDir := filepath.Join(root, "bad-meta")
+	if err := os.MkdirAll(badDir, 0o755); err != nil {
+		t.Fatalf("mkdir bad-meta: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "meta.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("write bad meta: %v", err)
+	}
+	// A legacy session whose meta predates CanonicalRepoPath: List must backfill
+	// the repo from the directory location.
+	writeLegacySession(t, repo, "old-session", Meta{
+		SessionID: "old-session",
+		Created:   time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
+		Status:    StatusCompleted,
+	})
+
+	sessions, err := List(repo)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected only the valid legacy session, got %+v", sessions)
+	}
+	got := sessions[0]
+	if got.SessionID != "old-session" {
+		t.Fatalf("unexpected session %+v", got)
+	}
+	if got.CanonicalRepoPath != repo {
+		t.Errorf("legacy CanonicalRepoPath=%q, want backfilled %q", got.CanonicalRepoPath, repo)
+	}
+}
+
+func TestListSkipsMalformedIndexLines(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := t.TempDir()
+
+	l, err := New(repo, "", "agent", "openai", "gpt-5", "go")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	id := l.SessionID()
+	_ = l.Close()
+	// Remove the session dir so List must fall through to index recovery, and
+	// prepend a garbage line the index reader must skip.
+	if err := os.RemoveAll(l.Dir()); err != nil {
+		t.Fatalf("remove session dir: %v", err)
+	}
+	indexFile := filepath.Join(config.StateDir(), "index.jsonl")
+	existing, err := os.ReadFile(indexFile)
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	if err := os.WriteFile(indexFile, append([]byte("{not json\n"), existing...), 0o644); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+
+	sessions, err := List(repo)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].SessionID != id {
+		t.Fatalf("expected to skip junk line and recover %q, got %+v", id, sessions)
+	}
+}
+
+func TestNewWarnsWhenGitignoreWriteFails(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := t.TempDir()
+	// Pre-create the .gitignore path as a directory so the belt-and-suspenders
+	// WriteFile fails; New must log and continue, still creating the session.
+	gitignoreAsDir := filepath.Join(repo, SessionsRoot, ".gitignore")
+	if err := os.MkdirAll(gitignoreAsDir, 0o755); err != nil {
+		t.Fatalf("mkdir gitignore-as-dir: %v", err)
+	}
+
+	l, err := New(repo, "", "a", "p", "m", "")
+	if err != nil {
+		t.Fatalf("New must still succeed despite gitignore write failure: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	if _, err := os.Stat(filepath.Join(l.Dir(), "meta.json")); err != nil {
+		t.Fatalf("session not created: %v", err)
+	}
+}
+
+func TestNewFallsBackToInTreeWithoutStateHome(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("HOME", "")
+	canonical := t.TempDir()
+
+	l, err := New(canonical, "", "a", "p", "m", "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	wantPrefix := filepath.Join(canonical, SessionsRoot)
+	if !strings.HasPrefix(l.Dir(), wantPrefix) {
+		t.Fatalf("fallback session dir %q not under %q", l.Dir(), wantPrefix)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)

@@ -39,6 +39,24 @@ func TestResolveGitToplevelNonRepoFallsBackToDir(t *testing.T) {
 	}
 }
 
+func TestRecordWorktreePath(t *testing.T) {
+	wd := "/repo"
+
+	// Isolation moved the working directory: the worktree path is recorded.
+	opts := &RunOptions{}
+	recordWorktreePath(opts, &Isolation{Effective: "/tmp/wt"}, wd)
+	if opts.WorktreePath != "/tmp/wt" {
+		t.Errorf("WorktreePath=%q, want /tmp/wt", opts.WorktreePath)
+	}
+
+	// No isolation (Effective == workingDir): nothing recorded.
+	opts = &RunOptions{}
+	recordWorktreePath(opts, &Isolation{Effective: wd}, wd)
+	if opts.WorktreePath != "" {
+		t.Errorf("WorktreePath=%q, want empty when no worktree", opts.WorktreePath)
+	}
+}
+
 func gitInit(t *testing.T, dir string) {
 	t.Helper()
 	cmd := exec.Command("git", "init")
