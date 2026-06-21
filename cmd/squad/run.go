@@ -347,7 +347,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().Bool("stream", false, "Stream model output tokens to stderr as they arrive")
 	cmd.Flags().Int("max-concurrent-tasks", 0, "Max concurrent background child tasks (default: 4)")
 	cmd.Flags().Bool("json", false, "Force JSON output format (composed agents only)")
-	cmd.Flags().String("resume", "", "Resume a prior session by id (see ./.squad/sessions/)")
+	cmd.Flags().String("resume", "", "Resume a prior session by id, or 'latest' (find ids with 'squad sessions')")
 	cmd.Flags().String("isolate", "", "Isolation mode: 'worktree' (separate dir + branch), 'branch' (new branch in-place), 'commit' (snapshot dirty tree), 'staged' (commit index, stash rest), 'unstaged' (work as-is), or 'none' (default: from manifest/config)")
 	cmd.Flags().Bool("skills-enabled", false, "Force-enable the Agent Skills catalog for this run (overrides agent.yaml)")
 	cmd.Flags().Bool("skills-disabled", false, "Force-disable the Agent Skills catalog for this run (overrides agent.yaml)")
