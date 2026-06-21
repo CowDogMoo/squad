@@ -966,7 +966,23 @@ func TestBudgetUsedPctPartial(t *testing.T) {
 }
 
 func TestBudgetUsedPctExceeded(t *testing.T) {
-	t.Parallel()
+	// Seed deterministic pricing rather than relying on the async,
+	// network-backed pricing fetch that New() kicks off in a goroutine.
+	// Otherwise, under parallel load the fetch may not have completed when
+	// BudgetUsedPct reads the cost — yielding 0 and a flaky failure. Not
+	// parallel, so the global seed is set and restored in the sequential
+	// phase, isolated from parallel tests that read pricing.
+	oldCache, oldFetched, oldErr := getPricingState()
+	t.Cleanup(func() { setPricingState(oldCache, oldFetched, oldErr) })
+	setPricingState(map[string]liteLLMModel{
+		"openai/gpt-4o": {
+			InputCostPerToken:  0.0000025,
+			OutputCostPerToken: 0.00001,
+			LiteLLMProvider:    "openai",
+			Mode:               "chat",
+		},
+	}, true, nil)
+
 	m := New("openai", "gpt-4o")
 	m.SetMaxCost(0.0001)
 	m.AddTokens(1_000_000, 1_000_000)
