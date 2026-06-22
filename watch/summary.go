@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/session"
 )
 
@@ -38,7 +39,10 @@ func decodePayload(raw []byte) map[string]any {
 		return nil
 	}
 	var p map[string]any
-	_ = json.Unmarshal(raw, &p)
+	if err := json.Unmarshal(raw, &p); err != nil {
+		logging.Warn("failed to decode event payload: %v", err)
+		return nil
+	}
 	return p
 }
 
