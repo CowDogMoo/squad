@@ -279,6 +279,7 @@ func TestHandleResponse(t *testing.T) {
 		wantErrContains string
 		wantStdout      bool
 		wantFile        bool
+		gitRepo         bool
 	}{
 		{
 			name:            "requires actionable error",
@@ -286,6 +287,14 @@ func TestHandleResponse(t *testing.T) {
 			response:        "plain text",
 			wantErr:         true,
 			wantErrContains: "not actionable",
+		},
+		{
+			name:            "fabricated files touched fails on clean git tree",
+			opts:            &RunOptions{RequireActionable: true, Mode: "edit"},
+			response:        "## Files Touched\n- a.yml — changed",
+			gitRepo:         true,
+			wantErr:         true,
+			wantErrContains: "working tree is unchanged",
 		},
 		{
 			name:       "apply no changes writes file",
@@ -314,7 +323,11 @@ func TestHandleResponse(t *testing.T) {
 			}
 			ctx := context.Background()
 			cmd.SetContext(ctx)
-			err := handleResponse(cmd, tt.opts, tt.response, t.TempDir())
+			workingDir := t.TempDir()
+			if tt.gitRepo {
+				workingDir = initGitRepo(t)
+			}
+			err := handleResponse(cmd, tt.opts, tt.response, workingDir)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("handleResponse() error = %v, wantErr %v", err, tt.wantErr)
 			}

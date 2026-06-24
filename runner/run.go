@@ -578,6 +578,13 @@ func handleResponse(cmd *cobra.Command, opts *RunOptions, response, workingDir s
 		if err := validateActionableResponse(cmd.Context(), response); err != nil {
 			return err
 		}
+		// Edit-mode runs must actually change the tree; a clean tree behind a
+		// "files touched" report means the model fabricated its result.
+		if opts.Mode == "" || opts.Mode == "edit" {
+			if err := validateActionableChanges(cmd.Context(), response, workingDir); err != nil {
+				return err
+			}
+		}
 	}
 
 	if opts.Apply {
