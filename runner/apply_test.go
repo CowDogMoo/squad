@@ -167,6 +167,58 @@ func TestValidateActionableResponse_EditDeadlineReached(t *testing.T) {
 	}
 }
 
+func TestValidateActionableChanges(t *testing.T) {
+	t.Parallel()
+
+	const touched = "## Files Touched\n- a.yml — changed"
+	const noChanges = "No changes detected; codebase is clean."
+	const diff = "```diff\ndiff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n```"
+
+	tests := []struct {
+		name    string
+		input   string
+		edits   bool // a real tool edit was recorded in ctx
+		dirty   bool // make the git tree dirty before checking
+		wantErr bool
+	}{
+		{"files touched but clean tree is fabrication", touched, false, false, true},
+		{"files touched with dirty tree passes", touched, false, true, false},
+		{"no changes report passes on clean tree", noChanges, false, false, false},
+		{"unified diff passes on clean tree", diff, false, false, false},
+		{"edits applied bypasses git check", touched, true, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := initGitRepo(t)
+			if tt.dirty {
+				if err := os.WriteFile(filepath.Join(dir, "changed.txt"), []byte("x"), 0o644); err != nil {
+					t.Fatalf("dirty file: %v", err)
+				}
+			}
+			ctx := tools.InitEdits(context.Background())
+			if tt.edits {
+				tools.MarkEditsApplied(ctx)
+			}
+			err := validateActionableChanges(ctx, tt.input, dir)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateActionableChanges() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateActionableChanges_NonGitDirSkips(t *testing.T) {
+	t.Parallel()
+	scrubGitEnv(t)
+	ctx := tools.InitEdits(context.Background())
+	// A non-git working dir cannot be verified, so the guard must pass through
+	// rather than fail a legitimate run.
+	if err := validateActionableChanges(ctx, "## Files Touched\n- a.yml", t.TempDir()); err != nil {
+		t.Fatalf("expected nil for non-git dir, got: %v", err)
+	}
+}
+
 func TestApplyResponseDiffNoChanges(t *testing.T) {
 	t.Parallel()
 	ctx := tools.InitEdits(context.Background())

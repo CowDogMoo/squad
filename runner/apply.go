@@ -58,6 +58,39 @@ func responseIndicatesNoChanges(response string) bool {
 	return strings.Contains(strings.ToLower(response), "no changes")
 }
 
+// validateActionableChanges guards against fabricated "changes made" reports.
+// validateActionableResponse accepts a report that merely contains the text
+// "files touched", which a local model can emit without ever calling an edit
+// tool. When such a report claims files were touched but nothing actually
+// changed — no tool edit, no unified diff, and a clean git working tree — the
+// run is treated as a fabrication and fails. It is only meaningful for
+// edit-mode runs inside a git repo; every other case passes through.
+func validateActionableChanges(ctx context.Context, response, workingDir string) error {
+	// A real tool edit or a unified diff is authoritative actionable output.
+	if tools.EditsApplied(ctx) {
+		return nil
+	}
+	if _, err := extractUnifiedDiff(response); err == nil {
+		return nil
+	}
+	// A genuine "no changes" report is fine. Only a "files touched" claim
+	// needs cross-checking against the working tree.
+	if responseIndicatesNoChanges(response) ||
+		!strings.Contains(strings.ToLower(response), "files touched") {
+		return nil
+	}
+	// Changes can only be verified inside a git repo; don't penalize others.
+	if !isGitRepo(ctx, workingDir) {
+		return nil
+	}
+	// If git can't report (error) or the tree actually changed, the report is
+	// trustworthy; only a confirmed-clean tree is a fabrication.
+	if dirty, err := workingTreeDirty(ctx, workingDir); err != nil || dirty {
+		return nil
+	}
+	return fmt.Errorf("report claims \"files touched\" but the working tree is unchanged: the agent reported edits it never applied (disable with --require-actionable=false)")
+}
+
 func extractUnifiedDiff(response string) (string, error) {
 	const fence = "```diff"
 	const altFence = "```patch"
