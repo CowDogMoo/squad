@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
@@ -2315,52 +2316,20 @@ func limitOutput(data []byte) []byte {
 }
 
 type globMatcher struct {
-	re *regexp.Regexp
+	pattern string
 }
 
 func newGlobMatcher(pattern string) (*globMatcher, error) {
 	normalized := filepath.ToSlash(pattern)
-	regex, err := globToRegex(normalized)
-	if err != nil {
-		return nil, err
+	if !doublestar.ValidatePattern(normalized) {
+		return nil, fmt.Errorf("invalid glob pattern: %s", pattern)
 	}
-	re, err := regexp.Compile(regex)
-	if err != nil {
-		return nil, err
-	}
-	return &globMatcher{re: re}, nil
+	return &globMatcher{pattern: normalized}, nil
 }
 
 func (g *globMatcher) Match(path string) bool {
-	return g.re.MatchString(path)
-}
-
-func globToRegex(pattern string) (string, error) {
-	var buf strings.Builder
-	buf.WriteString("^")
-	runes := []rune(pattern)
-	for i := 0; i < len(runes); i++ {
-		ch := runes[i]
-		if ch == '*' {
-			if i+1 < len(runes) && runes[i+1] == '*' {
-				buf.WriteString(".*")
-				i++
-			} else {
-				buf.WriteString(`[^/]*`)
-			}
-			continue
-		}
-		if ch == '?' {
-			buf.WriteString(".")
-			continue
-		}
-		if strings.ContainsRune(`.+()|[]{}^$\\`, ch) {
-			buf.WriteString(`\`)
-		}
-		buf.WriteRune(ch)
-	}
-	buf.WriteString("$")
-	return buf.String(), nil
+	matched, _ := doublestar.Match(g.pattern, path)
+	return matched
 }
 
 // TruncateString truncates s to maxLen bytes, appending "..." when truncation

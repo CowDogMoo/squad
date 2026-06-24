@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/skill"
@@ -110,7 +111,7 @@ func TestTruncateString(t *testing.T) {
 	}
 }
 
-func TestGlobToRegex(t *testing.T) {
+func TestGlobMatch(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name    string
@@ -120,26 +121,30 @@ func TestGlobToRegex(t *testing.T) {
 	}{
 		{"star dot go", "*.go", "main.go", "cmd/main.go"},
 		{"double star", "**/*.go", "cmd/main.go", "main.txt"},
+		{"double star matches root file", "**/*.go", "main.go", "main.txt"},
+		{"double star matches root md", "**/*.md", "README.md", "README.txt"},
+		{"double star prefix matches subdir root", "src/**/*.go", "src/main.go", "main.go"},
+		{"double star prefix matches nested", "src/**/*.go", "src/pkg/main.go", "lib/main.go"},
 		{"question mark", "foo?", "foox", "fooxx"},
 		{"literal dots", "file.txt", "file.txt", "filextxt"},
-		{"literal bracket", "[ab].go", "[ab].go", "a.go"},
+		{"bracket range", "[ab].go", "a.go", "c.go"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			regex, err := globToRegex(tt.pattern)
+			matched, err := doublestar.Match(tt.pattern, tt.match)
 			if err != nil {
-				t.Fatalf("globToRegex(%q) error = %v", tt.pattern, err)
+				t.Fatalf("doublestar.Match error: %v", err)
 			}
-			re, err := regexp.Compile(regex)
+			if !matched {
+				t.Fatalf("expected %q to match pattern %q", tt.match, tt.pattern)
+			}
+			matched, err = doublestar.Match(tt.pattern, tt.noMatch)
 			if err != nil {
-				t.Fatalf("regexp.Compile(%q) error = %v", regex, err)
+				t.Fatalf("doublestar.Match error: %v", err)
 			}
-			if !re.MatchString(tt.match) {
-				t.Fatalf("expected %q to match pattern %q (regex %q)", tt.match, tt.pattern, regex)
-			}
-			if re.MatchString(tt.noMatch) {
-				t.Fatalf("expected %q to NOT match pattern %q (regex %q)", tt.noMatch, tt.pattern, regex)
+			if matched {
+				t.Fatalf("expected %q to NOT match pattern %q", tt.noMatch, tt.pattern)
 			}
 		})
 	}
@@ -398,7 +403,9 @@ func TestGlobAndGrepTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("globTool: %v", err)
 	}
-	if strings.Contains(globOut, "a.txt") || !strings.Contains(globOut, "nested/c.txt") {
+	// "**/*.txt" matches both the root-level file and nested files (zero-or-more
+	// path segments), consistent with how grep walks the tree below.
+	if !strings.Contains(globOut, "a.txt") || !strings.Contains(globOut, "nested/c.txt") {
 		t.Fatalf("unexpected glob output: %s", globOut)
 	}
 

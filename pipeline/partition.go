@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 const (
@@ -49,12 +50,11 @@ func ExpandPartition(workDir string, p *Partition) ([][]string, error) {
 		maxPer = defaultMaxPerPartition
 	}
 
-	matcher, err := partitionGlobToRegex(p.Glob)
-	if err != nil {
-		return nil, fmt.Errorf("invalid partition glob %q: %w", p.Glob, err)
+	if !doublestar.ValidatePattern(p.Glob) {
+		return nil, fmt.Errorf("invalid partition glob %q", p.Glob)
 	}
 
-	matches, err := collectMatches(workDir, matcher)
+	matches, err := collectMatches(workDir, p.Glob)
 	if err != nil {
 		return nil, err
 	}
@@ -65,8 +65,8 @@ func ExpandPartition(workDir string, p *Partition) ([][]string, error) {
 	return splitIntoPartitions(matches, maxPer), nil
 }
 
-// collectMatches walks workDir and returns relative paths matching the regex.
-func collectMatches(workDir string, matcher *regexp.Regexp) ([]string, error) {
+// collectMatches walks workDir and returns relative paths matching the pattern.
+func collectMatches(workDir string, pattern string) ([]string, error) {
 	var matches []string
 	err := filepath.WalkDir(workDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -83,7 +83,8 @@ func collectMatches(workDir string, matcher *regexp.Regexp) ([]string, error) {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		if matcher.MatchString(rel) {
+		matched, _ := doublestar.Match(pattern, rel)
+		if matched {
 			matches = append(matches, rel)
 		}
 		return nil
@@ -129,42 +130,4 @@ func FormatPartitionPrompt(files []string, partIdx, totalParts int) string {
 	sb.WriteString("\nDo NOT read or analyze files outside this list.\n")
 	sb.WriteString("Other partitions are handling the remaining files in parallel.\n")
 	return sb.String()
-}
-
-// partitionGlobToRegex converts a glob pattern to a compiled regex.
-// Supports ** (any path, including zero segments) and * (any non-slash segment).
-// The pattern **/ matches zero or more directories (including the root level).
-func partitionGlobToRegex(pattern string) (*regexp.Regexp, error) {
-	normalized := filepath.ToSlash(pattern)
-	var buf strings.Builder
-	buf.WriteString("^")
-	runes := []rune(normalized)
-	for i := 0; i < len(runes); i++ {
-		ch := runes[i]
-		if ch == '*' {
-			if i+1 < len(runes) && runes[i+1] == '*' {
-				// **/ matches zero or more directory segments
-				if i+2 < len(runes) && runes[i+2] == '/' {
-					buf.WriteString("(.*/)?")
-					i += 2 // skip ** and /
-				} else {
-					buf.WriteString(".*")
-					i++ // skip second *
-				}
-			} else {
-				buf.WriteString(`[^/]*`)
-			}
-			continue
-		}
-		if ch == '?' {
-			buf.WriteString(".")
-			continue
-		}
-		if strings.ContainsRune(`.+()|[]{}^$\\`, ch) {
-			buf.WriteString(`\`)
-		}
-		buf.WriteRune(ch)
-	}
-	buf.WriteString("$")
-	return regexp.Compile(buf.String())
 }
