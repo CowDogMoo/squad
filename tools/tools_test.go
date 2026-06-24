@@ -323,6 +323,11 @@ func TestGlobMatcher(t *testing.T) {
 	if matcher.Match("cmd/main.txt") {
 		t.Fatalf("expected no match for cmd/main.txt")
 	}
+
+	// An unterminated character class is rejected by doublestar.ValidatePattern.
+	if _, err := newGlobMatcher("[invalid"); err == nil {
+		t.Fatal("expected error for invalid glob pattern, got nil")
+	}
 }
 
 func TestLimitOutput(t *testing.T) {

@@ -67,6 +67,23 @@ func TestExpandPartitionEmpty(t *testing.T) {
 	}
 }
 
+func TestExpandPartitionInvalidGlob(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// An unterminated character class is rejected by doublestar.ValidatePattern.
+	_, err := ExpandPartition(dir, &Partition{
+		By:   "files",
+		Glob: "[invalid",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid glob, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid partition glob") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestExpandPartitionDefaultSize(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
