@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/cowdogmoo/squad/metrics"
 )
 
@@ -63,6 +64,23 @@ func TestExpandPartitionEmpty(t *testing.T) {
 	}
 	if partitions != nil {
 		t.Fatalf("expected nil for no matches, got %d partitions", len(partitions))
+	}
+}
+
+func TestExpandPartitionInvalidGlob(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// An unterminated character class is rejected by doublestar.ValidatePattern.
+	_, err := ExpandPartition(dir, &Partition{
+		By:   "files",
+		Glob: "[invalid",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid glob, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid partition glob") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -387,7 +405,7 @@ stages:
 	}
 }
 
-func TestPartitionGlobToRegex(t *testing.T) {
+func TestPartitionGlob(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		pattern string
@@ -419,17 +437,18 @@ func TestPartitionGlobToRegex(t *testing.T) {
 		tt := tt
 		t.Run(tt.pattern, func(t *testing.T) {
 			t.Parallel()
-			re, err := partitionGlobToRegex(tt.pattern)
-			if err != nil {
-				t.Fatalf("partitionGlobToRegex(%q) error: %v", tt.pattern, err)
+			if !doublestar.ValidatePattern(tt.pattern) {
+				t.Fatalf("ValidatePattern(%q) returned false", tt.pattern)
 			}
 			for _, m := range tt.match {
-				if !re.MatchString(m) {
+				matched, _ := doublestar.Match(tt.pattern, m)
+				if !matched {
 					t.Errorf("pattern %q should match %q", tt.pattern, m)
 				}
 			}
 			for _, nm := range tt.noMatch {
-				if re.MatchString(nm) {
+				matched, _ := doublestar.Match(tt.pattern, nm)
+				if matched {
 					t.Errorf("pattern %q should NOT match %q", tt.pattern, nm)
 				}
 			}
