@@ -148,13 +148,19 @@ func newRoutineCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&wakeSystem, "wake-system", false, "Ask the OS to wake the machine from sleep to keep the daemon supervised (macOS/Windows only)")
 	// The flags were just defined above, so an error here can only mean a
 	// misspelled flag name — a programmer bug that should fail loudly.
-	if err := cmd.MarkFlagRequired("agent"); err != nil {
-		panic(err)
-	}
-	if err := cmd.MarkFlagRequired("schedule"); err != nil {
-		panic(err)
-	}
+	mustMarkRequired(cmd, "agent", "schedule")
 	return cmd
+}
+
+// mustMarkRequired marks the named flags as required, panicking if any name
+// does not correspond to a defined flag. A failure can only mean a misspelled
+// flag name in the command wiring — a programmer bug that should fail loudly.
+func mustMarkRequired(cmd *cobra.Command, names ...string) {
+	for _, name := range names {
+		if err := cmd.MarkFlagRequired(name); err != nil {
+			panic(err)
+		}
+	}
 }
 
 func newRoutineListCmd() *cobra.Command {

@@ -197,6 +197,23 @@ func TestStoreAndReadLargeResult(t *testing.T) {
 	}
 }
 
+func TestReadLargeResultRejectsTraversal(t *testing.T) {
+	wd := t.TempDir()
+	l, err := New(wd, "", "a", "p", "m", "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	// id is model-controlled; any value that could escape resultDir must be
+	// rejected before it is joined into a path (CWE-22).
+	for _, id := range []string{"", "..", "../../etc/hosts", "a/b", "sub/../../x"} {
+		if _, _, err := l.ReadLargeResult(id, 0, 0); err == nil {
+			t.Fatalf("expected error for traversal id %q, got nil", id)
+		}
+	}
+}
+
 func TestContextRoundTrip(t *testing.T) {
 	wd := t.TempDir()
 	l, err := New(wd, "", "a", "p", "m", "")
