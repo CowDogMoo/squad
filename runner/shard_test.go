@@ -1,10 +1,19 @@
 package runner
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
+
+	"github.com/cowdogmoo/squad/agent"
 )
 
 func TestBatchFiles(t *testing.T) {
@@ -113,5 +122,186 @@ func TestSummarizeAndMerge(t *testing.T) {
 	noneOut := mergeShards(res, "none")
 	if !strings.Contains(noneOut, "Files touched: a.md") {
 		t.Errorf("none merge missing touched line:\n%s", noneOut)
+	}
+}
+
+// ollamaShardServer stands up a minimal Ollama-compatible chat endpoint that
+// replies to every request with the same assistant content, so a sharded run
+// can drive InvokeModel once per shard without a real backend.
+func ollamaShardServer(t *testing.T, content string) *httptest.Server {
+	t.Helper()
+	body := fmt.Sprintf(`{"model":"mistral","message":{"role":"assistant","content":%q},"done":true}`, content)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// writeShardedAgent writes a sharded ("shard_by: file") agent manifest globbing
+// **/*.md and returns the agents dir. merge/onErr/maxParallel are caller-set so
+// tests can exercise the json/none merges and the stop/continue error policies.
+func writeShardedAgent(t *testing.T, name, merge, onErr string, maxParallel int) string {
+	t.Helper()
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, name)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	manifest := fmt.Sprintf(`name: %s
+version: 0.0.0
+entrypoint: system.md
+wrapper: wrapper.md
+execution:
+  shard_by: file
+  glob:
+    - "**/*.md"
+  shard_batch: 1
+  merge: %s
+  max_parallel: %d
+  on_shard_error: %s
+`, name, merge, maxParallel, onErr)
+	write := func(rel, body string) {
+		if err := os.WriteFile(filepath.Join(agentDir, rel), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	write("agent.yaml", manifest)
+	write("system.md", "System prompt.")
+	write("wrapper.md", "Wrapper prompt.")
+	return agentsDir
+}
+
+// writeWorkFiles creates named files under a fresh temp dir used as the sharded
+// run's working directory, and returns that directory.
+func writeWorkFiles(t *testing.T, names ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, n := range names {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("content"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", n, err)
+		}
+	}
+	return dir
+}
+
+func buildShardBundle(t *testing.T, opts *RunOptions, workingDir string) *agent.Bundle {
+	t.Helper()
+	bundle, err := agent.BuildBundleWithOptions(opts.AgentsDir, opts.Agent, "do work", workingDir, opts.Mode, opts.Vars, &agent.BundleOptions{})
+	if err != nil {
+		t.Fatalf("BuildBundleWithOptions: %v", err)
+	}
+	if !bundle.Sharded() {
+		t.Fatal("expected sharded bundle")
+	}
+	return bundle
+}
+
+func TestRunSharded_EndToEnd(t *testing.T) {
+	srv := ollamaShardServer(t, "ok")
+	agentsDir := writeShardedAgent(t, "degpt", "json", "continue", 2)
+	workingDir := writeWorkFiles(t, "a.md", "b.md")
+	opts := &RunOptions{
+		Agent:           "degpt",
+		AgentsDir:       agentsDir,
+		Provider:        "ollama",
+		Model:           "mistral",
+		BaseURL:         srv.URL,
+		MaxIterations:   1,
+		Mode:            "edit",
+		ConfigAvailable: true,
+	}
+	bundle := buildShardBundle(t, opts, workingDir)
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	resp, m, err := runSharded(context.Background(), cmd, opts, bundle, "do work", workingDir)
+	if err != nil {
+		t.Fatalf("runSharded: %v", err)
+	}
+	if m == nil {
+		t.Fatal("expected non-nil metrics")
+	}
+	var res shardedResult
+	if jerr := json.Unmarshal([]byte(resp), &res); jerr != nil {
+		t.Fatalf("merged output not valid json: %v\n%s", jerr, resp)
+	}
+	if res.Summary.Files != 2 || res.Summary.Shards != 2 || res.Summary.Clean != 2 || res.Summary.Failed != 0 {
+		t.Fatalf("summary = %+v", res.Summary)
+	}
+}
+
+func TestRunSharded_NoMatchingFiles(t *testing.T) {
+	srv := ollamaShardServer(t, "ok")
+	agentsDir := writeShardedAgent(t, "degpt", "json", "continue", 1)
+	workingDir := writeWorkFiles(t, "ignored.txt") // no .md files to glob
+	opts := &RunOptions{
+		Agent:           "degpt",
+		AgentsDir:       agentsDir,
+		Provider:        "ollama",
+		Model:           "mistral",
+		BaseURL:         srv.URL,
+		MaxIterations:   1,
+		Mode:            "edit",
+		ConfigAvailable: true,
+	}
+	bundle := buildShardBundle(t, opts, workingDir)
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	resp, _, err := runSharded(context.Background(), cmd, opts, bundle, "do work", workingDir)
+	if err != nil {
+		t.Fatalf("runSharded with no files should be a clean outcome, got %v", err)
+	}
+	var res shardedResult
+	if jerr := json.Unmarshal([]byte(resp), &res); jerr != nil {
+		t.Fatalf("merged output not valid json: %v\n%s", jerr, resp)
+	}
+	if res.Summary.Shards != 0 || res.Summary.Files != 0 {
+		t.Fatalf("expected empty summary, got %+v", res.Summary)
+	}
+}
+
+func TestRunSharded_ShardFailureStops(t *testing.T) {
+	// Every shard gets a fabricated "files touched" report with no real edit;
+	// with require-actionable on, the first shard fails validation and (stop
+	// policy) cancels the rest, so the second shard records a skip.
+	srv := ollamaShardServer(t, "Files touched: a.md")
+	agentsDir := writeShardedAgent(t, "degpt", "json", "stop", 1)
+	workingDir := writeWorkFiles(t, "a.md", "b.md")
+	opts := &RunOptions{
+		Agent:             "degpt",
+		AgentsDir:         agentsDir,
+		Provider:          "ollama",
+		Model:             "mistral",
+		BaseURL:           srv.URL,
+		MaxIterations:     1,
+		Mode:              "edit",
+		ConfigAvailable:   true,
+		RequireActionable: true,
+	}
+	bundle := buildShardBundle(t, opts, workingDir)
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	resp, _, err := runSharded(context.Background(), cmd, opts, bundle, "do work", workingDir)
+	if err == nil {
+		t.Fatal("expected an aggregate shard failure")
+	}
+	if !strings.Contains(err.Error(), "shards failed") {
+		t.Fatalf("error = %v, want it to mention failed shards", err)
+	}
+	var res shardedResult
+	if jerr := json.Unmarshal([]byte(resp), &res); jerr != nil {
+		t.Fatalf("merged output not valid json: %v\n%s", jerr, resp)
+	}
+	if res.Summary.Failed != 2 {
+		t.Fatalf("expected both shards failed (one validation, one skipped), got %+v", res.Summary)
+	}
+	if !strings.Contains(resp, "skipped") {
+		t.Errorf("expected a skipped shard in merged output:\n%s", resp)
 	}
 }
