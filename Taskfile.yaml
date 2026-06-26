@@ -26,8 +26,8 @@ includes:
   go:
     taskfile: "https://raw.githubusercontent.com/CowDogMoo/taskfile-templates/main/go/Taskfile.yaml"
     vars:
-      BINARY_NAME: '{{.BINARY_NAME}}'
-      CMD_PATH: '{{.CMD_PATH}}'
+      BINARY_NAME: squad
+      CMD_PATH: ./cmd/squad
   pre-commit:
     taskfile: "https://raw.githubusercontent.com/CowDogMoo/taskfile-templates/main/pre-commit/Taskfile.yaml"
 
