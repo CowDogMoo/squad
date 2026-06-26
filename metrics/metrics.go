@@ -31,6 +31,7 @@ type ChildMetrics struct {
 	Agent        string
 	InputTokens  int64
 	OutputTokens int64
+	Iterations   int
 	Model        string
 	Provider     string
 }
@@ -160,6 +161,7 @@ func (m *Metrics) AddChild(agent string, child *Metrics) {
 		Agent:        agent,
 		InputTokens:  child.InputTokens(),
 		OutputTokens: child.OutputTokens(),
+		Iterations:   child.Iterations(),
 		Model:        child.Model,
 		Provider:     child.Provider,
 	})
@@ -536,10 +538,31 @@ func (m *Metrics) String() string {
 // Summary returns a multi-line summary of the recorded metrics.
 func (m *Metrics) Summary() string {
 	cost := m.Cost()
-	costLine := "  Cost:       " + m.costString(cost)
 	in := m.InputTokens()
 	out := m.OutputTokens()
 	total := in + out
+
+	m.mu.Lock()
+	children := make([]ChildMetrics, len(m.Children))
+	copy(children, m.Children)
+	m.mu.Unlock()
+
+	// Header display values. When the parent ran no model calls itself but has
+	// children (a pure aggregator, e.g. a sharded run where every model call
+	// happens in a shard), the header would otherwise read 0 iterations / 0
+	// tokens / $0. Fall back to the children sum so the top line reflects the
+	// run. The per-child breakdown and "TOTAL (all agents)" line below stay
+	// computed from the parent's own counters + children, so no double-count.
+	dispIn, dispOut, dispIters, dispCost := in, out, m.Iterations(), cost
+	if total == 0 && len(children) > 0 {
+		for _, c := range children {
+			dispIn += c.InputTokens
+			dispOut += c.OutputTokens
+			dispIters += c.Iterations
+		}
+		dispCost = m.TotalCostWithChildren()
+	}
+	costLine := "  Cost:       " + m.costString(dispCost)
 
 	var warningLine string
 	loaded, _, err := PricingStatus()
@@ -557,20 +580,15 @@ Agent Metrics
 %s%s
 `,
 		m.Duration().Round(time.Millisecond),
-		m.Iterations(),
+		dispIters,
 		m.Model,
 		m.Provider,
-		in,
-		out,
-		total,
+		dispIn,
+		dispOut,
+		dispIn+dispOut,
 		costLine,
 		warningLine,
 	)
-
-	m.mu.Lock()
-	children := make([]ChildMetrics, len(m.Children))
-	copy(children, m.Children)
-	m.mu.Unlock()
 
 	if len(children) == 0 {
 		return base
