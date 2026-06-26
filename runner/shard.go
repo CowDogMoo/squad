@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -69,8 +70,8 @@ func runSharded(ctx context.Context, cmd *cobra.Command, opts *RunOptions, bundl
 	if err != nil {
 		return "", parent, fmt.Errorf("shard globbing failed: %w", err)
 	}
-	shards := batchFiles(files, exec.ShardBatch)
-	logging.InfoContext(ctx, "sharded run: %d files → %d shards (batch=%d)", len(files), len(shards), exec.ShardBatch)
+	shards := shardFiles(files, exec)
+	logging.InfoContext(ctx, "sharded run (by %s): %d files → %d shards", exec.ShardBy, len(files), len(shards))
 
 	if len(shards) == 0 {
 		// No matching files is a correct, clean outcome.
@@ -234,6 +235,41 @@ func matchesAny(rel string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// shardFiles partitions the work-list into shards according to exec.ShardBy:
+// "package" groups by directory (one shard per package), anything else batches
+// by ShardBatch count.
+func shardFiles(files []string, exec *agent.ExecutionConfig) [][]string {
+	if exec.ShardBy == "package" {
+		return groupByPackage(files)
+	}
+	return batchFiles(files, exec.ShardBatch)
+}
+
+// groupByPackage buckets files into one shard per parent directory. A Go
+// package is a directory, so this yields exactly one shard per package with all
+// of that package's files together, giving each shard full intra-package
+// context — the unit NEWBIE.md calls for when guaranteeing every package is
+// read. Shards are ordered by directory; files keep their sorted order within a
+// shard. ShardBatch does not apply. Input is assumed sorted (globShardFiles
+// sorts), so each directory's files are already contiguous and ordered.
+func groupByPackage(files []string) [][]string {
+	groups := map[string][]string{}
+	var dirs []string
+	for _, f := range files {
+		dir := path.Dir(f)
+		if _, seen := groups[dir]; !seen {
+			dirs = append(dirs, dir)
+		}
+		groups[dir] = append(groups[dir], f)
+	}
+	sort.Strings(dirs)
+	shards := make([][]string, 0, len(dirs))
+	for _, dir := range dirs {
+		shards = append(shards, groups[dir])
+	}
+	return shards
 }
 
 // batchFiles splits files into shards of at most size entries (size >= 1).

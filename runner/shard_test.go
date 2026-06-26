@@ -47,6 +47,38 @@ func TestBatchFiles(t *testing.T) {
 	}
 }
 
+func TestGroupByPackage(t *testing.T) {
+	t.Parallel()
+	// Two files in agent/, one each in runner/ and the repo root: three
+	// packages → three shards, each holding exactly its directory's files.
+	files := []string{"agent/bundle.go", "agent/composed.go", "main.go", "runner/run.go"}
+	got := groupByPackage(files)
+	want := [][]string{
+		{"main.go"}, // dir "." sorts before "agent" and "runner"
+		{"agent/bundle.go", "agent/composed.go"},
+		{"runner/run.go"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("groupByPackage = %d shards, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if strings.Join(got[i], ",") != strings.Join(want[i], ",") {
+			t.Errorf("shard %d = %v, want %v", i, got[i], want[i])
+		}
+	}
+
+	// shardFiles dispatches on ShardBy: "package" groups by directory, the
+	// default path batches by count.
+	pkgShards := shardFiles(files, &agent.ExecutionConfig{ShardBy: "package"})
+	if len(pkgShards) != 3 {
+		t.Errorf("shardFiles(package) = %d shards, want 3", len(pkgShards))
+	}
+	fileShards := shardFiles(files, &agent.ExecutionConfig{ShardBy: "file", ShardBatch: 1})
+	if len(fileShards) != 4 {
+		t.Errorf("shardFiles(file, batch=1) = %d shards, want 4", len(fileShards))
+	}
+}
+
 func TestGlobShardFiles(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
