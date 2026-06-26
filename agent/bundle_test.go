@@ -1522,3 +1522,65 @@ func TestManifestIterationFactorParses(t *testing.T) {
 		t.Fatalf("iteration_factor[default] = %v, want 1.5", got)
 	}
 }
+
+func TestExecutionConfigValidate(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		cfg     *ExecutionConfig
+		wantErr bool
+	}{
+		{"nil is no-op", nil, false},
+		{"empty shard_by is no-op", &ExecutionConfig{}, false},
+		{"unsupported shard_by", &ExecutionConfig{ShardBy: "dir", Glob: []string{"*.go"}}, true},
+		{"file requires glob", &ExecutionConfig{ShardBy: "file"}, true},
+		{"valid file shard", &ExecutionConfig{ShardBy: "file", Glob: []string{"**/*.go"}}, false},
+		{"invalid glob pattern", &ExecutionConfig{ShardBy: "file", Glob: []string{"[bad"}}, true},
+		{"invalid exclude pattern", &ExecutionConfig{ShardBy: "file", Glob: []string{"**/*.go"}, Exclude: []string{"[bad"}}, true},
+		{"negative shard_batch", &ExecutionConfig{ShardBy: "file", Glob: []string{"*.go"}, ShardBatch: -1}, true},
+		{"unsupported merge", &ExecutionConfig{ShardBy: "file", Glob: []string{"*.go"}, Merge: "xml"}, true},
+		{"negative max_parallel", &ExecutionConfig{ShardBy: "file", Glob: []string{"*.go"}, MaxParallel: -1}, true},
+		{"unsupported on_shard_error", &ExecutionConfig{ShardBy: "file", Glob: []string{"*.go"}, OnShardError: "panic"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if err := tt.cfg.Validate(); (err != nil) != tt.wantErr {
+				t.Errorf("Validate() err = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+
+	// Defaults are filled on a valid config.
+	cfg := &ExecutionConfig{ShardBy: "file", Glob: []string{"**/*.go"}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() unexpected err: %v", err)
+	}
+	if cfg.ShardBatch != 1 || cfg.Merge != "json" || cfg.MaxParallel != 1 || cfg.OnShardError != "continue" {
+		t.Errorf("defaults not filled: %+v", cfg)
+	}
+}
+
+func TestSharded(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		exec *ExecutionConfig
+		want bool
+	}{
+		{"nil execution", nil, false},
+		{"empty shard_by", &ExecutionConfig{}, false},
+		{"file shard_by", &ExecutionConfig{ShardBy: "file"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := (&Manifest{Execution: tt.exec}).Sharded(); got != tt.want {
+				t.Errorf("Manifest.Sharded() = %v, want %v", got, tt.want)
+			}
+			if got := (&Bundle{Execution: tt.exec}).Sharded(); got != tt.want {
+				t.Errorf("Bundle.Sharded() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -1679,10 +1679,8 @@ func editTool(workingDir string) func(ctx context.Context, rawArgs []byte) (stri
 		if !strings.Contains(content, payload.Old) {
 			return "", fmt.Errorf("text not found in %s", payload.Path)
 		}
-		if IsCommentsOnlyMode(ctx) {
-			if err := ValidateCommentsOnly(payload.Old, payload.New); err != nil {
-				return "", err
-			}
+		if err := editGuardError(ctx, payload.Old, payload.New); err != nil {
+			return "", err
 		}
 		var updated string
 		replaced := 1

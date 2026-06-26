@@ -110,6 +110,10 @@ func (m *Manifest) Validate() error {
 		return err
 	}
 
+	if err := m.Execution.Validate(); err != nil {
+		return err
+	}
+
 	if m.IsComposed() {
 		return m.validateComposed()
 	}

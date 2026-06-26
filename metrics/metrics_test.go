@@ -320,6 +320,37 @@ func TestSummaryOutput(t *testing.T) {
 	}
 }
 
+func TestSummaryAggregatorFallback(t *testing.T) {
+	t.Parallel()
+	// A pure aggregator (e.g. a sharded run): the parent makes no model calls
+	// itself; every call happens in a child. The header must reflect the
+	// children sum, not the parent's own zeros — and the "TOTAL" line must not
+	// double-count.
+	parent := New("openai", "gpt-oss-120b")
+	parent.Finish()
+	for _, name := range []string{"shard-01", "shard-02", "shard-03"} {
+		child := New("openai", "gpt-oss-120b")
+		child.AddTokens(10000, 2000) // 12000 tokens each
+		child.IncrementIterations()
+		child.IncrementIterations() // 2 iterations each
+		parent.AddChild(name, child)
+	}
+
+	s := parent.Summary()
+	if strings.Contains(s, "Iterations: 0") {
+		t.Errorf("aggregator header shows 0 iterations:\n%s", s)
+	}
+	if !strings.Contains(s, "Iterations: 6") { // 3 × 2
+		t.Errorf("header should sum child iterations to 6:\n%s", s)
+	}
+	if !strings.Contains(s, "36000 total") { // 3 × 12000
+		t.Errorf("header should sum child tokens to 36000:\n%s", s)
+	}
+	if strings.Contains(s, "72000") {
+		t.Errorf("TOTAL line double-counted children:\n%s", s)
+	}
+}
+
 func TestSummaryOllama(t *testing.T) {
 	t.Parallel()
 	m := New("ollama", "llama3")

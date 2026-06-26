@@ -58,6 +58,39 @@ func responseIndicatesNoChanges(response string) bool {
 	return strings.Contains(strings.ToLower(response), "no changes")
 }
 
+// claimsSpecificFilesTouched reports whether the response contains a
+// "files touched:" line that names at least one real file — i.e. anything
+// other than "none". A genuine no-changes report says "files touched: none";
+// a fabricated edit report names files it never wrote.
+//
+// This is deliberately independent of any "no changes" marker. A report that
+// both names a specific file AND says "no changes" is self-contradictory, and
+// that contradiction is itself a fabrication signature (observed from local
+// models that describe a rewrite in prose without ever calling an edit tool);
+// it must be cross-checked against the working tree rather than waved through.
+func claimsSpecificFilesTouched(response string) bool {
+	lines := strings.Split(response, "\n")
+	for i, line := range lines {
+		idx := strings.Index(strings.ToLower(line), "files touched")
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(line[idx+len("files touched"):])
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, ":"))
+		// The value may sit on the next line (e.g. a bullet list under the label).
+		if rest == "" && i+1 < len(lines) {
+			rest = strings.TrimSpace(lines[i+1])
+		}
+		// Strip surrounding markdown emphasis / list punctuation.
+		rest = strings.Trim(rest, " *_`-.|")
+		if rest == "" || strings.EqualFold(rest, "none") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // validateActionableChanges guards against fabricated "changes made" reports.
 // validateActionableResponse accepts a report that merely contains the text
 // "files touched", which a local model can emit without ever calling an edit
@@ -73,10 +106,11 @@ func validateActionableChanges(ctx context.Context, response, workingDir string)
 	if _, err := extractUnifiedDiff(response); err == nil {
 		return nil
 	}
-	// A genuine "no changes" report is fine. Only a "files touched" claim
-	// needs cross-checking against the working tree.
-	if responseIndicatesNoChanges(response) ||
-		!strings.Contains(strings.ToLower(response), "files touched") {
+	// Only a claim that specific files were touched needs cross-checking. A
+	// genuine "files touched: none" / no-changes report passes. A stray "no
+	// changes" marker does NOT exempt a report that also names specific files —
+	// that self-contradiction is exactly how some local models fabricate edits.
+	if !claimsSpecificFilesTouched(response) {
 		return nil
 	}
 	// Changes can only be verified inside a git repo; don't penalize others.

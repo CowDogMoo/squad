@@ -173,6 +173,12 @@ func TestValidateActionableChanges(t *testing.T) {
 	const touched = "## Files Touched\n- a.yml — changed"
 	const noChanges = "No changes detected; codebase is clean."
 	const diff = "```diff\ndiff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n```"
+	// A report that names a specific file AND says "no changes" — the
+	// self-contradictory shape a local model emits when it describes a rewrite
+	// in prose without ever calling an edit tool.
+	const contradictory = "## Summary\nRewrote one paragraph.\n\nFiles touched: OVERVIEW.md\nNo changes"
+	// A genuine no-findings report: explicit "none" plus the no-changes marker.
+	const noneTouched = "Files touched: none\nNo changes"
 
 	tests := []struct {
 		name    string
@@ -186,6 +192,9 @@ func TestValidateActionableChanges(t *testing.T) {
 		{"no changes report passes on clean tree", noChanges, false, false, false},
 		{"unified diff passes on clean tree", diff, false, false, false},
 		{"edits applied bypasses git check", touched, true, false, false},
+		{"specific file + 'no changes' on clean tree is fabrication", contradictory, false, false, true},
+		{"specific file + 'no changes' passes when edits applied", contradictory, true, false, false},
+		{"files touched: none with no changes passes", noneTouched, false, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

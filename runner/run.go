@@ -209,8 +209,23 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	}
 
 	cmd.SetContext(ctx)
+	return invokeAndHandle(ctx, cmd, opts, bundle, prompt, workingDir, logger)
+}
+
+// invokeAndHandle runs the agent (sharded or single-loop), prints metrics, and
+// applies/writes the response. It owns the metrics object and the deferred
+// metrics/session teardown, keeping ExecuteRun's setup small.
+func invokeAndHandle(ctx context.Context, cmd *cobra.Command, opts *RunOptions, bundle *agent.Bundle, prompt, workingDir string, logger *session.Logger) (err error) {
 	tools.ResetEditsApplied(ctx)
-	response, m, err := InvokeModel(ctx, opts, bundle)
+
+	var response string
+	var m *metrics.Metrics
+	sharded := bundle.Sharded()
+	if sharded {
+		response, m, err = runSharded(ctx, cmd, opts, bundle, prompt, workingDir)
+	} else {
+		response, m, err = InvokeModel(ctx, opts, bundle)
+	}
 
 	defer func() {
 		logRunHistory(opts, m)
@@ -220,16 +235,24 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 		closeSession(logger, m, err)
 	}()
 
+	// Sharded runs already applied + validated edits per shard inside
+	// runSharded; the merged response is an aggregate report. Write it even when
+	// err is non-nil (failed shards) so partial results aren't lost, then
+	// surface the error for a non-zero exit.
+	if sharded {
+		if response != "" {
+			if writeErr := writeResponse(cmd, response, opts); writeErr != nil && err == nil {
+				return writeErr
+			}
+		}
+		return err
+	}
+
 	if err != nil {
 		handleBudgetExceeded(cmd, opts, m, response, workingDir, err)
 		return err
 	}
-
-	if err := handleResponse(cmd, opts, response, workingDir); err != nil {
-		return err
-	}
-
-	return nil
+	return handleResponse(cmd, opts, response, workingDir)
 }
 
 // initRunContext attaches per-run tool state (edits tracker, edit-deadline
@@ -242,6 +265,10 @@ func initRunContext(ctx context.Context, bundle *agent.Bundle) context.Context {
 	if bundle.CommentsOnly {
 		ctx = tools.InitCommentsOnlyMode(ctx)
 		logging.InfoContext(ctx, "comments-only mode: Edit/MultiEdit will reject non-comment changes")
+	}
+	if bundle.ASCIIOnly {
+		ctx = tools.InitASCIIOnlyMode(ctx)
+		logging.InfoContext(ctx, "ascii-only mode: Edit/MultiEdit will reject newly introduced non-ASCII characters")
 	}
 	return ctx
 }

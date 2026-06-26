@@ -55,6 +55,18 @@ func TestValidate_LeafInlinePromptRejectsEntrypoint(t *testing.T) {
 	}
 }
 
+func TestValidate_RejectsBadExecutionBlock(t *testing.T) {
+	m := &Manifest{
+		Name:      "bad",
+		Prompt:    "hi",
+		Execution: &ExecutionConfig{ShardBy: "dir", Glob: []string{"*.go"}},
+	}
+	err := m.Validate()
+	if err == nil || !strings.Contains(err.Error(), "shard_by") {
+		t.Fatalf("expected execution validation error, got: %v", err)
+	}
+}
+
 func TestValidate_LeafInlinePromptRejectsWrapper(t *testing.T) {
 	m := &Manifest{
 		Name:    "bad",

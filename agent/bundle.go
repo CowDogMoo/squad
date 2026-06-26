@@ -14,6 +14,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/cowdogmoo/squad/browser"
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
@@ -89,6 +90,7 @@ type Manifest struct {
 	DependsOn     []string           `yaml:"depends_on,omitempty"`
 	Output        *OutputConfig      `yaml:"output,omitempty"`
 	Budget        *BudgetConfig      `yaml:"budget,omitempty"`
+	Execution     *ExecutionConfig   `yaml:"execution,omitempty"`
 	MCPServers    []mcp.ServerConfig `yaml:"mcp_servers,omitempty"`
 	DisableTask   bool               `yaml:"disable_task,omitempty"`
 	MaxIterations int                `yaml:"max_iterations,omitempty"` // iteration cap for this agent (0 = use CLI default)
@@ -103,6 +105,11 @@ type Manifest struct {
 	// Use for comment-cleanup agents (e.g. go-scrub-comments) so an LLM
 	// hallucinating new code cannot silently break the codebase.
 	CommentsOnly bool `yaml:"comments_only,omitempty"`
+	// ASCIIOnly, when true, rejects Edit/MultiEdit calls whose replacement
+	// text introduces non-ASCII characters not already in the original. Use
+	// for de-slop agents (e.g. degpt) so a model cannot sneak in smart quotes,
+	// em dashes, or other typographic tells — the very things it should strip.
+	ASCIIOnly bool `yaml:"ascii_only,omitempty"`
 	// Isolation declares the recommended isolation mode: "" (none) or
 	// "worktree" to run inside a fresh git worktree on a new branch.
 	// CLI --isolate and config run.isolation override this.
@@ -167,6 +174,112 @@ type ChildBudget struct {
 	Name          string  `yaml:"name"`
 	MaxCost       float64 `yaml:"max_cost,omitempty"`       // dedicated cost cap in USD (0 = use remaining budget)
 	MaxIterations int     `yaml:"max_iterations,omitempty"` // iteration cap for child (0 = inherit parent's cap)
+}
+
+// ExecutionConfig opts an agent into sharded (map/reduce) execution: squad
+// partitions the agent's input and runs the single-agent loop once per shard
+// with isolated context, then merges the per-shard outputs. It is intended for
+// agents whose unit of work is independent per file (degpt, go-scrub-comments,
+// rust-scrub-comments). Absent this block, the agent runs as a single loop —
+// the legacy behavior, unchanged.
+type ExecutionConfig struct {
+	// ShardBy selects the partitioning unit. "" (default) = no sharding;
+	// "file" = one shard per file (or per ShardBatch files).
+	ShardBy string `yaml:"shard_by,omitempty"`
+	// Glob lists the patterns squad globs (relative to the working dir) to
+	// build the work-list. Required when ShardBy is "file".
+	Glob []string `yaml:"glob,omitempty"`
+	// Exclude lists glob patterns to drop from the work-list (vendored,
+	// generated, VCS dirs).
+	Exclude []string `yaml:"exclude,omitempty"`
+	// ShardBatch is how many files go in one shard. Default 1 (strict per-file).
+	ShardBatch int `yaml:"shard_batch,omitempty"`
+	// Merge controls how per-shard outputs are combined: "json" (default,
+	// structured aggregate + per-shard sections) or "none" (verbatim concat).
+	Merge string `yaml:"merge,omitempty"`
+	// MaxParallel bounds concurrent shards. Default 1 (sequential, v1).
+	MaxParallel int `yaml:"max_parallel,omitempty"`
+	// OnShardError is "continue" (default; aggregate failures, other shards
+	// proceed) or "stop" (first failure aborts the rest).
+	OnShardError string `yaml:"on_shard_error,omitempty"`
+}
+
+// Sharded reports whether this manifest opts into sharded execution.
+func (m *Manifest) Sharded() bool {
+	return m.Execution != nil && m.Execution.ShardBy != ""
+}
+
+// Validate checks the execution block and fills defaults. It returns an error
+// for misconfiguration so failures surface at bundle load, not mid-run.
+func (e *ExecutionConfig) Validate() error {
+	if e == nil || e.ShardBy == "" {
+		return nil
+	}
+	if e.ShardBy != "file" {
+		return fmt.Errorf("execution.shard_by: unsupported value %q (only \"file\" is supported)", e.ShardBy)
+	}
+	if len(e.Glob) == 0 {
+		return fmt.Errorf("execution.shard_by: \"file\" requires a non-empty execution.glob")
+	}
+	if err := e.validatePatterns(); err != nil {
+		return err
+	}
+	e.fillDefaults()
+	return e.validateEnums()
+}
+
+// validatePatterns rejects malformed glob/exclude patterns at load so a typo
+// fails the bundle instead of silently matching nothing at runtime.
+func (e *ExecutionConfig) validatePatterns() error {
+	for _, p := range e.Glob {
+		if !doublestar.ValidatePattern(p) {
+			return fmt.Errorf("execution.glob: invalid pattern %q", p)
+		}
+	}
+	for _, p := range e.Exclude {
+		if !doublestar.ValidatePattern(p) {
+			return fmt.Errorf("execution.exclude: invalid pattern %q", p)
+		}
+	}
+	return nil
+}
+
+// fillDefaults applies the documented defaults to unset fields.
+func (e *ExecutionConfig) fillDefaults() {
+	if e.ShardBatch == 0 {
+		e.ShardBatch = 1
+	}
+	if e.Merge == "" {
+		e.Merge = "json"
+	}
+	if e.MaxParallel == 0 {
+		e.MaxParallel = 1
+	}
+	if e.OnShardError == "" {
+		e.OnShardError = "continue"
+	}
+}
+
+// validateEnums checks ranges and enum membership after defaults are applied.
+func (e *ExecutionConfig) validateEnums() error {
+	if e.ShardBatch < 1 {
+		return fmt.Errorf("execution.shard_batch must be >= 1, got %d", e.ShardBatch)
+	}
+	if e.Merge != "json" && e.Merge != "none" {
+		return fmt.Errorf("execution.merge: unsupported value %q (want \"json\" or \"none\")", e.Merge)
+	}
+	if e.MaxParallel < 1 {
+		return fmt.Errorf("execution.max_parallel must be >= 1, got %d", e.MaxParallel)
+	}
+	if e.OnShardError != "continue" && e.OnShardError != "stop" {
+		return fmt.Errorf("execution.on_shard_error: unsupported value %q (want \"continue\" or \"stop\")", e.OnShardError)
+	}
+	return nil
+}
+
+// Sharded reports whether this bundle opts into sharded (per-file) execution.
+func (b *Bundle) Sharded() bool {
+	return b.Execution != nil && b.Execution.ShardBy != ""
 }
 
 // PrimaryModel returns the first ranked ModelPreference, or the zero value
@@ -254,6 +367,7 @@ type Bundle struct {
 	BaseURL       string             // primary model's base URL override (for openai-compat)
 	Models        []ModelPreference  // ranked model preferences from manifest
 	Budget        *BudgetConfig      // budget configuration from manifest
+	Execution     *ExecutionConfig   // sharded-execution config from manifest (nil = single-loop)
 	Environment   *executor.Config   // execution environment from agent manifest
 	MCPServers    []mcp.ServerConfig // MCP server dependencies declared in agent.yaml
 	DisableTask   bool               // when true, the Task tool is not registered for this agent
@@ -269,6 +383,9 @@ type Bundle struct {
 	// CommentsOnly mirrors Manifest.CommentsOnly. Restricts Edit/MultiEdit
 	// to comment-only changes when true.
 	CommentsOnly bool
+	// ASCIIOnly mirrors Manifest.ASCIIOnly. Rejects edits that introduce
+	// non-ASCII characters not already present in the replaced text.
+	ASCIIOnly bool
 	// SkillEntries is the filtered set of skills surfaced in the system
 	// prompt's "Available skills" block. The runner uses these to build
 	// the Skill tool's runtime so the names the agent sees are exactly
@@ -944,6 +1061,7 @@ func BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode strin
 		BaseURL:         primary.BaseURL,
 		Models:          manifest.Models,
 		Budget:          manifest.Budget,
+		Execution:       manifest.Execution,
 		Environment:     manifest.Environment,
 		MCPServers:      resolvedMCP,
 		DisableTask:     manifest.DisableTask,
@@ -952,6 +1070,7 @@ func BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode strin
 		EditDeadline:    manifest.EditDeadline,
 		RemoteOnly:      manifest.IsRemoteOnly(),
 		CommentsOnly:    manifest.CommentsOnly,
+		ASCIIOnly:       manifest.ASCIIOnly,
 		SkillEntries:    skillEntries,
 		Requires:        manifest.Requires,
 	}, nil
