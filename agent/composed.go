@@ -41,7 +41,7 @@ type ComposedStage struct {
 	MCPServers []mcp.ServerConfig `yaml:"mcp_servers,omitempty"`
 }
 
-// IsInline returns true if the stage defines an inline agent.
+// IsInline reports whether the stage defines an inline agent.
 func (s ComposedStage) IsInline() bool {
 	return s.EntryPoint != ""
 }
@@ -79,19 +79,19 @@ type ComposedPartition struct {
 	MaxPerPartition int    `yaml:"max_per_partition"`
 }
 
-// IsComposed returns true if the manifest declares a composed agent
+// IsComposed reports whether the manifest declares a composed agent
 // (has stages rather than an entrypoint).
 func (m *Manifest) IsComposed() bool {
 	return len(m.Stages) > 0
 }
 
-// IsInlinePrompt returns true if the manifest uses the inline `prompt:`
+// IsInlinePrompt reports whether the manifest uses the inline `prompt:`
 // form instead of separate entrypoint+wrapper files.
 func (m *Manifest) IsInlinePrompt() bool {
 	return m.Prompt != ""
 }
 
-// IsRemoteOnly returns true when the agent has declared it does not
+// IsRemoteOnly reports whether the agent has declared it does not
 // touch the local filesystem (working_dir: none). Local file tools
 // (Read/Write/Edit/Glob/Grep/Bash) are not registered for such agents.
 func (m *Manifest) IsRemoteOnly() bool {

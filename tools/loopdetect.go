@@ -60,7 +60,7 @@ func (ld *LoopDetector) Record(calls []llms.ToolCall, results map[string]string)
 	ld.signatures = append(ld.signatures, sig)
 }
 
-// Stuck returns true if any step signature appears more than loopMaxRepeats
+// Stuck reports whether any step signature appears more than loopMaxRepeats
 // times within the last loopWindowSize steps.
 func (ld *LoopDetector) Stuck() bool {
 	n := len(ld.signatures)

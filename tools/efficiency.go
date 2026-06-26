@@ -506,8 +506,6 @@ func sortedKeys(m map[string]bool) []string {
 	return keys
 }
 
-// --- Smart Read Helpers ---
-
 const (
 	// largeFileLineThreshold is the number of lines above which Read
 	// auto-truncates to head+tail and suggests using offset/limit.
@@ -562,8 +560,6 @@ func TruncateToLines(content string, headLines, tailLines int) string {
 
 	return fmt.Sprintf("%s\n... [%d lines omitted — use Read with offset/limit] ...\n\n%s", head, omitted, tail)
 }
-
-// --- Tool Efficiency Prompt ---
 
 // ToolEfficiencyPrompt is injected into all agent system prompts to encourage
 // batching of tool calls and efficient file reading.
@@ -641,8 +637,6 @@ func (tc *TokenCalibration) Samples() int {
 	return tc.samples
 }
 
-// --- Adaptive Compaction ---
-
 // BudgetQuerier is satisfied by *metrics.Metrics and allows testing
 // without importing the full metrics package.
 type BudgetQuerier interface {
@@ -670,8 +664,6 @@ func AdaptiveCompactionThreshold(m BudgetQuerier) int {
 		return contextTokenThreshold // 50K — normal operation
 	}
 }
-
-// --- Semantic Message Scoring ---
 
 // MessageRelevance pairs a message index with its relevance score.
 type MessageRelevance struct {
@@ -757,8 +749,6 @@ func CollectEditedFiles(messages []llms.MessageContent) map[string]bool {
 	return edited
 }
 
-// --- File Summary ---
-
 // GenerateFileSummary produces a brief summary of a file's top-level
 // declarations (func, type, class, def, fn). The summary is stored in the
 // read cache and included in compaction summaries so the model can write
@@ -818,8 +808,6 @@ func extractDeclIdent(line, prefix string) string {
 	}
 	return name.String()
 }
-
-// --- Logging helper ---
 
 func logReadCacheHit(ctx context.Context, path string, entry ReadCacheEntry) {
 	logging.InfoContext(ctx, "  → Read %s [CACHE HIT — unchanged since iteration %d, %d lines, %d bytes]",

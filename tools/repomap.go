@@ -450,8 +450,6 @@ func countDirStats(dir string) (files, lines int) {
 	return
 }
 
-// --- Module detectors ---
-
 // detectCargoModules detects Rust crate and workspace members.
 func detectCargoModules(dir, markerPath string) ([]repoModule, error) {
 	data, err := os.ReadFile(markerPath)

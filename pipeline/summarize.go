@@ -23,7 +23,7 @@ const (
 // summarization instructions; text is the content to summarize.
 type SummarizeFunc func(ctx context.Context, systemPrompt, text string) (string, error)
 
-// ShouldSummarize returns true if the stage output should be summarized
+// ShouldSummarize reports whether the stage output should be summarized
 // based on the stage's Summarize setting and the output size.
 func ShouldSummarize(stage Stage, outputLen int) bool {
 	switch stage.Summarize {

@@ -146,7 +146,7 @@ func MarkEditDeadlineReached(ctx context.Context) {
 	}
 }
 
-// EditDeadlineReached returns true if the edit deadline stopped the loop.
+// EditDeadlineReached reports whether the edit deadline stopped the loop.
 func EditDeadlineReached(ctx context.Context) bool {
 	if b, ok := ctx.Value(editDeadlineKeyType{}).(*bool); ok {
 		return *b
@@ -256,7 +256,7 @@ func GetEditEnforcer(ctx context.Context) *EditEnforcer {
 	return nil
 }
 
-// CheckNames inspects tool call names and returns true if the loop should stop.
+// CheckNames reports whether the loop should stop based on the given tool call names.
 // It does NOT set editSeen — call ConfirmEdit after verifying the edit succeeded.
 func (e *EditEnforcer) CheckNames(names []string) bool {
 	if e == nil || e.editSeen {
@@ -534,7 +534,7 @@ func shouldBlockReadTools(ctx context.Context) bool {
 	return pe != nil && pe.ShouldBlockReads()
 }
 
-// checkEditDeadline returns true if the edit deadline has been reached.
+// checkEditDeadline reports whether the edit deadline has been reached.
 func checkEditDeadline(ctx context.Context, enforcer *EditEnforcer, toolCalls []llms.ToolCall) bool {
 	if enforcer == nil {
 		return false

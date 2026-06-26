@@ -146,8 +146,14 @@ func newRoutineCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repoOverride, "repo", "", "Repo root for --scope=repo (default: current working directory)")
 	cmd.Flags().StringVar(&catchup, "catchup", "", "Missed-fire policy: fire-once (default) | skip")
 	cmd.Flags().BoolVar(&wakeSystem, "wake-system", false, "Ask the OS to wake the machine from sleep to keep the daemon supervised (macOS/Windows only)")
-	_ = cmd.MarkFlagRequired("agent")
-	_ = cmd.MarkFlagRequired("schedule")
+	// The flags were just defined above, so an error here can only mean a
+	// misspelled flag name — a programmer bug that should fail loudly.
+	if err := cmd.MarkFlagRequired("agent"); err != nil {
+		panic(err)
+	}
+	if err := cmd.MarkFlagRequired("schedule"); err != nil {
+		panic(err)
+	}
 	return cmd
 }
 

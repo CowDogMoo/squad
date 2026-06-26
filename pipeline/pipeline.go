@@ -61,7 +61,7 @@ type ModelPreference struct {
 	Provider string
 }
 
-// IsInline returns true if the stage defines an inline agent.
+// IsInline reports whether the stage defines an inline agent.
 func (s Stage) IsInline() bool {
 	return s.InlineConfig != nil
 }

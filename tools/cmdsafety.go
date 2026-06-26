@@ -129,7 +129,7 @@ var readLikeBinaries = []string{
 	"wc",
 }
 
-// IsSafeCommand returns true if the command is known to be read-only.
+// IsSafeCommand reports whether the command is known to be read-only.
 func IsSafeCommand(cmd string) bool {
 	trimmed := strings.TrimSpace(cmd)
 	for _, prefix := range safeCommands {

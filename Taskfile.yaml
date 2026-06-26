@@ -26,8 +26,8 @@ includes:
   go:
     taskfile: "https://raw.githubusercontent.com/CowDogMoo/taskfile-templates/main/go/Taskfile.yaml"
     vars:
-      BINARY_NAME: squad
-      CMD_PATH: ./cmd/squad
+      BINARY_NAME: '{{.BINARY_NAME}}'
+      CMD_PATH: '{{.CMD_PATH}}'
   pre-commit:
     taskfile: "https://raw.githubusercontent.com/CowDogMoo/taskfile-templates/main/pre-commit/Taskfile.yaml"
 
@@ -47,7 +47,7 @@ tasks:
         msg: "PROMPT is required. Usage: task run PROMPT='your prompt here'"
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           "{{.PROMPT}}" \
           --agent {{.AGENT}} \
           --working-dir {{.WORKING_DIR}} \
@@ -62,7 +62,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-review \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -84,7 +84,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-review --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -105,7 +105,7 @@ tasks:
       COST_BUDGET: '{{.COST_BUDGET | default "5"}}'
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-tests \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -132,7 +132,7 @@ tasks:
       COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-tests --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -151,7 +151,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-cobra \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -173,7 +173,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-cobra --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -191,7 +191,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-doc-comments \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -213,7 +213,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-doc-comments --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -231,7 +231,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-security-audit \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -253,7 +253,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-security-audit --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -271,7 +271,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-taskfile \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -293,7 +293,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent go-taskfile --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -311,7 +311,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent python-review \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -333,7 +333,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent python-review --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -353,7 +353,7 @@ tasks:
       COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent python-tests \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -370,7 +370,7 @@ tasks:
         echo ""
         echo "Running final verification..."
       - cd {{.WORKING_DIR}} && pytest -v || true
-      - echo "pytest PASSED"
+      - echo "Verification complete"
 
   run:python-tests-analyze:
     desc: "Run the python-tests agent in readonly mode to analyze coverage gaps without writing tests"
@@ -379,7 +379,7 @@ tasks:
       COVERAGE_TARGET: '{{.COVERAGE_TARGET | default "75"}}'
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent python-tests --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -398,7 +398,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent python-doc-comments \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -420,7 +420,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent python-doc-comments --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -438,7 +438,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent ansible-review \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -460,7 +460,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent ansible-review --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -478,7 +478,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent ansible-molecule \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
@@ -500,7 +500,7 @@ tasks:
     silent: true
     cmds:
       - |
-        go run ./cmd/squad run -v \
+        go run {{.CMD_PATH}} run -v \
           --agent ansible-molecule --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
