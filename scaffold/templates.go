@@ -13,6 +13,9 @@ import (
 	"golang.org/x/text/language"
 )
 
+// AgentTemplates holds the embedded scaffolding templates used to
+// generate new agents and pipelines.
+//
 //go:embed templates/*.tmpl
 var AgentTemplates embed.FS
 

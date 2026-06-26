@@ -157,10 +157,14 @@ func NewCustomLogger(level slog.Level) *CustomLogger {
 	}
 }
 
+// SetQuiet enables or disables quiet mode, which suppresses all
+// non-error output.
 func (l *CustomLogger) SetQuiet(quiet bool) {
 	l.Quiet = quiet
 }
 
+// SetVerbose enables or disables verbose logging, which lowers the
+// effective log level to include debug messages.
 func (l *CustomLogger) SetVerbose(verbose bool) {
 	l.Verbose = verbose
 }
@@ -316,6 +320,8 @@ func Debug(message string, args ...interface{}) {
 	logGlobal(DebugLevel, message, args...)
 }
 
+// SetQuiet enables or disables quiet mode on the global logger, which
+// suppresses all non-error output.
 func SetQuiet(quiet bool) {
 	ensureLogger()
 	loggerMu.Lock()
@@ -331,6 +337,8 @@ func IsQuiet() bool {
 	return logger.Quiet
 }
 
+// SetVerbose enables or disables verbose logging on the global logger,
+// which lowers the effective log level to include debug messages.
 func SetVerbose(verbose bool) {
 	ensureLogger()
 	loggerMu.Lock()

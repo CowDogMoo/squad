@@ -2193,6 +2193,8 @@ func TruncateToolOutputHeadTail(output string, maxBytes int) string {
 // ("true"/"false") that LLMs sometimes produce for boolean fields.
 type FlexBool bool
 
+// UnmarshalJSON decodes a JSON boolean or a quoted string such as
+// "true", "false", "1", or "yes" into b, implementing [json.Unmarshaler].
 func (b *FlexBool) UnmarshalJSON(data []byte) error {
 	var v bool
 	if err := json.Unmarshal(data, &v); err == nil {
