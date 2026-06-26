@@ -146,9 +146,21 @@ func newRoutineCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repoOverride, "repo", "", "Repo root for --scope=repo (default: current working directory)")
 	cmd.Flags().StringVar(&catchup, "catchup", "", "Missed-fire policy: fire-once (default) | skip")
 	cmd.Flags().BoolVar(&wakeSystem, "wake-system", false, "Ask the OS to wake the machine from sleep to keep the daemon supervised (macOS/Windows only)")
-	_ = cmd.MarkFlagRequired("agent")
-	_ = cmd.MarkFlagRequired("schedule")
+	// The flags were just defined above, so an error here can only mean a
+	// misspelled flag name — a programmer bug that should fail loudly.
+	mustMarkRequired(cmd, "agent", "schedule")
 	return cmd
+}
+
+// mustMarkRequired marks the named flags as required, panicking if any name
+// does not correspond to a defined flag. A failure can only mean a misspelled
+// flag name in the command wiring — a programmer bug that should fail loudly.
+func mustMarkRequired(cmd *cobra.Command, names ...string) {
+	for _, name := range names {
+		if err := cmd.MarkFlagRequired(name); err != nil {
+			panic(err)
+		}
+	}
 }
 
 func newRoutineListCmd() *cobra.Command {

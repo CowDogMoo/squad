@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -336,6 +337,12 @@ func (l *Logger) StoreLargeResult(content string) (string, error) {
 func (l *Logger) ReadLargeResult(id string, offset, limit int) (string, int, error) {
 	if l == nil {
 		return "", 0, fmt.Errorf("nil logger")
+	}
+	// id is model-controlled (passed via the get_tool_result tool). Reject any
+	// value that could escape resultDir so a crafted id cannot read arbitrary
+	// .txt files on disk (CWE-22). Legitimate ids are opaque hex tokens.
+	if id == "" || strings.Contains(id, "..") || strings.ContainsRune(id, '/') || strings.ContainsRune(id, filepath.Separator) {
+		return "", 0, fmt.Errorf("invalid result id %q", id)
 	}
 	path := filepath.Join(l.resultDir, id+".txt")
 	data, err := os.ReadFile(path)

@@ -11,7 +11,6 @@ import (
 )
 
 // applyResponseDiff extracts and applies a unified diff from the model response.
-
 func applyResponseDiff(ctx context.Context, response, workingDir string, fallback bool) error {
 	diff, err := extractUnifiedDiff(response)
 	if err != nil {

@@ -13,13 +13,15 @@ import (
 	"golang.org/x/text/language"
 )
 
+// AgentTemplates holds the embedded scaffolding templates used to
+// generate new agents and pipelines.
+//
 //go:embed templates/*.tmpl
 var AgentTemplates embed.FS
 
 const templatesDir = "templates"
 
 // AgentData contains the data for rendering agent templates.
-
 type AgentData struct {
 	Name        string // e.g. "xss-testing"
 	NameTitle   string // e.g. "XSS Testing"

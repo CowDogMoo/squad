@@ -129,7 +129,7 @@ var readLikeBinaries = []string{
 	"wc",
 }
 
-// IsSafeCommand returns true if the command is known to be read-only.
+// IsSafeCommand reports whether the command is known to be read-only.
 func IsSafeCommand(cmd string) bool {
 	trimmed := strings.TrimSpace(cmd)
 	for _, prefix := range safeCommands {
@@ -146,7 +146,7 @@ func IsSafeCommand(cmd string) bool {
 	return false
 }
 
-// ContainsReadCommand checks whether a compound shell command contains any
+// ContainsReadCommand reports whether a compound shell command contains any
 // read-like operations. It splits on shell operators (&&, ||, ;, |) and
 // checks each segment for known read binaries. This catches bypass patterns
 // like "cd /path && cat file" that IsSafeCommand misses because the overall
