@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -123,6 +124,12 @@ func TestSummarizeAndMerge(t *testing.T) {
 	if !strings.Contains(noneOut, "Files touched: a.md") {
 		t.Errorf("none merge missing touched line:\n%s", noneOut)
 	}
+
+	// A none merge with nothing edited reports "Files touched: none".
+	clean := summarize(opts, []shardOutcome{{Files: []string{"x.md"}, Report: "clean"}})
+	if got := mergeShards(clean, "none"); !strings.Contains(got, "Files touched: none") {
+		t.Errorf("expected 'Files touched: none', got:\n%s", got)
+	}
 }
 
 // ollamaShardServer stands up a minimal Ollama-compatible chat endpoint that
@@ -155,6 +162,7 @@ func writeShardedAgent(t *testing.T, name, merge, onErr string, maxParallel int)
 version: 0.0.0
 entrypoint: system.md
 wrapper: wrapper.md
+ascii_only: true
 execution:
   shard_by: file
   glob:
@@ -231,6 +239,36 @@ func TestRunSharded_EndToEnd(t *testing.T) {
 	}
 	if res.Summary.Files != 2 || res.Summary.Shards != 2 || res.Summary.Clean != 2 || res.Summary.Failed != 0 {
 		t.Fatalf("summary = %+v", res.Summary)
+	}
+}
+
+func TestExecuteRun_Sharded(t *testing.T) {
+	// Full ExecuteRun path for a sharded agent: exercises invokeAndHandle's
+	// sharded branch (runSharded + writeResponse of the merged report) and
+	// initRunContext's ascii-only activation.
+	srv := ollamaShardServer(t, "ok")
+	agentsDir := writeShardedAgent(t, "degpt", "json", "continue", 1)
+	workingDir := writeWorkFiles(t, "a.md")
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	opts := &RunOptions{
+		Agent:           "degpt",
+		AgentsDir:       agentsDir,
+		WorkingDir:      workingDir,
+		Provider:        "ollama",
+		Model:           "mistral",
+		BaseURL:         srv.URL,
+		MaxIterations:   1,
+		Mode:            "edit",
+		ConfigAvailable: true,
+	}
+	if err := ExecuteRun(cmd, []string{"do work"}, opts); err != nil {
+		t.Fatalf("ExecuteRun: %v", err)
+	}
+	if !strings.Contains(out.String(), `"agent": "degpt"`) {
+		t.Fatalf("expected merged shard report in output, got:\n%s", out.String())
 	}
 }
 

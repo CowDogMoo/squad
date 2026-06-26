@@ -1560,3 +1560,27 @@ func TestExecutionConfigValidate(t *testing.T) {
 		t.Errorf("defaults not filled: %+v", cfg)
 	}
 }
+
+func TestSharded(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		exec *ExecutionConfig
+		want bool
+	}{
+		{"nil execution", nil, false},
+		{"empty shard_by", &ExecutionConfig{}, false},
+		{"file shard_by", &ExecutionConfig{ShardBy: "file"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := (&Manifest{Execution: tt.exec}).Sharded(); got != tt.want {
+				t.Errorf("Manifest.Sharded() = %v, want %v", got, tt.want)
+			}
+			if got := (&Bundle{Execution: tt.exec}).Sharded(); got != tt.want {
+				t.Errorf("Bundle.Sharded() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
