@@ -1535,6 +1535,8 @@ func TestExecutionConfigValidate(t *testing.T) {
 		{"unsupported shard_by", &ExecutionConfig{ShardBy: "dir", Glob: []string{"*.go"}}, true},
 		{"file requires glob", &ExecutionConfig{ShardBy: "file"}, true},
 		{"valid file shard", &ExecutionConfig{ShardBy: "file", Glob: []string{"**/*.go"}}, false},
+		{"package requires glob", &ExecutionConfig{ShardBy: "package"}, true},
+		{"valid package shard", &ExecutionConfig{ShardBy: "package", Glob: []string{"**/*.go"}}, false},
 		{"invalid glob pattern", &ExecutionConfig{ShardBy: "file", Glob: []string{"[bad"}}, true},
 		{"invalid exclude pattern", &ExecutionConfig{ShardBy: "file", Glob: []string{"**/*.go"}, Exclude: []string{"[bad"}}, true},
 		{"negative shard_batch", &ExecutionConfig{ShardBy: "file", Glob: []string{"*.go"}, ShardBatch: -1}, true},
@@ -1571,6 +1573,7 @@ func TestSharded(t *testing.T) {
 		{"nil execution", nil, false},
 		{"empty shard_by", &ExecutionConfig{}, false},
 		{"file shard_by", &ExecutionConfig{ShardBy: "file"}, true},
+		{"package shard_by", &ExecutionConfig{ShardBy: "package"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

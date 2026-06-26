@@ -184,15 +184,19 @@ type ChildBudget struct {
 // the legacy behavior, unchanged.
 type ExecutionConfig struct {
 	// ShardBy selects the partitioning unit. "" (default) = no sharding;
-	// "file" = one shard per file (or per ShardBatch files).
+	// "file" = one shard per file (or per ShardBatch files); "package" = one
+	// shard per directory, so every package's files run together in one shard
+	// with full intra-package context (the unit for guaranteed whole-repo
+	// coverage). ShardBatch does not apply to "package".
 	ShardBy string `yaml:"shard_by,omitempty"`
 	// Glob lists the patterns squad globs (relative to the working dir) to
-	// build the work-list. Required when ShardBy is "file".
+	// build the work-list. Required when ShardBy is "file" or "package".
 	Glob []string `yaml:"glob,omitempty"`
 	// Exclude lists glob patterns to drop from the work-list (vendored,
 	// generated, VCS dirs).
 	Exclude []string `yaml:"exclude,omitempty"`
 	// ShardBatch is how many files go in one shard. Default 1 (strict per-file).
+	// Ignored when ShardBy is "package" (one shard per directory).
 	ShardBatch int `yaml:"shard_batch,omitempty"`
 	// Merge controls how per-shard outputs are combined: "json" (default,
 	// structured aggregate + per-shard sections) or "none" (verbatim concat).
@@ -215,11 +219,11 @@ func (e *ExecutionConfig) Validate() error {
 	if e == nil || e.ShardBy == "" {
 		return nil
 	}
-	if e.ShardBy != "file" {
-		return fmt.Errorf("execution.shard_by: unsupported value %q (only \"file\" is supported)", e.ShardBy)
+	if e.ShardBy != "file" && e.ShardBy != "package" {
+		return fmt.Errorf("execution.shard_by: unsupported value %q (want \"file\" or \"package\")", e.ShardBy)
 	}
 	if len(e.Glob) == 0 {
-		return fmt.Errorf("execution.shard_by: \"file\" requires a non-empty execution.glob")
+		return fmt.Errorf("execution.shard_by %q requires a non-empty execution.glob", e.ShardBy)
 	}
 	if err := e.validatePatterns(); err != nil {
 		return err

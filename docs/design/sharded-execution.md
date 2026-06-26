@@ -37,8 +37,11 @@ preserving edit mode, readonly mode, the fabrication guard, and metrics.
   tracing, `go-review`) must be unaffected. Sharding is opt-in per agent.
 - Not a replacement for pipelines (which compose *different* agents). This
   shards *one* agent over *data*.
-- v1 does not shard by non-file units (function, package). File/glob only;
-  the schema leaves room to extend.
+- Sharding is by file or by package (directory). `shard_by: package` groups a
+  glob's matches by parent directory so every package runs as one shard with
+  full intra-package context — the unit for guaranteed whole-repo coverage
+  (see NEWBIE.md). Finer units (function) are out of scope; the schema leaves
+  room to extend.
 
 ## 3. Manifest schema
 
@@ -47,9 +50,9 @@ New optional `execution:` block on the leaf-agent manifest
 
 ```yaml
 execution:
-  shard_by: file          # "" (default, no sharding) | "file"
+  shard_by: file          # "" (default, no sharding) | "file" | "package"
   glob:                   # patterns squad globs to build the work-list.
-    - "**/*.md"           #   Required when shard_by: file.
+    - "**/*.md"           #   Required when shard_by is "file" or "package".
     - "**/*.txt"
   exclude:                # optional ignore globs (node_modules, vendor, .git…)
     - "**/node_modules/**"
@@ -62,7 +65,7 @@ execution:
 ```go
 // agent/bundle.go
 type ExecutionConfig struct {
-    ShardBy      string   `yaml:"shard_by,omitempty"`      // "" | "file"
+    ShardBy      string   `yaml:"shard_by,omitempty"`      // "" | "file" | "package"
     Glob         []string `yaml:"glob,omitempty"`
     Exclude      []string `yaml:"exclude,omitempty"`
     ShardBatch   int      `yaml:"shard_batch,omitempty"`   // default 1
@@ -73,8 +76,10 @@ type ExecutionConfig struct {
 // Manifest gains:  Execution *ExecutionConfig `yaml:"execution,omitempty"`
 ```
 
-Validation at bundle-load: `shard_by: file` requires non-empty `glob`;
-`merge` ∈ {reports,none}; `shard_batch` ≥ 1; `max_parallel` ≥ 1.
+Validation at bundle-load: `shard_by: file`/`package` requires non-empty
+`glob`; `merge` ∈ {reports,none}; `shard_batch` ≥ 1; `max_parallel` ≥ 1.
+`shard_by: package` groups the globbed files by parent directory (one shard
+per directory); `shard_batch` does not apply.
 
 ## 4. Execution model
 
