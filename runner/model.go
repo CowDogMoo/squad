@@ -544,7 +544,14 @@ func buildGeminiLLM(ctx context.Context, opts *RunOptions, model string) (llms.M
 }
 
 func normalizeProvider(provider string) string {
-	return strings.ToLower(strings.TrimSpace(provider))
+	p := strings.ToLower(strings.TrimSpace(provider))
+	// Agent manifests commonly write "google" for Gemini models; the
+	// implemented provider is "gemini" (metrics/apikey.go carries the
+	// matching credential entry for both spellings).
+	if p == "google" {
+		return "gemini"
+	}
+	return p
 }
 
 func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {

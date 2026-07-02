@@ -13,6 +13,7 @@ func TestKeyStatusProviderEnvTable(t *testing.T) {
 		{"openai-compat", "OPENAI_COMPAT_API_KEY"},
 		{"anthropic", "ANTHROPIC_API_KEY"},
 		{"gemini", "GOOGLE_API_KEY"},
+		{"google", "GOOGLE_API_KEY"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider, func(t *testing.T) {
