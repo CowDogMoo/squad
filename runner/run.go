@@ -338,6 +338,9 @@ func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent
 	if opts.ConfigModel != "" {
 		return applyConfigDefaultUnauthenticated(ctx, opts, bundle), nil
 	}
+	if opts.DryRun && len(skipped) > 0 {
+		return applyManifestTopUnauthenticated(ctx, opts, bundle), nil
+	}
 	if err := noCredentialsError(skipped); err != nil {
 		return "", err
 	}
@@ -455,6 +458,30 @@ func applyConfigDefaultUnauthenticated(ctx context.Context, opts *RunOptions, bu
 		"⚠  No provider has detected credentials. Proceeding with config default %q (%s);\n"+
 			"   the model call will likely fail authentication. Set the relevant API key to fix.",
 		opts.Model, opts.Provider)
+}
+
+// applyManifestTopUnauthenticated handles rule 4a-dry: nothing anywhere has
+// credentials, but the run is a --dry-run — bundle assembly and cost
+// estimation never call the model, so proceed with the manifest's top
+// preference and a warning instead of failing. Real runs without credentials
+// still abort via noCredentialsError.
+func applyManifestTopUnauthenticated(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) string {
+	top := bundle.Models[0]
+	opts.Model = top.Model
+	if opts.Provider == "" {
+		opts.Provider = top.Provider
+	}
+	if opts.BaseURL == "" {
+		opts.BaseURL = top.BaseURL
+	}
+	if opts.BaseURL == "" && bundle.BaseURL != "" {
+		opts.BaseURL = bundle.BaseURL
+	}
+	logging.WarnContext(ctx, "dry-run without credentials; using manifest top model %q (%s)", top.Model, top.Provider)
+	return fmt.Sprintf(
+		"⚠  No provider has detected credentials. Dry run proceeding with manifest model %q (%s);\n"+
+			"   a real run will fail until one of the provider API keys is set.",
+		top.Model, top.Provider)
 }
 
 // noCredentialsError handles rule 4b: manifest had entries but none had
