@@ -128,17 +128,24 @@ Only `name`, `entrypoint`, `wrapper`, and `task` are required. Everything else i
 
 ### system.md (Main Prompt)
 
-The core prompt defines identity, rules, and workflow:
+The core prompt defines identity, rules, and workflow. Start it with a YAML
+frontmatter block — the **Claude-native format**. This is the format every
+official [squad-agents](https://github.com/cowdogmoo/squad-agents) agent
+uses, and it makes the same file loadable by Claude Code with no conversion:
 
 ```markdown
+---
+name: my-review
+description: "Reviews Go code for correctness issues. Use proactively when asked to review Go code. By default it fixes issues in place; say \"readonly\" or \"report only\" for a findings report with no edits."
+tools: "Bash, Glob, Grep, Read, Edit, MultiEdit"
+model: opus
+---
 # IDENTITY
 
-{{if eq .Mode "edit"}}
-You are an autonomous code review agent. Fix issues and verify compilation.
-{{end}}
-{{if eq .Mode "readonly"}}
-You are an analysis agent. Report issues but do NOT modify files.
-{{end}}
+You are an autonomous code review agent. By default you run in **edit
+mode**: fix issues and verify compilation. If the caller's prompt asks for
+"readonly" or "report only", run in **readonly mode**: report issues and
+change nothing.
 
 # HARD RULES
 
@@ -150,19 +157,67 @@ You are an analysis agent. Report issues but do NOT modify files.
 
 1. Glob for files, Read to understand
 2. Analyze against criteria
-3. {{if eq .Mode "edit"}}Fix issues, verify build/tests{{end}}
+3. Edit mode only: fix issues, verify build/tests
 4. Emit report
 ```
 
-### Template Variables
+When the entrypoint starts with a frontmatter fence, squad:
 
-Prompts support Go template syntax with these built-in variables:
+- strips the frontmatter — squad reads its own metadata from `agent.yaml`;
+  the frontmatter fields are for Claude Code
+- skips Go-template rendering for **all** of that agent's prompt files
+  (`system.md`, `agent.md`, `task.md`). The body is delivered verbatim, so
+  literal `{{.VAR}}` text (Taskfile or Helm examples, say) survives
+  untouched.
+
+Write the body plain — no template syntax:
+
+- **Modes**: no `{{if .Mode}}` blocks. Describe both modes in prose: edit
+  as the default, readonly opt-in on caller phrases ("readonly", "report
+  only", "do not modify"). Squad injects a literal `Mode: readonly` line
+  into the assembled prompt under `--mode readonly`; Claude Code callers
+  put the keyword in the task prompt. Readonly runs also hard-reject
+  Write/Edit/MultiEdit at the tool layer, so the prose is belt and the
+  runner is suspenders.
+- **Variables**: no `{{.Var}}` / `{{.Default}}`. Bake the default into
+  prose: "target 75% unless the caller specifies otherwise."
+- **Includes**: no `{{include}}`. Inline shared content, or move it into a
+  [skill](./skills.md) and reference it as `Skill("name")` — skill
+  references resolve in both hosts.
+- **References**: squad injects `agent.yaml` `references:` into the
+  prompt; Claude Code does not. Phrase the knowledge-base section for both
+  hosts: "If the host has not already injected `criteria.md` into your
+  prompt, Read `<absolute path>` on your FIRST iteration."
+
+### Running the Same Agent in Claude Code
+
+A Claude-native `system.md` is a valid Claude Code agent definition as-is.
+Register it with a symlink:
+
+```bash
+ln -s /path/to/agents/my-review/system.md ~/.claude/agents/my-review.md
+```
+
+Claude Code reads `name`, `description`, `tools`, and `model` from the
+frontmatter and ignores `agent.yaml` entirely (unknown frontmatter keys are
+also ignored, so squad-only metadata can live there if you prefer one
+file). The `description` doubles as Claude's auto-delegation router —
+include when-to-use trigger text and the readonly opt-in phrases. Edits to
+the file reach both hosts immediately; there is no copy to drift.
+
+### Legacy Templated Format
+
+Prompt files without frontmatter are rendered as Go text/templates. New
+agents should use the Claude-native format; the template path remains for
+existing agents.
+
+#### Template Variables
 
 - `{{.Mode}}` - Current mode (`edit` or `readonly`)
 - `{{.Var "KEY"}}` - Custom variable passed via `--var KEY=VALUE`
 - `{{.Vars.KEY}}` - Alternate syntax for custom variables
 
-### Mode Conditionals
+#### Mode Conditionals
 
 Use `{{if eq .Mode "edit"}}...{{end}}` for edit-mode-only content:
 
@@ -175,6 +230,14 @@ Use `{{if eq .Mode "edit"}}...{{end}}` for edit-mode-only content:
 Do NOT modify any files. Report only.
 {{end}}
 ```
+
+#### Escaping Literal Braces
+
+In templated files, a literal `{{` in prose or examples must be escaped as
+`{{"{{"}}` or the renderer will evaluate it (an unknown variable becomes
+`<no value>`). Claude-native files need no escaping — one more reason to
+prefer them for agents whose subject matter is itself templated (Taskfile,
+Helm, GitHub Actions).
 
 ### Execution Backends
 
@@ -325,23 +388,24 @@ Skip:
 
 ### Output Format
 
-Consistent reporting:
+Consistent reporting, with one labeled section per mode:
 
 ```markdown
 # OUTPUT FORMAT
 
-{{if eq .Mode "edit"}}
-## Changes Made
+## Edit-mode report
+
+### Changes Made
 | File | Change | Rationale |
 
-## Verification
+### Verification
 - [ ] Build passes
 - [ ] Tests pass
-{{end}}
-{{if eq .Mode "readonly"}}
-## Issues Found
+
+## Readonly-mode report
+
+### Issues Found
 | Severity | File | Line | Issue | Recommendation |
-{{end}}
 ```
 
 ## Publishing Agents
@@ -407,7 +471,12 @@ squad run --agent my-review --print-bundle --dry-run
 
 ### Mode Not Working
 
-Ensure conditionals use exact syntax:
+Claude-native agents (frontmatter): mode is prose-dispatched. Make sure the
+body names the trigger phrases ("readonly", "report only") and that squad
+runs with `--mode readonly` — check the assembled bundle for the
+`Mode: readonly` line.
+
+Legacy templated agents: ensure conditionals use exact syntax:
 
 ```markdown
 {{if eq .Mode "edit"}}...{{end}}     # Correct
