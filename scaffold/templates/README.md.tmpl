@@ -27,10 +27,16 @@ squad run --agent {{.Name}} "Focus on the src/ directory"
 
 ## Modes
 
-This agent supports conditional prompts via Go template syntax:
+Mode is dispatched at runtime — the prompt describes both modes in prose:
 
 - **Edit mode** (`--mode edit`, default): Agent can modify files
 - **Readonly mode** (`--mode readonly`): Agent only analyzes and reports
+
+`system.md` uses the Claude-native format (YAML frontmatter + plain
+markdown, no template syntax), so the same file also works as a Claude Code
+agent: `ln -s $(pwd)/system.md ~/.claude/agents/{{.Name}}.md`. In Claude
+Code, trigger readonly by saying "readonly" or "report only" in the task
+prompt.
 
 ## Customization
 
