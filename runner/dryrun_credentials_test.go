@@ -45,3 +45,32 @@ func TestResolveModelPrecedenceDryRunWithoutCredentials(t *testing.T) {
 		t.Fatalf("error should list env vars, got: %v", err)
 	}
 }
+
+// TestResolveModelPrecedenceDryRunBundleBaseURL covers the bundle-level
+// BaseURL fallback: when neither the options nor the selected manifest entry
+// carry a base URL, the dry-run pick inherits the bundle's.
+func TestResolveModelPrecedenceDryRunBundleBaseURL(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_COMPAT_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+
+	bundle := &agent.Bundle{
+		BaseURL: "https://llm.internal/api",
+		Models: []agent.ModelPreference{
+			{Model: "claude-sonnet-4-6", Provider: "anthropic"},
+		},
+	}
+
+	opts := &RunOptions{DryRun: true}
+	warn, err := ResolveModelPrecedence(context.Background(), opts, bundle)
+	if err != nil {
+		t.Fatalf("dry-run without credentials should not error, got: %v", err)
+	}
+	if opts.BaseURL != "https://llm.internal/api" {
+		t.Fatalf("dry-run should inherit bundle BaseURL, got %q", opts.BaseURL)
+	}
+	if warn == "" {
+		t.Fatal("expected a dry-run warning")
+	}
+}
