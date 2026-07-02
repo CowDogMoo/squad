@@ -67,8 +67,9 @@ jobs:
           # Install gocyclo
           go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
 
-          # Install golangci-lint (pinned to avoid transient checksum mismatches)
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
+          # Install golangci-lint (pinned; go install verifies via the Go
+          # module checksum database instead of curl|sh)
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
 
           # Install gocritic
           go install github.com/go-critic/go-critic/cmd/gocritic@latest
