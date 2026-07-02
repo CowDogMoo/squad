@@ -132,6 +132,29 @@ func TestCreateAgent_Success(t *testing.T) {
 			t.Errorf("expected file %s to exist: %v", f, err)
 		}
 	}
+
+	// The knowledge base is scaffolded in the fleet layout: a skill at the
+	// agents-dir level with the agent's references/ entry symlinked to it.
+	skillPath := filepath.Join(dir, "skills", "my-agent-guide", "SKILL.md")
+	skillContent, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("expected reference skill at %s: %v", skillPath, err)
+	}
+	if !strings.HasPrefix(string(skillContent), "---\nname: my-agent-guide\n") {
+		t.Errorf("SKILL.md missing frontmatter, got: %.60q", string(skillContent))
+	}
+
+	linkPath := filepath.Join(agentPath, "references", "my-agent-guide.md")
+	if fi, lerr := os.Lstat(linkPath); lerr != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected %s to be a symlink (err=%v)", linkPath, lerr)
+	}
+	linked, err := os.ReadFile(linkPath)
+	if err != nil {
+		t.Fatalf("reference symlink does not resolve: %v", err)
+	}
+	if string(linked) != string(skillContent) {
+		t.Error("reference symlink content does not match SKILL.md")
+	}
 }
 
 func TestCreateAgent_Force(t *testing.T) {

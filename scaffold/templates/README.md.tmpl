@@ -23,7 +23,7 @@ squad run --agent {{.Name}} "Focus on the src/ directory"
 | `system.md` | Core system prompt (identity, rules, workflow) |
 | `agent.md` | Execution wrapper with mode-specific rules |
 | `task.md` | Default task instructions |
-| `references/{{.Name}}-guide.md` | Domain knowledge base |
+| `../skills/{{.Name}}-guide/SKILL.md` | Domain knowledge base (loadable as `Skill("{{.Name}}-guide")`; `references/{{.Name}}-guide.md` symlinks to it for squad injection) |
 
 ## Modes
 
