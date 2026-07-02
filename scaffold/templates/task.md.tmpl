@@ -1,31 +1,20 @@
-{{"{{"}}if eq .Mode "edit"{{"}}"}}
-Review and fix all {{.NameTitle}} issues in this codebase.
+Review all {{.NameTitle}} issues in this codebase. Default: fix them in
+place. If the request says "readonly"/"report only": analyze only, produce
+a prioritized report, and do NOT write or modify any files.
 
-Start by using Glob to discover all relevant source files.
-Read each file (skip test files and vendor directories).
-Cross-reference between files for consistency issues.
-Apply fixes via Edit tool, highest severity first.
-Run verification commands after each batch of edits.
+Start by using Glob to discover all relevant source files. Read each file
+(skip test files and vendor directories). Cross-reference between files for
+consistency issues. In edit mode apply fixes highest severity first and run
+verification commands after each batch.
 
-IMPORTANT CONSTRAINTS (repeat from system prompt):
+IMPORTANT CONSTRAINTS:
 
 - No cosmetic changes (doc comments, import ordering, naming style)
 - No new dependencies
 - Skip fixes needing 50+ lines or new files
 - Preserve backwards compatibility — no API surface changes
 - Every fix must be PROPORTIONAL — no micro-optimizations
-- Read each file ONCE, catalog all findings, then fix — target ≤12 iterations
+- Read each file ONCE, catalog all findings, then fix — target <=12 iterations
 - Use ONE Grep/Glob on repo root, not per-directory — minimize tool calls
 - After verification passes, emit report IMMEDIATELY — no post-fix exploration
 - Every file touched must appear in the output report
-{{"{{"}}end{{"}}"}}
-{{"{{"}}if eq .Mode "readonly"{{"}}"}}
-Analyze this codebase for {{.NameTitle}} issues.
-
-Use Glob to discover all relevant source files.
-Read each file (skip test files and vendor directories).
-Cross-reference between files for consistency issues.
-Produce a prioritized report of all findings.
-
-Do NOT write or modify any files.
-{{"{{"}}end{{"}}"}}

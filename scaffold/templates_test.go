@@ -51,6 +51,45 @@ func TestRenderAndListTemplates(t *testing.T) {
 	}
 }
 
+// TestRenderClaudeNativeOutput asserts the scaffolded prompt files use the
+// Claude-native format: system.md opens with YAML frontmatter carrying the
+// agent name, and no rendered prompt file contains template syntax (the
+// runner delivers frontmatter-marked agents verbatim, so a leftover `{{`
+// would reach the model as-is — or, under a legacy templated agent, get
+// rendered into `<no value>`).
+func TestRenderClaudeNativeOutput(t *testing.T) {
+	t.Parallel()
+
+	data := AgentData{
+		Name:        "demo-agent",
+		NameTitle:   "Demo Agent",
+		Description: "An example agent used in tests",
+		Lang:        "go",
+		Version:     "0.0.1",
+	}
+
+	system, err := Render("system.md.tmpl", data)
+	if err != nil {
+		t.Fatalf("Render system.md.tmpl: %v", err)
+	}
+	if !strings.HasPrefix(system, "---\n") {
+		t.Fatalf("system.md must open with a YAML frontmatter fence, got %q", system[:40])
+	}
+	if !strings.Contains(system, "name: demo-agent") {
+		t.Fatalf("system.md frontmatter missing agent name:\n%s", system[:200])
+	}
+
+	for _, name := range []string{"system.md.tmpl", "agent.md.tmpl", "task.md.tmpl"} {
+		out, err := Render(name, data)
+		if err != nil {
+			t.Fatalf("Render %s: %v", name, err)
+		}
+		if strings.Contains(out, "{{") {
+			t.Fatalf("%s rendered output contains template syntax:\n%s", name, out)
+		}
+	}
+}
+
 func TestRender_TemplateNotFound(t *testing.T) {
 	t.Parallel()
 	_, err := Render("nonexistent.tmpl", AgentData{Name: "x", NameTitle: "X"})
