@@ -132,6 +132,29 @@ func TestCreateAgent_Success(t *testing.T) {
 			t.Errorf("expected file %s to exist: %v", f, err)
 		}
 	}
+
+	// The knowledge base is scaffolded in the fleet layout: a skill at the
+	// agents-dir level with the agent's references/ entry symlinked to it.
+	skillPath := filepath.Join(dir, "skills", "my-agent-guide", "SKILL.md")
+	skillContent, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("expected reference skill at %s: %v", skillPath, err)
+	}
+	if !strings.HasPrefix(string(skillContent), "---\nname: my-agent-guide\n") {
+		t.Errorf("SKILL.md missing frontmatter, got: %.60q", string(skillContent))
+	}
+
+	linkPath := filepath.Join(agentPath, "references", "my-agent-guide.md")
+	if fi, lerr := os.Lstat(linkPath); lerr != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected %s to be a symlink (err=%v)", linkPath, lerr)
+	}
+	linked, err := os.ReadFile(linkPath)
+	if err != nil {
+		t.Fatalf("reference symlink does not resolve: %v", err)
+	}
+	if string(linked) != string(skillContent) {
+		t.Error("reference symlink content does not match SKILL.md")
+	}
 }
 
 func TestCreateAgent_Force(t *testing.T) {
@@ -577,4 +600,62 @@ func TestCopyAgent_DestExists_NoForce(t *testing.T) {
 	if err := scaffold.CopyAgent(ctx, dir, "src2-noforce", "dst2-noforce", false); err == nil {
 		t.Fatal("expected error when destination exists without force")
 	}
+}
+
+// TestCreateAgent_ReferenceSkillErrors drives the failure branches of the
+// reference-skill scaffolding: an unusable skills dir, an unwritable
+// SKILL.md path, an irremovable stale reference link, and a read-only
+// references dir that blocks symlink creation.
+func TestCreateAgent_ReferenceSkillErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("skills dir is a file", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "skills"), []byte("not a dir"), 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		err := scaffold.CreateAgent(ctx, scaffold.CreateOptions{Name: "my-agent", Lang: "go", AgentsDir: dir})
+		if err == nil || !strings.Contains(err.Error(), "skill directory") {
+			t.Fatalf("expected skill directory error, got: %v", err)
+		}
+	})
+
+	t.Run("SKILL.md path is a directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "skills", "my-agent-guide", "SKILL.md"), 0o755); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		err := scaffold.CreateAgent(ctx, scaffold.CreateOptions{Name: "my-agent", Lang: "go", AgentsDir: dir})
+		if err == nil || !strings.Contains(err.Error(), "failed to write") {
+			t.Fatalf("expected write error, got: %v", err)
+		}
+	})
+
+	t.Run("stale reference link is an irremovable dir", func(t *testing.T) {
+		dir := t.TempDir()
+		stale := filepath.Join(dir, "my-agent", "references", "my-agent-guide.md")
+		if err := os.MkdirAll(filepath.Join(stale, "occupied"), 0o755); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		err := scaffold.CreateAgent(ctx, scaffold.CreateOptions{Name: "my-agent", Lang: "go", AgentsDir: dir, Force: true})
+		if err == nil || !strings.Contains(err.Error(), "replace reference link") {
+			t.Fatalf("expected replace-link error, got: %v", err)
+		}
+	})
+
+	t.Run("references dir is read-only", func(t *testing.T) {
+		dir := t.TempDir()
+		refs := filepath.Join(dir, "my-agent", "references")
+		if err := os.MkdirAll(refs, 0o755); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		if err := os.Chmod(refs, 0o555); err != nil {
+			t.Fatalf("chmod: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(refs, 0o755) })
+		err := scaffold.CreateAgent(ctx, scaffold.CreateOptions{Name: "my-agent", Lang: "go", AgentsDir: dir, Force: true})
+		if err == nil || !strings.Contains(err.Error(), "reference symlink") {
+			t.Fatalf("expected symlink error, got: %v", err)
+		}
+	})
 }

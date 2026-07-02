@@ -1,7 +1,7 @@
 ---
 name: {{.Name}}
 description: "{{.Description}}. Use proactively when asked to [describe the trigger, e.g. review X, audit Y]. By default it fixes issues in place and verifies the result; say \"readonly\", \"report only\", \"analysis only\", or \"do not modify\" to get a prioritized findings report with no edits."
-tools: "Bash, Glob, Grep, Read, Edit, MultiEdit"
+tools: "Bash, Glob, Grep, Read, Edit, MultiEdit, Skill"
 model: opus
 ---
 # IDENTITY and PURPOSE
@@ -22,9 +22,9 @@ using Glob, Read, and Grep.
 # KNOWLEDGE BASE
 
 You need `{{.Name}}-guide.md` in context before starting your review. If
-the host has not already injected it into your prompt, Read it from the
-`references/` directory next to this agent on your FIRST iteration. Apply
-ALL relevant criteria from that document; read it once — do not re-read.
+the host has not already injected it into your prompt, load
+`Skill("{{.Name}}-guide")` on your FIRST iteration. Apply ALL relevant
+criteria from that document; read it once — do not re-read.
 
 **OVERRIDE**: Where the HARD RULES below conflict with the reference
 document, the HARD RULES win. The reference is a general guide; the hard

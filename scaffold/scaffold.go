@@ -75,12 +75,11 @@ func CreateAgent(ctx context.Context, opts CreateOptions) error {
 	}
 
 	files := map[string]string{
-		"agent.yaml":                            "agent.yaml.tmpl",
-		"system.md":                             "system.md.tmpl",
-		"agent.md":                              "agent.md.tmpl",
-		"task.md":                               "task.md.tmpl",
-		"README.md":                             "README.md.tmpl",
-		"references/" + opts.Name + "-guide.md": "reference.md.tmpl",
+		"agent.yaml": "agent.yaml.tmpl",
+		"system.md":  "system.md.tmpl",
+		"agent.md":   "agent.md.tmpl",
+		"task.md":    "task.md.tmpl",
+		"README.md":  "README.md.tmpl",
 	}
 
 	for outFile, tmplFile := range files {
@@ -96,12 +95,50 @@ func CreateAgent(ctx context.Context, opts CreateOptions) error {
 		logging.InfoContext(ctx, "Created %s", outPath)
 	}
 
+	if err := writeReferenceSkill(ctx, opts, data); err != nil {
+		return err
+	}
+
 	logging.InfoContext(ctx, "Agent %q created successfully at %s", opts.Name, agentPath)
 	logging.InfoContext(ctx, "Next steps:")
-	logging.InfoContext(ctx, "  1. Edit references/%s-guide.md with domain knowledge", opts.Name)
+	logging.InfoContext(ctx, "  1. Edit skills/%s-guide/SKILL.md with domain knowledge", opts.Name)
 	logging.InfoContext(ctx, "  2. Customize system.md with agent-specific rules")
 	logging.InfoContext(ctx, "  3. Test with: squad run --agent %s", opts.Name)
 
+	return nil
+}
+
+// writeReferenceSkill materializes the agent's knowledge base in the shared
+// fleet layout: the document lives at <agentsDir>/skills/<name>-guide/SKILL.md
+// (loadable by name via the Skill tool in any host) and
+// <agent>/references/<name>-guide.md is a relative symlink to it, which keeps
+// agent.yaml `references:` injection working for squad runs.
+func writeReferenceSkill(ctx context.Context, opts CreateOptions, data AgentData) error {
+	skillName := opts.Name + "-guide"
+	skillDir := filepath.Join(opts.AgentsDir, "skills", skillName)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create skill directory: %w", err)
+	}
+
+	content, err := Render("reference.md.tmpl", data)
+	if err != nil {
+		return fmt.Errorf("failed to render reference.md.tmpl: %w", err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("failed to write %s: %w", skillPath, err)
+	}
+	logging.InfoContext(ctx, "Created %s", skillPath)
+
+	linkPath := filepath.Join(opts.AgentsDir, opts.Name, "references", skillName+".md")
+	if err := os.Remove(linkPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to replace reference link %s: %w", linkPath, err)
+	}
+	target := filepath.Join("..", "..", "skills", skillName, "SKILL.md")
+	if err := os.Symlink(target, linkPath); err != nil {
+		return fmt.Errorf("failed to create reference symlink %s: %w", linkPath, err)
+	}
+	logging.InfoContext(ctx, "Created %s -> %s", linkPath, target)
 	return nil
 }
 

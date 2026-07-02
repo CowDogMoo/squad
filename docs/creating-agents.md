@@ -27,8 +27,8 @@ my-review/
 ├── system.md       # Main prompt - identity, rules, workflow (required)
 ├── agent.md        # Execution wrapper (required)
 ├── task.md         # Default task instructions (required)
-└── references/     # Knowledge base docs (optional)
-    └── criteria.md
+└── references/     # Knowledge base links (optional)
+    └── criteria.md #   -> ../../skills/criteria/SKILL.md (see References)
 ```
 
 ### agent.yaml (Manifest)
@@ -184,10 +184,16 @@ Write the body plain — no template syntax:
 - **Includes**: no `{{include}}`. Inline shared content, or move it into a
   [skill](./skills.md) and reference it as `Skill("name")` — skill
   references resolve in both hosts.
-- **References**: squad injects `agent.yaml` `references:` into the
-  prompt; Claude Code does not. Phrase the knowledge-base section for both
-  hosts: "If the host has not already injected `criteria.md` into your
-  prompt, Read `<absolute path>` on your FIRST iteration."
+- **References**: ship the knowledge base as a skill and let the body load
+  it by name. The document lives at `<agents-dir>/skills/<name>/SKILL.md`
+  (YAML frontmatter + content), and `<agent>/references/<doc>.md` is a
+  relative symlink to it — squad injects it via `agent.yaml` `references:`
+  (the SKILL frontmatter is stripped on injection), while Claude Code loads
+  it on demand. Phrase the knowledge-base section for both hosts: "If the
+  host has not already injected `criteria.md` into your prompt, load
+  `Skill("criteria")` on your FIRST iteration." `squad init agent`
+  scaffolds this layout automatically. Never hardcode absolute paths in
+  the body — they break on every other machine.
 
 ### Running the Same Agent in Claude Code
 
