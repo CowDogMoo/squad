@@ -690,7 +690,33 @@ func resolveMCPServerTemplates(servers []mcp.ServerConfig, data TemplateData) ([
 	return resolved, nil
 }
 
+// stripPromptFrontmatter detects the Claude-native prompt format: a file
+// beginning with a `---` YAML frontmatter fence. It returns the body after
+// the closing fence and true when a terminated frontmatter block is present.
+// The frontmatter (name/description/tools/model) is host metadata for Claude
+// Code; squad reads its equivalents from agent.yaml, so the block is dropped.
+func stripPromptFrontmatter(content string) (string, bool) {
+	rest, ok := strings.CutPrefix(content, "---\n")
+	if !ok {
+		if rest, ok = strings.CutPrefix(content, "---\r\n"); !ok {
+			return content, false
+		}
+	}
+	for _, fence := range []string{"\n---\n", "\n---\r\n"} {
+		if idx := strings.Index(rest, fence); idx >= 0 {
+			return strings.TrimLeft(rest[idx+len(fence):], "\r\n"), true
+		}
+	}
+	return content, false
+}
+
 // loadAndProcessPrompts loads system, wrapper, and task files, then processes them as templates.
+//
+// Exception: when the entrypoint carries a YAML frontmatter block, the agent
+// uses the Claude-native plain-markdown format (dual-host prompt files shared
+// verbatim with Claude Code). None of its prompt files are template-rendered —
+// literal {{...}} text such as Taskfile examples must survive unchanged. Mode
+// still reaches the agent through the "Mode:" header buildSystemMessage emits.
 func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data TemplateData) (system, wrapper, task string, err error) {
 	systemData, err := readFileInRoot(agentPath, manifest.EntryPoint)
 	if err != nil {
@@ -703,6 +729,10 @@ func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data
 	taskContent, err := loadTask(agentPath, manifest.Task)
 	if err != nil {
 		return "", "", "", err
+	}
+
+	if body, ok := stripPromptFrontmatter(string(systemData)); ok {
+		return body, string(wrapperData), taskContent, nil
 	}
 
 	system, err = processTemplate("system", string(systemData), agentsDir, data)
