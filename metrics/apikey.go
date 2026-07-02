@@ -39,6 +39,13 @@ var providerAPIKeyEnv = map[string][]string{
 	"openai-compat":    {"OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"},
 	"anthropic":        {"ANTHROPIC_API_KEY"},
 	"gemini":           {"GOOGLE_API_KEY"},
+	// "google" is the provider name agent manifests commonly use for
+	// Gemini models; the runner aliases it to "gemini" (see
+	// runner.normalizeProvider). Listing it here keeps credential
+	// detection consistent — without this entry an unknown provider is
+	// treated as "no key needed" and fallback selection picks it even
+	// when GOOGLE_API_KEY is absent.
+	"google": {"GOOGLE_API_KEY"},
 }
 
 // KeyStatus mirrors provider token precedence used by the runner: an
