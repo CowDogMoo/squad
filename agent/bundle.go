@@ -557,17 +557,36 @@ func readFileInRoot(root, path string) (data []byte, retErr error) {
 	return io.ReadAll(f)
 }
 
-func loadReferences(agentPath string, refs []string) ([]string, error) {
+// loadReferences reads each manifest reference and returns it as an injectable
+// prompt block. References normally live inside the agent directory; a
+// reference may also be a symlink into a shared location elsewhere under
+// agentsDir (e.g. `references/foo.md -> ../../skills/foo/SKILL.md`), so when
+// the agent-rooted read fails the lookup is retried with agentsDir as the
+// traversal root. A leading YAML frontmatter block (present when the
+// reference doubles as a SKILL.md) is stripped — it is host metadata, not
+// reference content.
+func loadReferences(agentPath, agentsDir string, refs []string) ([]string, error) {
 	var result []string
 	for _, ref := range refs {
 		if strings.TrimSpace(ref) == "" {
 			continue
 		}
 		refData, err := readFileInRoot(agentPath, ref)
+		if err != nil && agentsDir != "" {
+			if rel, rerr := filepath.Rel(agentsDir, filepath.Join(agentPath, ref)); rerr == nil {
+				if wide, werr := readFileInRoot(agentsDir, rel); werr == nil {
+					refData, err = wide, nil
+				}
+			}
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to read reference %s: %w", ref, err)
 		}
-		result = append(result, fmt.Sprintf("## Reference: %s\n\n%s\n", ref, strings.TrimSpace(string(refData))))
+		content := string(refData)
+		if body, ok := stripPromptFrontmatter(content); ok {
+			content = body
+		}
+		result = append(result, fmt.Sprintf("## Reference: %s\n\n%s\n", ref, strings.TrimSpace(content)))
 	}
 	return result, nil
 }
@@ -1054,7 +1073,7 @@ func BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode strin
 		if lerr != nil {
 			return nil, lerr
 		}
-		refs, rerr := loadReferences(agentPath, manifest.References)
+		refs, rerr := loadReferences(agentPath, agentsDir, manifest.References)
 		if rerr != nil {
 			return nil, rerr
 		}
@@ -1210,10 +1229,10 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 	}
 
 	// References are resolved from baseDir (shared) or promptDir (stage-specific).
-	refs, err := loadReferences(promptDir, manifest.References)
+	refs, err := loadReferences(promptDir, includeRoot, manifest.References)
 	if err != nil {
 		// Fall back to baseDir for shared references.
-		refs, err = loadReferences(baseDir, manifest.References)
+		refs, err = loadReferences(baseDir, includeRoot, manifest.References)
 		if err != nil {
 			return nil, err
 		}
