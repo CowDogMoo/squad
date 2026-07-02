@@ -685,7 +685,7 @@ func TestLoadReferences_SkipsBlankRefs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "ref.md"), []byte("body"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	got, err := loadReferences(root, []string{"", "   ", "ref.md", "\t"})
+	got, err := loadReferences(root, "", []string{"", "   ", "ref.md", "\t"})
 	if err != nil {
 		t.Fatalf("loadReferences: %v", err)
 	}
@@ -701,7 +701,7 @@ func TestLoadReferences_SkipsBlankRefs(t *testing.T) {
 func TestLoadReferences_MissingFile(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	_, err := loadReferences(root, []string{"nope.md"})
+	_, err := loadReferences(root, "", []string{"nope.md"})
 	if err == nil {
 		t.Fatal("expected error for missing reference")
 	}
