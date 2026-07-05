@@ -30,7 +30,7 @@ jobs:
     name: 🚨 Semgrep Analysis
     runs-on: ubuntu-latest
     container:
-      image: semgrep/semgrep:1.167.0
+      image: semgrep/semgrep:1.168.0
 
     steps:
       - name: Checkout
