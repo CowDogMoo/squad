@@ -6,8 +6,10 @@ on:
     paths:
       - .github/renovate.json5
   schedule:
-    # Run every week on sunday and wednesday at 00:00 UTC
-    - cron: "0 0 * * 0,3"
+    # Run every 4 hours. Renovate is the only thing that can merge automerge-
+    # enabled PRs, so the gap between "checks go green" and "next run" is how
+    # long a ready PR sits open.
+    - cron: "0 */4 * * *"
   workflow_dispatch:
     inputs:
       dryRun:

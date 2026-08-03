@@ -20,7 +20,7 @@ concurrency:
 
 env:
   DEBIAN_FRONTEND: noninteractive
-  GO_VERSION: 1.26.4
+  GO_VERSION: 1.26.5
 
 permissions:
   actions: read
