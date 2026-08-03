@@ -105,12 +105,19 @@ repos:
         language: script
         types: [json, yaml]
 
+      # Manual-only: CI runs `pre-commit run --all-files`, which ignores the
+      # `files` filter below and so ran this on every PR. A newly published
+      # advisory then blocked unrelated PRs without any code change. The
+      # Govulncheck workflow now gates dependency changes and scans daily.
+      # Run locally with:
+      #   pre-commit run govulncheck-scan --hook-stage manual
       - id: govulncheck-scan
         name: govulncheck vulnerability scan
         entry: .hooks/govulncheck-scan.sh
         language: script
         pass_filenames: false
         files: '(go\.mod|go\.sum)$'
+        stages: [manual]
         description: "Run govulncheck to check for vulnerabilities in Go dependencies"
 
       - id: goreleaser-check
