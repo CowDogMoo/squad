@@ -266,13 +266,13 @@ tasks:
           --out {{.OUT_DIR}}/squad-go-security-audit-analysis.txt
       - echo "Security audit analysis written to {{.OUT_DIR}}/squad-go-security-audit-analysis.txt"
 
-  run:go-taskfile:
-    desc: "Run the go-taskfile agent to autonomously fix Taskfile.yaml best-practice violations"
+  run:taskfile-review:
+    desc: "Run the taskfile-review agent to autonomously fix Taskfile.yaml best-practice violations"
     silent: true
     cmds:
       - |
         go run {{.CMD_PATH}} run -v \
-          --agent go-taskfile \
+          --agent taskfile-review \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
@@ -280,21 +280,21 @@ tasks:
           --model {{.MODEL}} \
           --require-actionable=true \
           --temperature 0.3 \
-          --out {{.OUT_DIR}}/squad-go-taskfile.txt
-      - echo "Taskfile review output written to {{.OUT_DIR}}/squad-go-taskfile.txt"
+          --out {{.OUT_DIR}}/squad-taskfile-review.txt
+      - echo "Taskfile review output written to {{.OUT_DIR}}/squad-taskfile-review.txt"
       - |
         echo ""
         echo "Running final verification..."
       - task --list
       - echo "task --list PASSED"
 
-  run:go-taskfile-analyze:
-    desc: "Run the go-taskfile agent in readonly mode to analyze Taskfile violations without applying fixes"
+  run:taskfile-review-analyze:
+    desc: "Run the taskfile-review agent in readonly mode to analyze Taskfile violations without applying fixes"
     silent: true
     cmds:
       - |
         go run {{.CMD_PATH}} run -v \
-          --agent go-taskfile --mode readonly \
+          --agent taskfile-review --mode readonly \
           --working-dir {{.WORKING_DIR}} \
           {{._API_KEY_FLAG}} \
           --provider {{.PROVIDER}} \
@@ -303,8 +303,8 @@ tasks:
           --require-actionable=false \
           --temperature 0.3 \
           --print=false \
-          --out {{.OUT_DIR}}/squad-go-taskfile-analysis.txt
-      - echo "Taskfile analysis written to {{.OUT_DIR}}/squad-go-taskfile-analysis.txt"
+          --out {{.OUT_DIR}}/squad-taskfile-review-analysis.txt
+      - echo "Taskfile analysis written to {{.OUT_DIR}}/squad-taskfile-review-analysis.txt"
 
   run:python-review:
     desc: "Run the python-review agent to autonomously fix Python code quality issues"
