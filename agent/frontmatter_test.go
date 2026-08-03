@@ -79,7 +79,7 @@ func writePromptAgent(t *testing.T, system, wrapper, task string) string {
 // the frontmatter is dropped and literal {{...}} text (e.g. Taskfile
 // examples) survives verbatim in system, wrapper, and task alike.
 func TestLoadAndProcessPromptsClaudeNative(t *testing.T) {
-	system := "---\nname: go-taskfile\ntools: \"Bash, Read\"\n---\n" +
+	system := "---\nname: taskfile-review\ntools: \"Bash, Read\"\n---\n" +
 		"# IDENTITY\n\nQuote the value: `VAR: '{{.OTHER_VAR}}'`.\n"
 	wrapper := "# AGENT MODE\n\nNever template-ify `{{.CMD_PATH}}` literals.\n"
 	task := "Fix the Taskfile. Leave `{{.VAR}}` examples alone.\n"
@@ -92,7 +92,7 @@ func TestLoadAndProcessPromptsClaudeNative(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadAndProcessPrompts: %v", err)
 	}
-	if strings.Contains(gotSystem, "name: go-taskfile") {
+	if strings.Contains(gotSystem, "name: taskfile-review") {
 		t.Errorf("frontmatter not stripped from system prompt: %q", gotSystem)
 	}
 	if !strings.HasPrefix(gotSystem, "# IDENTITY") {
