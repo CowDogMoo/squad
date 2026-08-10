@@ -124,9 +124,9 @@ func TestExtractFunctionCalls(t *testing.T) {
 			&oairesponses.Response{
 				Output: []oairesponses.ResponseOutputItemUnion{
 					{Type: "message", ID: "msg"},
-					{Type: "function_call", ID: "1", CallID: "call-1", Name: "Echo", Arguments: "{}"},
+					{Type: "function_call", ID: "1", CallID: "call-1", Name: "Echo", Arguments: oairesponses.ResponseOutputItemUnionArguments{OfString: "{}"}},
 					{Type: "message", ID: "msg2"},
-					{Type: "function_call", ID: "2", CallID: "call-2", Name: "Read", Arguments: `{"path":"x"}`},
+					{Type: "function_call", ID: "2", CallID: "call-2", Name: "Read", Arguments: oairesponses.ResponseOutputItemUnionArguments{OfString: `{"path":"x"}`}},
 				},
 			},
 			2,
