@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/ui/pane"
@@ -371,7 +371,7 @@ func TestViewBeforeWindowSize(t *testing.T) {
 	// View should not panic before WindowSizeMsg sets dimensions; it uses
 	// fallback defaults.
 	a := makeApp()
-	out := a.View()
+	out := a.render()
 	if out == "" {
 		t.Error("View should produce output even without WindowSizeMsg")
 	}
@@ -380,7 +380,7 @@ func TestViewBeforeWindowSize(t *testing.T) {
 func TestViewQuittingReturnsEmpty(t *testing.T) {
 	a := makeApp()
 	a.quitting = true
-	if got := a.View(); got != "" {
+	if got := a.render(); got != "" {
 		t.Errorf("quitting View should be empty, got %q", got)
 	}
 }
@@ -389,7 +389,7 @@ func TestViewWithRunsRendersPanel(t *testing.T) {
 	a := makeApp()
 	a.width = 120
 	a.height = 30
-	out := a.View()
+	out := a.render()
 	if !strings.Contains(out, "SQUAD") {
 		t.Errorf("View should render SQUAD panel, got: %s", out)
 	}
@@ -399,7 +399,7 @@ func TestViewEmptyShowsWelcome(t *testing.T) {
 	a := New(nil)
 	a.width = 120
 	a.height = 30
-	out := a.View()
+	out := a.render()
 	if !strings.Contains(out, "WELCOME") {
 		t.Errorf("empty View should show welcome, got: %s", out)
 	}
@@ -410,7 +410,7 @@ func TestViewWithToast(t *testing.T) {
 	a.width = 120
 	a.height = 30
 	a.setToast("hello toast")
-	out := a.View()
+	out := a.render()
 	if !strings.Contains(out, "hello toast") {
 		t.Errorf("View should include active toast, got: %s", out)
 	}
@@ -421,7 +421,7 @@ func TestViewLaunchFormModalTakesOver(t *testing.T) {
 	a.width = 120
 	a.height = 30
 	a.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "run"})
-	out := a.View()
+	out := a.render()
 	// The launch form should occupy the screen without the SQUAD panel.
 	if !strings.Contains(out, "NEW RUN") {
 		t.Errorf("launch form modal should render NEW RUN, got: %s", out)
@@ -525,7 +525,7 @@ func TestHandleSubmitBarePrompt(t *testing.T) {
 func TestRegionShiftTab(t *testing.T) {
 	a := makeApp()
 	a.focusedRegion = regionComposer
-	next, _ := a.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	next, _ := a.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	a2 := asApp(t, next)
 	if a2.focusedRegion == regionComposer {
 		t.Errorf("shift+tab should move out of composer region")
@@ -534,7 +534,7 @@ func TestRegionShiftTab(t *testing.T) {
 
 func TestCtrlKDispatchesCancel(t *testing.T) {
 	a := makeApp()
-	next, _ := a.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	next, _ := a.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
 	a2 := asApp(t, next)
 	if a2.currentToast() == "" {
 		t.Error("ctrl+k on unpaired run should toast")
@@ -613,7 +613,7 @@ func TestCmdPresetDeleteSuccess(t *testing.T) {
 
 func TestHandleRegionKeyUnhandled(t *testing.T) {
 	a := makeApp()
-	cmd, handled := a.handleRegionKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	cmd, handled := a.handleRegionKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	if handled {
 		t.Error("unrelated key should not be handled by region dispatcher")
 	}

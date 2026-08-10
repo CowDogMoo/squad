@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // stub View used as the launch form's parent.
@@ -20,7 +20,7 @@ func (s stubView) Title() string                  { return s.name }
 func typeAll(t *testing.T, v View, s string) View {
 	t.Helper()
 	for _, r := range s {
-		next, _ := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		next, _ := v.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 		if next == nil {
 			t.Fatalf("nil view while typing %q", s)
 		}
@@ -47,7 +47,7 @@ func asLaunchRequest(t *testing.T, cmd tea.Cmd) LaunchRequest {
 func TestLaunchEscReturnsParent(t *testing.T) {
 	parent := stubView{name: "parent"}
 	form := NewLaunch(parent, LaunchDefaults{})
-	next, _ := form.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ := form.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if got := next.Title(); got != "parent" {
 		t.Errorf("esc should return parent (Title=parent), got %q", got)
 	}
@@ -58,7 +58,7 @@ func TestLaunchTabCyclesFocus(t *testing.T) {
 	v := View(NewLaunch(parent, LaunchDefaults{}))
 	// 8 fields total — tab 8 times should land back on the first.
 	for i := 0; i < fldCount; i++ {
-		next, _ := v.Update(tea.KeyMsg{Type: tea.KeyTab})
+		next, _ := v.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 		v = next
 	}
 	// Confirm we still have a Launch view (didn't accidentally close).
@@ -80,9 +80,9 @@ func TestLaunchSubmitMissingAgent(t *testing.T) {
 		if l.focus == fldLaunch {
 			break
 		}
-		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+		v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	}
-	v, cmd := v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v, cmd := v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil && cmd() != nil {
 		// A valid LaunchRequest would not happen with empty agent.
 		if _, ok := AsLaunchRequest(cmd()); ok {
@@ -183,12 +183,12 @@ func TestLaunchSubmitEmitsRequest(t *testing.T) {
 		if l.focus == fldPrompt {
 			break
 		}
-		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+		v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	}
 	// Type prompt.
 	v = typeAll(t, v, "fix the bug")
 	// Submit via Ctrl+S.
-	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	next, cmd := v.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	req := asLaunchRequest(t, cmd)
 	if req.Agent != "go-review" || req.Prompt != "fix the bug" {
 		t.Errorf("request: got %+v", req)
@@ -221,10 +221,10 @@ func TestLaunchSubmitIncludesAdvanced(t *testing.T) {
 		if l.focus == fldPrompt {
 			break
 		}
-		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+		v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	}
 	v = typeAll(t, v, "do the thing")
-	_, cmd := v.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	_, cmd := v.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	req := asLaunchRequest(t, cmd)
 	if req.Provider != "anthropic" || req.Model != "claude-sonnet-4-6" || req.Isolate != "worktree" {
 		t.Errorf("advanced fields lost: got %+v", req)
@@ -247,14 +247,14 @@ func TestLaunchArrowsNavigateFieldsOnSingleLineInputs(t *testing.T) {
 		if l.focus == fldBudget {
 			break
 		}
-		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+		v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	}
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyDown})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	l, _ := AsLaunchView(v)
 	if l.focus != fldMode {
 		t.Errorf("↓ on budget should advance to mode (%d), got %d", fldMode, l.focus)
 	}
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyUp})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	l, _ = AsLaunchView(v)
 	if l.focus != fldBudget {
 		t.Errorf("↑ on mode should return to budget (%d), got %d", fldBudget, l.focus)
@@ -363,13 +363,13 @@ func TestLaunchWorkingDirTabCompletes(t *testing.T) {
 	form.workingDir.SetOptions(workingDirSuggestions(root + sep + "cow"))
 	v := View(form)
 	// First Tab moves agent → workingDir.
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	l, _ := AsLaunchView(v)
 	if l.focus != fldWorkingDir {
 		t.Fatalf("expected focus on workingDir, got %d", l.focus)
 	}
 	// Second Tab should complete the unique match, not advance focus.
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	l, _ = AsLaunchView(v)
 	if l.focus != fldWorkingDir {
 		t.Errorf("Tab with completable match should stay on workingDir, got focus=%d", l.focus)
@@ -394,8 +394,8 @@ func TestLaunchWorkingDirTabAdvancesWhenAtLCP(t *testing.T) {
 	form := NewLaunch(parent, LaunchDefaults{Agent: "x", WorkingDir: root + sep + "cow"})
 	form.workingDir.SetOptions(workingDirSuggestions(root + sep + "cow"))
 	v := View(form)
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab}) // → workingDir
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab}) // can't complete
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // → workingDir
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // can't complete
 	l, _ := AsLaunchView(v)
 	if l.focus != fldBudget {
 		t.Errorf("Tab at LCP should advance focus to budget (%d), got %d", fldBudget, l.focus)
@@ -408,12 +408,12 @@ func TestLaunchWorkingDirDropdownOwnsVerticalKeys(t *testing.T) {
 	parent := stubView{name: "parent"}
 	form := NewLaunch(parent, LaunchDefaults{Agent: "go-review"})
 	v := View(form)
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	l, ok := AsLaunchView(v)
 	if !ok || l.focus != fldWorkingDir {
 		t.Fatalf("expected focus on workingDir, got %d", l.focus)
 	}
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyDown})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	l, _ = AsLaunchView(v)
 	if l.focus != fldWorkingDir {
 		t.Errorf("↓ on workingDir should stay on field (dropdown nav), got focus=%d", l.focus)
@@ -432,7 +432,7 @@ func TestLaunchArrowsForwardedToTypeaheadDropdown(t *testing.T) {
 	if l.focus != fldAgent {
 		t.Fatalf("expected default focus on agent, got %d", l.focus)
 	}
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyDown})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	l, _ = AsLaunchView(v)
 	if l.focus != fldAgent {
 		t.Errorf("↓ on agent should stay on agent (dropdown nav), got focus=%d", l.focus)
@@ -455,14 +455,14 @@ func TestLaunchArrowsNavigateOnButtons(t *testing.T) {
 		if l.focus == fldLaunch {
 			break
 		}
-		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+		v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	}
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyRight})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	l, _ := AsLaunchView(v)
 	if l.focus != fldCancel {
 		t.Errorf("→ on Launch should advance to Cancel (%d), got %d", fldCancel, l.focus)
 	}
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	l, _ = AsLaunchView(v)
 	if l.focus != fldLaunch {
 		t.Errorf("← on Cancel should return to Launch (%d), got %d", fldLaunch, l.focus)
@@ -483,13 +483,13 @@ func TestLaunchModelOptionsFollowProvider(t *testing.T) {
 	// as the typed value matches a known provider.
 	form = NewLaunch(stubView{name: "parent"}, LaunchDefaults{})
 	v := View(form)
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab}) // workingDir
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // workingDir
 	for {
 		l, _ := AsLaunchView(v)
 		if l.focus == fldProvider {
 			break
 		}
-		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+		v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	}
 	v = typeAll(t, v, "gemini")
 	l, _ := AsLaunchView(v)

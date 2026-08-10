@@ -17,7 +17,7 @@
 package pane
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // View is the polymorphic bottom-pane mount. Implementations must be

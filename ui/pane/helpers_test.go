@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestComposerInit(t *testing.T) {
@@ -57,7 +57,7 @@ func TestComposerPushHistoryDedupesAndCaps(t *testing.T) {
 }
 
 func TestComposerHistoryAtOldestStaysPut(t *testing.T) {
-	up := tea.KeyMsg{Type: tea.KeyUp, Alt: true}
+	up := tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModAlt}
 	v := View(NewComposer())
 	v = typeString(t, v, "only")
 	v, _ = v.Update(enterKey())
@@ -72,7 +72,7 @@ func TestComposerHistoryAtOldestStaysPut(t *testing.T) {
 
 func TestComposerHistoryNextWithoutNavIsNoOp(t *testing.T) {
 	c := NewComposer()
-	down := tea.KeyMsg{Type: tea.KeyDown, Alt: true}
+	down := tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModAlt}
 	v, _ := c.Update(down)
 	if v == nil {
 		t.Fatal("history next on fresh composer should not close the pane")
@@ -197,9 +197,9 @@ func TestDigitsOnlyAcceptKey(t *testing.T) {
 		msg  tea.Msg
 		want bool
 	}{
-		{"digit", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}}, true},
-		{"letter", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}, false},
-		{"non-rune key (backspace)", tea.KeyMsg{Type: tea.KeyBackspace}, true},
+		{"digit", tea.KeyPressMsg{Code: '5', Text: "5"}, true},
+		{"letter", tea.KeyPressMsg{Code: 'a', Text: "a"}, false},
+		{"non-rune key (backspace)", tea.KeyPressMsg{Code: tea.KeyBackspace}, true},
 		{"non-key msg", tea.WindowSizeMsg{}, true},
 	}
 	for _, tc := range cases {
@@ -218,11 +218,11 @@ func TestBudgetAcceptKey(t *testing.T) {
 		current string
 		want    bool
 	}{
-		{"digit", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}}, "", true},
-		{"first dot", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'.'}}, "1", true},
-		{"second dot rejected", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'.'}}, "1.5", false},
-		{"letter rejected", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}, "", false},
-		{"backspace passes", tea.KeyMsg{Type: tea.KeyBackspace}, "1.5", true},
+		{"digit", tea.KeyPressMsg{Code: '5', Text: "5"}, "", true},
+		{"first dot", tea.KeyPressMsg{Code: '.', Text: "."}, "1", true},
+		{"second dot rejected", tea.KeyPressMsg{Code: '.', Text: "."}, "1.5", false},
+		{"letter rejected", tea.KeyPressMsg{Code: 'a', Text: "a"}, "", false},
+		{"backspace passes", tea.KeyPressMsg{Code: tea.KeyBackspace}, "1.5", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -247,17 +247,17 @@ func TestContextualHintCoversAllFields(t *testing.T) {
 func TestTypeaheadUpDownNavigatesDropdown(t *testing.T) {
 	ta := newTypeahead("", "", 20, []string{"a", "b", "c"})
 	ta.Focus()
-	ta, _ = ta.Update(tea.KeyMsg{Type: tea.KeyDown})
+	ta, _ = ta.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if ta.cursor != 1 {
 		t.Errorf("↓ should move cursor to 1, got %d", ta.cursor)
 	}
-	ta, _ = ta.Update(tea.KeyMsg{Type: tea.KeyDown})
-	ta, _ = ta.Update(tea.KeyMsg{Type: tea.KeyDown})
+	ta, _ = ta.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	ta, _ = ta.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	// Should clamp at end (3 options, max cursor = 2).
 	if ta.cursor != 2 {
 		t.Errorf("cursor should clamp at len-1=2, got %d", ta.cursor)
 	}
-	ta, _ = ta.Update(tea.KeyMsg{Type: tea.KeyUp})
+	ta, _ = ta.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if ta.cursor != 1 {
 		t.Errorf("↑ should move cursor back to 1, got %d", ta.cursor)
 	}
@@ -266,8 +266,8 @@ func TestTypeaheadUpDownNavigatesDropdown(t *testing.T) {
 func TestTypeaheadEnterCommitsHighlight(t *testing.T) {
 	ta := newTypeahead("", "", 20, []string{"foo", "bar"})
 	ta.Focus()
-	ta, _ = ta.Update(tea.KeyMsg{Type: tea.KeyDown}) // cursor = 1
-	ta, _ = ta.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	ta, _ = ta.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // cursor = 1
+	ta, _ = ta.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if ta.Value() != "bar" {
 		t.Errorf("Enter should commit bar, got %q", ta.Value())
 	}
@@ -308,7 +308,7 @@ func TestTypeaheadDropdownScrollsToCursor(t *testing.T) {
 	ta.Focus()
 	// Move cursor below visible window.
 	for i := 0; i < 5; i++ {
-		ta, _ = ta.Update(tea.KeyMsg{Type: tea.KeyDown})
+		ta, _ = ta.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	out := ta.DropdownView()
 	// The cursor row (index 5 = "f") should appear in view.
@@ -335,8 +335,8 @@ func TestTypeaheadDropdownHeight(t *testing.T) {
 func TestTypeaheadUpdateRunInputResetsCursor(t *testing.T) {
 	ta := newTypeahead("", "", 20, []string{"alpha", "beta"})
 	ta.Focus()
-	ta, _ = ta.Update(tea.KeyMsg{Type: tea.KeyDown}) // cursor = 1
-	ta, _ = ta.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	ta, _ = ta.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // cursor = 1
+	ta, _ = ta.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if ta.cursor != 0 {
 		t.Errorf("typing should reset cursor to 0, got %d", ta.cursor)
 	}
@@ -345,25 +345,25 @@ func TestTypeaheadUpdateRunInputResetsCursor(t *testing.T) {
 func TestSelectFieldCyclesWithArrowsAndHL(t *testing.T) {
 	sf := newSelectField([]string{"a", "b", "c"}, "a", "")
 	sf.Focus()
-	sf, _ = sf.Update(tea.KeyMsg{Type: tea.KeyRight})
+	sf, _ = sf.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if sf.Value() != "b" {
 		t.Errorf("right → b, got %q", sf.Value())
 	}
-	sf, _ = sf.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	sf, _ = sf.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	if sf.Value() != "c" {
 		t.Errorf("l → c, got %q", sf.Value())
 	}
-	sf, _ = sf.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	sf, _ = sf.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	// Should clamp at end.
 	if sf.Value() != "c" {
 		t.Errorf("clamp at end: got %q, want c", sf.Value())
 	}
-	sf, _ = sf.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	sf, _ = sf.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
 	if sf.Value() != "b" {
 		t.Errorf("h → b, got %q", sf.Value())
 	}
-	sf, _ = sf.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	sf, _ = sf.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	sf, _ = sf.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	sf, _ = sf.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	// Should clamp at start.
 	if sf.Value() != "a" {
 		t.Errorf("clamp at start: got %q, want a", sf.Value())
@@ -372,7 +372,7 @@ func TestSelectFieldCyclesWithArrowsAndHL(t *testing.T) {
 
 func TestSelectFieldSpaceCycles(t *testing.T) {
 	sf := newSelectField([]string{"a", "b"}, "a", "")
-	sf, _ = sf.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	sf, _ = sf.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
 	if sf.Value() != "b" {
 		t.Errorf("space should cycle forward, got %q", sf.Value())
 	}
@@ -438,7 +438,7 @@ func focusField(t *testing.T, v View, target int) View {
 		if l.focus == target {
 			return v
 		}
-		v, _ = v.Update(tea.KeyMsg{Type: tea.KeyTab})
+		v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	}
 	t.Fatalf("focusField: could not reach %d", target)
 	return v
@@ -448,7 +448,7 @@ func TestLaunchEnterOnCancelReturnsParent(t *testing.T) {
 	parent := stubView{name: "parent"}
 	form := NewLaunch(parent, LaunchDefaults{Agent: "x"})
 	v := focusField(t, View(form), fldCancel)
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if v.Title() != "parent" {
 		t.Errorf("Enter on Cancel should return parent, got Title=%q", v.Title())
 	}
@@ -460,7 +460,7 @@ func TestLaunchEnterOnLaunchSubmits(t *testing.T) {
 	form := NewLaunch(parent, LaunchDefaults{Agent: "go-review"})
 	form.prompt.SetValue("do the thing")
 	v := focusField(t, View(form), fldLaunch)
-	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	req := asLaunchRequest(t, cmd)
 	if req.Agent != "go-review" || req.Prompt != "do the thing" {
 		t.Errorf("Enter on Launch should submit, got %+v", req)
@@ -474,7 +474,7 @@ func TestLaunchEnterOnAgentAdvancesFocus(t *testing.T) {
 	parent := stubView{name: "parent"}
 	form := NewLaunch(parent, LaunchDefaults{Agents: []string{"alpha", "beta"}})
 	// Default focus is fldAgent.
-	v, _ := form.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v, _ := form.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	l, _ := AsLaunchView(v)
 	if l.focus != fldWorkingDir {
 		t.Errorf("Enter on agent should advance to workingDir (%d), got %d", fldWorkingDir, l.focus)
@@ -487,7 +487,7 @@ func TestLaunchEnterOnWorkingDirNoChangeAdvancesFocus(t *testing.T) {
 	form := NewLaunch(parent, LaunchDefaults{Agent: "x", WorkingDir: "/nowhere"})
 	form.workingDir.SetOptions(nil)
 	v := focusField(t, View(form), fldWorkingDir)
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	l, _ := AsLaunchView(v)
 	if l.focus != fldBudget {
 		t.Errorf("Enter on workingDir with no commit should advance to budget (%d), got %d", fldBudget, l.focus)
@@ -504,7 +504,7 @@ func TestLaunchEnterOnWorkingDirCommitsAndStays(t *testing.T) {
 	form := NewLaunch(parent, LaunchDefaults{Agent: "x", WorkingDir: root + sep})
 	form.workingDir.SetOptions(workingDirSuggestions(root + sep))
 	v := focusField(t, View(form), fldWorkingDir)
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	l, _ := AsLaunchView(v)
 	// Commit took → focus stays on workingDir.
 	if l.focus != fldWorkingDir {
@@ -519,7 +519,7 @@ func TestLaunchEnterOnProviderRefreshesModelOptions(t *testing.T) {
 	parent := stubView{name: "parent"}
 	form := NewLaunch(parent, LaunchDefaults{Agent: "x"})
 	v := focusField(t, View(form), fldProvider)
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	l, _ := AsLaunchView(v)
 	if l.focus != fldModel {
 		t.Errorf("Enter on provider should advance to model (%d), got %d", fldModel, l.focus)
@@ -530,7 +530,7 @@ func TestLaunchEnterOnModelAdvancesFocus(t *testing.T) {
 	parent := stubView{name: "parent"}
 	form := NewLaunch(parent, LaunchDefaults{Agent: "x"})
 	v := focusField(t, View(form), fldModel)
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	l, _ := AsLaunchView(v)
 	if l.focus != fldIsolate {
 		t.Errorf("Enter on model should advance to isolate (%d), got %d", fldIsolate, l.focus)
@@ -544,7 +544,7 @@ func TestLaunchEnterOnPromptFallsThrough(t *testing.T) {
 	// Enter on prompt is not "handled" by the form — it forwards to the
 	// textarea, which inserts no newline (the textarea reserves Enter for
 	// composer submit). The form stays open and focus stays put.
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	l, ok := AsLaunchView(v)
 	if !ok {
 		t.Fatal("Enter on prompt should keep form open")
@@ -558,7 +558,7 @@ func TestLaunchEnterOnIsolateAdvancesFocus(t *testing.T) {
 	parent := stubView{name: "parent"}
 	form := NewLaunch(parent, LaunchDefaults{Agent: "x"})
 	v := focusField(t, View(form), fldIsolate)
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	l, _ := AsLaunchView(v)
 	// fldIsolate uses the default branch in handleEnter.
 	if l.focus != fldPrompt {
@@ -572,12 +572,12 @@ func TestLaunchAcceptKeyOnIterRejectsLetters(t *testing.T) {
 	v := focusField(t, View(form), fldIters)
 	before, _ := AsLaunchView(v)
 	prev := before.iter.Value()
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	v, _ = v.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	l, _ := AsLaunchView(v)
 	if l.iter.Value() != prev {
 		t.Errorf("letter should be rejected on iter field, got %q", l.iter.Value())
 	}
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
+	v, _ = v.Update(tea.KeyPressMsg{Code: '5', Text: "5"})
 	l, _ = AsLaunchView(v)
 	if !strings.Contains(l.iter.Value(), "5") {
 		t.Errorf("digit should pass through, got %q", l.iter.Value())
@@ -590,7 +590,7 @@ func TestLaunchAcceptKeyOnBudgetRejectsSecondDot(t *testing.T) {
 	v := focusField(t, View(form), fldBudget)
 	before, _ := AsLaunchView(v)
 	prev := before.budget.Value()
-	v, _ = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'.'}})
+	v, _ = v.Update(tea.KeyPressMsg{Code: '.', Text: "."})
 	l, _ := AsLaunchView(v)
 	if l.budget.Value() != prev {
 		t.Errorf("second dot should be rejected, got %q", l.budget.Value())

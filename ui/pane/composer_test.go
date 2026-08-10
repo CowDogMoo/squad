@@ -4,17 +4,17 @@ import (
 	"reflect"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // keyMsg builds a tea.KeyMsg for a single rune or named key. Keep this
 // tiny — the textarea model parses tea.KeyMsg natively, so we just need
 // to construct one.
 func runeKey(r rune) tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+	return tea.KeyPressMsg{Code: r, Text: string(r)}
 }
 
-func enterKey() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyEnter} }
+func enterKey() tea.KeyMsg { return tea.KeyPressMsg{Code: tea.KeyEnter} }
 
 // typeString sends each character through Update as a KeyRunes msg.
 // Returns the resulting view (which may swap if Update produced one).
@@ -127,8 +127,8 @@ func TestComposerHistoryRecallsPriorSubmissions(t *testing.T) {
 	// History walks on ctrl+↑/ctrl+↓ — plain ↑/↓ belongs to the host App
 	// (sidebar cycle) so users can navigate runs without leaving the
 	// composer.
-	up := tea.KeyMsg{Type: tea.KeyUp, Alt: true}
-	down := tea.KeyMsg{Type: tea.KeyDown, Alt: true}
+	up := tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModAlt}
+	down := tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModAlt}
 	v := View(NewComposer())
 	v = typeString(t, v, "first")
 	v, _ = v.Update(enterKey())
@@ -152,7 +152,7 @@ func TestComposerHistoryRecallsPriorSubmissions(t *testing.T) {
 
 func TestComposerHistoryEmptyIsNoOp(t *testing.T) {
 	c := NewComposer()
-	up := tea.KeyMsg{Type: tea.KeyUp, Alt: true}
+	up := tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModAlt}
 	v, _ := c.Update(up)
 	if v == nil {
 		t.Fatal("history key on fresh composer should not close the pane")

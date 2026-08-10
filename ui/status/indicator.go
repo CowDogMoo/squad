@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/cowdogmoo/squad/ui/style"
 )
@@ -54,9 +54,9 @@ type Snapshot struct {
 	Interrupt bool          // show "esc to interrupt" affordance
 }
 
-// Render returns a single styled line. ANSI escapes are emitted unless the
-// caller has set lipgloss.SetColorProfile(termenv.Ascii) — which test code
-// should do to produce stable goldens.
+// Render returns a single styled line. ANSI escapes are always emitted;
+// lipgloss v2 defers color-profile downsampling to the bubbletea renderer,
+// so tests asserting on output should strip escapes first.
 func Render(s Snapshot) string {
 	glyph := renderGlyph(s.State, s.Frame)
 	label := renderLabel(s.State, s.Label)
