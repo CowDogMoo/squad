@@ -432,7 +432,7 @@ func ExtractFunctionCalls(resp *oairesponses.Response) []FunctionCall {
 				ID:        item.ID,
 				CallID:    item.CallID,
 				Name:      item.Name,
-				Arguments: item.Arguments,
+				Arguments: item.Arguments.OfString,
 			})
 		}
 	}
