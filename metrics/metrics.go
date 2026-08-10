@@ -129,6 +129,18 @@ func (m *Metrics) IncrementIterations() {
 	m.iterations++
 }
 
+// AddIterations adds n iterations to the run total. Agentic CLI providers
+// report the whole run's turn count at once rather than incrementing per
+// loop pass; non-positive n is ignored.
+func (m *Metrics) AddIterations(n int) {
+	if n <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.iterations += n
+}
+
 // InputTokens returns the current input token count.
 func (m *Metrics) InputTokens() int64 {
 	m.mu.Lock()
@@ -262,6 +274,8 @@ var SupportedProviders = []string{
 	"gemini",
 	"ollama",
 	"openai-compat",
+	"claude-code",
+	"agy",
 }
 
 // providerMappings maps a squad provider name to the LiteLLM
@@ -628,6 +642,8 @@ func (m *Metrics) costString(cost float64) string {
 		return fmt.Sprintf("$%.4f", cost)
 	case strings.ToLower(m.Provider) == "ollama":
 		return "$0.00 (local)"
+	case IsAgenticCLI(m.Provider):
+		return "$0.00 (subscription)"
 	default:
 		return "N/A (pricing not available yet)"
 	}

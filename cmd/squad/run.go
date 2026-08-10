@@ -325,7 +325,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().String("api-version", "", "API version (Azure/OpenAI-compatible)")
 	cmd.Flags().String("api-type", "", "API type (openai or azure)")
 	cmd.Flags().Bool("openai-compat-max-tokens", false, "Use max_tokens for OpenAI-compatible endpoints")
-	cmd.Flags().String("provider", "", "Model provider (openai, anthropic, gemini, ollama, etc)")
+	cmd.Flags().String("provider", "", "Model provider (openai, anthropic, gemini, ollama, claude-code, agy, etc)")
 	cmd.Flags().String("model", "", "Model name")
 	cmd.Flags().Float64("temperature", -1, "Sampling temperature (default from config)")
 	cmd.Flags().Int("max-tokens", -1, "Max output tokens (default from config)")

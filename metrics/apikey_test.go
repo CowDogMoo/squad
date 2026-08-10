@@ -1,6 +1,10 @@
 package metrics
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestKeyStatusProviderEnvTable(t *testing.T) {
 	cases := []struct {
@@ -70,5 +74,44 @@ func TestKeyStatusUnknownProviderNotNeeded(t *testing.T) {
 	got := KeyStatus("not-a-real-provider", "")
 	if got.State != APIKeyNotNeeded || got.EnvVar != "" || got.Source != APIKeySourceNone {
 		t.Fatalf("unknown provider status = %+v, want not-needed/no env", got)
+	}
+}
+
+func TestKeyStatusAgenticCLIBinaryPresent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	got := KeyStatus("claude-code", "")
+	if got.State != APIKeyOK || got.Source != APIKeySourceBinary || got.EnvVar != "claude CLI" {
+		t.Fatalf("claude-code with binary on PATH = %+v, want ok from binary", got)
+	}
+}
+
+func TestKeyStatusAgenticCLIBinaryMissing(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	got := KeyStatus("agy", "")
+	if got.State != APIKeyMissing || got.EnvVar != "agy CLI" || got.Source != APIKeySourceNone {
+		t.Fatalf("agy without binary = %+v, want missing agy CLI", got)
+	}
+}
+
+func TestIsAgenticCLI(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"claude-code", true},
+		{" Claude-Code", true},
+		{"agy", true},
+		{"anthropic", false},
+		{"claude", false}, // alias resolution happens in runner.normalizeProvider
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := IsAgenticCLI(tc.in); got != tc.want {
+			t.Errorf("IsAgenticCLI(%q) = %v, want %v", tc.in, got, tc.want)
+		}
 	}
 }
