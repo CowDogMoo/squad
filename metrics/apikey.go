@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -20,8 +21,25 @@ type APIKeySource string
 const (
 	APIKeySourceConfig APIKeySource = "config"
 	APIKeySourceEnv    APIKeySource = "env"
+	APIKeySourceBinary APIKeySource = "binary"
 	APIKeySourceNone   APIKeySource = "none"
 )
+
+// AgenticCLIBinaries maps subscription-based agentic CLI providers to the
+// binary each one shells out to. These providers need no API key — the CLI
+// carries its own authentication (typically a subscription login) — so
+// credential detection checks that the binary is installed instead.
+var AgenticCLIBinaries = map[string]string{
+	"claude-code": "claude",
+	"agy":         "agy",
+}
+
+// IsAgenticCLI reports whether provider runs through a local agentic CLI
+// binary rather than a direct model API.
+func IsAgenticCLI(provider string) bool {
+	_, ok := AgenticCLIBinaries[strings.ToLower(strings.TrimSpace(provider))]
+	return ok
+}
 
 // APIKeyStatus reports whether a provider has the credential it needs.
 type APIKeyStatus struct {
@@ -58,6 +76,15 @@ func KeyStatus(provider, providerToken string) APIKeyStatus {
 	}
 	if provider == "ollama" {
 		return APIKeyStatus{State: APIKeyNotNeeded, Source: APIKeySourceNone}
+	}
+	// Agentic CLI providers authenticate through the installed binary, so
+	// "credential present" means "binary on PATH". This lets manifest model
+	// walks fall back to an API provider when the CLI isn't installed.
+	if bin, ok := AgenticCLIBinaries[provider]; ok {
+		if _, err := exec.LookPath(bin); err != nil {
+			return APIKeyStatus{State: APIKeyMissing, EnvVar: bin + " CLI", Source: APIKeySourceNone}
+		}
+		return APIKeyStatus{State: APIKeyOK, EnvVar: bin + " CLI", Source: APIKeySourceBinary}
 	}
 	envVars, ok := providerAPIKeyEnv[provider]
 	if !ok || len(envVars) == 0 {

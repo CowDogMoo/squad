@@ -191,6 +191,15 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 		logging.InfoContext(cmd.Context(), "remote-only agent: disabling require-actionable")
 	}
 
+	// Agentic CLI providers edit files directly on disk, so actionable-output
+	// detection relies on comparing git working-tree fingerprints; outside a
+	// git repo there is nothing to compare and the CLI's prose report would
+	// false-fail the guard.
+	if opts.RequireActionable && metrics.IsAgenticCLI(normalizeProvider(opts.Provider)) && !isGitRepo(cmd.Context(), workingDir) {
+		opts.RequireActionable = false
+		logging.InfoContext(cmd.Context(), "agentic CLI provider outside a git repo: disabling require-actionable")
+	}
+
 	ctx := initRunContext(cmd.Context(), bundle)
 
 	logger, err := openSession(opts, bundle, prompt)
@@ -326,6 +335,22 @@ func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent
 	}
 	if opts.Model != "" {
 		applyExplicitModel(opts, bundle)
+		return "", nil
+	}
+	// An explicitly requested agentic CLI provider (claude-code, agy)
+	// authenticates through the local CLI, so the credential-driven walk
+	// below doesn't apply — and the config default model (rule 2) belongs
+	// to a different API provider and must not be paired with the CLI. The
+	// model may stay empty: the CLI then uses its own configured default,
+	// unless the manifest pins one for this provider.
+	if p := normalizeProvider(opts.Provider); metrics.IsAgenticCLI(p) {
+		for i := range bundle.Models {
+			if normalizeProvider(bundle.Models[i].Provider) == p {
+				opts.Model = bundle.Models[i].Model
+				break
+			}
+		}
+		logging.InfoContext(ctx, "using agentic CLI provider %s (model=%q)", p, opts.Model)
 		return "", nil
 	}
 	if warn, ok := applyConfigDefault(ctx, opts, bundle); ok {

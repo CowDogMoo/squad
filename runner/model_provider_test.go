@@ -10,12 +10,16 @@ import "testing"
 func TestNormalizeProviderGoogleAlias(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"google":    "gemini",
-		" Google ":  "gemini",
-		"gemini":    "gemini",
-		"anthropic": "anthropic",
-		"":          "",
-		" OpenAI ":  "openai",
+		"google":      "gemini",
+		" Google ":    "gemini",
+		"gemini":      "gemini",
+		"anthropic":   "anthropic",
+		"":            "",
+		" OpenAI ":    "openai",
+		"claude":      "claude-code",
+		" Claude ":    "claude-code",
+		"claude-code": "claude-code",
+		"agy":         "agy",
 	}
 	for in, want := range cases {
 		if got := normalizeProvider(in); got != want {

@@ -320,6 +320,8 @@ variables, or config file.
 | Google AI | supported | Google AI endpoints | required | Gemini models via LangChainGo |
 | Ollama | supported | `http://localhost:11434/v1` (default) | optional | Local models; use `--num-ctx` for context size |
 | OpenAI-compatible | supported | provider-specific (required) | optional | Any `/v1/chat/completions` endpoint; use `--base-url` |
+| Claude Code CLI | supported | n/a | not needed | `claude-code`; runs the installed `claude` binary in print mode on your subscription |
+| Augment CLI | supported | n/a | not needed | `agy`; runs the installed `agy` binary in print mode on your subscription |
 
 ### OpenAI
 
@@ -432,6 +434,51 @@ provider:
 model:
   default: databricks-gpt-5-5-pro
 ```
+
+### Agentic CLI providers (no API key)
+
+The `claude-code` and `agy` providers run an installed agentic CLI — Claude
+Code's `claude` or Augment's `agy` — in non-interactive print mode instead of
+calling a model API. The CLI brings its own tools, permissions, and
+authentication (typically a subscription login), so no API key or token is
+needed; squad assembles the agent's prompt bundle, hands it to the CLI in the
+working directory, and records the reported token usage and turn count from
+the CLI's JSON output.
+
+```bash
+# Claude Code (uses the CLI's default model when --model is omitted)
+squad run --agent go-review --provider claude-code
+
+# Pin a model alias understood by the CLI
+squad run --agent go-review --provider claude-code --model sonnet
+
+# Augment CLI
+squad run --agent go-review --provider agy
+```
+
+Agent manifests can rank a CLI ahead of an API fallback; the CLI entry is
+selected only when its binary is on `PATH`:
+
+```yaml
+models:
+  - provider: claude-code
+    model: sonnet
+  - provider: anthropic
+    model: claude-sonnet-4-6
+```
+
+Behavior differences from API providers:
+
+- The CLI runs its own agent loop, so squad's tool surface, `--max-iterations`,
+  `--temperature`, `--max-tokens`, and `--stream` do not apply.
+- Cost is reported as `$0` — usage is billed through the CLI's subscription.
+- `--mode readonly` maps to the CLI's native restrictions (`claude`:
+  edit tools disallowed; `agy`: plan mode).
+- Permission prompts are bypassed (`--dangerously-skip-permissions`), matching
+  squad's unattended tool loop.
+- `environment` types other than `local`, `comments_only`, and `ascii_only`
+  are rejected — those guarantees live in squad's own tool gates.
+- MCP servers from the manifest are not forwarded; configure them in the CLI.
 
 Example Databricks endpoint names: `databricks-gpt-5-5-pro`,
 `databricks-claude-sonnet-4-5`, `databricks-meta-llama-3-3-70b-instruct`.

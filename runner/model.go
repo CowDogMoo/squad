@@ -173,6 +173,13 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 		systemPrompt += "\n\n## System Override\n\n" + strings.TrimSpace(opts.System) + "\n"
 	}
 
+	// Agentic CLI providers run the entire agent loop inside the external
+	// binary with its own tools and auth; squad's executor, MCP, and tool
+	// plumbing must not be set up for them.
+	if metrics.IsAgenticCLI(provider) {
+		return invokeAgenticCLI(ctx, opts, provider, model, systemPrompt, bundle, m)
+	}
+
 	ex, err := executor.New(bundle.Environment, bundle.WorkDir)
 	if err != nil {
 		m.Finish()
@@ -462,6 +469,10 @@ func buildLLM(ctx context.Context, opts *RunOptions, provider, model string) (ll
 		return buildGeminiLLM(ctx, opts, model)
 	case "openai-compat":
 		return buildOpenAICompatLLM(opts, "openai-compat", model)
+	case "claude-code", "agy":
+		// Defence in depth: these are dispatched in InvokeModel before the
+		// LangChain path; reaching here means a call path skipped that branch.
+		return nil, fmt.Errorf("provider %q is an agentic CLI provider and cannot be used as a LangChain model", provider)
 	default:
 		return nil, fmt.Errorf("provider not implemented: %s", provider)
 	}
@@ -545,11 +556,15 @@ func buildGeminiLLM(ctx context.Context, opts *RunOptions, model string) (llms.M
 
 func normalizeProvider(provider string) string {
 	p := strings.ToLower(strings.TrimSpace(provider))
+	switch p {
 	// Agent manifests commonly write "google" for Gemini models; the
 	// implemented provider is "gemini" (metrics/apikey.go carries the
 	// matching credential entry for both spellings).
-	if p == "google" {
+	case "google":
 		return "gemini"
+	// "claude" is the natural spelling for the Claude Code CLI provider.
+	case "claude":
+		return "claude-code"
 	}
 	return p
 }

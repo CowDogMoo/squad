@@ -110,6 +110,32 @@ func TestIncrementIterations(t *testing.T) {
 	}
 }
 
+func TestAddIterations(t *testing.T) {
+	t.Parallel()
+	m := New("claude-code", "")
+
+	m.AddIterations(0)
+	m.AddIterations(-5)
+	if m.Iterations() != 0 {
+		t.Fatalf("Iterations = %d, want 0 after non-positive adds", m.Iterations())
+	}
+
+	m.AddIterations(3)
+	m.AddIterations(2)
+	if m.Iterations() != 5 {
+		t.Fatalf("Iterations = %d, want 5", m.Iterations())
+	}
+}
+
+func TestCostStringSubscriptionProvider(t *testing.T) {
+	t.Parallel()
+	m := New("claude-code", "some-model")
+	m.AddTokens(1000, 100)
+	if got := m.String(); !strings.Contains(got, "$0.00 (subscription)") {
+		t.Fatalf("String() = %q, want subscription cost marker", got)
+	}
+}
+
 func TestFinish(t *testing.T) {
 	t.Parallel()
 	m := New("openai", "gpt-4o")
