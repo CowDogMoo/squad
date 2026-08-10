@@ -239,6 +239,42 @@ func TestRunMissingBinary(t *testing.T) {
 	}
 }
 
+func TestRunUnknownProvider(t *testing.T) {
+	t.Parallel()
+	_, err := Run(context.Background(), Request{Provider: "nope", UserPrompt: "x"})
+	if err == nil || !strings.Contains(err.Error(), "unknown agentic CLI provider") {
+		t.Fatalf("err = %v, want unknown-provider error", err)
+	}
+}
+
+func TestOutputTailTruncatesLongStreams(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("e", 3000)
+	got := outputTail([]byte(long), []byte("out"))
+	if !strings.Contains(got, "stderr: …") {
+		t.Errorf("long stderr should be tail-truncated with ellipsis: %.80s", got)
+	}
+	if !strings.Contains(got, "stdout: out") {
+		t.Errorf("stdout tail missing: %.80s", got)
+	}
+	if len(got) > 4200 {
+		t.Errorf("tail output too long: %d bytes", len(got))
+	}
+	if outputTail(nil, nil) != "" {
+		t.Error("empty streams should produce empty tail")
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	t.Parallel()
+	if got := truncate("short", 10); got != "short" {
+		t.Errorf("truncate(short) = %q", got)
+	}
+	if got := truncate("abcdef", 3); got != "abc…" {
+		t.Errorf("truncate long = %q, want abc…", got)
+	}
+}
+
 func TestRunNonZeroExit(t *testing.T) {
 	dir := t.TempDir()
 	script := "#!/bin/sh\necho 'auth expired' >&2\nexit 1\n"

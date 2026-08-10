@@ -10,9 +10,11 @@ import (
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/executor"
+	"github.com/cowdogmoo/squad/mcp"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/skill"
 	"github.com/cowdogmoo/squad/tools"
+	"github.com/spf13/cobra"
 )
 
 func TestInvokeAgenticCLIRejectsNonLocalEnvironment(t *testing.T) {
@@ -196,5 +198,108 @@ func TestInvokeAgenticCLINoEditsNoMark(t *testing.T) {
 	}
 	if tools.EditsApplied(ctx) {
 		t.Error("EditsApplied = true, want false for a read-only run")
+	}
+}
+
+// TestInvokeAgenticCLIWarnsOnIgnoredOptions pins that MCP servers, --resume,
+// and --stream are warn-and-continue for CLI providers, not errors.
+func TestInvokeAgenticCLIWarnsOnIgnoredOptions(t *testing.T) {
+	repo := initTestGitRepo(t)
+	installFakeAgenticCLI(t, ":")
+
+	bundle := &agent.Bundle{
+		WorkDir:    repo,
+		User:       "task",
+		MCPServers: []mcp.ServerConfig{{Name: "srv"}},
+	}
+	opts := &RunOptions{ResumeID: "prior-session", Stream: true}
+	m := metrics.New("claude-code", "")
+	resp, _, err := invokeAgenticCLI(tools.InitEdits(context.Background()), opts, "claude-code", "", "sys", bundle, m)
+	if err != nil {
+		t.Fatalf("invokeAgenticCLI: %v", err)
+	}
+	if resp != "done" {
+		t.Errorf("response = %q, want %q", resp, "done")
+	}
+}
+
+func TestInvokeAgenticCLIWrapsCLIFailure(t *testing.T) {
+	binDir := t.TempDir()
+	script := "#!/bin/sh\ncat > /dev/null\necho boom >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	bundle := &agent.Bundle{WorkDir: t.TempDir(), User: "task"}
+	m := metrics.New("claude-code", "")
+	_, _, err := invokeAgenticCLI(tools.InitEdits(context.Background()), &RunOptions{}, "claude-code", "", "sys", bundle, m)
+	if err == nil || !strings.Contains(err.Error(), "model call failed") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v, want wrapped CLI failure with stderr tail", err)
+	}
+}
+
+func TestAgenticWorktreeSnapshot(t *testing.T) {
+	ctx := context.Background()
+	if got := agenticWorktreeSnapshot(ctx, t.TempDir()); got != "" {
+		t.Errorf("non-git dir snapshot = %q, want empty", got)
+	}
+
+	// A repo with no commits makes `git diff HEAD` fail, which must degrade
+	// to "detection unavailable" rather than a partial fingerprint.
+	empty := t.TempDir()
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = empty
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if got := agenticWorktreeSnapshot(ctx, empty); got != "" {
+		t.Errorf("commitless repo snapshot = %q, want empty", got)
+	}
+
+	repo := initTestGitRepo(t)
+	first := agenticWorktreeSnapshot(ctx, repo)
+	if first == "" {
+		t.Fatal("committed repo snapshot empty, want fingerprint")
+	}
+	if err := os.WriteFile(filepath.Join(repo, "b.txt"), []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if second := agenticWorktreeSnapshot(ctx, repo); second == first {
+		t.Error("snapshot unchanged after adding a file")
+	}
+}
+
+func TestBuildLLMRejectsAgenticCLIProviders(t *testing.T) {
+	t.Parallel()
+	for _, provider := range []string{"claude-code", "agy"} {
+		_, err := buildLLM(context.Background(), &RunOptions{}, provider, "")
+		if err == nil || !strings.Contains(err.Error(), "agentic CLI provider") {
+			t.Errorf("buildLLM(%q) err = %v, want agentic-CLI rejection", provider, err)
+		}
+	}
+}
+
+// TestExecuteRunAgenticCLIOutsideGitRepo drives the full ExecuteRun path with
+// a CLI provider in a non-git working dir: the require-actionable guard must
+// disable itself and the run must route through the fake CLI end to end.
+func TestExecuteRunAgenticCLIOutsideGitRepo(t *testing.T) {
+	installFakeAgenticCLI(t, ":")
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	agentsDir := writeTestAgent(t, "smoke")
+	opts := &RunOptions{
+		Agent:             "smoke",
+		AgentsDir:         agentsDir,
+		Provider:          "claude-code",
+		WorkingDir:        t.TempDir(),
+		RequireActionable: true,
+		ConfigAvailable:   true,
+	}
+	if err := ExecuteRun(cmd, []string{"hello"}, opts); err != nil {
+		t.Fatalf("ExecuteRun() error = %v", err)
+	}
+	if opts.RequireActionable {
+		t.Error("RequireActionable still true, want auto-disabled outside a git repo")
 	}
 }
