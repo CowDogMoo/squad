@@ -166,6 +166,18 @@ func TestViewRendersLaunchFormAfterOpen(t *testing.T) {
 	}
 }
 
+func TestViewWrapsRenderInAltScreen(t *testing.T) {
+	a := makeApp()
+	next, _ := a.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	v := asApp(t, next).View()
+	if !v.AltScreen {
+		t.Error("View() should enable the alternate screen buffer")
+	}
+	if !contains(v.Content, "SQUAD") {
+		t.Errorf("View() content should carry the rendered frame; got:\n%s", v.Content)
+	}
+}
+
 func contains(s, substr string) bool {
 	for i := 0; i+len(substr) <= len(s); i++ {
 		if s[i:i+len(substr)] == substr {
