@@ -36,6 +36,17 @@ type Composer struct {
 // enough that the slice never balloons.
 const historyMax = 100
 
+// slashCommands mirrors the host app's command dispatch table
+// (app.handleCommand). Rendered as the live-filtered menu above the
+// input while the buffer starts with "/" — keep in sync when adding
+// a command there.
+var slashCommands = []struct{ name, args, desc string }{
+	{"run", "", "open the launch form"},
+	{"preset", "save|load|list|delete [NAME]", "manage launch presets"},
+	{"help", "", "commands and keys"},
+	{"quit", "", "exit squad"},
+}
+
 // NewComposer returns a Composer with sensible defaults: 1-line visible
 // height when empty (grows to MaxHeight as the user types), no line
 // numbers, placeholder hint, prompt arrow.
@@ -180,12 +191,64 @@ func (c *Composer) fitHeight() {
 }
 
 // View renders the composer. Width/height come from the host; if width is
-// 0 we trust the textarea's existing size (set via WindowSizeMsg).
+// 0 we trust the textarea's existing size (set via WindowSizeMsg). While
+// the buffer is a slash command, the matching-command menu renders above
+// the input so the user never has to remember command names.
 func (c Composer) View(width, _ int) string {
 	if width > 0 {
 		c.ta.SetWidth(width - 2)
 	}
+	if menu := c.slashMenu(); menu != "" {
+		return menu + "\n" + c.ta.View()
+	}
 	return c.ta.View()
+}
+
+// slashMenu returns the command menu for the current buffer, or "" when
+// the buffer isn't a partial slash command. "/pr" lists commands whose
+// name starts with "pr"; once a full name plus a space is typed, only
+// that command's usage line stays as an inline argument reminder.
+// Multi-line buffers get no menu — a slash inside prose isn't a command.
+func (c Composer) slashMenu() string {
+	text := trimLeftSpace(c.ta.Value())
+	if !strings.HasPrefix(text, "/") || strings.Contains(text, "\n") {
+		return ""
+	}
+	token := text[1:]
+	hasArgs := false
+	if i := strings.IndexByte(token, ' '); i >= 0 {
+		token, hasArgs = token[:i], true
+	}
+
+	type row struct{ left, desc string }
+	var rows []row
+	maxLeft := 0
+	for _, cmd := range slashCommands {
+		if hasArgs && cmd.name != token {
+			continue
+		}
+		if !hasArgs && !strings.HasPrefix(cmd.name, token) {
+			continue
+		}
+		left := "/" + cmd.name
+		if cmd.args != "" {
+			left += " " + cmd.args
+		}
+		if len(left) > maxLeft {
+			maxLeft = len(left)
+		}
+		rows = append(rows, row{left, cmd.desc})
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, len(rows))
+	for _, r := range rows {
+		pad := strings.Repeat(" ", maxLeft-len(r.left)+2)
+		lines = append(lines, "  "+style.Hint.Render(r.left)+pad+style.Secondary.Render(r.desc))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Height returns the composer's current rendered row count. The host uses

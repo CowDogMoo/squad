@@ -2,6 +2,7 @@ package pane
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -174,4 +175,58 @@ func composerValue(t *testing.T, v View) string {
 		t.Fatalf("expected Composer, got %T", v)
 	}
 	return c.Value()
+}
+
+func TestComposerSlashMenu(t *testing.T) {
+	cases := []struct {
+		name    string
+		buffer  string
+		want    []string
+		exclude []string
+		empty   bool
+	}{
+		{
+			name:   "bare slash lists all commands",
+			buffer: "/",
+			want:   []string{"/run", "/preset", "/help", "/quit"},
+		},
+		{
+			name:    "prefix filters the list",
+			buffer:  "/pre",
+			want:    []string{"/preset"},
+			exclude: []string{"/run", "/help", "/quit"},
+		},
+		{
+			name:    "typed args keep only the usage line",
+			buffer:  "/preset lo",
+			want:    []string{"/preset"},
+			exclude: []string{"/run"},
+		},
+		{name: "plain prompt has no menu", buffer: "fix the bug", empty: true},
+		{name: "unknown command has no menu", buffer: "/xyz", empty: true},
+		{name: "multi-line buffer has no menu", buffer: "/run\nsecond line", empty: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewComposer()
+			c.SetValue(tc.buffer)
+			menu := c.slashMenu()
+			if tc.empty {
+				if menu != "" {
+					t.Fatalf("expected no menu for %q, got:\n%s", tc.buffer, menu)
+				}
+				return
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(menu, w) {
+					t.Errorf("menu for %q missing %q:\n%s", tc.buffer, w, menu)
+				}
+			}
+			for _, e := range tc.exclude {
+				if strings.Contains(menu, e) {
+					t.Errorf("menu for %q should not contain %q:\n%s", tc.buffer, e, menu)
+				}
+			}
+		})
+	}
 }
