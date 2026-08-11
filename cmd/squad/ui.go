@@ -28,7 +28,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/cowdogmoo/squad/config"
@@ -111,7 +111,6 @@ func runUI(cmd *cobra.Command, _ []string) error {
 
 	prog := tea.NewProgram(
 		model,
-		tea.WithAltScreen(),
 		tea.WithContext(cmd.Context()),
 	)
 	_, err := prog.Run()

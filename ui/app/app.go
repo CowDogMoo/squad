@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/ui/pane"
@@ -255,7 +256,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // The panel is padded vertically to fill (height - toast - composer), so
 // the chrome reaches the bottom of the terminal instead of leaving dead
 // black space below.
-func (a App) View() string {
+func (a App) View() tea.View {
+	view := tea.NewView(a.render())
+	view.AltScreen = true
+	return view
+}
+
+// render produces the full-screen frame as a string. Split from View so
+// tests can assert on the raw content without unwrapping tea.View.
+func (a App) render() string {
 	if a.quitting {
 		return ""
 	}
@@ -389,33 +398,7 @@ func truncateAnsi(s string, width int) string {
 	if width == 1 {
 		return "…"
 	}
-	target := width - 1
-	in := []rune(s)
-	var b strings.Builder
-	visible := 0
-	for i := 0; i < len(in); i++ {
-		r := in[i]
-		if r == 0x1b && i+1 < len(in) && in[i+1] == '[' {
-			b.WriteRune(r)
-			i++
-			for i < len(in) {
-				b.WriteRune(in[i])
-				c := in[i]
-				if c >= 0x40 && c <= 0x7e {
-					break
-				}
-				i++
-			}
-			continue
-		}
-		if visible >= target {
-			b.WriteRune('…')
-			break
-		}
-		b.WriteRune(r)
-		visible++
-	}
-	return b.String()
+	return ansi.Truncate(s, width, "…")
 }
 
 // AsApp narrows a tea.Model back to App. Kept in production code so the

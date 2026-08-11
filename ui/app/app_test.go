@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/cowdogmoo/squad/ui/pane"
 	"github.com/cowdogmoo/squad/ui/presets"
@@ -67,7 +67,7 @@ func TestCycleSelectionBackward(t *testing.T) {
 
 func TestQuitOnCtrlC(t *testing.T) {
 	a := makeApp()
-	next, cmd := a.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, cmd := a.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if !asApp(t, next).Quitting() {
 		t.Error("ctrl+c should set quitting=true")
 	}
@@ -90,7 +90,7 @@ func TestCtrlNAdvancesSelection(t *testing.T) {
 	// "always advance sidebar" shortcut that works from any region (so
 	// users can flip through runs without leaving the composer).
 	a := makeApp()
-	next, _ := a.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	next, _ := a.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	if got := asApp(t, next).Selected(); got != "b" {
 		t.Errorf("ctrl+n: got %q, want %q", got, "b")
 	}
@@ -101,12 +101,12 @@ func TestTabCyclesRegions(t *testing.T) {
 	if got := a.focusedRegion; got != regionComposer {
 		t.Fatalf("default region: got %v, want regionComposer", got)
 	}
-	next, _ := a.Update(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ := a.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if got := asApp(t, next).focusedRegion; got != regionSidebar {
 		t.Errorf("after tab: got %v, want regionSidebar", got)
 	}
 	// In sidebar region, ↓ cycles runs.
-	after, _ := next.Update(tea.KeyMsg{Type: tea.KeyDown})
+	after, _ := next.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if got := asApp(t, after).Selected(); got != "b" {
 		t.Errorf("sidebar+↓: got %q, want %q", got, "b")
 	}
@@ -160,9 +160,21 @@ func TestViewRendersLaunchFormAfterOpen(t *testing.T) {
 		t.Fatal("expected App after resize")
 	}
 	sized.handleSubmit(pane.Submitted{Kind: pane.KindCommand, Text: "run"})
-	out := sized.View()
+	out := sized.render()
 	if !contains(out, "NEW RUN") {
 		t.Errorf("after /run, View() should contain NEW RUN heading; got:\n%s", out)
+	}
+}
+
+func TestViewWrapsRenderInAltScreen(t *testing.T) {
+	a := makeApp()
+	next, _ := a.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	v := asApp(t, next).View()
+	if !v.AltScreen {
+		t.Error("View() should enable the alternate screen buffer")
+	}
+	if !contains(v.Content, "SQUAD") {
+		t.Errorf("View() content should carry the rendered frame; got:\n%s", v.Content)
 	}
 }
 

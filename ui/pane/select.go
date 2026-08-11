@@ -3,8 +3,8 @@ package pane
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/cowdogmoo/squad/ui/style"
 )
@@ -25,11 +25,16 @@ func newTypeahead(placeholder, value string, width int, options []string) typeah
 	ti := textinput.New()
 	ti.Placeholder = placeholder
 	ti.SetValue(value)
-	ti.Width = width
+	ti.SetWidth(width)
 	ti.Prompt = ""
-	ti.PromptStyle = style.Hint
-	ti.PlaceholderStyle = style.Faint
-	ti.TextStyle = style.Body
+	styles := ti.Styles()
+	styles.Focused.Prompt = style.Hint
+	styles.Blurred.Prompt = style.Hint
+	styles.Focused.Placeholder = style.Faint
+	styles.Blurred.Placeholder = style.Faint
+	styles.Focused.Text = style.Body
+	styles.Blurred.Text = style.Body
+	ti.SetStyles(styles)
 	return typeahead{
 		input:   ti,
 		options: append([]string(nil), options...),
@@ -253,7 +258,7 @@ func (s selectField) Update(msg tea.Msg) (selectField, tea.Cmd) {
 		if s.cursor > 0 {
 			s.cursor--
 		}
-	case "right", "l", " ":
+	case "right", "l", "space":
 		if s.cursor < len(s.options)-1 {
 			s.cursor++
 		}

@@ -16,7 +16,7 @@
 // motion (see ui/status).
 package style
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // Color values. Hex strings are kept here as the single source of truth.
 const (

@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/ui/style"
@@ -203,10 +203,12 @@ func NewLaunch(parent View, defaults LaunchDefaults) Launch {
 	prompt.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("shift+enter", "ctrl+j"),
 	)
-	prompt.FocusedStyle.Placeholder = style.Faint
-	prompt.BlurredStyle.Placeholder = style.Faint
-	prompt.FocusedStyle.Text = style.Body
-	prompt.BlurredStyle.Text = style.Body
+	promptStyles := prompt.Styles()
+	promptStyles.Focused.Placeholder = style.Faint
+	promptStyles.Blurred.Placeholder = style.Faint
+	promptStyles.Focused.Text = style.Body
+	promptStyles.Blurred.Text = style.Body
+	prompt.SetStyles(promptStyles)
 	prompt.Prompt = "  "
 
 	f := Launch{
@@ -231,11 +233,16 @@ func mkInput(placeholder, value string, width int) textinput.Model {
 	ti := textinput.New()
 	ti.Placeholder = placeholder
 	ti.SetValue(value)
-	ti.Width = width
+	ti.SetWidth(width)
 	ti.Prompt = ""
-	ti.PromptStyle = style.Hint
-	ti.PlaceholderStyle = style.Faint
-	ti.TextStyle = style.Body
+	styles := ti.Styles()
+	styles.Focused.Prompt = style.Hint
+	styles.Blurred.Prompt = style.Hint
+	styles.Focused.Placeholder = style.Faint
+	styles.Blurred.Placeholder = style.Faint
+	styles.Focused.Text = style.Body
+	styles.Blurred.Text = style.Body
+	ti.SetStyles(styles)
 	return ti
 }
 
@@ -358,7 +365,7 @@ func (l Launch) handleEnter() (View, tea.Cmd, bool) {
 		// Commit the highlighted dropdown match into the input, then
 		// advance focus. Lets the user pick a suggestion with Enter
 		// without it acting as a form submit.
-		l.agent, _ = l.agent.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		l.agent, _ = l.agent.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		l.focus = (l.focus + 1) % fldCount
 		l.applyFocus()
 		return l, nil, true
@@ -367,7 +374,7 @@ func (l Launch) handleEnter() (View, tea.Cmd, bool) {
 		// commit took, keep focus on the field so the user can keep
 		// walking down the tree; otherwise treat Enter as "next field".
 		prev := l.workingDir.Value()
-		l.workingDir, _ = l.workingDir.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		l.workingDir, _ = l.workingDir.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		if l.workingDir.Value() != prev {
 			l.workingDir.SetOptions(workingDirSuggestions(l.workingDir.Value()))
 			return l, nil, true
@@ -379,7 +386,7 @@ func (l Launch) handleEnter() (View, tea.Cmd, bool) {
 		// Same dropdown-commit-then-advance behavior for the provider
 		// typeahead.
 		prev := l.provider.Value()
-		l.provider, _ = l.provider.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		l.provider, _ = l.provider.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		if l.provider.Value() != prev {
 			l.model.SetOptions(modelsForProvider(l.provider.Value()))
 		}
@@ -389,7 +396,7 @@ func (l Launch) handleEnter() (View, tea.Cmd, bool) {
 	case fldModel:
 		// Same dropdown-commit-then-advance behavior for the model
 		// typeahead.
-		l.model, _ = l.model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		l.model, _ = l.model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		l.focus = (l.focus + 1) % fldCount
 		l.applyFocus()
 		return l, nil, true
@@ -458,15 +465,15 @@ func (l Launch) dispatchToField(msg tea.Msg) (View, tea.Cmd) {
 	return l, cmd
 }
 
-// digitsOnlyAcceptKey returns false for rune keystrokes that aren't
-// digits 0-9 (so the iter field rejects letters, `-`, `.`). Non-rune
+// digitsOnlyAcceptKey returns false for text keystrokes that aren't
+// digits 0-9 (so the iter field rejects letters, `-`, `.`). Non-text
 // keys like backspace and arrows return true.
 func digitsOnlyAcceptKey(msg tea.Msg) bool {
 	km, ok := msg.(tea.KeyMsg)
-	if !ok || km.Type != tea.KeyRunes {
+	if !ok || km.Key().Text == "" {
 		return true
 	}
-	for _, r := range km.Runes {
+	for _, r := range km.Key().Text {
 		if r < '0' || r > '9' {
 			return false
 		}
@@ -479,11 +486,11 @@ func digitsOnlyAcceptKey(msg tea.Msg) bool {
 // dot can be rejected without resorting to ParseFloat on every keystroke.
 func budgetAcceptKey(msg tea.Msg, current string) bool {
 	km, ok := msg.(tea.KeyMsg)
-	if !ok || km.Type != tea.KeyRunes {
+	if !ok || km.Key().Text == "" {
 		return true
 	}
 	hasDot := strings.ContainsRune(current, '.')
-	for _, r := range km.Runes {
+	for _, r := range km.Key().Text {
 		switch {
 		case r >= '0' && r <= '9':
 		case r == '.' && !hasDot:

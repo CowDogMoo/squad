@@ -3,9 +3,9 @@ package pane
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/cowdogmoo/squad/ui/style"
 )
@@ -55,11 +55,13 @@ func NewComposer() Composer {
 		key.WithHelp("shift+enter", "newline"),
 	)
 
-	ta.FocusedStyle.Prompt = style.Hint
-	ta.FocusedStyle.Placeholder = style.Faint
-	ta.FocusedStyle.Text = style.Body
-	ta.BlurredStyle.Placeholder = style.Faint
-	ta.BlurredStyle.Text = style.Body
+	styles := ta.Styles()
+	styles.Focused.Prompt = style.Hint
+	styles.Focused.Placeholder = style.Faint
+	styles.Focused.Text = style.Body
+	styles.Blurred.Placeholder = style.Faint
+	styles.Blurred.Text = style.Body
+	ta.SetStyles(styles)
 
 	ta.Focus()
 	return Composer{ta: ta, histIdx: -1}

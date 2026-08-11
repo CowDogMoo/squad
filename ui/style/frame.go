@@ -3,7 +3,8 @@ package style
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Panel renders `body` inside a rounded border with `title` embedded in
@@ -95,36 +96,5 @@ func truncateVisible(s string, width int) string {
 	if width <= 1 {
 		return "…"
 	}
-	// Walk the string, counting visible runes until we hit width-1.
-	// Skip ANSI escape sequences entirely.
-	var b strings.Builder
-	visible := 0
-	target := width - 1
-	in := []rune(s)
-	for i := 0; i < len(in); i++ {
-		r := in[i]
-		if r == 0x1b && i+1 < len(in) && in[i+1] == '[' {
-			// CSI — copy through the final letter inclusive.
-			b.WriteRune(r)
-			i++
-			for i < len(in) {
-				b.WriteRune(in[i])
-				c := in[i]
-				if c >= 0x40 && c <= 0x7e {
-					break
-				}
-				i++
-			}
-			continue
-		}
-		if visible >= target {
-			b.WriteRune('…')
-			// Append any trailing reset sequence so the line stops
-			// painting in the truncated style.
-			break
-		}
-		b.WriteRune(r)
-		visible++
-	}
-	return b.String()
+	return ansi.Truncate(s, width, "…")
 }
