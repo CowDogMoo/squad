@@ -161,3 +161,21 @@ func compareGolden(t *testing.T, name, got string) {
 		t.Errorf("golden mismatch for %s\nwant:\n%s\ngot:\n%s", name, wantStr, got)
 	}
 }
+
+func TestRenderEmptyCountFooter(t *testing.T) {
+	out := stripANSI(Render(Snapshot{
+		Runs:       []Run{{ID: "a", Agent: "x", State: StateCompleted, Elapsed: time.Minute}},
+		Width:      30,
+		EmptyCount: 3,
+	}))
+	if !strings.Contains(out, "· 3 empty hidden") {
+		t.Errorf("expected empty-hidden footer, got:\n%s", out)
+	}
+}
+
+func TestRenderEmptyCountWithNoGroups(t *testing.T) {
+	out := stripANSI(Render(Snapshot{Width: 30, EmptyCount: 2}))
+	if !strings.Contains(out, "(no runs)") || !strings.Contains(out, "· 2 empty hidden") {
+		t.Errorf("no-groups render should still account for hidden stubs, got:\n%s", out)
+	}
+}

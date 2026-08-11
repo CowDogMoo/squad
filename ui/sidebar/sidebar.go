@@ -63,6 +63,10 @@ type Snapshot struct {
 	// MaxPerGroup truncates each group with a "… N more" footer. 0 = no
 	// truncation.
 	MaxPerGroup int
+	// EmptyCount is how many empty stub runs the caller filtered out
+	// before building the Snapshot. Rendered as a trailing faint line so
+	// the hidden rows stay accounted for; 0 renders nothing.
+	EmptyCount int
 }
 
 // Bucket partitions runs into the default group set: Working / Needs Input /
@@ -110,14 +114,28 @@ func Render(s Snapshot) string {
 	}
 
 	if len(groups) == 0 {
-		return style.Faint.Render("  (no runs)")
+		out := style.Faint.Render("  (no runs)")
+		if s.EmptyCount > 0 {
+			out += "\n" + hiddenLine(s.EmptyCount)
+		}
+		return out
 	}
 
 	var sections []string
 	for _, g := range groups {
 		sections = append(sections, renderGroup(g, s.Selected, s.MaxPerGroup, width))
 	}
-	return strings.Join(sections, "\n\n")
+	out := strings.Join(sections, "\n\n")
+	if s.EmptyCount > 0 {
+		out += "\n\n" + hiddenLine(s.EmptyCount)
+	}
+	return out
+}
+
+// hiddenLine is the trailing "· N empty" footer accounting for stub runs
+// the caller collapsed out of the list.
+func hiddenLine(n int) string {
+	return style.Faint.Render(fmt.Sprintf("  · %d empty hidden", n))
 }
 
 func renderGroup(g Group, selected string, maxPerGroup, width int) string {
@@ -140,8 +158,14 @@ func renderGroup(g Group, selected string, maxPerGroup, width int) string {
 
 func renderRow(r Run, selected bool, width int) string {
 	glyph, glyphStyle := glyphFor(r.State, r.Alive)
+	// Exited runs render dim so the alive ones carry the visual weight —
+	// with dozens of terminal rows, full-brightness names drown the list.
 	agentStyle := style.Body
 	elapsedStyle := style.Secondary
+	if !r.Alive {
+		agentStyle = style.Secondary
+		elapsedStyle = style.Faint
+	}
 	prefix := "  "
 	if selected {
 		prefix = style.Hint.Render("› ")

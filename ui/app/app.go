@@ -433,6 +433,30 @@ func (a App) currentRuns() []sidebar.Run {
 	return a.static
 }
 
+// visibleRuns returns currentRuns minus empty stubs, plus how many stubs
+// were hidden. The selected run always stays visible so focus never
+// points at a row the sidebar doesn't show.
+func (a App) visibleRuns() ([]sidebar.Run, int) {
+	runs := a.currentRuns()
+	out := make([]sidebar.Run, 0, len(runs))
+	hidden := 0
+	for _, r := range runs {
+		if isStub(r) && r.ID != a.selected {
+			hidden++
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, hidden
+}
+
+// isStub reports whether a run is an empty leftover session: exited in
+// under a second without recording a single event. There's nothing to
+// inspect, so the sidebar collapses these into a "· N empty" count.
+func isStub(r sidebar.Run) bool {
+	return !r.Alive && r.Elapsed < time.Second && r.LastEvent == ""
+}
+
 // rediscover scans sessionsRoot for any session dirs not yet known and
 // adds a fresh Tailer for each. Called from the frame loop at most every
 // rediscoverEvery; cost is one ReadDir.
@@ -883,8 +907,10 @@ func (a *App) handleRegionKey(m tea.KeyMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
+// cycleSelection moves selection through the visible run list only —
+// hidden stubs are skipped, matching what the sidebar shows.
 func (a *App) cycleSelection(delta int) {
-	runs := a.currentRuns()
+	runs, _ := a.visibleRuns()
 	if len(runs) == 0 {
 		return
 	}
@@ -903,8 +929,8 @@ func (a *App) cycleSelection(delta int) {
 // a brief onboarding hint instead of an empty `(no runs)` label so the
 // column has a visible identity from first launch.
 func (a App) renderSidebar(width int) string {
-	runs := a.currentRuns()
-	if len(runs) == 0 {
+	runs, hidden := a.visibleRuns()
+	if len(runs) == 0 && hidden == 0 {
 		return style.Title.Render("RUNS") + "\n\n" +
 			style.Faint.Render("  no runs yet") + "\n" +
 			style.Faint.Render("  type /run to launch")
@@ -913,7 +939,8 @@ func (a App) renderSidebar(width int) string {
 		Runs:        runs,
 		Selected:    a.selected,
 		Width:       width,
-		MaxPerGroup: 12,
+		MaxPerGroup: 8,
+		EmptyCount:  hidden,
 	})
 }
 

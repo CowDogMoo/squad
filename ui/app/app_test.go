@@ -400,3 +400,48 @@ func TestIndicatorForAllStates(t *testing.T) {
 		}
 	}
 }
+
+func TestVisibleRunsCollapsesStubs(t *testing.T) {
+	a := New([]sidebar.Run{
+		{ID: "a", Agent: "alpha", State: sidebar.StateWorking, Alive: true, Elapsed: time.Minute},
+		{ID: "b", Agent: "beta", State: sidebar.StateCompleted, Elapsed: 2 * time.Minute},
+		{ID: "stub1", Agent: "beta", State: sidebar.StateCompleted},
+		{ID: "stub2", Agent: "beta", State: sidebar.StateFailed},
+	})
+	vis, hidden := a.visibleRuns()
+	if hidden != 2 {
+		t.Errorf("hidden: got %d, want 2", hidden)
+	}
+	if len(vis) != 2 || vis[0].ID != "a" || vis[1].ID != "b" {
+		t.Errorf("visible: got %+v, want runs a and b", vis)
+	}
+}
+
+func TestVisibleRunsKeepsSelectedStub(t *testing.T) {
+	// New() selects the first run — a stub here. Selection must never
+	// point at a row the sidebar doesn't show.
+	a := New([]sidebar.Run{
+		{ID: "stub", Agent: "beta", State: sidebar.StateCompleted},
+		{ID: "b", Agent: "beta", State: sidebar.StateCompleted, Elapsed: time.Minute},
+	})
+	vis, hidden := a.visibleRuns()
+	if hidden != 0 || len(vis) != 2 {
+		t.Errorf("selected stub must stay visible: got %d visible, %d hidden", len(vis), hidden)
+	}
+}
+
+func TestCycleSelectionSkipsStubs(t *testing.T) {
+	a := New([]sidebar.Run{
+		{ID: "a", Agent: "alpha", State: sidebar.StateWorking, Alive: true, Elapsed: time.Minute},
+		{ID: "stub", Agent: "beta", State: sidebar.StateCompleted},
+		{ID: "b", Agent: "beta", State: sidebar.StateCompleted, Elapsed: time.Minute},
+	})
+	a.cycleSelection(+1)
+	if a.Selected() != "b" {
+		t.Errorf("cycle should skip the stub: got %q, want %q", a.Selected(), "b")
+	}
+	a.cycleSelection(+1)
+	if a.Selected() != "a" {
+		t.Errorf("wrap: got %q, want %q", a.Selected(), "a")
+	}
+}
