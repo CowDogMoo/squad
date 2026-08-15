@@ -1,9 +1,9 @@
 // Package agenticcli drives locally installed agentic coding CLIs — Claude
-// Code (`claude`) and Augment's `agy` — in non-interactive print mode as
-// squad model providers. The CLI owns the entire agent loop: its own tools,
-// permission handling, and authentication (typically a subscription login).
-// Squad hands it the assembled prompt bundle, waits for the final report,
-// and never needs a provider API key.
+// Code (`claude`) and Google Antigravity's `agy` — in non-interactive print
+// mode as squad model providers. The CLI owns the entire agent loop: its own
+// tools, permission handling, and authentication (typically a subscription
+// login). Squad hands it the assembled prompt bundle, waits for the final
+// report, and never needs a provider API key.
 package agenticcli
 
 import (
@@ -12,15 +12,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/cowdogmoo/squad/logging"
 )
 
-// agyPrintTimeout overrides agy's 5-minute default print-mode wait, which is
-// far too short for a real agent run. Context cancellation still kills the
-// subprocess earlier when squad's own deadline fires.
-const agyPrintTimeout = "4h"
+// antigravityPrintTimeout overrides agy's 5-minute default print-mode wait,
+// which is far too short for a real agent run. Context cancellation still
+// kills the subprocess earlier when squad's own deadline fires.
+const antigravityPrintTimeout = "4h"
 
 // readOnlyDisallowedTools mirrors squad's readonly gate (Write/Edit/MultiEdit
 // rejected, reads and Bash allowed) in Claude Code's tool-permission terms.
@@ -28,24 +29,31 @@ const readOnlyDisallowedTools = "Write,Edit,MultiEdit,NotebookEdit"
 
 // Spec describes one supported agentic CLI.
 type Spec struct {
-	// Provider is the squad provider name ("claude-code", "agy").
+	// Provider is the squad provider name ("claude-code", "antigravity").
 	Provider string
 	// Binary is the executable looked up on PATH.
 	Binary string
 	// Install is a one-line install-and-login hint for missing-binary errors.
 	Install string
+	// EnforcesReadOnly reports whether the CLI has a native flag that
+	// actually blocks edits. Antigravity does not: its print mode runs with
+	// permissions auto-approved and `--mode plan` still writes files
+	// (verified against agy 1.1.13), so squad refuses readonly runs rather
+	// than silently dropping the guarantee.
+	EnforcesReadOnly bool
 }
 
 var specs = map[string]Spec{
 	"claude-code": {
-		Provider: "claude-code",
-		Binary:   "claude",
-		Install:  "npm install -g @anthropic-ai/claude-code, then run `claude` once to log in",
+		Provider:         "claude-code",
+		Binary:           "claude",
+		Install:          "npm install -g @anthropic-ai/claude-code, then run `claude` once to log in",
+		EnforcesReadOnly: true,
 	},
-	"agy": {
-		Provider: "agy",
+	"antigravity": {
+		Provider: "antigravity",
 		Binary:   "agy",
-		Install:  "https://docs.augmentcode.com/cli — then run `agy` once to log in",
+		Install:  "install the Antigravity CLI from https://antigravity.google, then run `agy` once to log in",
 	},
 }
 
@@ -58,7 +66,7 @@ func Lookup(provider string) (Spec, bool) {
 
 // Request carries one print-mode invocation.
 type Request struct {
-	// Provider selects the CLI ("claude-code" or "agy").
+	// Provider selects the CLI ("claude-code" or "antigravity").
 	Provider string
 	// Model is passed through to the CLI's --model flag; empty uses the
 	// CLI's own configured default, which is the common subscription case.
@@ -70,7 +78,7 @@ type Request struct {
 	// WorkDir is the directory the CLI runs in.
 	WorkDir string
 	// ReadOnly maps squad's readonly mode onto the CLI's native
-	// restriction flags.
+	// restriction flags. Run rejects it for CLIs that cannot enforce it.
 	ReadOnly bool
 }
 
@@ -89,6 +97,10 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	spec, ok := Lookup(req.Provider)
 	if !ok {
 		return Result{}, fmt.Errorf("unknown agentic CLI provider: %q", req.Provider)
+	}
+	if req.ReadOnly && !spec.EnforcesReadOnly {
+		return Result{}, fmt.Errorf("provider %q cannot enforce read-only mode: the %s CLI's print mode auto-approves permissions and its plan mode does not block writes; use claude-code or an API provider for readonly runs",
+			spec.Provider, spec.Binary)
 	}
 	path, err := exec.LookPath(spec.Binary)
 	if err != nil {
@@ -121,23 +133,73 @@ func buildArgs(req Request) (args []string, stdin string) {
 		args = []string{"--print", "--output-format", "json", "--dangerously-skip-permissions"}
 		args = append(args, claudeCommonArgs(req)...)
 		return args, req.UserPrompt
-	case "agy":
+	case "antigravity":
 		// agy has no separate system-prompt flag; prepend it to the task.
-		prompt := req.UserPrompt
+		parts := make([]string, 0, 3)
 		if req.SystemPrompt != "" {
-			prompt = req.SystemPrompt + "\n\n" + req.UserPrompt
+			parts = append(parts, req.SystemPrompt)
 		}
-		args = []string{"--print", prompt, "--output-format", "json", "--print-timeout", agyPrintTimeout,
-			"--dangerously-skip-permissions"}
+		workDir := absWorkDir(req.WorkDir)
+		if workDir != "" {
+			parts = append(parts, workDirNote(workDir))
+		}
+		parts = append(parts, req.UserPrompt)
+		args = []string{"--print", strings.Join(parts, "\n\n"), "--output-format", "json",
+			"--print-timeout", antigravityPrintTimeout, "--dangerously-skip-permissions"}
+		if workDir != "" {
+			args = append(args, "--add-dir", workDir)
+		}
 		if req.Model != "" {
 			args = append(args, "--model", req.Model)
-		}
-		if req.ReadOnly {
-			args = append(args, "--mode", "plan")
 		}
 		return args, ""
 	}
 	return nil, ""
+}
+
+// workDirNote pins the agent to squad's working directory. Without it the
+// Antigravity backend roots the session in its own workspace (~/.gemini/
+// antigravity-cli/scratch), so relative file paths land there and
+// run_command executes in the backend's cwd — not in WorkDir, which the
+// child process's cwd does not influence (verified against agy 1.1.13).
+func workDirNote(workDir string) string {
+	return "## Working directory\n\n" +
+		"Your working directory for this task is " + workDir + ". " +
+		"Resolve every relative path against it and create or edit files only under it unless the task says otherwise. " +
+		"Your shell does NOT start there, so begin every shell command with: cd " + workDir
+}
+
+// absWorkDir best-effort resolves dir to an absolute path; the prompt and
+// --add-dir must not depend on a cwd the Antigravity backend ignores.
+func absWorkDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return dir
+	}
+	return abs
+}
+
+// NormalizeAntigravityModel maps a manifest Gemini model name onto
+// Antigravity's tiered model IDs. The CLI serves Gemini models with a
+// reasoning-effort suffix (gemini-3.1-pro-low, gemini-3.7-flash-high, …) and
+// rejects bare API names ("--model gemini-3.1-pro requires --effort"), so a
+// borrowed entry gets the CLI's cheapest tier appended; API-only -preview/
+// -latest suffixes are dropped first. Non-Gemini names pass through
+// untouched.
+func NormalizeAntigravityModel(model string) string {
+	if !strings.HasPrefix(strings.ToLower(model), "gemini-") {
+		return model
+	}
+	m := strings.TrimSuffix(model, "-preview")
+	m = strings.TrimSuffix(m, "-latest")
+	switch {
+	case strings.HasSuffix(m, "-low"), strings.HasSuffix(m, "-medium"), strings.HasSuffix(m, "-high"):
+		return m
+	}
+	return m + "-low"
 }
 
 // claudeCommonArgs returns the claude flags shared by the single-shot and
@@ -169,10 +231,13 @@ type claudeOutput struct {
 	} `json:"usage"`
 }
 
-// agyOutput is the envelope `agy --print --output-format json` prints.
-type agyOutput struct {
+// antigravityOutput is the envelope `agy --print --output-format json`
+// prints. Failures may carry the diagnostic in `error` with an empty
+// `response` (e.g. an invalid --model selection).
+type antigravityOutput struct {
 	Status   string `json:"status"`
 	Response string `json:"response"`
+	Error    string `json:"error"`
 	NumTurns int    `json:"num_turns"`
 	Usage    struct {
 		InputTokens  int64 `json:"input_tokens"`
@@ -192,8 +257,8 @@ func parseOutput(provider string, stdout []byte) (Result, error) {
 			return Result{Response: string(stdout)}, nil
 		}
 		return claudeResult(out)
-	case "agy":
-		var out agyOutput
+	case "antigravity":
+		var out antigravityOutput
 		if err := json.Unmarshal(stdout, &out); err != nil {
 			logging.Warn("agy output is not the expected JSON envelope (%v); using raw output", err)
 			return Result{Response: string(stdout)}, nil
@@ -205,7 +270,11 @@ func parseOutput(provider string, stdout []byte) (Result, error) {
 			Turns:        out.NumTurns,
 		}
 		if !strings.EqualFold(out.Status, "SUCCESS") {
-			return res, fmt.Errorf("agy run failed (status=%s): %s", out.Status, truncate(out.Response, 500))
+			detail := out.Error
+			if detail == "" {
+				detail = out.Response
+			}
+			return res, fmt.Errorf("antigravity run failed (status=%s): %s", out.Status, truncate(detail, 500))
 		}
 		return res, nil
 	}

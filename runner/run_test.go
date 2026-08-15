@@ -788,8 +788,9 @@ func TestResolveModelPrecedence_ConfigTokenWinsOverManifestTop(t *testing.T) {
 // TestResolveModelPrecedence_AgenticCLI covers the agentic CLI branch:
 // claude-code borrows the manifest's anthropic model when no claude-code
 // entry pins one (both run the same models, and the agent's tuning is
-// calibrated against the anthropic pin), while agy never borrows — its
-// backend is not Anthropic.
+// calibrated against the anthropic pin), and antigravity borrows the
+// manifest's gemini model mapped onto the CLI's tiered IDs. Neither borrows
+// the other backend's entry.
 func TestResolveModelPrecedence_AgenticCLI(t *testing.T) {
 	anthropicOnly := []agent.ModelPreference{
 		{Model: "claude-sonnet-4-6", Provider: "anthropic"},
@@ -825,10 +826,44 @@ func TestResolveModelPrecedence_AgenticCLI(t *testing.T) {
 			wantModel: "",
 		},
 		{
-			name:      "agy does not borrow the anthropic entry",
-			provider:  "agy",
+			name:      "antigravity does not borrow the anthropic entry",
+			provider:  "antigravity",
 			models:    anthropicOnly,
 			wantModel: "",
+		},
+		{
+			name:     "antigravity borrows the gemini entry with tier normalization",
+			provider: "antigravity",
+			models: []agent.ModelPreference{
+				{Model: "claude-sonnet-4-6", Provider: "anthropic"},
+				{Model: "gemini-3.1-pro", Provider: "gemini"},
+			},
+			wantModel: "gemini-3.1-pro-low",
+		},
+		{
+			name:     "antigravity keeps an already-tiered gemini entry verbatim",
+			provider: "antigravity",
+			models: []agent.ModelPreference{
+				{Model: "gemini-3.7-flash-high", Provider: "gemini"},
+			},
+			wantModel: "gemini-3.7-flash-high",
+		},
+		{
+			name:     "manifest antigravity entry wins over gemini entry",
+			provider: "antigravity",
+			models: []agent.ModelPreference{
+				{Model: "gemini-3.1-pro", Provider: "gemini"},
+				{Model: "claude-opus-4-6-thinking", Provider: "antigravity"},
+			},
+			wantModel: "claude-opus-4-6-thinking",
+		},
+		{
+			name:     "agy alias resolves to antigravity and borrows gemini",
+			provider: "agy",
+			models: []agent.ModelPreference{
+				{Model: "gemini-3-flash-preview", Provider: "google"},
+			},
+			wantModel: "gemini-3-flash-low",
 		},
 	}
 	for _, tc := range tests {

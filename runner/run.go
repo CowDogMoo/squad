@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/agenticcli"
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/mcp"
@@ -401,33 +402,44 @@ func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent
 }
 
 // applyAgenticCLIModel resolves the model for an explicitly requested agentic
-// CLI provider (claude-code, agy). The CLI authenticates locally, so the
-// credential-driven walk doesn't apply — and the config default model (rule 2)
-// belongs to a different API provider and must not be paired with the CLI.
-// Resolution order: a manifest entry pinned for this provider; for claude-code
-// only, the manifest's anthropic entry (the CLI executes the same models and
-// accepts full model names, and the agent's tuning — prompts, budgets, cost
-// multipliers — is calibrated against that pin, not whatever the CLI's default
-// happens to be); otherwise empty, letting the CLI use its own configured
-// default. agy never borrows the anthropic entry — its backend is not
-// Anthropic.
+// CLI provider (claude-code, antigravity). The CLI authenticates locally, so
+// the credential-driven walk doesn't apply — and the config default model
+// (rule 2) belongs to a different API provider and must not be paired with
+// the CLI. Resolution order: a manifest entry pinned for this provider; then
+// the manifest entry for the CLI's backing API provider — anthropic for
+// claude-code (the CLI executes the same models and accepts full model
+// names), gemini for antigravity (mapped onto the CLI's tiered IDs) — since
+// the agent's tuning (prompts, budgets, cost multipliers) is calibrated
+// against that pin, not whatever the CLI's default happens to be; otherwise
+// empty, letting the CLI use its own configured default.
 func applyAgenticCLIModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle, p string) {
-	for i := range bundle.Models {
-		if normalizeProvider(bundle.Models[i].Provider) == p {
-			opts.Model = bundle.Models[i].Model
-			break
-		}
-	}
-	if opts.Model == "" && p == "claude-code" {
-		for i := range bundle.Models {
-			if normalizeProvider(bundle.Models[i].Provider) == "anthropic" {
-				opts.Model = bundle.Models[i].Model
+	opts.Model = manifestModelFor(bundle, p)
+	if opts.Model == "" {
+		switch p {
+		case "claude-code":
+			if m := manifestModelFor(bundle, "anthropic"); m != "" {
+				opts.Model = m
 				logging.InfoContext(ctx, "using manifest anthropic model %q for claude-code CLI", opts.Model)
-				break
+			}
+		case "antigravity":
+			if m := manifestModelFor(bundle, "gemini"); m != "" {
+				opts.Model = agenticcli.NormalizeAntigravityModel(m)
+				logging.InfoContext(ctx, "using manifest gemini model %q as %q for the antigravity CLI", m, opts.Model)
 			}
 		}
 	}
 	logging.InfoContext(ctx, "using agentic CLI provider %s (model=%q)", p, opts.Model)
+}
+
+// manifestModelFor returns the model of the first manifest entry whose
+// provider normalizes to p, or "" when none is pinned.
+func manifestModelFor(bundle *agent.Bundle, p string) string {
+	for i := range bundle.Models {
+		if normalizeProvider(bundle.Models[i].Provider) == p {
+			return bundle.Models[i].Model
+		}
+	}
+	return ""
 }
 
 // applyExplicitModel handles rule 1: opts.Model was set explicitly. Fill in

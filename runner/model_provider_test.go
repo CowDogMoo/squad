@@ -19,7 +19,8 @@ func TestNormalizeProviderGoogleAlias(t *testing.T) {
 		"claude":      "claude-code",
 		" Claude ":    "claude-code",
 		"claude-code": "claude-code",
-		"agy":         "agy",
+		"agy":         "antigravity",
+		"antigravity": "antigravity",
 	}
 	for in, want := range cases {
 		if got := normalizeProvider(in); got != want {

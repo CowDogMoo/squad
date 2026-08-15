@@ -31,7 +31,7 @@ const (
 // credential detection checks that the binary is installed instead.
 var AgenticCLIBinaries = map[string]string{
 	"claude-code": "claude",
-	"agy":         "agy",
+	"antigravity": "agy",
 }
 
 // IsAgenticCLI reports whether provider runs through a local agentic CLI

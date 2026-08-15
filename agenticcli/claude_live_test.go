@@ -256,8 +256,8 @@ func TestRunLive_RejectsNonClaude(t *testing.T) {
 	cb := func(context.Context, string, json.RawMessage, string) (Decision, error) {
 		return Decision{Allow: true}, nil
 	}
-	if _, err := RunLive(context.Background(), LiveRequest{Request: Request{Provider: "agy"}, CanUseTool: cb}); err == nil {
-		t.Error("want error for agy provider")
+	if _, err := RunLive(context.Background(), LiveRequest{Request: Request{Provider: "antigravity"}, CanUseTool: cb}); err == nil {
+		t.Error("want error for antigravity provider")
 	}
 	if _, err := RunLive(context.Background(), LiveRequest{Request: Request{Provider: "claude-code"}}); err == nil {
 		t.Error("want error for nil CanUseTool")

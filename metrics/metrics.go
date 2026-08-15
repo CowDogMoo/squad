@@ -275,7 +275,7 @@ var SupportedProviders = []string{
 	"ollama",
 	"openai-compat",
 	"claude-code",
-	"agy",
+	"antigravity",
 }
 
 // providerMappings maps a squad provider name to the LiteLLM
