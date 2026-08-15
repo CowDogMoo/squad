@@ -738,3 +738,36 @@ func TestManagerSaveConfigWriteError(t *testing.T) {
 		t.Fatalf("error = %q, want failed to write config", err.Error())
 	}
 }
+
+// TestSaveConfigStaysInsideTestSandbox deliberately sets NO per-test XDG
+// isolation: it asserts that the package-level TestMain redirect alone keeps
+// saveConfig away from the developer's real ~/.config/squad/config.yaml, so
+// a future test that forgets newTestManager-style isolation corrupts a
+// throwaway directory instead of the real user config.
+func TestSaveConfigStaysInsideTestSandbox(t *testing.T) {
+	sandbox := os.Getenv("XDG_CONFIG_HOME")
+	if !strings.Contains(sandbox, "squad-source-test-xdg-") {
+		t.Fatalf("TestMain sandbox not active: XDG_CONFIG_HOME = %q", sandbox)
+	}
+
+	cfg := config.Defaults()
+	cfg.Agents.Repositories = map[string]config.RepoSpec{
+		"sandboxed": {URL: "https://github.com/org/sandboxed.git"},
+	}
+	cfg.Agents.LocalPaths = []string{}
+	manager, err := source.NewManager(cfg)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if err := manager.RemoveSource("sandboxed"); err != nil {
+		t.Fatalf("RemoveSource: %v", err)
+	}
+
+	written := configPath(t)
+	if !strings.Contains(written, "squad-source-test-xdg-") {
+		t.Fatalf("saveConfig target %q escaped the test sandbox", written)
+	}
+	if _, err := os.Stat(written); err != nil {
+		t.Fatalf("expected config written inside sandbox at %s: %v", written, err)
+	}
+}
