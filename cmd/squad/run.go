@@ -161,6 +161,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		ResumeID:              v.GetString("run.resume"),
 		SkillOverrides:        skillOverrides,
 		AutoConfirm:           autoConfirmMode(cmd),
+		Interactive:           v.GetBool("run.interactive"),
 	}
 }
 
@@ -263,6 +264,7 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 		{"run.max_concurrent_tasks", "max-concurrent-tasks"},
 		{"run.resume", "resume"},
 		{"run.isolation", "isolate"},
+		{"run.interactive", "interactive"},
 	} {
 		if err := bind(pair[0], pair[1]); err != nil {
 			return err
@@ -307,6 +309,12 @@ user_prompt will be used (if configured in the agent's manifest).`,
 				if err == nil {
 					manifest, mErr := agent.LoadManifest(agentDir)
 					if mErr == nil && manifest.IsComposed() {
+						// The composed path builds its own sub-agent RunOptions and
+						// never attaches the sign-off gate, so the flag would
+						// silently do nothing there.
+						if opts.Interactive {
+							return fmt.Errorf("--interactive is not supported with composed agents yet")
+						}
 						return runComposedAgent(cmd, args, opts, manifest, agentDir)
 					}
 				}
@@ -355,6 +363,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().StringArray("allow-skill", nil, "Restrict the skill catalog to this name (can be repeated; when set, overrides the agent.yaml allow list)")
 	cmd.Flags().StringArray("deny-skill", nil, "Remove a skill from the catalog by name (can be repeated; when set, overrides the agent.yaml deny list)")
 	cmd.Flags().String("auto-confirm", "", "How the Confirm tool resolves in non-TTY runs: yes (auto-approve), no (auto-decline), or abort (default; fail loudly)")
+	cmd.Flags().Bool("interactive", false, "Require sign-off before file modifications: the agent proposes a plan, and you approve it, reject it, or reply with feedback to iterate (requires a TTY)")
 
 	cmd.MarkFlagsMutuallyExclusive("dry-run", "apply")
 	cmd.MarkFlagsMutuallyExclusive("skills-enabled", "skills-disabled")

@@ -107,7 +107,7 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 	defer span.End()
 
 	client := newClient(apiKey, baseURL, organization)
-	handlers, toolDefs := tools.BuildHandlersWithSkill(workingDir, taskCfg, ex, skillRuntime, confirmRuntime)
+	handlers, toolDefs := tools.BuildHandlersWithSkill(workingDir, taskCfg, ex, skillRuntime, confirmRuntime, tools.GetSignOffRuntime(ctx))
 	registerLargeResultTool(ctx, handlers, &toolDefs)
 	// Per-iteration runtimes must also be installed on ctx so the Skill /
 	// Confirm tool handlers find them when invoked.
@@ -541,6 +541,19 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 					CallID: call.CallID,
 					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 						OfString: openai.String(fmt.Sprintf("error: %s is not permitted in readonly mode (this run is analysis-only and must not modify files)", call.Name)),
+					},
+				},
+			})
+			continue
+		}
+
+		if denial := tools.SignOffDenial(ctx, call.Name); denial != "" {
+			logging.InfoContext(ctx, "responses API: %s denied pending plan sign-off", call.Name)
+			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
+				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
+					CallID: call.CallID,
+					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
+						OfString: openai.String(denial),
 					},
 				},
 			})

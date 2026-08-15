@@ -235,12 +235,12 @@ func TestParsePositiveInt(t *testing.T) {
 func TestBuildHandlers_ConfirmRegistrationGated(t *testing.T) {
 	wd := t.TempDir()
 	// nil runtime → no Confirm tool
-	handlers, _ := buildHandlersWithSkill(wd, nil, nil, nil, nil)
+	handlers, _ := buildHandlersWithSkill(wd, nil, nil, nil, nil, nil)
 	if _, ok := handlers["Confirm"]; ok {
 		t.Error("Confirm should not register when runtime is nil")
 	}
 	// Non-nil runtime → registered
-	handlers, _ = buildHandlersWithSkill(wd, nil, nil, nil, &ConfirmRuntime{AutoConfirm: AutoConfirmAbort})
+	handlers, _ = buildHandlersWithSkill(wd, nil, nil, nil, &ConfirmRuntime{AutoConfirm: AutoConfirmAbort}, nil)
 	if _, ok := handlers["Confirm"]; !ok {
 		t.Error("Confirm should register when runtime is present")
 	}

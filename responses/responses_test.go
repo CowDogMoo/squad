@@ -352,6 +352,46 @@ func TestExecuteAndBuildOutputsDeniedByReadOnlyMode(t *testing.T) {
 	}
 }
 
+func TestExecuteAndBuildOutputsDeniedPendingSignOff(t *testing.T) {
+	t.Parallel()
+	// With an unapproved sign-off gate on ctx the mutating file tools must
+	// short-circuit with a denial and must NOT invoke the handler;
+	// read-only tools still run.
+	ctx := tools.WithSignOffRuntime(context.Background(), &tools.SignOffRuntime{})
+	var writeInvocations atomic.Int32
+	handlers := map[string]tools.Handler{
+		"Read": {Call: func(context.Context, []byte) (string, error) { return "read-ok", nil }},
+		"Write": {Call: func(context.Context, []byte) (string, error) {
+			writeInvocations.Add(1)
+			return "should-not-run", nil
+		}},
+	}
+	calls := []FunctionCall{
+		{Name: "Write", CallID: "call-denied", Arguments: "{}"},
+		{Name: "Read", CallID: "call-allowed", Arguments: "{}"},
+	}
+	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	if len(outputs) != 2 {
+		t.Fatalf("expected 2 outputs, got %d", len(outputs))
+	}
+	deniedOut := outputs[0].OfFunctionCallOutput
+	if deniedOut == nil || deniedOut.CallID != "call-denied" {
+		t.Fatalf("first output should mirror the denied call, got %+v", deniedOut)
+	}
+	wantDenied := "error: Write is locked until a plan is approved (interactive sign-off is enabled). " +
+		"Call ProposePlan with your intended changes and wait for user approval before modifying files"
+	if !reflect.DeepEqual(deniedOut.Output.OfString, openai.String(wantDenied)) {
+		t.Fatalf("denial output = %v, want %q", deniedOut.Output.OfString, wantDenied)
+	}
+	if got := writeInvocations.Load(); got != 0 {
+		t.Fatalf("Write handler was invoked %d times; sign-off denial must short-circuit", got)
+	}
+	allowedOut := outputs[1].OfFunctionCallOutput
+	if allowedOut == nil || !reflect.DeepEqual(allowedOut.Output.OfString, openai.String("read-ok")) {
+		t.Fatalf("Read must still run while the gate is locked, got %+v", allowedOut)
+	}
+}
+
 func TestLogOutputItems(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

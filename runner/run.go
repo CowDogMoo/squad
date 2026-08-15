@@ -143,6 +143,11 @@ type RunOptions struct {
 	// non-TTY runs. Empty (the default) means "abort" so unattended runs
 	// fail loudly when a skill needs a human checkpoint.
 	AutoConfirm tools.AutoConfirmMode
+	// Interactive enables the sign-off gate: mutating tools stay locked
+	// until the agent presents a plan via ProposePlan and the user approves
+	// it at the terminal (or replies with feedback to iterate). Requires a
+	// TTY; there is deliberately no auto policy for unattended runs.
+	Interactive bool
 	// CanonicalRepoPath is the pre-isolation git toplevel of the working dir.
 	CanonicalRepoPath string
 	// WorktreePath is the ephemeral worktree path (if isolation is used).
@@ -151,6 +156,14 @@ type RunOptions struct {
 
 // ExecuteRun contains the full run command logic, parameterized by RunOptions.
 func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
+	// Sign-off needs a human at a terminal; fail before any setup so the
+	// error is the first and only output. Piping a prompt via stdin also
+	// makes stdin a non-TTY, so interactive runs must pass the prompt as
+	// an argument.
+	if opts.Interactive && !isStdinTTY() {
+		return errors.New("--interactive requires a terminal: run from a TTY and pass the prompt as an argument instead of piping it")
+	}
+
 	prompt, err := readPrompt(cmd, args)
 	if err != nil {
 		return err
@@ -184,23 +197,11 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 
 	opts.WorkingDir = workingDir
 
-	// Remote-only agents never produce file diffs; the "must edit code"
-	// guard is a code-editing-agent concern that doesn't apply here.
-	if bundle.RemoteOnly && opts.RequireActionable {
-		opts.RequireActionable = false
-		logging.InfoContext(cmd.Context(), "remote-only agent: disabling require-actionable")
+	if err := applyProviderGuards(cmd, opts, bundle, workingDir); err != nil {
+		return err
 	}
 
-	// Agentic CLI providers edit files directly on disk, so actionable-output
-	// detection relies on comparing git working-tree fingerprints; outside a
-	// git repo there is nothing to compare and the CLI's prose report would
-	// false-fail the guard.
-	if opts.RequireActionable && metrics.IsAgenticCLI(normalizeProvider(opts.Provider)) && !isGitRepo(cmd.Context(), workingDir) {
-		opts.RequireActionable = false
-		logging.InfoContext(cmd.Context(), "agentic CLI provider outside a git repo: disabling require-actionable")
-	}
-
-	ctx := initRunContext(cmd.Context(), bundle)
+	ctx := initRunContext(cmd.Context(), opts, bundle)
 
 	logger, err := openSession(opts, bundle, prompt)
 	if err != nil {
@@ -219,6 +220,37 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 
 	cmd.SetContext(ctx)
 	return invokeAndHandle(ctx, cmd, opts, bundle, prompt, workingDir, logger)
+}
+
+// applyProviderGuards resolves option conflicts that depend on the final
+// provider, which is only known once prepareBundle has run
+// ResolveModelPrecedence. Rejecting the interactive/agentic-CLI conflict here —
+// before the session opens and the metrics banner machinery starts — keeps it
+// from surfacing mid-run with a confusing zero-value metrics block.
+func applyProviderGuards(cmd *cobra.Command, opts *RunOptions, bundle *agent.Bundle, workingDir string) error {
+	// Remote-only agents never produce file diffs; the "must edit code"
+	// guard is a code-editing-agent concern that doesn't apply here.
+	if bundle.RemoteOnly && opts.RequireActionable {
+		opts.RequireActionable = false
+		logging.InfoContext(cmd.Context(), "remote-only agent: disabling require-actionable")
+	}
+
+	provider := normalizeProvider(opts.Provider)
+
+	if opts.Interactive && metrics.IsAgenticCLI(provider) {
+		return errInteractiveAgenticCLI(provider)
+	}
+
+	// Agentic CLI providers edit files directly on disk, so actionable-output
+	// detection relies on comparing git working-tree fingerprints; outside a
+	// git repo there is nothing to compare and the CLI's prose report would
+	// false-fail the guard.
+	if opts.RequireActionable && metrics.IsAgenticCLI(provider) && !isGitRepo(cmd.Context(), workingDir) {
+		opts.RequireActionable = false
+		logging.InfoContext(cmd.Context(), "agentic CLI provider outside a git repo: disabling require-actionable")
+	}
+
+	return nil
 }
 
 // invokeAndHandle runs the agent (sharded or single-loop), prints metrics, and
@@ -268,7 +300,7 @@ func invokeAndHandle(ctx context.Context, cmd *cobra.Command, opts *RunOptions, 
 // counter, and opt-in modes from the manifest) to ctx before the agent
 // invocation. Returning a single helper keeps ExecuteRun's setup linear
 // regardless of how many opt-in modes get added over time.
-func initRunContext(ctx context.Context, bundle *agent.Bundle) context.Context {
+func initRunContext(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) context.Context {
 	ctx = tools.InitEdits(ctx)
 	ctx = tools.InitEditDeadline(ctx)
 	if bundle.CommentsOnly {
@@ -278,6 +310,13 @@ func initRunContext(ctx context.Context, bundle *agent.Bundle) context.Context {
 	if bundle.ASCIIOnly {
 		ctx = tools.InitASCIIOnlyMode(ctx)
 		logging.InfoContext(ctx, "ascii-only mode: Edit/MultiEdit will reject newly introduced non-ASCII characters")
+	}
+	if opts.Interactive {
+		// Attached once here — above the shard fan-out and the Task tool —
+		// so every agent in the run shares one gate: whichever agent first
+		// needs to mutate proposes a plan, and one approval unlocks the tree.
+		ctx = tools.WithSignOffRuntime(ctx, newSignOffRuntime())
+		logging.InfoContext(ctx, "interactive sign-off: Write/Edit/MultiEdit locked until a plan is approved")
 	}
 	return ctx
 }
