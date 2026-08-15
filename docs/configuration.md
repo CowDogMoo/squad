@@ -321,7 +321,7 @@ variables, or config file.
 | Ollama | supported | `http://localhost:11434/v1` (default) | optional | Local models; use `--num-ctx` for context size |
 | OpenAI-compatible | supported | provider-specific (required) | optional | Any `/v1/chat/completions` endpoint; use `--base-url` |
 | Claude Code CLI | supported | n/a | not needed | `claude-code`; runs the installed `claude` binary in print mode on your subscription |
-| Augment CLI | supported | n/a | not needed | `agy`; runs the installed `agy` binary in print mode on your subscription |
+| Antigravity CLI | supported | n/a | not needed | `antigravity` (alias `agy`); runs Google Antigravity's installed `agy` binary in print mode on your subscription |
 
 ### OpenAI
 
@@ -437,13 +437,13 @@ model:
 
 ### Agentic CLI providers (no API key)
 
-The `claude-code` and `agy` providers run an installed agentic CLI — Claude
-Code's `claude` or Augment's `agy` — in non-interactive print mode instead of
-calling a model API. The CLI brings its own tools, permissions, and
-authentication (typically a subscription login), so no API key or token is
-needed; squad assembles the agent's prompt bundle, hands it to the CLI in the
-working directory, and records the reported token usage and turn count from
-the CLI's JSON output.
+The `claude-code` and `antigravity` providers run an installed agentic CLI —
+Claude Code's `claude` or Google Antigravity's `agy` — in non-interactive
+print mode instead of calling a model API. The CLI brings its own tools,
+permissions, and authentication (typically a subscription login), so no API
+key or token is needed; squad assembles the agent's prompt bundle, hands it
+to the CLI in the working directory, and records the reported token usage and
+turn count from the CLI's JSON output.
 
 ```bash
 # Claude Code (uses the CLI's default model when --model is omitted)
@@ -452,8 +452,9 @@ squad run --agent go-review --provider claude-code
 # Pin a model alias understood by the CLI
 squad run --agent go-review --provider claude-code --model sonnet
 
-# Augment CLI
-squad run --agent go-review --provider agy
+# Antigravity CLI (`agy` is accepted as a legacy alias)
+squad run --agent go-review --provider antigravity
+squad run --agent go-review --provider antigravity --model gemini-3.1-pro-high
 ```
 
 Agent manifests can rank a CLI ahead of an API fallback; the CLI entry is
@@ -467,19 +468,35 @@ models:
     model: claude-sonnet-4-6
 ```
 
+When no CLI-specific entry pins a model, the CLI borrows the manifest entry
+of its backing API provider so agent tuning stays calibrated: `claude-code`
+uses the `anthropic` entry as-is, and `antigravity` uses the `gemini` entry
+mapped onto Antigravity's tiered model IDs (a bare `gemini-3.1-pro` becomes
+`gemini-3.1-pro-low`; `-preview`/`-latest` suffixes are dropped). Antigravity
+also serves Claude and GPT-OSS models, but those must be pinned explicitly
+with a `provider: antigravity` entry — squad never guesses that mapping.
+
 Behavior differences from API providers:
 
 - The CLI runs its own agent loop, so squad's tool surface, `--max-iterations`,
   `--temperature`, `--max-tokens`, and `--stream` do not apply.
 - Cost is reported as `$0` — usage is billed through the CLI's subscription.
-- `--mode readonly` maps to the CLI's native restrictions (`claude`:
-  edit tools disallowed; `agy`: plan mode).
+- `--mode readonly` maps to `claude`'s native restrictions (edit tools
+  disallowed). `antigravity` is rejected in readonly and plan mode: the agy
+  CLI's print mode auto-approves permissions and its plan mode does not block
+  writes, so squad fails loudly instead of pretending the guarantee holds.
 - Permission prompts are bypassed (`--dangerously-skip-permissions`), matching
   squad's unattended tool loop. The exception is `--interactive` with
   `claude-code`: squad then drives the CLI through its stream-json permission
   protocol, answering each edit-permission request from the sign-off gate, so
   file modifications stay locked until you approve the agent's plan at the
-  terminal. `agy` does not support `--interactive`.
+  terminal. `antigravity` does not support `--interactive` — headless agy
+  settles every choice itself and exposes no permission protocol for squad to
+  intercept.
+- Antigravity roots its session in its own workspace rather than the
+  invocation directory, so squad passes `--add-dir` and pins the working
+  directory in the prompt; the agent is told to `cd` there for shell commands
+  and resolve every relative path against it.
 - `environment` types other than `local`, `comments_only`, and `ascii_only`
   are rejected — those guarantees live in squad's own tool gates.
 - MCP servers from the manifest are not forwarded; configure them in the CLI.
@@ -536,7 +553,7 @@ When you integrate squad into a production workflow:
 
 - **Cap cost on every run.** Set `--max-cost` (or `run.max_cost` in the config file) to a sane USD ceiling. A budget cap is the only universally reliable stop.
 - **Pick an explicit `--auto-confirm` policy** for unattended execution. The default `abort` is correct for interactive runs; for routines, choose `yes` only when you've audited the agent's tool surface.
-- **Use `--interactive` when you want to review before anything changes.** The agent investigates, then presents a plan via the `ProposePlan` tool; `Write`/`Edit`/`MultiEdit` stay locked until you approve it at the terminal. Answer `yes` to approve, `no` to reject, or give feedback — anything else you type or paste (multi-line is fine; finish with an empty line or ctrl-d) goes back to the agent, which revises the plan and proposes again. One approval covers the whole run, including shards and Task-spawned child agents. Requires a TTY — non-TTY runs fail loudly rather than auto-approving, and the flag is not yet supported for composed agents or the `agy` provider. With `--provider claude-code` the gate rides the CLI's own permission protocol: instead of calling a `ProposePlan` tool, the agent writes its plan as a message, and squad presents that plan (plus the pending edit) for the same approve/reject/feedback review before any file modification is allowed.
+- **Use `--interactive` when you want to review before anything changes.** The agent investigates, then presents a plan via the `ProposePlan` tool; `Write`/`Edit`/`MultiEdit` stay locked until you approve it at the terminal. Answer `yes` to approve, `no` to reject, or give feedback — anything else you type or paste (multi-line is fine; finish with an empty line or ctrl-d) goes back to the agent, which revises the plan and proposes again. One approval covers the whole run, including shards and Task-spawned child agents. Requires a TTY — non-TTY runs fail loudly rather than auto-approving, and the flag is not supported for composed agents or the `antigravity` provider (headless agy has no permission protocol for squad to gate). With `--provider claude-code` the gate rides the CLI's own permission protocol: instead of calling a `ProposePlan` tool, the agent writes its plan as a message, and squad presents that plan (plus the pending edit) for the same approve/reject/feedback review before any file modification is allowed.
 - **Sandbox writes** with `--isolate worktree` (separate dir + branch) or the `environment: docker` execution backend ([docs/execution-backends.md](./execution-backends.md)) so a bad edit lands in a throwaway tree, not your working copy.
 - **Review `agent.yaml` and the prompt files like code.** The `Bash` tool runs arbitrary shell; treat every manifest change in PR review the same way you'd treat a change to a CI workflow.
 - **Never hard-code API keys** in `agent.yaml` or shell history. Use `$VAR` or `$(command)` token resolution to pull from a secret manager — see [Token resolution](#token-resolution) above.

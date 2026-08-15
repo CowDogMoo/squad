@@ -559,7 +559,7 @@ func buildLLM(ctx context.Context, opts *RunOptions, provider, model string) (ll
 		return buildGeminiLLM(ctx, opts, model)
 	case "openai-compat":
 		return buildOpenAICompatLLM(opts, "openai-compat", model)
-	case "claude-code", "agy":
+	case "claude-code", "antigravity":
 		// Defence in depth: these are dispatched in InvokeModel before the
 		// LangChain path; reaching here means a call path skipped that branch.
 		return nil, fmt.Errorf("provider %q is an agentic CLI provider and cannot be used as a LangChain model", provider)
@@ -655,6 +655,10 @@ func normalizeProvider(provider string) string {
 	// "claude" is the natural spelling for the Claude Code CLI provider.
 	case "claude":
 		return "claude-code"
+	// "agy" is the Antigravity CLI's binary name and was the provider's
+	// original squad name; older manifests and configs still say it.
+	case "agy":
+		return "antigravity"
 	}
 	return p
 }

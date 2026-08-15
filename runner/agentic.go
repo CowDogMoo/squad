@@ -21,7 +21,7 @@ import (
 )
 
 // invokeAgenticCLI runs the prompt through a locally installed agentic CLI
-// (claude-code or agy) in non-interactive print mode. The CLI executes its
+// (claude-code or antigravity) in non-interactive print mode. The CLI executes its
 // own tool loop directly in the working directory with its own
 // authentication, so squad's executor, tool registry, MCP plumbing, and API
 // keys are all bypassed.

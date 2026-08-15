@@ -146,7 +146,7 @@ squad run --agent go-review --provider ollama --model qwen2.5-coder:7b-instruct
 
 # Run through an installed agentic CLI on its subscription (no API key required)
 squad run --agent go-review --provider claude-code   # Claude Code
-squad run --agent go-review --provider agy           # Augment CLI
+squad run --agent go-review --provider antigravity   # Google Antigravity CLI
 
 # Estimate cost without calling the model
 squad run --agent go-review --dry-run
@@ -192,7 +192,7 @@ Run `squad <subcommand> --help` for full flag documentation.
 | Flag                  | Description                                                       | Default       |
 | --------------------- | ----------------------------------------------------------------- | ------------- |
 | `--agent`             | Agent name (required)                                             | —             |
-| `--provider`          | LLM provider (`openai`, `anthropic`, `gemini`, `ollama`, `claude-code`, `agy`, …) | config        |
+| `--provider`          | LLM provider (`openai`, `anthropic`, `gemini`, `ollama`, `claude-code`, `antigravity`, …) | config        |
 | `--model`             | Model identifier                                                  | config        |
 | `--working-dir`       | Target directory the agent operates on                            | current dir   |
 | `--max-cost`          | USD budget cap (0 = unlimited)                                    | `5.00`        |

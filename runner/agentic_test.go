@@ -41,8 +41,8 @@ func TestInvokeAgenticCLIRejectsEditGates(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := metrics.New("agy", "")
-			_, _, err := invokeAgenticCLI(context.Background(), &RunOptions{}, "agy", "", "sys", tt.bundle, m)
+			m := metrics.New("antigravity", "")
+			_, _, err := invokeAgenticCLI(context.Background(), &RunOptions{}, "antigravity", "", "sys", tt.bundle, m)
 			if err == nil || !strings.Contains(err.Error(), "cannot enforce comments_only/ascii_only") {
 				t.Fatalf("err = %v, want edit-gate rejection", err)
 			}
@@ -272,7 +272,7 @@ func TestAgenticWorktreeSnapshot(t *testing.T) {
 
 func TestBuildLLMRejectsAgenticCLIProviders(t *testing.T) {
 	t.Parallel()
-	for _, provider := range []string{"claude-code", "agy"} {
+	for _, provider := range []string{"claude-code", "antigravity"} {
 		_, err := buildLLM(context.Background(), &RunOptions{}, provider, "")
 		if err == nil || !strings.Contains(err.Error(), "agentic CLI provider") {
 			t.Errorf("buildLLM(%q) err = %v, want agentic-CLI rejection", provider, err)

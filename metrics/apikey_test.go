@@ -91,9 +91,9 @@ func TestKeyStatusAgenticCLIBinaryPresent(t *testing.T) {
 
 func TestKeyStatusAgenticCLIBinaryMissing(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	got := KeyStatus("agy", "")
+	got := KeyStatus("antigravity", "")
 	if got.State != APIKeyMissing || got.EnvVar != "agy CLI" || got.Source != APIKeySourceNone {
-		t.Fatalf("agy without binary = %+v, want missing agy CLI", got)
+		t.Fatalf("antigravity without binary = %+v, want missing agy CLI", got)
 	}
 }
 
@@ -104,9 +104,10 @@ func TestIsAgenticCLI(t *testing.T) {
 	}{
 		{"claude-code", true},
 		{" Claude-Code", true},
-		{"agy", true},
+		{"antigravity", true},
 		{"anthropic", false},
 		{"claude", false}, // alias resolution happens in runner.normalizeProvider
+		{"agy", false},    // ditto: the legacy name resolves there too
 		{"", false},
 	}
 	for _, tc := range cases {

@@ -16,7 +16,8 @@ func TestLookup(t *testing.T) {
 		wantOK     bool
 	}{
 		{provider: "claude-code", wantBinary: "claude", wantOK: true},
-		{provider: "agy", wantBinary: "agy", wantOK: true},
+		{provider: "antigravity", wantBinary: "agy", wantOK: true},
+		{provider: "agy", wantOK: false}, // legacy alias resolves in runner.normalizeProvider
 		{provider: "anthropic", wantOK: false},
 		{provider: "", wantOK: false},
 	}
@@ -63,24 +64,25 @@ func TestBuildArgs(t *testing.T) {
 			wantStdin: "task",
 		},
 		{
-			name: "agy minimal",
-			req:  Request{Provider: "agy", UserPrompt: "task"},
+			name: "antigravity minimal",
+			req:  Request{Provider: "antigravity", UserPrompt: "task"},
 			wantArgs: []string{
 				"--print", "task", "--output-format", "json",
-				"--print-timeout", agyPrintTimeout, "--dangerously-skip-permissions",
+				"--print-timeout", antigravityPrintTimeout, "--dangerously-skip-permissions",
 			},
 		},
 		{
-			name: "agy system prompt prepended and readonly",
+			name: "antigravity system prompt and workdir rooting",
 			req: Request{
-				Provider: "agy", Model: "gpt5",
-				SystemPrompt: "be brief", UserPrompt: "task", ReadOnly: true,
+				Provider: "antigravity", Model: "gemini-3.7-flash-low",
+				SystemPrompt: "be brief", UserPrompt: "task", WorkDir: "/tmp/repo",
 			},
 			wantArgs: []string{
-				"--print", "be brief\n\ntask", "--output-format", "json",
-				"--print-timeout", agyPrintTimeout, "--dangerously-skip-permissions",
-				"--model", "gpt5",
-				"--mode", "plan",
+				"--print", "be brief\n\n" + workDirNote("/tmp/repo") + "\n\ntask",
+				"--output-format", "json",
+				"--print-timeout", antigravityPrintTimeout, "--dangerously-skip-permissions",
+				"--add-dir", "/tmp/repo",
+				"--model", "gemini-3.7-flash-low",
 			},
 		},
 		{
@@ -110,7 +112,7 @@ func TestBuildArgs(t *testing.T) {
 func TestParseOutput(t *testing.T) {
 	t.Parallel()
 	claudeSuccess := `{"is_error":false,"num_turns":3,"result":"done","usage":{"input_tokens":6,"cache_creation_input_tokens":100,"cache_read_input_tokens":200,"output_tokens":9},"type":"result"}`
-	agySuccess := `{"conversation_id":"abc","status":"SUCCESS","response":"done\n","num_turns":2,"usage":{"input_tokens":500,"output_tokens":40,"total_tokens":540}}`
+	antigravitySuccess := `{"conversation_id":"abc","status":"SUCCESS","response":"done\n","num_turns":2,"usage":{"input_tokens":500,"output_tokens":40,"total_tokens":540}}`
 
 	tests := []struct {
 		name       string
@@ -136,16 +138,21 @@ func TestParseOutput(t *testing.T) {
 			stdout: "plain text answer", wantResp: "plain text answer",
 		},
 		{
-			name: "agy success", provider: "agy", stdout: agySuccess,
+			name: "antigravity success", provider: "antigravity", stdout: antigravitySuccess,
 			wantResp: "done\n", wantInput: 500, wantOutput: 40, wantTurns: 2,
 		},
 		{
-			name: "agy failure status", provider: "agy",
+			name: "antigravity failure status", provider: "antigravity",
 			stdout:  `{"status":"ERROR","response":"boom","num_turns":1,"usage":{}}`,
 			wantErr: "status=ERROR",
 		},
 		{
-			name: "agy non-JSON falls back to raw", provider: "agy",
+			name: "antigravity failure detail in error field", provider: "antigravity",
+			stdout:  `{"status":"ERROR","response":"","error":"invalid model selection (--model \"gemini-3.1-pro\")","num_turns":0,"usage":{}}`,
+			wantErr: "invalid model selection",
+		},
+		{
+			name: "antigravity non-JSON falls back to raw", provider: "antigravity",
 			stdout: "plain", wantResp: "plain",
 		},
 		{
@@ -233,9 +240,38 @@ func TestRunSpawnsBinary(t *testing.T) {
 
 func TestRunMissingBinary(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	_, err := Run(context.Background(), Request{Provider: "agy", UserPrompt: "x", WorkDir: t.TempDir()})
+	_, err := Run(context.Background(), Request{Provider: "antigravity", UserPrompt: "x", WorkDir: t.TempDir()})
 	if err == nil || !strings.Contains(err.Error(), "requires the \"agy\" CLI on PATH") {
 		t.Fatalf("err = %v, want missing-binary error", err)
+	}
+}
+
+// TestRunReadOnlyRejectedForAntigravity pins the fail-loud behavior: the agy
+// CLI has no flag that actually blocks edits in print mode, so a readonly
+// request must error before the binary is even looked up.
+func TestRunReadOnlyRejectedForAntigravity(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no agy on PATH: the rejection must come first
+	_, err := Run(context.Background(), Request{Provider: "antigravity", UserPrompt: "x", ReadOnly: true})
+	if err == nil || !strings.Contains(err.Error(), "cannot enforce read-only mode") {
+		t.Fatalf("err = %v, want read-only rejection", err)
+	}
+}
+
+func TestNormalizeAntigravityModel(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"gemini-3.1-pro":           "gemini-3.1-pro-low",
+		"gemini-3.1-pro-preview":   "gemini-3.1-pro-low",
+		"gemini-3-flash-latest":    "gemini-3-flash-low",
+		"gemini-3.7-flash-high":    "gemini-3.7-flash-high",
+		"gemini-3.7-flash-medium":  "gemini-3.7-flash-medium",
+		"claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
+		"gpt-oss-120b-medium":      "gpt-oss-120b-medium",
+	}
+	for in, want := range cases {
+		if got := NormalizeAntigravityModel(in); got != want {
+			t.Errorf("NormalizeAntigravityModel(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

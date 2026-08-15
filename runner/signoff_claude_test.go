@@ -241,16 +241,17 @@ func TestClaudeSignOffGate_UnitBranches(t *testing.T) {
 }
 
 // TestApplyProviderConstraints_InteractiveAgenticCLI pins the narrowed
-// fail-fast: agy + --interactive is still rejected before the session opens,
-// while claude-code + --interactive proceeds to the live path.
+// fail-fast: antigravity + --interactive is still rejected before the session
+// opens (headless agy auto-settles choices and exposes no permission
+// protocol), while claude-code + --interactive proceeds to the live path.
 func TestApplyProviderConstraints_InteractiveAgenticCLI(t *testing.T) {
 	t.Parallel()
 	cmd := &cobra.Command{}
 	bundle := &agent.Bundle{}
 
-	err := applyProviderConstraints(cmd, &RunOptions{Interactive: true, Provider: "agy"}, bundle, t.TempDir())
+	err := applyProviderConstraints(cmd, &RunOptions{Interactive: true, Provider: "antigravity"}, bundle, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "not supported with agentic CLI provider") {
-		t.Errorf("agy: err = %v, want the fail-fast rejection", err)
+		t.Errorf("antigravity: err = %v, want the fail-fast rejection", err)
 	}
 	if err := applyProviderConstraints(cmd, &RunOptions{Interactive: true, Provider: "claude-code"}, bundle, t.TempDir()); err != nil {
 		t.Errorf("claude-code: err = %v, want nil (live path supported)", err)
