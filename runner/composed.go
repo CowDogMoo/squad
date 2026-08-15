@@ -53,10 +53,12 @@ func ManifestToPipeline(m *agent.Manifest) (*pl.Pipeline, error) {
 		if s.IsInline() {
 			ps.Agent = s.Name
 			ps.InlineConfig = &pl.InlineConfig{
-				EntryPoint: s.EntryPoint,
-				Wrapper:    s.Wrapper,
-				Task:       s.Task,
-				References: s.References,
+				EntryPoint:   s.EntryPoint,
+				Wrapper:      s.Wrapper,
+				Task:         s.Task,
+				References:   s.References,
+				CommentsOnly: s.CommentsOnly,
+				ASCIIOnly:    s.ASCIIOnly,
 			}
 			for _, model := range s.Models {
 				ps.InlineConfig.Models = append(ps.InlineConfig.Models, pl.ModelPreference{

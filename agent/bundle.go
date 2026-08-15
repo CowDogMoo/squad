@@ -1184,6 +1184,8 @@ type InlineAgentConfig struct {
 	Models       []ModelPreference // model preferences
 	References   []string          // paths to reference files, relative to base dir
 	IncludesRoot string            // dir holding _includes/ for {{include}}; empty = baseDir
+	CommentsOnly bool              // restrict Edit/MultiEdit to comment changes
+	ASCIIOnly    bool              // reject edits introducing non-ASCII characters
 }
 
 // resolveInlinePromptDir returns the directory containing the inline agent's
@@ -1211,13 +1213,15 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 	}
 
 	manifest := &Manifest{
-		Name:       cfg.Name,
-		Version:    "inline",
-		EntryPoint: cfg.EntryPoint,
-		Wrapper:    cfg.Wrapper,
-		Task:       cfg.Task,
-		Models:     cfg.Models,
-		References: cfg.References,
+		Name:         cfg.Name,
+		Version:      "inline",
+		EntryPoint:   cfg.EntryPoint,
+		Wrapper:      cfg.Wrapper,
+		Task:         cfg.Task,
+		Models:       cfg.Models,
+		References:   cfg.References,
+		CommentsOnly: cfg.CommentsOnly,
+		ASCIIOnly:    cfg.ASCIIOnly,
 	}
 
 	displayMode := resolveDisplayMode(mode)
@@ -1258,13 +1262,15 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 	primary := manifest.PrimaryModel()
 
 	return &Bundle{
-		System:   sys.String(),
-		User:     userMessage,
-		Combined: combined.Bytes(),
-		WorkDir:  workingDir,
-		Model:    primary.Model,
-		Provider: primary.Provider,
-		BaseURL:  primary.BaseURL,
-		Models:   manifest.Models,
+		System:       sys.String(),
+		User:         userMessage,
+		Combined:     combined.Bytes(),
+		WorkDir:      workingDir,
+		Model:        primary.Model,
+		Provider:     primary.Provider,
+		BaseURL:      primary.BaseURL,
+		Models:       manifest.Models,
+		CommentsOnly: manifest.CommentsOnly,
+		ASCIIOnly:    manifest.ASCIIOnly,
 	}, nil
 }

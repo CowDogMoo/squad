@@ -175,14 +175,38 @@ func rehydrateSkillStack(rt *tools.SkillRuntime, workingDir string, logger *sess
 	_ = workingDir // reserved for future use if absolute paths need rebasing
 }
 
-// applyReadOnlyMode enables the readonly tool gate on ctx when mode is
-// "readonly", and returns ctx unchanged otherwise.
+// modeRestrictsEdits reports whether mode forbids file mutations. "plan" is
+// the plan-review flavor of readonly (offered by the TUI launcher and stage
+// manifests): the agent analyzes and proposes, but changes nothing.
+func modeRestrictsEdits(mode string) bool {
+	return mode == "readonly" || mode == "plan"
+}
+
+// applyReadOnlyMode enables the readonly tool gate on ctx when mode
+// restricts edits ("readonly", "plan"), and returns ctx unchanged otherwise.
 func applyReadOnlyMode(ctx context.Context, mode string) context.Context {
-	if mode != "readonly" {
+	if !modeRestrictsEdits(mode) {
 		return ctx
 	}
-	logging.InfoContext(ctx, "readonly mode: Write/Edit/MultiEdit will be rejected")
+	logging.InfoContext(ctx, "%s mode: Write/Edit/MultiEdit will be rejected", mode)
 	return tools.InitReadOnlyMode(ctx)
+}
+
+// applyEditRestrictions arms the manifest's comments_only/ascii_only edit
+// gates on ctx. It runs here — the chokepoint shared by leaf, composed-stage,
+// and Task-child invocations — so every path enforces the manifest's
+// guarantees; the checks make it idempotent for the leaf path, which already
+// armed the gates in initRunContext.
+func applyEditRestrictions(ctx context.Context, bundle *agent.Bundle) context.Context {
+	if bundle.CommentsOnly && !tools.IsCommentsOnlyMode(ctx) {
+		ctx = tools.InitCommentsOnlyMode(ctx)
+		logging.InfoContext(ctx, "comments-only mode: Edit/MultiEdit will reject non-comment changes")
+	}
+	if bundle.ASCIIOnly && !tools.IsASCIIOnlyMode(ctx) {
+		ctx = tools.InitASCIIOnlyMode(ctx)
+		logging.InfoContext(ctx, "ascii-only mode: Edit/MultiEdit will reject newly introduced non-ASCII characters")
+	}
+	return ctx
 }
 
 // InvokeModel resolves provider settings and calls the appropriate model backend.
@@ -207,8 +231,10 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 	maxTokens := opts.MaxTokens
 
 	// InvokeModel is the single chokepoint for both leaf and composed
-	// sub-agent runs, so readonly enforcement applies uniformly here.
+	// sub-agent runs, so readonly and manifest edit-restriction
+	// enforcement applies uniformly here.
 	ctx = applyReadOnlyMode(ctx, opts.Mode)
+	ctx = applyEditRestrictions(ctx, bundle)
 
 	// Create metrics early so partial cost is always available, even if
 	// we fail during executor or MCP setup.

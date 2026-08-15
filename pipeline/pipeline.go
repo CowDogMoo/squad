@@ -53,6 +53,10 @@ type InlineConfig struct {
 	Task       string
 	Models     []ModelPreference
 	References []string
+	// CommentsOnly/ASCIIOnly carry the stage's edit restrictions through
+	// to the inline bundle so composed stages keep manifest guarantees.
+	CommentsOnly bool
+	ASCIIOnly    bool
 }
 
 // ModelPreference mirrors agent.ModelPreference to avoid circular imports.

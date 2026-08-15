@@ -1470,6 +1470,35 @@ func TestBuildBundleInline_BaseDirReferenceFallback(t *testing.T) {
 	assertContains(t, bundle.System, "shared ref content", "fallback baseDir reference")
 }
 
+// TestBuildBundleInline_EditRestrictions pins that comments_only/ascii_only
+// survive into the inline bundle — composed stages lost them silently before.
+func TestBuildBundleInline_EditRestrictions(t *testing.T) {
+	t.Parallel()
+	baseDir := t.TempDir()
+	writeTestFiles(t, baseDir, map[string]string{
+		"system.md":  "stage system",
+		"wrapper.md": "stage wrapper",
+	})
+
+	cfg := &InlineAgentConfig{
+		Name:         "guarded",
+		EntryPoint:   "system.md",
+		Wrapper:      "wrapper.md",
+		CommentsOnly: true,
+		ASCIIOnly:    true,
+	}
+	bundle, err := BuildBundleInline(baseDir, cfg, "prompt", t.TempDir(), "", nil)
+	if err != nil {
+		t.Fatalf("BuildBundleInline: %v", err)
+	}
+	if !bundle.CommentsOnly {
+		t.Error("CommentsOnly dropped from inline bundle")
+	}
+	if !bundle.ASCIIOnly {
+		t.Error("ASCIIOnly dropped from inline bundle")
+	}
+}
+
 // TestBuildBundle_InlinePromptBadTemplate covers BuildBundle's error return
 // when the inline prompt contains an invalid template expression.
 func TestBuildBundle_InlinePromptBadTemplate(t *testing.T) {

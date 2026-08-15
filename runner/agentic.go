@@ -57,7 +57,7 @@ func invokeAgenticCLI(ctx context.Context, opts *RunOptions, provider, model, sy
 		SystemPrompt: systemPrompt,
 		UserPrompt:   bundle.User,
 		WorkDir:      bundle.WorkDir,
-		ReadOnly:     opts.Mode == "readonly",
+		ReadOnly:     modeRestrictsEdits(opts.Mode),
 	}
 	res, gate, err := runAgenticCLI(ctx, req)
 	m.AddTokens(res.InputTokens, res.OutputTokens)

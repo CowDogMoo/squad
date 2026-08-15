@@ -34,6 +34,34 @@ func TestApplyReadOnlyMode(t *testing.T) {
 	if !tools.IsReadOnlyMode(applyReadOnlyMode(context.Background(), "readonly")) {
 		t.Fatal("readonly mode must enable the readonly gate")
 	}
+	if !tools.IsReadOnlyMode(applyReadOnlyMode(context.Background(), "plan")) {
+		t.Fatal("plan mode must enable the readonly gate (a plan run changes nothing)")
+	}
+}
+
+func TestApplyEditRestrictions(t *testing.T) {
+	t.Parallel()
+	ctx := applyEditRestrictions(context.Background(), &agent.Bundle{})
+	if tools.IsCommentsOnlyMode(ctx) || tools.IsASCIIOnlyMode(ctx) {
+		t.Fatal("plain bundle must not arm edit restrictions")
+	}
+
+	// Composed stages reach InvokeModel without initRunContext, so the
+	// chokepoint must arm the gates from the bundle alone.
+	ctx = applyEditRestrictions(context.Background(), &agent.Bundle{CommentsOnly: true, ASCIIOnly: true})
+	if !tools.IsCommentsOnlyMode(ctx) {
+		t.Error("comments-only bundle must arm the comments gate")
+	}
+	if !tools.IsASCIIOnlyMode(ctx) {
+		t.Error("ascii-only bundle must arm the ascii gate")
+	}
+
+	// Leaf runs arrive already armed via initRunContext; re-applying must
+	// be a no-op, not an error or duplicate arming.
+	armed := tools.InitCommentsOnlyMode(context.Background())
+	if got := applyEditRestrictions(armed, &agent.Bundle{CommentsOnly: true}); !tools.IsCommentsOnlyMode(got) {
+		t.Error("already-armed ctx must stay armed")
+	}
 }
 
 func TestLoadResumeTranscript(t *testing.T) {
