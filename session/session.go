@@ -52,6 +52,7 @@ const (
 	EventRunEnd          = "run_end"
 	EventSkillLoaded     = "skill_loaded"
 	EventConfirmResolved = "confirm_resolved"
+	EventSignOffResolved = "sign_off_resolved"
 )
 
 // Meta holds the per-session metadata kept in meta.json. It is rewritten on

@@ -58,6 +58,41 @@ func isStdinTTY() bool {
 	return isatty.IsTerminal(os.Stdin.Fd())
 }
 
+// newSignOffRuntime wires os.Stdin / os.Stderr into the sign-off gate for
+// --interactive runs. Unlike buildConfirmRuntime there is no auto policy:
+// ExecuteRun already rejected non-TTY runs, and the tool fails loudly if
+// one slips through.
+func newSignOffRuntime() *tools.SignOffRuntime {
+	return &tools.SignOffRuntime{
+		In:    os.Stdin,
+		Out:   os.Stderr,
+		IsTTY: isStdinTTY,
+	}
+}
+
+// errInteractiveAgenticCLI explains why the sign-off gate does not combine
+// with an agentic CLI provider today: the CLI executes its tool loop in a
+// separate process, outside squad's dispatchers, so the ProposePlan gate
+// has no seam to intercept edits. (An equivalent flow is possible via the
+// CLI's own plan permission mode plus --resume; not implemented.) Used by
+// ExecuteRun's fail-fast validation and by InvokeModel's backstop (child
+// agents can switch provider via manifest override after the top-level
+// validation ran).
+func errInteractiveAgenticCLI(provider string) error {
+	return fmt.Errorf("--interactive is not supported with agentic CLI provider %q yet: the external CLI runs its tool loop in a separate process, outside squad's sign-off gate", provider)
+}
+
+// signOffPromptBlock is appended to the system prompt of every agent in an
+// --interactive run so the model knows the mutation gate exists and how to
+// clear it.
+const signOffPromptBlock = "\n\n## Interactive Sign-Off\n\n" +
+	"This run requires human sign-off before any file modifications. Write, Edit, and MultiEdit are locked until a plan is approved.\n\n" +
+	"1. Investigate first using read-only tools (Read, Grep, Glob, Bash).\n" +
+	"2. Call ProposePlan with a concise, complete plan: what you will change, which files, and why.\n" +
+	"3. The user will approve, reject, or reply with feedback. If you receive feedback, revise the plan and call ProposePlan again.\n" +
+	"4. Only after approval, apply the changes.\n\n" +
+	"Do not run state-changing shell commands before approval. If the user rejects the plan, make no changes and summarize your findings instead.\n"
+
 // buildSkillRuntime constructs the per-run Skill tool runtime from the
 // bundle's filtered entries. Returns nil when no skills are visible so
 // RunWithToolsConfig treats this as "no Skill tool".
@@ -172,11 +207,21 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 	if opts.System != "" {
 		systemPrompt += "\n\n## System Override\n\n" + strings.TrimSpace(opts.System) + "\n"
 	}
+	if tools.GetSignOffRuntime(ctx) != nil {
+		systemPrompt += signOffPromptBlock
+	}
 
 	// Agentic CLI providers run the entire agent loop inside the external
 	// binary with its own tools and auth; squad's executor, MCP, and tool
 	// plumbing must not be set up for them.
 	if metrics.IsAgenticCLI(provider) {
+		// Backstop for agents that reach here without ExecuteRun's
+		// validation (child dispatch, composed stages): the sign-off gate
+		// cannot hold inside an external binary's own tool loop.
+		if tools.GetSignOffRuntime(ctx) != nil {
+			m.Finish()
+			return "", m, errInteractiveAgenticCLI(provider)
+		}
 		return invokeAgenticCLI(ctx, opts, provider, model, systemPrompt, bundle, m)
 	}
 

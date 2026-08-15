@@ -385,7 +385,7 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	ctx = WithSkillRuntime(ctx, cfg.Skill)
 	ctx = WithConfirmRuntime(ctx, cfg.Confirm)
 
-	handlers, toolDefs := buildHandlersWithSkill(workingDir, cfg.TaskCfg, cfg.Executor, cfg.Skill, cfg.Confirm)
+	handlers, toolDefs := buildHandlersWithSkill(workingDir, cfg.TaskCfg, cfg.Executor, cfg.Skill, cfg.Confirm, GetSignOffRuntime(ctx))
 	callOpts = append(callOpts, llms.WithTools(toolDefs))
 
 	if maxIterations <= 0 {
@@ -1011,6 +1011,8 @@ func appendToolCallMessage(messages []llms.MessageContent, textContent string, t
 
 // serialTools are tools that must not run concurrently because they
 // mutate shared state (filesystem, executor) in order-dependent ways.
+// Confirm and ProposePlan qualify because they read os.Stdin — two prompts
+// racing on one terminal would interleave and steal each other's input.
 var serialTools = map[string]bool{
 	"Bash":           true,
 	"BashBackground": true,
@@ -1018,6 +1020,8 @@ var serialTools = map[string]bool{
 	"MultiEdit":      true,
 	"Write":          true,
 	"Task":           true,
+	"Confirm":        true,
+	"ProposePlan":    true,
 }
 
 func executeToolCalls(ctx context.Context, messages []llms.MessageContent, toolCalls []llms.ToolCall, handlers map[string]Handler, splitResults bool) []llms.MessageContent {
@@ -1107,6 +1111,13 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 		toolResponse.Name = toolName
 		toolResponse.Content = fmt.Sprintf("error: %s is not permitted in readonly mode (this run is analysis-only and must not modify files)", toolName)
 		logging.InfoContext(ctx, "  ✗ %s denied by readonly mode", toolName)
+		return toolResponse
+	}
+
+	if denial := SignOffDenial(ctx, toolName); denial != "" {
+		toolResponse.Name = toolName
+		toolResponse.Content = denial
+		logging.InfoContext(ctx, "  ✗ %s denied pending plan sign-off", toolName)
 		return toolResponse
 	}
 	ctx, span := telemetry.Tracer().Start(ctx, "tool."+toolName,
@@ -1205,20 +1216,20 @@ func toolArgsSummaryComplex(toolName string, args map[string]interface{}) string
 // ReportFinding tool is also registered. MCP tools from taskCfg.ExtraTools
 // are appended last.
 func BuildHandlers(workingDir string, taskCfg *TaskConfig, ex executor.Executor) (map[string]Handler, []llms.Tool) {
-	return buildHandlersWithSkill(workingDir, taskCfg, ex, nil, nil)
+	return buildHandlersWithSkill(workingDir, taskCfg, ex, nil, nil, nil)
 }
 
 // BuildHandlersWithSkill is the exported variant of buildHandlersWithSkill,
 // used by callers in other packages (e.g. the OpenAI Responses API path)
-// that need to register the Skill and Confirm tools.
-func BuildHandlersWithSkill(workingDir string, taskCfg *TaskConfig, ex executor.Executor, skillRuntime *SkillRuntime, confirmRuntime *ConfirmRuntime) (map[string]Handler, []llms.Tool) {
-	return buildHandlersWithSkill(workingDir, taskCfg, ex, skillRuntime, confirmRuntime)
+// that need to register the Skill, Confirm, and ProposePlan tools.
+func BuildHandlersWithSkill(workingDir string, taskCfg *TaskConfig, ex executor.Executor, skillRuntime *SkillRuntime, confirmRuntime *ConfirmRuntime, signOffRuntime *SignOffRuntime) (map[string]Handler, []llms.Tool) {
+	return buildHandlersWithSkill(workingDir, taskCfg, ex, skillRuntime, confirmRuntime, signOffRuntime)
 }
 
 // buildHandlersWithSkill is the full-featured constructor. Callers that need
 // the Skill or Confirm tools — i.e. the runner — go through here; existing
 // callers that don't care (tests, pipeline glue) can keep using BuildHandlers.
-func buildHandlersWithSkill(workingDir string, taskCfg *TaskConfig, ex executor.Executor, skillRuntime *SkillRuntime, confirmRuntime *ConfirmRuntime) (map[string]Handler, []llms.Tool) {
+func buildHandlersWithSkill(workingDir string, taskCfg *TaskConfig, ex executor.Executor, skillRuntime *SkillRuntime, confirmRuntime *ConfirmRuntime, signOffRuntime *SignOffRuntime) (map[string]Handler, []llms.Tool) {
 	handlers := map[string]Handler{}
 
 	add := func(handler Handler) {
@@ -1256,6 +1267,13 @@ func buildHandlersWithSkill(workingDir string, taskCfg *TaskConfig, ex executor.
 	// A nil runtime means the runner explicitly suppressed it (e.g. tests).
 	if confirmRuntime != nil {
 		add(Handler{Def: definitionConfirm(), Call: confirmTool(confirmRuntime)})
+	}
+
+	// ProposePlan is registered only when the run has a sign-off gate
+	// (--interactive). Its presence in the tool list is the model's cue
+	// that mutations are locked behind a plan approval.
+	if signOffRuntime != nil {
+		add(Handler{Def: definitionProposePlan(), Call: proposePlanTool(signOffRuntime)})
 	}
 
 	if taskCfg != nil {

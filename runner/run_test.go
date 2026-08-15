@@ -1408,7 +1408,7 @@ func TestInitRunContext_CommentsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundle := &agent.Bundle{CommentsOnly: true}
-	ctx := initRunContext(context.Background(), bundle)
+	ctx := initRunContext(context.Background(), &RunOptions{}, bundle)
 	// Verify the context has the edit deadline initialized (non-nil).
 	if ctx == nil {
 		t.Fatal("initRunContext returned nil context")
@@ -1422,12 +1422,61 @@ func TestInitRunContext_CommentsOnly(t *testing.T) {
 func TestInitRunContext_Normal(t *testing.T) {
 	t.Parallel()
 	bundle := &agent.Bundle{CommentsOnly: false}
-	ctx := initRunContext(context.Background(), bundle)
+	ctx := initRunContext(context.Background(), &RunOptions{}, bundle)
 	if ctx == nil {
 		t.Fatal("initRunContext returned nil context")
 	}
 	if tools.IsCommentsOnlyMode(ctx) {
 		t.Error("expected comments-only mode to be unset for normal bundle")
+	}
+	if tools.GetSignOffRuntime(ctx) != nil {
+		t.Error("expected no sign-off gate without --interactive")
+	}
+}
+
+func TestInitRunContext_Interactive(t *testing.T) {
+	t.Parallel()
+	ctx := initRunContext(context.Background(), &RunOptions{Interactive: true}, &agent.Bundle{})
+	rt := tools.GetSignOffRuntime(ctx)
+	if rt == nil {
+		t.Fatal("expected a sign-off gate for --interactive runs")
+	}
+	if rt.Approved() {
+		t.Error("gate must start locked")
+	}
+}
+
+func TestInvokeModel_InteractiveRejectsAgenticCLI(t *testing.T) {
+	t.Parallel()
+	// Backstop for runs that reach InvokeModel without ExecuteRun's
+	// validation (e.g. a child agent whose manifest overrides the provider
+	// to an agentic CLI): a locked sign-off gate on ctx must refuse before
+	// dispatching to the external binary.
+	ctx := tools.WithSignOffRuntime(context.Background(), &tools.SignOffRuntime{})
+	opts := &RunOptions{Provider: "claude-code", Model: "sonnet"}
+	bundle := &agent.Bundle{System: "sys", User: "user", WorkDir: t.TempDir()}
+	_, m, err := InvokeModel(ctx, opts, bundle)
+	if err == nil {
+		t.Fatal("expected --interactive with agentic CLI provider to fail")
+	}
+	if !strings.Contains(err.Error(), "not supported with agentic CLI provider") {
+		t.Errorf("error should explain the incompatibility: %v", err)
+	}
+	if m == nil {
+		t.Error("InvokeModel must return non-nil metrics even on refusal")
+	}
+}
+
+func TestExecuteRun_InteractiveRequiresTTY(t *testing.T) {
+	t.Parallel()
+	// Under `go test` stdin is /dev/null, so the run must fail before any
+	// setup — no agent, prompt, or working dir is needed to hit the check.
+	err := ExecuteRun(&cobra.Command{}, nil, &RunOptions{Interactive: true})
+	if err == nil {
+		t.Fatal("expected --interactive without a TTY to fail")
+	}
+	if !strings.Contains(err.Error(), "requires a terminal") {
+		t.Errorf("error should explain the TTY requirement: %v", err)
 	}
 }
 

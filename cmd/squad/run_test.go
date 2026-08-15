@@ -1235,6 +1235,75 @@ stages:
 	}
 }
 
+func TestRunComposedAgent_RejectsInteractive(t *testing.T) {
+	manifest := `
+name: test-composed
+version: "1.0"
+
+stages:
+  - name: s1
+    agent: a1
+`
+	agentsDir := setupTestAgent(t, "test-composed", manifest, nil)
+
+	v := viper.New()
+	v.Set("run.agent", "test-composed")
+	v.Set("run.agents_dir", agentsDir)
+	v.Set("run.interactive", true)
+
+	cmd := newRunCmd()
+	ctx := withViper(context.Background(), v)
+	ctx = withConfig(ctx, config.Defaults())
+	cmd.SetContext(ctx)
+
+	if err := cmd.Flags().Set("agent", "test-composed"); err != nil {
+		t.Fatalf("Set agent: %v", err)
+	}
+	if err := cmd.Flags().Set("agents-dir", agentsDir); err != nil {
+		t.Fatalf("Set agents-dir: %v", err)
+	}
+
+	err := cmd.RunE(cmd, nil)
+	if err == nil {
+		t.Fatal("expected error for --interactive with composed agent")
+	}
+	if !strings.Contains(err.Error(), "not supported with composed agents") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBindRunFlagsInteractive(t *testing.T) {
+	cmd := newRunCmd()
+	v := viper.New()
+	if err := bindRunFlags(cmd, v); err != nil {
+		t.Fatalf("bindRunFlags: %v", err)
+	}
+	if v.GetBool("run.interactive") {
+		t.Fatal("run.interactive should default to false")
+	}
+	if err := cmd.Flags().Set("interactive", "true"); err != nil {
+		t.Fatalf("Set interactive: %v", err)
+	}
+	if !v.GetBool("run.interactive") {
+		t.Fatal("run.interactive should follow the --interactive flag")
+	}
+}
+
+func TestNewRunOptionsInteractive(t *testing.T) {
+	for _, interactive := range []bool{true, false} {
+		v := viper.New()
+		v.Set("run.interactive", interactive)
+
+		cmd := commandWithViper(v)
+		ctx := withConfig(cmd.Context(), config.Defaults())
+		cmd.SetContext(ctx)
+
+		if opts := newRunOptions(cmd); opts.Interactive != interactive {
+			t.Errorf("Interactive = %v, want %v", opts.Interactive, interactive)
+		}
+	}
+}
+
 func TestRunComposedAgent_ExecutionPath(t *testing.T) {
 	t.Parallel()
 

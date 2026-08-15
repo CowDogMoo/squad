@@ -208,6 +208,7 @@ Run `squad <subcommand> --help` for full flag documentation.
 | `--mcp-server`        | MCP server spec (repeatable)                                      | —             |
 | `--allow-skill`       | Restrict skills to this allowlist (repeatable)                    | manifest      |
 | `--auto-confirm`      | How `Confirm` tool resolves in non-TTY runs (`yes`/`no`/`abort`)  | `abort`       |
+| `--interactive`       | Sign off on the agent's plan before it can modify files: approve, reject, or reply with feedback to iterate (requires a TTY) | `false`       |
 
 ## Agents
 
