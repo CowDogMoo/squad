@@ -197,7 +197,7 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 
 	opts.WorkingDir = workingDir
 
-	if err := applyProviderGuards(cmd, opts, bundle, workingDir); err != nil {
+	if err := applyProviderConstraints(cmd, opts, bundle, workingDir); err != nil {
 		return err
 	}
 
@@ -222,12 +222,12 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	return invokeAndHandle(ctx, cmd, opts, bundle, prompt, workingDir, logger)
 }
 
-// applyProviderGuards resolves option conflicts that depend on the final
-// provider, which is only known once prepareBundle has run
-// ResolveModelPrecedence. Rejecting the interactive/agentic-CLI conflict here —
-// before the session opens and the metrics banner machinery starts — keeps it
-// from surfacing mid-run with a confusing zero-value metrics block.
-func applyProviderGuards(cmd *cobra.Command, opts *RunOptions, bundle *agent.Bundle, workingDir string) error {
+// applyProviderConstraints adjusts run options that depend on the final
+// provider/bundle resolution and rejects unsupported combinations. It runs
+// after prepareBundle (the provider is final once ResolveModelPrecedence has
+// run) and before the session opens, so rejections are the first and only
+// output instead of surfacing mid-run with a zero-value metrics block.
+func applyProviderConstraints(cmd *cobra.Command, opts *RunOptions, bundle *agent.Bundle, workingDir string) error {
 	// Remote-only agents never produce file diffs; the "must edit code"
 	// guard is a code-editing-agent concern that doesn't apply here.
 	if bundle.RemoteOnly && opts.RequireActionable {
@@ -235,21 +235,18 @@ func applyProviderGuards(cmd *cobra.Command, opts *RunOptions, bundle *agent.Bun
 		logging.InfoContext(cmd.Context(), "remote-only agent: disabling require-actionable")
 	}
 
-	provider := normalizeProvider(opts.Provider)
-
-	if opts.Interactive && metrics.IsAgenticCLI(provider) {
-		return errInteractiveAgenticCLI(provider)
+	if opts.Interactive && metrics.IsAgenticCLI(normalizeProvider(opts.Provider)) {
+		return errInteractiveAgenticCLI(normalizeProvider(opts.Provider))
 	}
 
 	// Agentic CLI providers edit files directly on disk, so actionable-output
 	// detection relies on comparing git working-tree fingerprints; outside a
 	// git repo there is nothing to compare and the CLI's prose report would
 	// false-fail the guard.
-	if opts.RequireActionable && metrics.IsAgenticCLI(provider) && !isGitRepo(cmd.Context(), workingDir) {
+	if opts.RequireActionable && metrics.IsAgenticCLI(normalizeProvider(opts.Provider)) && !isGitRepo(cmd.Context(), workingDir) {
 		opts.RequireActionable = false
 		logging.InfoContext(cmd.Context(), "agentic CLI provider outside a git repo: disabling require-actionable")
 	}
-
 	return nil
 }
 
@@ -969,9 +966,30 @@ func recordWorktreePath(opts *RunOptions, iso *Isolation, workingDir string) {
 func ResolveGitToplevel(dir string) string {
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
 	cmd.Dir = dir
+	// Discovery must be governed by cmd.Dir alone. When squad runs inside a
+	// git hook (e.g. pre-commit in a linked worktree) git exports GIT_DIR and
+	// friends, which would silently redirect rev-parse to the hook's repo.
+	cmd.Env = envWithoutGitDiscovery(os.Environ())
 	out, err := cmd.Output()
 	if err != nil {
 		return dir // fallback to the original dir if not in a git repo
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// envWithoutGitDiscovery returns env minus the variables that override git's
+// cwd-based repository discovery.
+func envWithoutGitDiscovery(env []string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		switch {
+		case strings.HasPrefix(kv, "GIT_DIR="),
+			strings.HasPrefix(kv, "GIT_WORK_TREE="),
+			strings.HasPrefix(kv, "GIT_INDEX_FILE="),
+			strings.HasPrefix(kv, "GIT_COMMON_DIR="):
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }

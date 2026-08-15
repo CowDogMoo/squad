@@ -477,6 +477,15 @@ func seedSkillRepo(t *testing.T, name, description string) string {
 	} {
 		c := exec.Command(args[0], args[1:]...)
 		c.Dir = seed
+		// Drop git discovery vars so a parent git hook (pre-commit exports
+		// GIT_DIR) can't redirect these commands to the enclosing repo.
+		for _, kv := range os.Environ() {
+			if strings.HasPrefix(kv, "GIT_DIR=") || strings.HasPrefix(kv, "GIT_WORK_TREE=") ||
+				strings.HasPrefix(kv, "GIT_INDEX_FILE=") || strings.HasPrefix(kv, "GIT_COMMON_DIR=") {
+				continue
+			}
+			c.Env = append(c.Env, kv)
+		}
 		if out, err := c.CombinedOutput(); err != nil {
 			t.Fatalf("%v: %v\n%s", args, err, out)
 		}
