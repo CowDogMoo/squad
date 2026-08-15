@@ -50,3 +50,11 @@ ignore:
   - "session/session_io.go"
   - "ui/presets/presets_io.go"
   - "tools/transcript_io.go"
+  # fakeclaude is test-support: a scripted stand-in for the claude CLI's
+  # stream-json control protocol, re-exec'd as a subprocess by agenticcli
+  # and runner tests (the helper-process pattern). It runs in a child
+  # process, so its execution can never appear in a coverage profile, and
+  # covering test scaffolding is not meaningful anyway — the protocol
+  # behavior it fakes is pinned by the golden fixtures in
+  # agenticcli/testdata and the RunLive tests that drive it.
+  - "internal/fakeclaude/**"

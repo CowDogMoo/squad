@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -287,6 +288,101 @@ func TestClaudeLiveArgs(t *testing.T) {
 type nopWriteCloser struct{ *bytes.Buffer }
 
 func (nopWriteCloser) Close() error { return nil }
+
+// failingWriteCloser injects write/close failures into the stdin sink.
+type failingWriteCloser struct{ writeErr, closeErr error }
+
+func (f failingWriteCloser) Write([]byte) (int, error) { return 0, f.writeErr }
+func (f failingWriteCloser) Close() error              { return f.closeErr }
+
+func TestRunLive_MissingBinary(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, err := RunLive(context.Background(), liveReq(t.TempDir(), func(context.Context, string, json.RawMessage, string) (Decision, error) {
+		return Decision{Allow: true}, nil
+	}))
+	if err == nil || !strings.Contains(err.Error(), `requires the "claude" CLI on PATH`) {
+		t.Fatalf("err = %v, want the install hint", err)
+	}
+}
+
+func TestLiveSessionProtocolBranches(t *testing.T) {
+	t.Parallel()
+
+	t.Run("control_request without request_id counts toward the budget", func(t *testing.T) {
+		t.Parallel()
+		s := &liveSession{ctx: context.Background()}
+		if err := s.handle([]byte(`{"type":"control_request"}`)); err != nil {
+			t.Fatalf("first malformed request must not be fatal: %v", err)
+		}
+		if err := s.handle([]byte(`{"type":"control_request"}`)); err == nil || !strings.Contains(err.Error(), "protocol failure") {
+			t.Fatalf("second consecutive malformed request must fail closed, got %v", err)
+		}
+	})
+
+	t.Run("unknown control subtype gets an error response", func(t *testing.T) {
+		t.Parallel()
+		var sent bytes.Buffer
+		s := &liveSession{ctx: context.Background(), stdin: nopWriteCloser{&sent}}
+		err := s.handle([]byte(`{"type":"control_request","request_id":"r9","request":{"subtype":"hook_callback"}}`))
+		if err != nil {
+			t.Fatalf("one unknown subtype must not be fatal: %v", err)
+		}
+		if got := sent.String(); !strings.Contains(got, `"subtype":"error"`) || !strings.Contains(got, `"request_id":"r9"`) {
+			t.Errorf("expected an error control_response for r9, sent: %s", got)
+		}
+	})
+
+	t.Run("errOrEOF keeps non-EOF errors verbatim", func(t *testing.T) {
+		t.Parallel()
+		underlying := errors.New("read: connection reset")
+		if got := errOrEOF(underlying); got != underlying {
+			t.Errorf("errOrEOF rewrote a real error: %v", got)
+		}
+		if got := errOrEOF(io.EOF); !strings.Contains(got.Error(), "closed stdout") {
+			t.Errorf("errOrEOF(EOF) = %v, want the readable rewrite", got)
+		}
+	})
+
+	t.Run("send fails after stdin is closed", func(t *testing.T) {
+		t.Parallel()
+		s := &liveSession{ctx: context.Background(), stdin: nopWriteCloser{&bytes.Buffer{}}}
+		s.closeStdin()
+		if err := s.send([]byte("{}")); err == nil || !strings.Contains(err.Error(), "already closed") {
+			t.Fatalf("err = %v, want stdin-closed", err)
+		}
+	})
+
+	t.Run("send surfaces write errors", func(t *testing.T) {
+		t.Parallel()
+		s := &liveSession{ctx: context.Background(), stdin: failingWriteCloser{writeErr: errors.New("pipe broke")}}
+		if err := s.send([]byte("{}")); err == nil || !strings.Contains(err.Error(), "pipe broke") {
+			t.Fatalf("err = %v, want the write error", err)
+		}
+	})
+
+	t.Run("closeStdin tolerates close errors and is idempotent", func(t *testing.T) {
+		t.Parallel()
+		s := &liveSession{ctx: context.Background(), stdin: failingWriteCloser{closeErr: errors.New("bad fd")}}
+		s.closeStdin()
+		s.closeStdin()
+		if !s.stdinClosed {
+			t.Fatal("stdin must be marked closed despite the close error")
+		}
+	})
+
+	t.Run("accumulate tolerates nil and empty blocks", func(t *testing.T) {
+		t.Parallel()
+		s := &liveSession{ctx: context.Background()}
+		s.accumulate(nil)
+		s.accumulate(&streamedMsg{ID: "m1", Content: []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}{{Type: "text", Text: ""}, {Type: "tool_use"}}})
+		if got := s.latestAssistantText(); got != "" {
+			t.Errorf("latestAssistantText = %q, want empty", got)
+		}
+	})
+}
 
 // TestGoldenSessionReplay replays the recorded CLI stdout fixture through the
 // event loop and verifies the control responses squad produces are

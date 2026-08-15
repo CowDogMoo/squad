@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -193,6 +194,50 @@ func TestInvokeModel_InteractiveClaudeCodeGoesLive(t *testing.T) {
 	if m.Iterations() != 1 {
 		t.Errorf("iterations = %d, want 1", m.Iterations())
 	}
+}
+
+// TestClaudeSignOffGate_UnitBranches covers the adapter decisions that the
+// fake-binary integration flows don't reach: a review attempted without a
+// terminal (fail closed) and the post-rejection latch.
+func TestClaudeSignOffGate_UnitBranches(t *testing.T) {
+	t.Parallel()
+	input := json.RawMessage(`{"file_path":"a.txt"}`)
+
+	t.Run("review without a TTY fails closed", func(t *testing.T) {
+		t.Parallel()
+		gate := &claudeSignOffGate{rt: &tools.SignOffRuntime{IsTTY: func() bool { return false }}}
+		_, err := gate.canUseTool(context.Background(), "Write", input, "my plan")
+		if err == nil || !strings.Contains(err.Error(), "interactive terminal") {
+			t.Fatalf("err = %v, want the terminal requirement", err)
+		}
+	})
+
+	t.Run("rejection latch denies without re-prompting", func(t *testing.T) {
+		t.Parallel()
+		gate := &claudeSignOffGate{rt: &tools.SignOffRuntime{}}
+		gate.rejected = true
+		// No In/Out/IsTTY wired: prompting would panic or error, so a
+		// successful deny proves the latch short-circuits the review.
+		d, err := gate.canUseTool(context.Background(), "Edit", input, "another plan")
+		if err != nil {
+			t.Fatalf("canUseTool: %v", err)
+		}
+		if d.Allow || d.Message != denyRejectedMsg {
+			t.Fatalf("decision = %+v, want the standing rejection deny", d)
+		}
+		if d.Interrupt {
+			t.Error("latch denial must not re-send the interrupt")
+		}
+	})
+
+	t.Run("non-mutating tools bypass the gate entirely", func(t *testing.T) {
+		t.Parallel()
+		gate := &claudeSignOffGate{rt: &tools.SignOffRuntime{}}
+		d, err := gate.canUseTool(context.Background(), "Read", input, "")
+		if err != nil || !d.Allow {
+			t.Fatalf("Read must always be allowed, got %+v, %v", d, err)
+		}
+	})
 }
 
 // TestApplyProviderConstraints_InteractiveAgenticCLI pins the narrowed
