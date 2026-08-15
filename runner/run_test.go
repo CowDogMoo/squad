@@ -785,6 +785,73 @@ func TestResolveModelPrecedence_ConfigTokenWinsOverManifestTop(t *testing.T) {
 	}
 }
 
+// TestResolveModelPrecedence_AgenticCLI covers the agentic CLI branch:
+// claude-code borrows the manifest's anthropic model when no claude-code
+// entry pins one (both run the same models, and the agent's tuning is
+// calibrated against the anthropic pin), while agy never borrows — its
+// backend is not Anthropic.
+func TestResolveModelPrecedence_AgenticCLI(t *testing.T) {
+	anthropicOnly := []agent.ModelPreference{
+		{Model: "claude-sonnet-4-6", Provider: "anthropic"},
+		{Model: "gpt-4.1-mini", Provider: "openai"},
+	}
+	tests := []struct {
+		name      string
+		provider  string
+		models    []agent.ModelPreference
+		wantModel string
+	}{
+		{
+			name:      "claude-code borrows anthropic entry",
+			provider:  "claude-code",
+			models:    anthropicOnly,
+			wantModel: "claude-sonnet-4-6",
+		},
+		{
+			name:     "manifest claude-code entry wins over anthropic entry",
+			provider: "claude-code",
+			models: []agent.ModelPreference{
+				{Model: "claude-sonnet-4-6", Provider: "anthropic"},
+				{Model: "opus", Provider: "claude-code"},
+			},
+			wantModel: "opus",
+		},
+		{
+			name:     "no anthropic entry leaves model empty for CLI default",
+			provider: "claude-code",
+			models: []agent.ModelPreference{
+				{Model: "gpt-4.1-mini", Provider: "openai"},
+			},
+			wantModel: "",
+		},
+		{
+			name:      "agy does not borrow the anthropic entry",
+			provider:  "agy",
+			models:    anthropicOnly,
+			wantModel: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := &RunOptions{Provider: tc.provider}
+			bundle := &agent.Bundle{Models: tc.models}
+			warn, err := ResolveModelPrecedence(context.Background(), opts, bundle)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if warn != "" {
+				t.Fatalf("unexpected warning: %q", warn)
+			}
+			if opts.Model != tc.wantModel {
+				t.Fatalf("expected model %q, got %q", tc.wantModel, opts.Model)
+			}
+			if opts.Provider != tc.provider {
+				t.Fatalf("provider changed: expected %q, got %q", tc.provider, opts.Provider)
+			}
+		})
+	}
+}
+
 func runAndAssertBundle(t *testing.T, opts *RunOptions, wantModel, wantProvider string) {
 	t.Helper()
 	cmd := &cobra.Command{}
