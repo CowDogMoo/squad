@@ -235,8 +235,11 @@ func applyProviderConstraints(cmd *cobra.Command, opts *RunOptions, bundle *agen
 		logging.InfoContext(cmd.Context(), "remote-only agent: disabling require-actionable")
 	}
 
-	if opts.Interactive && metrics.IsAgenticCLI(normalizeProvider(opts.Provider)) {
-		return errInteractiveAgenticCLI(normalizeProvider(opts.Provider))
+	// claude-code supports the gate through its stream-json permission
+	// protocol (agenticcli.RunLive); other agentic CLIs have no seam for
+	// squad to intercept edits, so they are rejected up front.
+	if p := normalizeProvider(opts.Provider); opts.Interactive && metrics.IsAgenticCLI(p) && p != "claude-code" {
+		return errInteractiveAgenticCLI(p)
 	}
 
 	// Agentic CLI providers edit files directly on disk, so actionable-output

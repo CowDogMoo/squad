@@ -71,15 +71,15 @@ func newSignOffRuntime() *tools.SignOffRuntime {
 }
 
 // errInteractiveAgenticCLI explains why the sign-off gate does not combine
-// with an agentic CLI provider today: the CLI executes its tool loop in a
-// separate process, outside squad's dispatchers, so the ProposePlan gate
-// has no seam to intercept edits. (An equivalent flow is possible via the
-// CLI's own plan permission mode plus --resume; not implemented.) Used by
-// ExecuteRun's fail-fast validation and by InvokeModel's backstop (child
-// agents can switch provider via manifest override after the top-level
-// validation ran).
+// with an agentic CLI provider other than claude-code: the CLI executes its
+// tool loop in a separate process, outside squad's dispatchers, so the gate
+// has no seam to intercept edits. claude-code is the exception — its
+// stream-json permission protocol gives squad that seam (agenticcli.RunLive).
+// Used by ExecuteRun's fail-fast validation and by InvokeModel's backstop
+// (child agents can switch provider via manifest override after the
+// top-level validation ran).
 func errInteractiveAgenticCLI(provider string) error {
-	return fmt.Errorf("--interactive is not supported with agentic CLI provider %q yet: the external CLI runs its tool loop in a separate process, outside squad's sign-off gate", provider)
+	return fmt.Errorf("--interactive is not supported with agentic CLI provider %q: the external CLI runs its tool loop in a separate process, outside squad's sign-off gate", provider)
 }
 
 // signOffPromptBlock is appended to the system prompt of every agent in an
@@ -91,6 +91,18 @@ const signOffPromptBlock = "\n\n## Interactive Sign-Off\n\n" +
 	"2. Call ProposePlan with a concise, complete plan: what you will change, which files, and why.\n" +
 	"3. The user will approve, reject, or reply with feedback. If you receive feedback, revise the plan and call ProposePlan again.\n" +
 	"4. Only after approval, apply the changes.\n\n" +
+	"Do not run state-changing shell commands before approval. If the user rejects the plan, make no changes and summarize your findings instead.\n"
+
+// signOffPromptBlockCLI is the claude-code live-path variant of the sign-off
+// instructions: there is no ProposePlan tool in the CLI's session, so the
+// model writes its plan as prose and the permission gate presents it for
+// approval when the first edit is attempted.
+const signOffPromptBlockCLI = "\n\n## Interactive Sign-Off\n\n" +
+	"This run requires human sign-off before any file modifications. Write, Edit, MultiEdit, and NotebookEdit are locked until a plan is approved.\n\n" +
+	"1. Investigate first using read-only tools.\n" +
+	"2. Write out your complete plan as a normal message: what you will change, which files, and why. Concise but complete — this is everything the user sees before deciding.\n" +
+	"3. In the SAME turn, immediately attempt the first file modification. The permission system pauses it and presents your plan to the user, who approves, rejects, or replies with feedback. Never end your turn to wait for approval and never ask for approval in chat — the review happens automatically when you attempt the edit.\n" +
+	"4. If the modification is denied with feedback, write a revised plan as a message and retry the edit. Once a modification is allowed, the plan is approved — apply the changes.\n\n" +
 	"Do not run state-changing shell commands before approval. If the user rejects the plan, make no changes and summarize your findings instead.\n"
 
 // buildSkillRuntime constructs the per-run Skill tool runtime from the
@@ -208,7 +220,13 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 		systemPrompt += "\n\n## System Override\n\n" + strings.TrimSpace(opts.System) + "\n"
 	}
 	if tools.GetSignOffRuntime(ctx) != nil {
-		systemPrompt += signOffPromptBlock
+		if metrics.IsAgenticCLI(provider) {
+			// The CLI has no ProposePlan tool; the model presents its
+			// plan as prose and the permission gate does the rest.
+			systemPrompt += signOffPromptBlockCLI
+		} else {
+			systemPrompt += signOffPromptBlock
+		}
 	}
 
 	// Agentic CLI providers run the entire agent loop inside the external
@@ -216,9 +234,10 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 	// plumbing must not be set up for them.
 	if metrics.IsAgenticCLI(provider) {
 		// Backstop for agents that reach here without ExecuteRun's
-		// validation (child dispatch, composed stages): the sign-off gate
-		// cannot hold inside an external binary's own tool loop.
-		if tools.GetSignOffRuntime(ctx) != nil {
+		// validation (child dispatch, composed stages): claude-code holds
+		// the gate through its stream-json permission protocol; other
+		// CLIs run their tool loop with no seam for squad to intercept.
+		if tools.GetSignOffRuntime(ctx) != nil && provider != "claude-code" {
 			m.Finish()
 			return "", m, errInteractiveAgenticCLI(provider)
 		}

@@ -119,15 +119,7 @@ func buildArgs(req Request) (args []string, stdin string) {
 	switch req.Provider {
 	case "claude-code":
 		args = []string{"--print", "--output-format", "json", "--dangerously-skip-permissions"}
-		if req.SystemPrompt != "" {
-			args = append(args, "--append-system-prompt", req.SystemPrompt)
-		}
-		if req.Model != "" {
-			args = append(args, "--model", req.Model)
-		}
-		if req.ReadOnly {
-			args = append(args, "--disallowed-tools", readOnlyDisallowedTools)
-		}
+		args = append(args, claudeCommonArgs(req)...)
 		return args, req.UserPrompt
 	case "agy":
 		// agy has no separate system-prompt flag; prepend it to the task.
@@ -146,6 +138,22 @@ func buildArgs(req Request) (args []string, stdin string) {
 		return args, ""
 	}
 	return nil, ""
+}
+
+// claudeCommonArgs returns the claude flags shared by the single-shot and
+// live paths: system prompt, model, and the readonly tool restriction.
+func claudeCommonArgs(req Request) []string {
+	var args []string
+	if req.SystemPrompt != "" {
+		args = append(args, "--append-system-prompt", req.SystemPrompt)
+	}
+	if req.Model != "" {
+		args = append(args, "--model", req.Model)
+	}
+	if req.ReadOnly {
+		args = append(args, "--disallowed-tools", readOnlyDisallowedTools)
+	}
+	return args
 }
 
 // claudeOutput is the envelope `claude -p --output-format json` prints.
@@ -183,16 +191,7 @@ func parseOutput(provider string, stdout []byte) (Result, error) {
 			logging.Warn("claude output is not the expected JSON envelope (%v); using raw output", err)
 			return Result{Response: string(stdout)}, nil
 		}
-		res := Result{
-			Response:     out.Result,
-			InputTokens:  out.Usage.InputTokens + out.Usage.CacheCreationInputTokens + out.Usage.CacheReadInputTokens,
-			OutputTokens: out.Usage.OutputTokens,
-			Turns:        out.NumTurns,
-		}
-		if out.IsError {
-			return res, fmt.Errorf("claude run failed: %s", strings.TrimSpace(out.Result))
-		}
-		return res, nil
+		return claudeResult(out)
 	case "agy":
 		var out agyOutput
 		if err := json.Unmarshal(stdout, &out); err != nil {
@@ -211,6 +210,22 @@ func parseOutput(provider string, stdout []byte) (Result, error) {
 		return res, nil
 	}
 	return Result{}, fmt.Errorf("unknown agentic CLI provider: %q", provider)
+}
+
+// claudeResult maps the decoded claude envelope onto a Result. Shared by the
+// single-shot path (whole-stdout envelope) and the live path (the terminal
+// `result` stream event, whose fields are a superset of the envelope).
+func claudeResult(out claudeOutput) (Result, error) {
+	res := Result{
+		Response:     out.Result,
+		InputTokens:  out.Usage.InputTokens + out.Usage.CacheCreationInputTokens + out.Usage.CacheReadInputTokens,
+		OutputTokens: out.Usage.OutputTokens,
+		Turns:        out.NumTurns,
+	}
+	if out.IsError {
+		return res, fmt.Errorf("claude run failed: %s", strings.TrimSpace(out.Result))
+	}
+	return res, nil
 }
 
 // outputTail formats the tail of stderr and stdout for error messages, so a
