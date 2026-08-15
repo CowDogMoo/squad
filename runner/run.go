@@ -376,20 +376,8 @@ func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent
 		applyExplicitModel(opts, bundle)
 		return "", nil
 	}
-	// An explicitly requested agentic CLI provider (claude-code, agy)
-	// authenticates through the local CLI, so the credential-driven walk
-	// below doesn't apply — and the config default model (rule 2) belongs
-	// to a different API provider and must not be paired with the CLI. The
-	// model may stay empty: the CLI then uses its own configured default,
-	// unless the manifest pins one for this provider.
 	if p := normalizeProvider(opts.Provider); metrics.IsAgenticCLI(p) {
-		for i := range bundle.Models {
-			if normalizeProvider(bundle.Models[i].Provider) == p {
-				opts.Model = bundle.Models[i].Model
-				break
-			}
-		}
-		logging.InfoContext(ctx, "using agentic CLI provider %s (model=%q)", p, opts.Model)
+		applyAgenticCLIModel(ctx, opts, bundle, p)
 		return "", nil
 	}
 	if warn, ok := applyConfigDefault(ctx, opts, bundle); ok {
@@ -410,6 +398,36 @@ func ResolveModelPrecedence(ctx context.Context, opts *RunOptions, bundle *agent
 	}
 	applyLegacyBundleFallback(opts, bundle)
 	return "", nil
+}
+
+// applyAgenticCLIModel resolves the model for an explicitly requested agentic
+// CLI provider (claude-code, agy). The CLI authenticates locally, so the
+// credential-driven walk doesn't apply — and the config default model (rule 2)
+// belongs to a different API provider and must not be paired with the CLI.
+// Resolution order: a manifest entry pinned for this provider; for claude-code
+// only, the manifest's anthropic entry (the CLI executes the same models and
+// accepts full model names, and the agent's tuning — prompts, budgets, cost
+// multipliers — is calibrated against that pin, not whatever the CLI's default
+// happens to be); otherwise empty, letting the CLI use its own configured
+// default. agy never borrows the anthropic entry — its backend is not
+// Anthropic.
+func applyAgenticCLIModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle, p string) {
+	for i := range bundle.Models {
+		if normalizeProvider(bundle.Models[i].Provider) == p {
+			opts.Model = bundle.Models[i].Model
+			break
+		}
+	}
+	if opts.Model == "" && p == "claude-code" {
+		for i := range bundle.Models {
+			if normalizeProvider(bundle.Models[i].Provider) == "anthropic" {
+				opts.Model = bundle.Models[i].Model
+				logging.InfoContext(ctx, "using manifest anthropic model %q for claude-code CLI", opts.Model)
+				break
+			}
+		}
+	}
+	logging.InfoContext(ctx, "using agentic CLI provider %s (model=%q)", p, opts.Model)
 }
 
 // applyExplicitModel handles rule 1: opts.Model was set explicitly. Fill in

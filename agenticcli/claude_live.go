@@ -232,6 +232,7 @@ type liveEvent struct {
 	Subtype   string        `json:"subtype"`
 	SessionID string        `json:"session_id"`
 	RequestID string        `json:"request_id"`
+	Model     string        `json:"model"`
 	Request   *controlEvent `json:"request"`
 	Message   *streamedMsg  `json:"message"`
 }
@@ -266,7 +267,10 @@ func (s *liveSession) handle(line []byte) error {
 		if ev.Subtype == "init" {
 			s.sessionID = ev.SessionID
 			s.protoErrs = 0
-			logging.InfoContext(s.ctx, "claude live session started (session_id=%s)", ev.SessionID)
+			// The init event carries the model the CLI resolved (flag >
+			// env > settings > built-in default) — the only reliable
+			// source when no --model was passed.
+			logging.InfoContext(s.ctx, "claude live session started (session_id=%s model=%s)", ev.SessionID, ev.Model)
 		}
 	case "assistant":
 		s.protoErrs = 0
