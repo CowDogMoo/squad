@@ -238,6 +238,8 @@ func TestManifestToPipeline_InlineConfig(t *testing.T) {
 				Models: []agent.ModelPreference{
 					{Model: "gpt-4", Provider: "openai"},
 				},
+				CommentsOnly: true,
+				ASCIIOnly:    true,
 			},
 		},
 	}
@@ -268,6 +270,10 @@ func TestManifestToPipeline_InlineConfig(t *testing.T) {
 	}
 	if len(s.InlineConfig.Models) != 1 || s.InlineConfig.Models[0].Model != "gpt-4" {
 		t.Fatalf("expected model gpt-4, got %v", s.InlineConfig.Models)
+	}
+	if !s.InlineConfig.CommentsOnly || !s.InlineConfig.ASCIIOnly {
+		t.Fatalf("edit restrictions dropped: comments_only=%t ascii_only=%t",
+			s.InlineConfig.CommentsOnly, s.InlineConfig.ASCIIOnly)
 	}
 }
 

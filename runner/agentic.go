@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -50,16 +51,23 @@ func invokeAgenticCLI(ctx context.Context, opts *RunOptions, provider, model, sy
 
 	before := agenticWorktreeSnapshot(ctx, bundle.WorkDir)
 	logging.InfoContext(ctx, "agentic CLI run started (provider=%s model=%s dir=%s)", provider, model, bundle.WorkDir)
-	res, err := agenticcli.Run(ctx, agenticcli.Request{
+	req := agenticcli.Request{
 		Provider:     provider,
 		Model:        model,
 		SystemPrompt: systemPrompt,
 		UserPrompt:   bundle.User,
 		WorkDir:      bundle.WorkDir,
-		ReadOnly:     opts.Mode == "readonly",
-	})
+		ReadOnly:     modeRestrictsEdits(opts.Mode),
+	}
+	res, gate, err := runAgenticCLI(ctx, req)
 	m.AddTokens(res.InputTokens, res.OutputTokens)
 	m.AddIterations(res.Turns)
+	if gate != nil && gate.wasRejected() {
+		// The rejection interrupt cuts the CLI off mid-turn, so its result
+		// envelope is an empty error; report the rejection itself, matching
+		// the native ProposePlan outcome.
+		return "", m, errors.New("sign-off: plan rejected by the user; no changes were made")
+	}
 	if err != nil {
 		return "", m, fmt.Errorf("model call failed: %w", err)
 	}

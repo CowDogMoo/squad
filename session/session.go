@@ -53,6 +53,9 @@ const (
 	EventSkillLoaded     = "skill_loaded"
 	EventConfirmResolved = "confirm_resolved"
 	EventSignOffResolved = "sign_off_resolved"
+	// EventPermissionDecision records one can_use_tool allow/deny answered
+	// on the claude-code live path (tool name, decision, reason).
+	EventPermissionDecision = "permission_decision"
 )
 
 // Meta holds the per-session metadata kept in meta.json. It is rewritten on

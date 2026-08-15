@@ -56,7 +56,7 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 
 		mode = effectiveStageMode(opts.Mode, mode)
 
-		bundle, err := buildAgentBundle(agentName, agentPrompt, wd, mode, mergedVars, agentsDir, composedAgentDir, cfg, pipelineRunner)
+		bundle, err := buildAgentBundle(agentName, agentPrompt, wd, mode, mergedVars, agentsDir, composedAgentDir, cfg, pipelineRunner, opts.SkillOverrides)
 		if err != nil {
 			return "", nil, err
 		}
@@ -92,7 +92,7 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 // buildAgentBundle builds the agent bundle, dispatching to inline or
 // external loading based on whether the named agent is registered as
 // an inline agent on the pipeline runner.
-func buildAgentBundle(agentName, prompt, wd, mode string, mergedVars map[string]string, agentsDir, composedAgentDir string, cfg *config.Config, pipelineRunner *pl.Runner) (*agent.Bundle, error) {
+func buildAgentBundle(agentName, prompt, wd, mode string, mergedVars map[string]string, agentsDir, composedAgentDir string, cfg *config.Config, pipelineRunner *pl.Runner, skillOverrides *agent.SkillOverrides) (*agent.Bundle, error) {
 	if inlineCfg, ok := pipelineRunner.InlineAgents[agentName]; ok && inlineCfg != nil {
 		inlineAgent := &agent.InlineAgentConfig{
 			Name:         agentName,
@@ -101,6 +101,8 @@ func buildAgentBundle(agentName, prompt, wd, mode string, mergedVars map[string]
 			Task:         inlineCfg.Task,
 			References:   inlineCfg.References,
 			IncludesRoot: agentsDir,
+			CommentsOnly: inlineCfg.CommentsOnly,
+			ASCIIOnly:    inlineCfg.ASCIIOnly,
 		}
 		for _, m := range inlineCfg.Models {
 			inlineAgent.Models = append(inlineAgent.Models, agent.ModelPreference{
@@ -119,7 +121,9 @@ func buildAgentBundle(agentName, prompt, wd, mode string, mergedVars map[string]
 	if err != nil {
 		return nil, err
 	}
-	bundle, err := agent.BuildBundle(resolvedAgentsDir, agentName, prompt, wd, mode, mergedVars)
+	bundle, err := agent.BuildBundleWithOptions(resolvedAgentsDir, agentName, prompt, wd, mode, mergedVars, &agent.BundleOptions{
+		SkillOverrides: skillOverrides,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to build agent %s: %w", agentName, err)
 	}
@@ -240,8 +244,17 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 
 	mode, _ := cmd.Flags().GetString("mode")
 
+	// Interactive-tool and tool-surface flags must survive into stage
+	// invocations: without AutoConfirm every Confirm call inside a
+	// pipeline sub-agent resolves as "abort", and --mcp-server /
+	// --allow-skill / --deny-skill would be silently ignored.
+	mcpStrings, _ := cmd.Flags().GetStringArray("mcp-server")
+
 	return &runner.RunOptions{
 		Mode:                  mode,
+		AutoConfirm:           autoConfirmMode(cmd),
+		MCPServers:            parseMCPServers(mcpStrings),
+		SkillOverrides:        resolveSkillOverrides(cmd),
 		APIKey:                apiKey,
 		BaseURL:               baseURL,
 		Org:                   org,

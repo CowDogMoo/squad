@@ -33,6 +33,10 @@ type ComposedStage struct {
 	Task       string            `yaml:"task,omitempty"`
 	Models     []ModelPreference `yaml:"models,omitempty"`
 	References []string          `yaml:"references,omitempty"`
+	// CommentsOnly/ASCIIOnly mirror the standalone-manifest edit
+	// restrictions for inline stages.
+	CommentsOnly bool `yaml:"comments_only,omitempty"`
+	ASCIIOnly    bool `yaml:"ascii_only,omitempty"`
 
 	// MCPServers, when non-empty, replaces the parent manifest's
 	// MCP server list for this stage only. Used to scope tool surface

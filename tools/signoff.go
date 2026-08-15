@@ -158,34 +158,59 @@ func proposePlanTool(runtime *SignOffRuntime) func(ctx context.Context, rawArgs 
 	}
 }
 
-// resolveSignOff prompts the reviewer and classifies the answer. result is
-// "approved" or "feedback" on success; a rejection or I/O failure returns an
-// error so the model stops. Empty input lines re-prompt rather than erroring
-// — an accidental Enter shouldn't cost a model round-trip.
-func resolveSignOff(runtime *SignOffRuntime, plan string) (result, feedback string, err error) {
-	if runtime == nil || runtime.IsTTY == nil || !runtime.IsTTY() {
+// Review outcomes returned by ReviewPlan.
+const (
+	ReviewApproved = "approved"
+	ReviewRejected = "rejected"
+	ReviewFeedback = "feedback"
+)
+
+// ReviewPlan renders plan at the terminal and classifies the reviewer's
+// answer as ReviewApproved (latching the gate open), ReviewRejected, or
+// ReviewFeedback (with the feedback text). Empty input lines re-prompt
+// rather than erroring — an accidental Enter shouldn't cost a model
+// round-trip. Used directly by the claude-code live path, where the plan is
+// assistant prose instead of a ProposePlan call.
+func (r *SignOffRuntime) ReviewPlan(plan string) (outcome, feedback string, err error) {
+	if r == nil || r.IsTTY == nil || !r.IsTTY() {
 		return "", "", errors.New("propose-plan: sign-off requires an interactive terminal")
 	}
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	answer, err := promptSignOff(runtime, plan)
+	answer, err := promptSignOff(r, plan)
 	if err != nil {
 		return "", "", err
 	}
 	switch lower := strings.ToLower(answer); {
 	case signOffApproveAnswers[lower]:
-		runtime.approved.Store(true)
-		return "approved", "", nil
+		r.approved.Store(true)
+		return ReviewApproved, "", nil
 	case signOffRejectAnswers[lower]:
-		return "rejected", "", errors.New("propose-plan: plan rejected by the user; make no changes, summarize your findings, and stop")
+		return ReviewRejected, "", nil
 	default:
-		feedback, err := readFeedbackBody(runtime, answer)
+		feedback, err := readFeedbackBody(r, answer)
 		if err != nil {
 			return "", "", err
 		}
-		return "feedback", feedback, nil
+		return ReviewFeedback, feedback, nil
 	}
+}
+
+// resolveSignOff adapts ReviewPlan for the ProposePlan tool, where a
+// rejection must surface as an error so the model stops.
+func resolveSignOff(runtime *SignOffRuntime, plan string) (result, feedback string, err error) {
+	if runtime == nil {
+		return "", "", errors.New("propose-plan: sign-off requires an interactive terminal")
+	}
+	outcome, feedback, err := runtime.ReviewPlan(plan)
+	if err != nil {
+		return "", "", err
+	}
+	if outcome == ReviewRejected {
+		return ReviewRejected, "", errors.New("propose-plan: plan rejected by the user; make no changes, summarize your findings, and stop")
+	}
+	return outcome, feedback, nil
 }
 
 // promptSignOff renders the plan with review instructions and reads the

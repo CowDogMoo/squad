@@ -475,7 +475,11 @@ Behavior differences from API providers:
 - `--mode readonly` maps to the CLI's native restrictions (`claude`:
   edit tools disallowed; `agy`: plan mode).
 - Permission prompts are bypassed (`--dangerously-skip-permissions`), matching
-  squad's unattended tool loop.
+  squad's unattended tool loop. The exception is `--interactive` with
+  `claude-code`: squad then drives the CLI through its stream-json permission
+  protocol, answering each edit-permission request from the sign-off gate, so
+  file modifications stay locked until you approve the agent's plan at the
+  terminal. `agy` does not support `--interactive`.
 - `environment` types other than `local`, `comments_only`, and `ascii_only`
   are rejected — those guarantees live in squad's own tool gates.
 - MCP servers from the manifest are not forwarded; configure them in the CLI.
@@ -532,7 +536,7 @@ When you integrate squad into a production workflow:
 
 - **Cap cost on every run.** Set `--max-cost` (or `run.max_cost` in the config file) to a sane USD ceiling. A budget cap is the only universally reliable stop.
 - **Pick an explicit `--auto-confirm` policy** for unattended execution. The default `abort` is correct for interactive runs; for routines, choose `yes` only when you've audited the agent's tool surface.
-- **Use `--interactive` when you want to review before anything changes.** The agent investigates, then presents a plan via the `ProposePlan` tool; `Write`/`Edit`/`MultiEdit` stay locked until you approve it at the terminal. Answer `yes` to approve, `no` to reject, or give feedback — anything else you type or paste (multi-line is fine; finish with an empty line or ctrl-d) goes back to the agent, which revises the plan and proposes again. One approval covers the whole run, including shards and Task-spawned child agents. Requires a TTY — non-TTY runs fail loudly rather than auto-approving, and the flag is not yet supported for composed agents or agentic CLI providers (`claude-code`, `agy`).
+- **Use `--interactive` when you want to review before anything changes.** The agent investigates, then presents a plan via the `ProposePlan` tool; `Write`/`Edit`/`MultiEdit` stay locked until you approve it at the terminal. Answer `yes` to approve, `no` to reject, or give feedback — anything else you type or paste (multi-line is fine; finish with an empty line or ctrl-d) goes back to the agent, which revises the plan and proposes again. One approval covers the whole run, including shards and Task-spawned child agents. Requires a TTY — non-TTY runs fail loudly rather than auto-approving, and the flag is not yet supported for composed agents or the `agy` provider. With `--provider claude-code` the gate rides the CLI's own permission protocol: instead of calling a `ProposePlan` tool, the agent writes its plan as a message, and squad presents that plan (plus the pending edit) for the same approve/reject/feedback review before any file modification is allowed.
 - **Sandbox writes** with `--isolate worktree` (separate dir + branch) or the `environment: docker` execution backend ([docs/execution-backends.md](./execution-backends.md)) so a bad edit lands in a throwaway tree, not your working copy.
 - **Review `agent.yaml` and the prompt files like code.** The `Bash` tool runs arbitrary shell; treat every manifest change in PR review the same way you'd treat a change to a CI workflow.
 - **Never hard-code API keys** in `agent.yaml` or shell history. Use `$VAR` or `$(command)` token resolution to pull from a secret manager — see [Token resolution](#token-resolution) above.

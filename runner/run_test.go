@@ -1451,9 +1451,10 @@ func TestInvokeModel_InteractiveRejectsAgenticCLI(t *testing.T) {
 	// Backstop for runs that reach InvokeModel without ExecuteRun's
 	// validation (e.g. a child agent whose manifest overrides the provider
 	// to an agentic CLI): a locked sign-off gate on ctx must refuse before
-	// dispatching to the external binary.
+	// dispatching to the external binary. claude-code is exempt — it holds
+	// the gate through its live permission protocol.
 	ctx := tools.WithSignOffRuntime(context.Background(), &tools.SignOffRuntime{})
-	opts := &RunOptions{Provider: "claude-code", Model: "sonnet"}
+	opts := &RunOptions{Provider: "agy", Model: "sonnet"}
 	bundle := &agent.Bundle{System: "sys", User: "user", WorkDir: t.TempDir()}
 	_, m, err := InvokeModel(ctx, opts, bundle)
 	if err == nil {

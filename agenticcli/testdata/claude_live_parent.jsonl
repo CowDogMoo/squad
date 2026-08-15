@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Create a file named hello.txt in the current directory containing exactly: hi\nDo not ask questions, just create it."}]}}
+{"type":"control_response","response":{"subtype":"success","request_id":"383c3342-7f8c-431a-ba4a-1f244fc1345a","response":{"behavior":"deny","message":"PROBE-DENY: retry the exact same Write once more."}}}
+{"type":"control_response","response":{"subtype":"success","request_id":"6fb70ff4-18af-4b19-9e6e-ffbfb60ef24d","response":{"behavior":"allow","updatedInput":{"file_path":"/tmp/probe/hello.txt","content":"hi"}}}}
+{"type":"control_request","request_id":"probe-int-1","request":{"subtype":"interrupt"}}

@@ -13,6 +13,7 @@ import (
 	"github.com/cowdogmoo/squad/mcp"
 	pl "github.com/cowdogmoo/squad/pipeline"
 	"github.com/cowdogmoo/squad/runner"
+	"github.com/cowdogmoo/squad/tools"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -113,6 +114,29 @@ func TestBuildComposedRunOpts(t *testing.T) {
 			t.Fatalf("expected MaxIterations=10, got %d", opts.MaxIterations)
 		}
 	})
+
+}
+
+// TestBuildComposedRunOpts_InteractiveToolFlags pins that interactive-tool
+// and tool-surface flags survive into stage options: a dropped AutoConfirm
+// made every Confirm inside a pipeline sub-agent abort, and --mcp-server /
+// --allow-skill were silently ignored.
+func TestBuildComposedRunOpts_InteractiveToolFlags(t *testing.T) {
+	t.Parallel()
+	cmd := newTestRunCmdWithContext(nil)
+	_ = cmd.Flags().Set("auto-confirm", "yes")
+	_ = cmd.Flags().Set("mcp-server", "files:cat:/tmp")
+	_ = cmd.Flags().Set("allow-skill", "go-review-criteria")
+	opts := buildComposedRunOpts(cmd, nil)
+	if opts.AutoConfirm != tools.AutoConfirmYes {
+		t.Errorf("AutoConfirm = %q, want yes", opts.AutoConfirm)
+	}
+	if len(opts.MCPServers) != 1 || opts.MCPServers[0].Name != "files" {
+		t.Errorf("MCPServers = %+v, want the --mcp-server flag parsed", opts.MCPServers)
+	}
+	if opts.SkillOverrides == nil || len(opts.SkillOverrides.Allow) != 1 {
+		t.Errorf("SkillOverrides = %+v, want the --allow-skill flag carried", opts.SkillOverrides)
+	}
 
 	t.Run("max-iterations clamped high", func(t *testing.T) {
 		t.Parallel()
