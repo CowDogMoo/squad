@@ -432,7 +432,7 @@ Skills are single-directory capabilities a running agent loads on demand. They f
 ```text
 skills/
 └── comment-scrub-playbook/
-    ├── SKILL.md             # required: identity, allowed_tools, instructions
+    ├── SKILL.md             # required: identity, allowed-tools, instructions
     └── references/          # optional: knowledge-base documents the skill cites
 ```
 

@@ -51,12 +51,15 @@ func effectiveStageMode(topMode, stageMode string) string {
 // individual agents. It handles agent resolution, bundle building, budget
 // propagation, and model invocation.
 func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentDir string, cfg *config.Config, vars map[string]string, pipelineRunner *pl.Runner) func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
+	// Resolved once so every stage sees the same catalog-scope skill
+	// directories as a standalone run of the same agent.
+	catalogPaths := runner.ResolveSkillCatalogPaths(cfg)
 	return func(ctx context.Context, agentName, agentPrompt, wd, mode string, stageVars map[string]string) (string, *metrics.Metrics, error) {
 		mergedVars := mergeVars(vars, stageVars)
 
 		mode = effectiveStageMode(opts.Mode, mode)
 
-		bundle, err := buildAgentBundle(agentName, agentPrompt, wd, mode, mergedVars, agentsDir, composedAgentDir, cfg, pipelineRunner, opts.SkillOverrides)
+		bundle, err := buildAgentBundle(agentName, agentPrompt, wd, mode, mergedVars, agentsDir, composedAgentDir, cfg, pipelineRunner, opts.SkillOverrides, catalogPaths)
 		if err != nil {
 			return "", nil, err
 		}
@@ -92,7 +95,7 @@ func buildRunAgentFunc(opts *runner.RunOptions, agentsDir string, composedAgentD
 // buildAgentBundle builds the agent bundle, dispatching to inline or
 // external loading based on whether the named agent is registered as
 // an inline agent on the pipeline runner.
-func buildAgentBundle(agentName, prompt, wd, mode string, mergedVars map[string]string, agentsDir, composedAgentDir string, cfg *config.Config, pipelineRunner *pl.Runner, skillOverrides *agent.SkillOverrides) (*agent.Bundle, error) {
+func buildAgentBundle(agentName, prompt, wd, mode string, mergedVars map[string]string, agentsDir, composedAgentDir string, cfg *config.Config, pipelineRunner *pl.Runner, skillOverrides *agent.SkillOverrides, catalogPaths []string) (*agent.Bundle, error) {
 	if inlineCfg, ok := pipelineRunner.InlineAgents[agentName]; ok && inlineCfg != nil {
 		inlineAgent := &agent.InlineAgentConfig{
 			Name:         agentName,
@@ -123,6 +126,7 @@ func buildAgentBundle(agentName, prompt, wd, mode string, mergedVars map[string]
 	}
 	bundle, err := agent.BuildBundleWithOptions(resolvedAgentsDir, agentName, prompt, wd, mode, mergedVars, &agent.BundleOptions{
 		SkillOverrides: skillOverrides,
+		CatalogPaths:   catalogPaths,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to build agent %s: %w", agentName, err)

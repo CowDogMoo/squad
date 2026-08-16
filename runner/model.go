@@ -856,9 +856,13 @@ func buildTaskConfig(opts *RunOptions) *tools.TaskConfig {
 		Findings:      opts.Findings,
 		AgentName:     opts.AgentName,
 	}
+	// Resolved once so every Task child shares the same catalog-scope skill
+	// directories as the parent run.
+	catalogPaths := ResolveSkillCatalogPaths(opts.Config)
 	cfg.CallModel = func(ctx context.Context, agentsDir, agentName, prompt, workingDir, mode string) (string, *metrics.Metrics, error) {
 		childBundle, err := agent.BuildBundleWithOptions(agentsDir, agentName, prompt, workingDir, mode, opts.Vars, &agent.BundleOptions{
 			SkillOverrides: opts.SkillOverrides,
+			CatalogPaths:   catalogPaths,
 		})
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to build child agent bundle: %w", err)

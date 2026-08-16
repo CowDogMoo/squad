@@ -1585,7 +1585,7 @@ func TestExecuteRun_InteractiveRequiresTTY(t *testing.T) {
 
 func TestResolveSkillCatalogPaths_NilConfig(t *testing.T) {
 	t.Parallel()
-	paths := resolveSkillCatalogPaths(nil)
+	paths := ResolveSkillCatalogPaths(nil)
 	if paths != nil {
 		t.Errorf("expected nil for nil config, got %v", paths)
 	}
@@ -1594,7 +1594,7 @@ func TestResolveSkillCatalogPaths_NilConfig(t *testing.T) {
 func TestResolveSkillCatalogPaths_EmptyConfig(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{}
-	paths := resolveSkillCatalogPaths(cfg)
+	paths := ResolveSkillCatalogPaths(cfg)
 	if paths != nil {
 		t.Errorf("expected nil for empty config, got %v", paths)
 	}
