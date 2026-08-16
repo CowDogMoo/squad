@@ -1755,14 +1755,14 @@ func TestRehydrateSkillStackToleratesMalformedEvents(t *testing.T) {
 }
 
 func TestResolveSkillCatalogPaths_Nil(t *testing.T) {
-	if got := resolveSkillCatalogPaths(nil); got != nil {
+	if got := ResolveSkillCatalogPaths(nil); got != nil {
 		t.Errorf("expected nil for nil config, got %v", got)
 	}
 }
 
 func TestResolveSkillCatalogPaths_Empty(t *testing.T) {
 	cfg := &config.Config{}
-	if got := resolveSkillCatalogPaths(cfg); got != nil {
+	if got := ResolveSkillCatalogPaths(cfg); got != nil {
 		t.Errorf("expected nil for empty config, got %v", got)
 	}
 }
@@ -1774,7 +1774,7 @@ func TestResolveSkillCatalogPaths_Local(t *testing.T) {
 	cfg := &config.Config{
 		Skills: config.SkillsConfig{LocalPaths: []string{local}},
 	}
-	paths := resolveSkillCatalogPaths(cfg)
+	paths := ResolveSkillCatalogPaths(cfg)
 	if len(paths) != 1 || paths[0] != local {
 		t.Fatalf("paths = %v, want [%q]", paths, local)
 	}
