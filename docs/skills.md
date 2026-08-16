@@ -104,6 +104,9 @@ While an agent is running, the `Skill(name)` tool delivers a skill's full body a
   ```
 
 - **Write / Edit / MultiEdit** stay strictly anchored to the working directory. Skills are reference material, not write targets.
+- **`allowed-tools`**, if the skill declares it, clamps which tools the agent may call. Enforcement happens at tool dispatch with intersection semantics: every skill on the stack must permit the tool, so one restrictive skill is enough to deny. A skill without the field imposes no restriction. `Skill` itself is always exempt — a restrictive skill can't lock the agent out of loading another — and a denied call returns a tool-result error to the model rather than aborting the run. Matching is by bare tool name; Claude Code's argument-scoped forms like `Bash(python:*)` degrade to plain `Bash`.
+
+The stack is push-only — nothing pops when a skill's task is "done", because there is no reliable done signal. A loaded skill's `allowed-tools` therefore clamps the run from the moment of loading until the run ends. Declare it only on skills meant to constrain everything downstream (a readonly analysis playbook, a look-don't-touch audit procedure); leave it off knowledge skills that editing agents load, or loading the skill silently strips their Write/Edit access for the rest of the run.
 
 Each `Skill(...)` call emits a `skill_loaded` event into `events.jsonl` for the run's session, so the trail of which skill the agent reached for is auditable. On `squad run --resume <id>`, the stack is rehydrated from those events — a resumed run picks up the skills the prior run loaded.
 
@@ -191,6 +194,7 @@ Skills are trusted code — they can direct an agent to run scripts in the skill
 - **Catalog sources are remote.** A compromised `squad skill update` fetches whatever the upstream now publishes. Pin to specific revisions in `cfg.Skills.Repositories` if that matters for your team.
 - **Skill-dir Read/Bash relaxation is one-way.** Even on the stack, Read / Grep cannot escape the skill directory itself — `../etc/passwd` from inside a skill still errors.
 - **Write / Edit are not relaxed.** A skill cannot mutate itself mid-run.
+- **`allowed-tools` is enforced — and permanent for the run.** A skill that declares it restricts every subsequent tool call until the run ends (intersection across the stack, never popped). See [The `Skill` tool](#the-skill-tool).
 
 ## Interop with Claude Code skills
 
@@ -198,7 +202,7 @@ The open standard is the open standard. A skill authored for Claude Code drops i
 
 Squad does not introduce squad-specific frontmatter fields. If you see `x-squad:` namespaced keys in a future SKILL.md, that's where private extensions would live; the standard fields stay untouched.
 
-We do not adopt the `allowed-tools` field some Claude Code skills carry. Squad's per-agent tool gating already handles that at a coarser level, and conflating the two would invent a squad-specific tool-name vocabulary the spec doesn't define.
+Squad honors the `allowed-tools` field some Claude Code skills carry: while a skill declaring it is on the stack, tool calls outside the list are rejected at dispatch. Matching is by bare tool name — Claude Code's argument-scoped `Bash(python:*)` form degrades to plain `Bash` — and because the skill stack never pops, the restriction holds for the remainder of the run, not just the skill's own steps (see [The `Skill` tool](#the-skill-tool)). Claude Code's other extensions (`context: fork`, `argument-hint`, `` !`<command>` `` dynamic injection, …) parse without error and are ignored.
 
 ## When to use a skill vs. an agent
 

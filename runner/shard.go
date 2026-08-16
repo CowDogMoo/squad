@@ -81,7 +81,7 @@ func runSharded(ctx context.Context, cmd *cobra.Command, opts *RunOptions, bundl
 
 	bundleOpts := &agent.BundleOptions{
 		SkillOverrides: opts.SkillOverrides,
-		CatalogPaths:   resolveSkillCatalogPaths(opts.Config),
+		CatalogPaths:   ResolveSkillCatalogPaths(opts.Config),
 	}
 
 	// Bounded worker pool. MaxParallel == 1 is effectively sequential. Each

@@ -259,7 +259,7 @@ A common pattern: a `cart-checkout` skill calls `chrome-devtools-mcp` tools to d
 
 The open-standard core that Squad implements is `name`, `description`, and the SKILL.md body — the format that travels between runtimes. Claude Code has extended the same file format with product-specific frontmatter: `when_to_use`, `disable-model-invocation`, `user-invocable`, `allowed-tools`, `disallowed-tools`, `argument-hint`, `arguments`, `model`, `effort`, `context: fork`, `agent`, `hooks`, `paths`, `shell`. Claude Code also now exposes custom slash commands as skills.
 
-Squad treats these extensions as forward-compatible: skills that use them still parse (we do not reject unknown fields), but Squad honors only the open-standard core plus its own per-agent gating in `agent.yaml`. Practical implication: an open-standard-only skill runs everywhere; a skill that depends on `context: fork` or `` !`<command>` `` dynamic injection will work in Claude Code and behave as a plain SKILL.md elsewhere.
+Squad treats these extensions as forward-compatible: skills that use them still parse (we do not reject unknown fields). Of the extensions, Squad honors `allowed-tools` — enforced at tool dispatch as an intersection across every loaded skill, and lasting for the remainder of the run because the skill stack never pops (see [`skills.md`](./skills.md)). The rest are ignored, with per-agent gating handled by Squad's own `skills:` block in `agent.yaml`. Practical implication: an open-standard-only skill runs everywhere; a skill that depends on `context: fork` or `` !`<command>` `` dynamic injection will work in Claude Code and behave as a plain SKILL.md elsewhere.
 
 ### When a skill is the right choice
 
@@ -476,7 +476,7 @@ Squad implements the open [Agent Skills standard](https://agentskills.io) — th
 
 **Where the runtimes diverge.** The standard guarantees only the core fields above. Anthropic's own first-party platform does not sync skills between surfaces (claude.ai vs API vs Claude Code each have their own catalog), and Claude Code's product-specific extensions (`context: fork`, `argument-hint`, `` !`<command>` `` dynamic injection, etc.) are not portable. The honest summary: **a SKILL.md that uses only the open-standard core runs everywhere; product-specific frontmatter is ignored where unsupported.**
 
-Squad intentionally does not honor the `allowed-tools` frontmatter field that some Claude Code skills carry. Squad's per-agent tool gating handles that at a coarser level via `agent.yaml`.
+Squad honors the `allowed-tools` frontmatter field that some Claude Code skills carry: while a skill declaring it is loaded, tool calls outside the list are rejected at dispatch (intersection semantics when several skills are stacked; `Skill` itself is always exempt; `Bash(python:*)`-style specifiers degrade to the bare tool name). The clamp lasts from load until the run ends — the skill stack never pops — so only declare `allowed-tools` on skills meant to constrain everything downstream, never on knowledge skills that editing agents load. Coarser per-agent gating remains available via the `skills:` block in `agent.yaml`.
 
 **OpenAI Codex** also consumes the same standard via [Codex Skills](https://developers.openai.com/codex/skills/) — a skill checked into your repo can be run by Codex against the same SKILL.md file.
 
