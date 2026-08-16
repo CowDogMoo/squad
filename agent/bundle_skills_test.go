@@ -341,3 +341,42 @@ func TestResolveSkills_ManifestScopeFilter(t *testing.T) {
 		t.Errorf("expected no entries when scope is global only, got %v", entries)
 	}
 }
+
+func TestBuildBundleInline_SkillEntriesAndOverrides(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdg, ".config"))
+	t.Setenv("HOME", xdg)
+
+	baseDir := setupInlineDir(t, map[string]string{
+		"system.md": "inline system prompt",
+		"agent.md":  "inline wrapper",
+	})
+	catalogDir := t.TempDir()
+	writeSkill(t, catalogDir, "demo-skill", "Demonstrates inline skill plumbing.", "demo body")
+
+	cfg := &InlineAgentConfig{Name: "test-inline", EntryPoint: "system.md", Wrapper: "agent.md"}
+	opts := &BundleOptions{CatalogPaths: []string{catalogDir}}
+	bundle, err := BuildBundleInlineWithOptions(baseDir, cfg, "go", t.TempDir(), "edit", nil, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.SkillEntries) != 1 || bundle.SkillEntries[0].Name() != "demo-skill" {
+		t.Fatalf("SkillEntries = %v, want exactly demo-skill", bundle.SkillEntries)
+	}
+	if !strings.Contains(bundle.System, "- **demo-skill**: Demonstrates inline skill plumbing.") {
+		t.Errorf("system prompt missing skill block entry:\n%s", bundle.System)
+	}
+
+	disabled := false
+	opts.SkillOverrides = &SkillOverrides{Enabled: &disabled}
+	bundle, err = BuildBundleInlineWithOptions(baseDir, cfg, "go", t.TempDir(), "edit", nil, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.SkillEntries) != 0 {
+		t.Errorf("disabled override should yield no entries, got %v", bundle.SkillEntries)
+	}
+	if strings.Contains(bundle.System, skill.PromptBlockHeader) {
+		t.Errorf("disabled override should omit skill block")
+	}
+}

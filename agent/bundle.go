@@ -1204,6 +1204,14 @@ func resolveInlinePromptDir(baseDir, name, entryPoint string) string {
 // Files are resolved with progressive lookup: stages/<name>/ first, then baseDir.
 // {{include}} resolves against cfg.IncludesRoot/_includes/ when set, else baseDir/_includes/.
 func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDir, mode string, vars map[string]string) (*Bundle, error) {
+	return BuildBundleInlineWithOptions(baseDir, cfg, prompt, workingDir, mode, vars, nil)
+}
+
+// BuildBundleInlineWithOptions is the inline-agent counterpart of
+// [BuildBundleWithOptions], accepting per-run skill overrides and catalog
+// paths so inline pipeline stages resolve the same skill set as standalone
+// runs. A nil opts is equivalent to [BuildBundleInline].
+func BuildBundleInlineWithOptions(baseDir string, cfg *InlineAgentConfig, prompt, workingDir, mode string, vars map[string]string, opts *BundleOptions) (*Bundle, error) {
 	// Resolve the prompt directory: check stages/<name>/ first, then baseDir.
 	promptDir := resolveInlinePromptDir(baseDir, cfg.Name, cfg.EntryPoint)
 
@@ -1242,7 +1250,13 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 		}
 	}
 
-	_, skillBlock, err := resolveSkills(workingDir, manifest.Skills, nil, nil)
+	var skillOverrides *SkillOverrides
+	var catalogPaths []string
+	if opts != nil {
+		skillOverrides = opts.SkillOverrides
+		catalogPaths = opts.CatalogPaths
+	}
+	skillEntries, skillBlock, err := resolveSkills(workingDir, manifest.Skills, skillOverrides, catalogPaths)
 	if err != nil {
 		return nil, err
 	}
@@ -1272,5 +1286,6 @@ func BuildBundleInline(baseDir string, cfg *InlineAgentConfig, prompt, workingDi
 		Models:       manifest.Models,
 		CommentsOnly: manifest.CommentsOnly,
 		ASCIIOnly:    manifest.ASCIIOnly,
+		SkillEntries: skillEntries,
 	}, nil
 }

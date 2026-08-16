@@ -113,7 +113,10 @@ func buildAgentBundle(agentName, prompt, wd, mode string, mergedVars map[string]
 				Provider: m.Provider,
 			})
 		}
-		bundle, err := agent.BuildBundleInline(pipelineRunner.ComposedDir, inlineAgent, prompt, wd, mode, mergedVars)
+		bundle, err := agent.BuildBundleInlineWithOptions(pipelineRunner.ComposedDir, inlineAgent, prompt, wd, mode, mergedVars, &agent.BundleOptions{
+			SkillOverrides: skillOverrides,
+			CatalogPaths:   catalogPaths,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to build inline agent %s: %w", agentName, err)
 		}
