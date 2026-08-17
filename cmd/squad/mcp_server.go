@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"github.com/chromedp/chromedp"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -50,6 +49,9 @@ func runBrowserServerIO(ctx context.Context, userDataDir string, headless bool, 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", headless),
 	)
+	if os.Getenv("SQUAD_NO_SANDBOX") == "true" {
+		opts = append(opts, chromedp.Flag("no-sandbox", true))
+	}
 	if userDataDir != "" {
 		opts = append(opts, chromedp.UserDataDir(userDataDir))
 	}
@@ -69,18 +71,6 @@ func runBrowserServerIO(ctx context.Context, userDataDir string, headless bool, 
 	return stdioServer.Listen(ctx, in, out)
 }
 
-func toolContext(browserCtx context.Context, reqCtx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(browserCtx, timeout)
-	if reqCtx != nil && reqCtx.Done() != nil {
-		stop := context.AfterFunc(reqCtx, cancel)
-		return ctx, func() {
-			stop()
-			cancel()
-		}
-	}
-	return ctx, cancel
-}
-
 func registerBrowserTools(s *server.MCPServer, browserCtx context.Context) {
 	s.AddTool(mcp.NewTool("navigate",
 		mcp.WithDescription("Navigate the browser to a given URL"),
@@ -95,10 +85,7 @@ func registerBrowserTools(s *server.MCPServer, browserCtx context.Context) {
 			return mcp.NewToolResultError("url must be a string"), nil
 		}
 
-		callCtx, cancel := toolContext(browserCtx, ctx, 30*time.Second)
-		defer cancel()
-
-		err := chromedp.Run(callCtx, chromedp.Navigate(url))
+		err := chromedp.Run(browserCtx, chromedp.Navigate(url), chromedp.WaitReady("body", chromedp.ByQuery))
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to navigate: %v", err)), nil
 		}
@@ -109,11 +96,8 @@ func registerBrowserTools(s *server.MCPServer, browserCtx context.Context) {
 	s.AddTool(mcp.NewTool("read_page",
 		mcp.WithDescription("Extract all text from the current page body"),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		callCtx, cancel := toolContext(browserCtx, ctx, 10*time.Second)
-		defer cancel()
-
 		var text string
-		err := chromedp.Run(callCtx, chromedp.Text("body", &text, chromedp.NodeVisible))
+		err := chromedp.Run(browserCtx, chromedp.Text("body", &text, chromedp.ByQuery))
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to read page text: %v", err)), nil
 		}
@@ -133,11 +117,8 @@ func registerBrowserTools(s *server.MCPServer, browserCtx context.Context) {
 			return mcp.NewToolResultError("script must be a string"), nil
 		}
 
-		callCtx, cancel := toolContext(browserCtx, ctx, 10*time.Second)
-		defer cancel()
-
 		var res any
-		err := chromedp.Run(callCtx, chromedp.Evaluate(script, &res))
+		err := chromedp.Run(browserCtx, chromedp.Evaluate(script, &res))
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to evaluate: %v", err)), nil
 		}
@@ -158,10 +139,7 @@ func registerBrowserTools(s *server.MCPServer, browserCtx context.Context) {
 			return mcp.NewToolResultError("selector must be a string"), nil
 		}
 
-		callCtx, cancel := toolContext(browserCtx, ctx, 10*time.Second)
-		defer cancel()
-
-		err := chromedp.Run(callCtx, chromedp.Click(sel, chromedp.NodeVisible))
+		err := chromedp.Run(browserCtx, chromedp.Click(sel, chromedp.ByQuery))
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to click %s: %v", sel, err)), nil
 		}

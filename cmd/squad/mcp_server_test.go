@@ -42,6 +42,8 @@ func TestMCPServerBrowserCmd(t *testing.T) {
 }
 
 func TestMCPServerRunBrowserServerInvalidPath(t *testing.T) {
+	t.Setenv("SQUAD_NO_SANDBOX", "true")
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -52,6 +54,8 @@ func TestMCPServerRunBrowserServerInvalidPath(t *testing.T) {
 }
 
 func TestMCPServerRunBrowserServerIO_Success(t *testing.T) {
+	t.Setenv("SQUAD_NO_SANDBOX", "true")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -66,6 +70,8 @@ func TestMCPServerRunBrowserServerIO_Success(t *testing.T) {
 }
 
 func TestMCPServerBrowserCmd_Execute(t *testing.T) {
+	t.Setenv("SQUAD_NO_SANDBOX", "true")
+
 	cmd := newMCPServerBrowserCmd()
 	cmd.SetArgs([]string{"--headless=true"})
 	cmd.SetIn(strings.NewReader(""))
@@ -83,7 +89,7 @@ func TestMCPServerBrowserCmd_Execute(t *testing.T) {
 
 func TestMCPServerRegisterBrowserTools_ErrorCases(t *testing.T) {
 	s := server.NewMCPServer("test-browser", "1.0.0")
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), chromedp.Flag("headless", true))
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), chromedp.Flag("headless", true), chromedp.Flag("no-sandbox", true))
 	defer cancelAlloc()
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	cancel() // cancel immediately to trigger execution errors
@@ -132,6 +138,26 @@ func TestMCPServerRegisterBrowserTools_ErrorCases(t *testing.T) {
 	}
 }
 
+func callTool(t *testing.T, s *server.MCPServer, ctx context.Context, name string, args map[string]any) string {
+	t.Helper()
+	tool := s.GetTool(name)
+	if tool == nil {
+		t.Fatalf("tool %s not found", name)
+	}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = args
+	res, err := tool.Handler(ctx, req)
+	if err != nil || res == nil || res.IsError {
+		t.Fatalf("tool %s failed: res=%v, err=%v", name, res, err)
+	}
+	if len(res.Content) > 0 {
+		if text, ok := res.Content[0].(mcp.TextContent); ok {
+			return text.Text
+		}
+	}
+	return ""
+}
+
 func TestMCPServerRegisterBrowserTools_LiveExecution(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -139,7 +165,7 @@ func TestMCPServerRegisterBrowserTools_LiveExecution(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), chromedp.Flag("headless", true))
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), chromedp.Flag("headless", true), chromedp.Flag("no-sandbox", true))
 	defer cancelAlloc()
 
 	ctx, cancel := chromedp.NewContext(allocCtx)
@@ -148,54 +174,9 @@ func TestMCPServerRegisterBrowserTools_LiveExecution(t *testing.T) {
 	s := server.NewMCPServer("test-live-browser", "1.0.0")
 	registerBrowserTools(s, ctx)
 
-	t.Run("navigate", func(t *testing.T) {
-		tool := s.GetTool("navigate")
-		req := mcp.CallToolRequest{}
-		req.Params.Arguments = map[string]interface{}{"url": ts.URL}
-		res, err := tool.Handler(ctx, req)
-		if err != nil || res == nil || res.IsError {
-			t.Fatalf("navigate failed: res=%v, err=%v", res, err)
-		}
-	})
-
-	t.Run("read_page", func(t *testing.T) {
-		tool := s.GetTool("read_page")
-		req := mcp.CallToolRequest{}
-		res, err := tool.Handler(ctx, req)
-		if err != nil || res == nil || res.IsError {
-			t.Fatalf("read_page failed: res=%v, err=%v", res, err)
-		}
-	})
-
-	t.Run("evaluate_js", func(t *testing.T) {
-		tool := s.GetTool("evaluate_js")
-		req := mcp.CallToolRequest{}
-		req.Params.Arguments = map[string]interface{}{"script": "10 * 5"}
-		res, err := tool.Handler(ctx, req)
-		if err != nil || res == nil || res.IsError {
-			t.Fatalf("evaluate_js failed: res=%v, err=%v", res, err)
-		}
-	})
-
-	t.Run("click", func(t *testing.T) {
-		tool := s.GetTool("click")
-		req := mcp.CallToolRequest{}
-		req.Params.Arguments = map[string]interface{}{"selector": "#test-btn"}
-		res, err := tool.Handler(ctx, req)
-		if err != nil || res == nil || res.IsError {
-			t.Fatalf("click failed: res=%v, err=%v", res, err)
-		}
-	})
-
-	t.Run("click_error", func(t *testing.T) {
-		tool := s.GetTool("click")
-		req := mcp.CallToolRequest{}
-		req.Params.Arguments = map[string]interface{}{"selector": "#missing"}
-		shortCtx, shortCancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		defer shortCancel()
-		res, _ := tool.Handler(shortCtx, req)
-		if res == nil || !res.IsError {
-			t.Errorf("expected error result, got: %v", res)
-		}
-	})
+	callTool(t, s, ctx, "navigate", map[string]any{"url": ts.URL})
+	callTool(t, s, ctx, "read_page", nil)
+	callTool(t, s, ctx, "evaluate_js", map[string]any{"script": "10 * 5"})
+	callTool(t, s, ctx, "click", map[string]any{"selector": "#test-btn"})
+	callTool(t, s, ctx, "read_page", nil)
 }

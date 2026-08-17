@@ -79,7 +79,7 @@ func TestBrowserEvalLiveSuccess(t *testing.T) {
 	}
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
+		chromedp.Flag("headless", true), chromedp.Flag("no-sandbox", true),
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("remote-debugging-port", "0"),
 	)
