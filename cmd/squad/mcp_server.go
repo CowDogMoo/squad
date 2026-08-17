@@ -58,7 +58,9 @@ any squad agent can use it regardless of model provider.
 By default a headless browser is launched for the server's own use. Pass
 --profile to instead attach to the already-running Chrome session of a
 squad browser profile, so the tools drive a real, logged-in browser and
-nothing new is launched:
+nothing new is launched. While attached, the controlled page is framed
+in orange with a "squad" badge so it's always visible which page the
+agent is driving:
 
   squad browser open myprofile --remote-debug
   squad mcp server browser --profile myprofile
@@ -110,7 +112,19 @@ func connectBrowserServer(ctx context.Context, opts browserServerOptions) (conte
 		if opts.UserDataDir != "" {
 			return nil, nil, errors.New("--profile attaches to a running session and cannot be combined with --user-data-dir")
 		}
-		return attachToActivePage(ctx, opts.Profile)
+		tabCtx, cleanup, err := attachToActivePage(ctx, opts.Profile)
+		if err != nil {
+			return nil, nil, err
+		}
+		removeIndicator, err := installAttachIndicator(tabCtx)
+		if err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("install attach indicator: %w", err)
+		}
+		return tabCtx, func() {
+			removeIndicator()
+			cleanup()
+		}, nil
 	}
 
 	execOpts := append(chromedp.DefaultExecAllocatorOptions[:],

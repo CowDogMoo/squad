@@ -286,7 +286,27 @@ func TestMCPServerAttachMode(t *testing.T) {
 		t.Fatalf("evaluate_js = %q, want the running session's page content", out)
 	}
 
+	// While attached, the page must carry the visible agent-control
+	// indicator — and keep it across navigations.
+	const indicatorCheck = "document.getElementById('__squad_indicator__') !== null"
+	if out := callTool(t, s, ctx, "evaluate_js", map[string]any{"script": indicatorCheck}); out != "true" {
+		t.Fatalf("indicator present = %s, want true after attach", out)
+	}
+	callTool(t, s, ctx, "navigate", map[string]any{"url": "data:text/html,<body>HELLO-NAV</body>"})
+	if out := callTool(t, s, ctx, "evaluate_js", map[string]any{"script": indicatorCheck}); out != "true" {
+		t.Fatalf("indicator present = %s, want true after navigation", out)
+	}
+
 	cleanup()
+
+	// Detach must remove the indicator but leave the page itself alone.
+	var indicatorAfter bool
+	if err := chromedp.Run(browserCtx, chromedp.Evaluate(indicatorCheck, &indicatorAfter)); err != nil {
+		t.Fatalf("evaluate after cleanup: %v", err)
+	}
+	if indicatorAfter {
+		t.Fatal("indicator still present after detach")
+	}
 
 	// The user's page must survive the server detaching.
 	targets, err := chromedp.Targets(browserCtx)
@@ -294,7 +314,7 @@ func TestMCPServerAttachMode(t *testing.T) {
 		t.Fatalf("Targets after cleanup: %v", err)
 	}
 	for _, tgt := range targets {
-		if tgt.Type == "page" && strings.Contains(tgt.URL, "HELLO-ATTACH") {
+		if tgt.Type == "page" && strings.Contains(tgt.URL, "HELLO-NAV") {
 			return
 		}
 	}
