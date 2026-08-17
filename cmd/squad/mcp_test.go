@@ -199,7 +199,7 @@ func TestMCPListZeroServers(t *testing.T) {
 func TestNewMCPCmdWiring(t *testing.T) {
 	t.Parallel()
 	root := newMCPCmd()
-	want := map[string]bool{"ls": false, "probe": false, "tools": false}
+	want := map[string]bool{"ls": false, "probe": false, "tools": false, "server": false}
 	for _, sub := range root.Commands() {
 		if _, ok := want[sub.Name()]; ok {
 			want[sub.Name()] = true
