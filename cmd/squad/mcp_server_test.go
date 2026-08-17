@@ -31,6 +31,30 @@ func chromeExecOpts(extra ...chromedp.ExecAllocatorOption) []chromedp.ExecAlloca
 	return append(opts, extra...)
 }
 
+// scrubProfileDir registers a tolerant cleanup for a Chrome profile dir that
+// lives under t.TempDir: Chrome's helper processes can still be flushing
+// profile files for a moment after the allocator reports the browser gone,
+// which makes t.TempDir's strict RemoveAll flake with "directory not empty".
+// Registered after withBrowserRoot, it runs before the TempDir cleanup and
+// retries until Chrome's stragglers have quiesced.
+func scrubProfileDir(t *testing.T, dir string) {
+	t.Helper()
+	t.Cleanup(func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			err := os.RemoveAll(dir)
+			if err == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Logf("profile dir cleanup gave up: %v", err)
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	})
+}
+
 var (
 	chromeCheckOnce sync.Once
 	chromeCheckErr  error
@@ -254,6 +278,7 @@ func TestMCPServerAttachMode(t *testing.T) {
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	scrubProfileDir(t, profileDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

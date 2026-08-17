@@ -77,6 +77,7 @@ func TestBrowserEvalLiveSuccess(t *testing.T) {
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	scrubProfileDir(t, profileDir)
 
 	opts := chromeExecOpts(
 		chromedp.UserDataDir(profileDir),
