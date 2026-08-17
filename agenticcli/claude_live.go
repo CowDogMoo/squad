@@ -25,6 +25,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/cowdogmoo/squad/logging"
@@ -195,7 +196,14 @@ type liveSession struct {
 // loop keeps draining until EOF so the process never blocks on a full pipe.
 func (s *liveSession) loop(userPrompt string) (Result, error) {
 	if err := s.send(userMessageEvent(userPrompt)); err != nil {
-		return Result{}, err
+		if !errors.Is(err, syscall.EPIPE) {
+			return Result{}, err
+		}
+		// The CLI died before reading the prompt. Don't surface the raw
+		// broken pipe: fall through to drain stdout so the exit path
+		// reports the far more diagnostic exited-without-a-result error
+		// (which carries the CLI's stderr tail).
+		logging.DebugContext(s.ctx, "claude live: initial prompt write hit EPIPE; draining stdout")
 	}
 	for {
 		line, readErr := s.reader.ReadString('\n')
