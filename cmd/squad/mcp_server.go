@@ -48,10 +48,8 @@ func runBrowserServerIO(ctx context.Context, userDataDir string, headless bool, 
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", headless),
+		chromedp.Flag("no-sandbox", true),
 	)
-	if os.Getenv("SQUAD_NO_SANDBOX") == "true" {
-		opts = append(opts, chromedp.Flag("no-sandbox", true))
-	}
 	if userDataDir != "" {
 		opts = append(opts, chromedp.UserDataDir(userDataDir))
 	}

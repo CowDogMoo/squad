@@ -24,7 +24,6 @@ func runSessionsSubcmd(t *testing.T, cmd *cobra.Command, args []string) (string,
 }
 
 func TestSessionsCmdListsAndOpensWithoutMutating(t *testing.T) {
-	t.Skip("Hangs in CI")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	repo := t.TempDir()
 	t.Chdir(repo)

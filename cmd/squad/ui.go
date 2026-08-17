@@ -112,6 +112,8 @@ func runUI(cmd *cobra.Command, _ []string) error {
 	prog := tea.NewProgram(
 		model,
 		tea.WithContext(cmd.Context()),
+		tea.WithInput(cmd.InOrStdin()),
+		tea.WithOutput(cmd.OutOrStdout()),
 	)
 	_, err := prog.Run()
 	return err

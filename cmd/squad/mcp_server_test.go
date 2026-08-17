@@ -42,8 +42,6 @@ func TestMCPServerBrowserCmd(t *testing.T) {
 }
 
 func TestMCPServerRunBrowserServerInvalidPath(t *testing.T) {
-	t.Setenv("SQUAD_NO_SANDBOX", "true")
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -54,8 +52,6 @@ func TestMCPServerRunBrowserServerInvalidPath(t *testing.T) {
 }
 
 func TestMCPServerRunBrowserServerIO_Success(t *testing.T) {
-	t.Setenv("SQUAD_NO_SANDBOX", "true")
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -70,8 +66,6 @@ func TestMCPServerRunBrowserServerIO_Success(t *testing.T) {
 }
 
 func TestMCPServerBrowserCmd_Execute(t *testing.T) {
-	t.Setenv("SQUAD_NO_SANDBOX", "true")
-
 	cmd := newMCPServerBrowserCmd()
 	cmd.SetArgs([]string{"--headless=true"})
 	cmd.SetIn(strings.NewReader(""))

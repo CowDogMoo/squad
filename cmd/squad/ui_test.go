@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -62,13 +64,15 @@ func TestDiscoverAgentsReturnsSortedNames(t *testing.T) {
 }
 
 func TestRunUIExitsOnCancelledContext(t *testing.T) {
-	t.Skip("Hangs in CI")
 	base := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, "config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(base, "cache"))
 	t.Setenv("HOME", base)
 
 	cmd := newUICmd()
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
 	// Pre-cancelled context so tea.NewProgram exits without needing a TTY.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -89,13 +93,15 @@ func TestRunUIExitsOnCancelledContext(t *testing.T) {
 }
 
 func TestRunUINonMockMissingDirIsHandled(t *testing.T) {
-	t.Skip("Hangs in CI")
 	base := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, "config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(base, "cache"))
 	t.Setenv("HOME", base)
 
 	cmd := newUICmd()
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cmd.SetContext(ctx)
@@ -111,7 +117,6 @@ func TestRunUINonMockMissingDirIsHandled(t *testing.T) {
 }
 
 func TestRunUIDefaultsWorkingDirAndSessionsDir(t *testing.T) {
-	t.Skip("Hangs in CI")
 	// Exercise the "no --working-dir" branch (which calls os.Getwd) AND the
 	// "no --sessions-dir" branch (which derives one under workingDir). Both
 	// flags are left unset.
@@ -132,6 +137,9 @@ func TestRunUIDefaultsWorkingDirAndSessionsDir(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(wd) })
 
 	cmd := newUICmd()
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
 	// Pre-cancel so tea returns instantly without a TTY.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
