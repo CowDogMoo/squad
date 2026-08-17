@@ -43,8 +43,8 @@ Example:
 				return fmt.Errorf("evaluate failed: %w", err)
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), res)
-			return nil
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), res)
+			return err
 		},
 	}
 	return cmd

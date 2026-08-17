@@ -36,7 +36,6 @@ func TestActivePort_DevToolsIsDir(t *testing.T) {
 	if err := os.MkdirAll(portDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	defer os.RemoveAll(portDir)
 	_, err := ActivePort("myprofile")
 	if err == nil || !strings.Contains(err.Error(), "read DevToolsActivePort") {
 		t.Fatalf("expected read error when DevToolsActivePort is a dir, got %v", err)
@@ -48,7 +47,6 @@ func TestActivePort_InvalidFormatShort(t *testing.T) {
 	if err := os.WriteFile(portDir, []byte("9222\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	defer os.RemoveAll(portDir)
 	_, err := ActivePort("myprofile")
 	if err == nil || !strings.Contains(err.Error(), "invalid DevToolsActivePort format") {
 		t.Fatalf("expected invalid format error, got %v", err)
@@ -60,7 +58,6 @@ func TestActivePort_InvalidPort(t *testing.T) {
 	if err := os.WriteFile(portDir, []byte("not-a-port\n/devtools/browser/abc\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	defer os.RemoveAll(portDir)
 	_, err := ActivePort("myprofile")
 	if err == nil || !strings.Contains(err.Error(), "invalid port") {
 		t.Fatalf("expected invalid port error, got %v", err)
@@ -72,7 +69,6 @@ func TestActivePort_Valid(t *testing.T) {
 	if err := os.WriteFile(portDir, []byte("9222\n/devtools/browser/abc-123\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	defer os.RemoveAll(portDir)
 	got, err := ActivePort("myprofile")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
