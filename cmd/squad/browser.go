@@ -42,6 +42,7 @@ Typical workflow:
 	cmd.AddCommand(newBrowserListCmd())
 	cmd.AddCommand(newBrowserDeleteCmd())
 	cmd.AddCommand(newBrowserPathCmd())
+	cmd.AddCommand(newBrowserEvalCmd())
 	return cmd
 }
 

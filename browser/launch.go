@@ -104,6 +104,7 @@ func Launch(name string, opts LaunchOptions) error {
 	}
 	args := []string{
 		"--user-data-dir=" + dir,
+		"--remote-debugging-port=0",
 		"--new-window",
 		url,
 	}

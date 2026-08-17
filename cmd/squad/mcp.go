@@ -35,6 +35,7 @@ Server specs follow the same format as --mcp-server:
 	cmd.AddCommand(newMCPListCmd())
 	cmd.AddCommand(newMCPProbeCmd())
 	cmd.AddCommand(newMCPToolsCmd())
+	cmd.AddCommand(newMCPServerCmd())
 	return cmd
 }
 

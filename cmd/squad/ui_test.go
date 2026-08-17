@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -68,6 +70,9 @@ func TestRunUIExitsOnCancelledContext(t *testing.T) {
 	t.Setenv("HOME", base)
 
 	cmd := newUICmd()
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
 	// Pre-cancelled context so tea.NewProgram exits without needing a TTY.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -94,6 +99,9 @@ func TestRunUINonMockMissingDirIsHandled(t *testing.T) {
 	t.Setenv("HOME", base)
 
 	cmd := newUICmd()
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cmd.SetContext(ctx)
@@ -129,6 +137,9 @@ func TestRunUIDefaultsWorkingDirAndSessionsDir(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(wd) })
 
 	cmd := newUICmd()
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
 	// Pre-cancel so tea returns instantly without a TTY.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

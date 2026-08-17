@@ -20,7 +20,7 @@ func withBrowserRoot(t *testing.T) string {
 
 func TestNewBrowserCmdHasSubcommands(t *testing.T) {
 	cmd := newBrowserCmd()
-	wantSubs := []string{"open", "list", "delete", "path"}
+	wantSubs := []string{"open", "list", "delete", "path", "eval"}
 	for _, name := range wantSubs {
 		if _, _, err := cmd.Find([]string{name}); err != nil {
 			t.Errorf("subcommand %q missing from `browser`: %v", name, err)
