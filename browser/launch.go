@@ -36,9 +36,10 @@ func chromeCandidates() []string {
 	}
 }
 
-// findChrome resolves the first launchable Chrome binary in chromeCandidates.
+// FindChrome resolves the first launchable Chrome binary in chromeCandidates.
 // Absolute paths are checked with os.Stat; bare names go through exec.LookPath.
-func findChrome() (string, error) {
+// SQUAD_BROWSER_BIN overrides the candidate list entirely.
+func FindChrome() (string, error) {
 	for _, c := range chromeCandidates() {
 		if c == "" {
 			continue
@@ -81,6 +82,12 @@ type LaunchOptions struct {
 	// Chrome is started and Launch returns immediately — useful for
 	// scripted setup where the caller doesn't want to wedge a terminal.
 	Wait bool
+	// RemoteDebug, when true, starts Chrome with remote debugging on a
+	// random port (recorded in the profile's DevToolsActivePort file) so
+	// `squad browser eval` can attach. Off by default: the CDP endpoint
+	// gives ANY local process full control of the browser, including its
+	// cookies and logged-in sessions.
+	RemoteDebug bool
 	// Stderr receives diagnostic output (Chrome's own logs). nil discards.
 	Stderr *os.File
 }
@@ -94,7 +101,7 @@ func Launch(name string, opts LaunchOptions) error {
 	if err != nil {
 		return err
 	}
-	bin, err := findChrome()
+	bin, err := FindChrome()
 	if err != nil {
 		return err
 	}
@@ -104,10 +111,12 @@ func Launch(name string, opts LaunchOptions) error {
 	}
 	args := []string{
 		"--user-data-dir=" + dir,
-		"--remote-debugging-port=0",
 		"--new-window",
-		url,
 	}
+	if opts.RemoteDebug {
+		args = append(args, "--remote-debugging-port=0")
+	}
+	args = append(args, url)
 	cmd := exec.Command(bin, args...)
 	if opts.Stderr != nil {
 		cmd.Stderr = opts.Stderr

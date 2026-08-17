@@ -1,6 +1,7 @@
 package agenticcli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -176,6 +177,32 @@ func TestRunLive_ProtocolGarbage(t *testing.T) {
 			t.Errorf("Response = %q, want fake done", res.Response)
 		}
 	})
+}
+
+// TestLoop_InitialWriteEPIPEFallsThroughToExitDiagnosis pins the race where
+// the CLI dies before reading the initial prompt: the EPIPE from the stdin
+// write must not mask the exited-without-a-result diagnosis, which is what
+// carries the CLI's stderr tail in RunLive. Before the fix this surfaced as
+// a flaky "write stdin: broken pipe" on slow CI runners.
+func TestLoop_InitialWriteEPIPEFallsThroughToExitDiagnosis(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil { // dead reader: writes now hit EPIPE
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+
+	s := &liveSession{
+		ctx:    context.Background(),
+		stdin:  w,
+		reader: bufio.NewReader(strings.NewReader("")),
+	}
+	_, err = s.loop("prompt")
+	if err == nil || !strings.Contains(err.Error(), "without a result event") {
+		t.Fatalf("err = %v, want exit-without-result", err)
+	}
 }
 
 func TestRunLive_ExitWithoutResult(t *testing.T) {

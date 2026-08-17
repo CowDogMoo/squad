@@ -6,14 +6,55 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/cowdogmoo/squad/browser"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
+
+// chromeExecOpts returns headless allocator options pinned to the same
+// binary discovery browser.Launch uses, so tests don't launch whatever
+// stray Chromium chromedp's own preference order finds first.
+func chromeExecOpts(extra ...chromedp.ExecAllocatorOption) []chromedp.ExecAllocatorOption {
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true), chromedp.NoSandbox)
+	if bin, err := browser.FindChrome(); err == nil {
+		opts = append(opts, chromedp.ExecPath(bin))
+	}
+	return append(opts, extra...)
+}
+
+var (
+	chromeCheckOnce sync.Once
+	chromeCheckErr  error
+)
+
+// requireChrome skips the test when no Chrome/Chromium can be launched:
+// tests that exercise a real browser must degrade to a skip, not a failure,
+// on machines without one. The probe result is cached — launching Chrome is
+// too slow to repeat per test.
+func requireChrome(t *testing.T) {
+	t.Helper()
+	chromeCheckOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, chromeExecOpts()...)
+		defer cancelAlloc()
+		browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+		defer cancelBrowser()
+		chromeCheckErr = chromedp.Run(browserCtx, chromedp.Navigate("about:blank"))
+	})
+	if chromeCheckErr != nil {
+		t.Skipf("chrome unavailable: %v", chromeCheckErr)
+	}
+}
 
 func TestMCPServerCmd(t *testing.T) {
 	cmd := newMCPServerCmd()
@@ -33,46 +74,65 @@ func TestMCPServerBrowserCmd(t *testing.T) {
 	if cmd.Use != "browser" {
 		t.Errorf("expected Use 'browser', got %q", cmd.Use)
 	}
-	if cmd.Flags().Lookup("user-data-dir") == nil {
-		t.Error("expected user-data-dir flag")
-	}
-	if cmd.Flags().Lookup("headless") == nil {
-		t.Error("expected headless flag")
+	for _, flag := range []string{"profile", "user-data-dir", "headless", "no-sandbox"} {
+		if cmd.Flags().Lookup(flag) == nil {
+			t.Errorf("expected %s flag", flag)
+		}
 	}
 }
 
-func TestMCPServerRunBrowserServerCancelledContext(t *testing.T) {
+func TestMCPServerRunBrowserServerIOCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := runBrowserServer(ctx, "", true)
+	err := runBrowserServerIO(ctx, browserServerOptions{Headless: true, NoSandbox: true}, strings.NewReader(""), &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
 }
 
+func TestMCPServerConnectBrowserServerProfileConflicts(t *testing.T) {
+	_, _, err := connectBrowserServer(context.Background(), browserServerOptions{
+		Profile:     "myprofile",
+		UserDataDir: "/tmp/somewhere",
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("err = %v, want profile/user-data-dir conflict", err)
+	}
+}
+
+func TestMCPServerConnectBrowserServerProfileNoSession(t *testing.T) {
+	withBrowserRoot(t)
+	_, _, err := connectBrowserServer(context.Background(), browserServerOptions{Profile: "ghost"})
+	if err == nil || !strings.Contains(err.Error(), "no active browser session") {
+		t.Fatalf("err = %v, want no-active-session error", err)
+	}
+}
+
 func TestMCPServerRunBrowserServerIO_Success(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	requireChrome(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var stdout bytes.Buffer
 	stdin := strings.NewReader("")
 
 	// Providing empty reader will cause stdioServer.Listen to finish on EOF.
-	err := runBrowserServerIO(ctx, "", true, stdin, &stdout)
+	err := runBrowserServerIO(ctx, browserServerOptions{Headless: true, NoSandbox: true}, stdin, &stdout)
 	if err != nil {
 		t.Fatalf("runBrowserServerIO error: %v", err)
 	}
 }
 
 func TestMCPServerBrowserCmd_Execute(t *testing.T) {
+	requireChrome(t)
 	cmd := newMCPServerBrowserCmd()
-	cmd.SetArgs([]string{"--headless=true"})
+	cmd.SetArgs([]string{"--headless=true", "--no-sandbox"})
 	cmd.SetIn(strings.NewReader(""))
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd.SetContext(ctx)
 
@@ -83,7 +143,7 @@ func TestMCPServerBrowserCmd_Execute(t *testing.T) {
 
 func TestMCPServerRegisterBrowserTools_ErrorCases(t *testing.T) {
 	s := server.NewMCPServer("test-browser", "1.0.0")
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), chromedp.Flag("headless", true), chromedp.Flag("no-sandbox", true))
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), chromeExecOpts()...)
 	defer cancelAlloc()
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	cancel() // cancel immediately to trigger execution errors
@@ -153,17 +213,25 @@ func callTool(t *testing.T, s *server.MCPServer, ctx context.Context, name strin
 }
 
 func TestMCPServerRegisterBrowserTools_LiveExecution(t *testing.T) {
+	requireChrome(t)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = fmt.Fprint(w, `<!DOCTYPE html><html><body><h1>Hello MCP Browser</h1><button id="test-btn" onclick="document.body.innerText='button clicked'">Click Me</button></body></html>`)
 	}))
 	defer ts.Close()
 
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), chromedp.Flag("headless", true), chromedp.Flag("no-sandbox", true))
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), chromeExecOpts()...)
 	defer cancelAlloc()
 
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
+
+	// Mirror connectBrowserServer's init: the browser and its tab must be
+	// owned by the long-lived context before any tool call derives a
+	// short-lived one from it.
+	if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
+		t.Skipf("skipping live browser test: %v", err)
+	}
 
 	s := server.NewMCPServer("test-live-browser", "1.0.0")
 	registerBrowserTools(s, ctx)
@@ -173,4 +241,62 @@ func TestMCPServerRegisterBrowserTools_LiveExecution(t *testing.T) {
 	callTool(t, s, ctx, "evaluate_js", map[string]any{"script": "10 * 5"})
 	callTool(t, s, ctx, "click", map[string]any{"selector": "#test-btn"})
 	callTool(t, s, ctx, "read_page", nil)
+}
+
+// TestMCPServerAttachMode pins the --profile path: the server attaches to an
+// already-running session's page, drives it in place, and its teardown must
+// leave that page open — closing the user's tab would defeat the entire
+// attach-to-real-Chrome model.
+func TestMCPServerAttachMode(t *testing.T) {
+	requireChrome(t)
+	root := withBrowserRoot(t)
+	profileDir := filepath.Join(root, "attachmode")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, chromeExecOpts(
+		chromedp.UserDataDir(profileDir),
+		chromedp.Flag("remote-debugging-port", "0"),
+	)...)
+	defer cancelAlloc()
+
+	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	defer cancelBrowser()
+
+	if err := chromedp.Run(browserCtx, chromedp.Navigate("data:text/html,<body>HELLO-ATTACH</body>")); err != nil {
+		t.Skipf("skipping live browser test: %v", err)
+	}
+
+	tabCtx, cleanup, err := connectBrowserServer(ctx, browserServerOptions{Profile: "attachmode"})
+	if err != nil {
+		t.Fatalf("connectBrowserServer: %v", err)
+	}
+
+	s := server.NewMCPServer("test-attach-browser", "1.0.0")
+	registerBrowserTools(s, tabCtx)
+
+	if text := callTool(t, s, ctx, "read_page", nil); !strings.Contains(text, "HELLO-ATTACH") {
+		t.Fatalf("read_page = %q, want the running session's page content", text)
+	}
+	if out := callTool(t, s, ctx, "evaluate_js", map[string]any{"script": "document.body.innerText"}); !strings.Contains(out, "HELLO-ATTACH") {
+		t.Fatalf("evaluate_js = %q, want the running session's page content", out)
+	}
+
+	cleanup()
+
+	// The user's page must survive the server detaching.
+	targets, err := chromedp.Targets(browserCtx)
+	if err != nil {
+		t.Fatalf("Targets after cleanup: %v", err)
+	}
+	for _, tgt := range targets {
+		if tgt.Type == "page" && strings.Contains(tgt.URL, "HELLO-ATTACH") {
+			return
+		}
+	}
+	t.Fatalf("session page was closed by server teardown; remaining targets: %d", len(targets))
 }

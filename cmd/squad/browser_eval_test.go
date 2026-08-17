@@ -78,12 +78,11 @@ func TestBrowserEvalLiveSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true), chromedp.Flag("no-sandbox", true),
+	opts := chromeExecOpts(
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("remote-debugging-port", "0"),
 	)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
@@ -92,7 +91,7 @@ func TestBrowserEvalLiveSuccess(t *testing.T) {
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	defer cancelBrowser()
 
-	if err := chromedp.Run(browserCtx, chromedp.Navigate("about:blank")); err != nil {
+	if err := chromedp.Run(browserCtx, chromedp.Navigate("data:text/html,<body>HELLO-EVAL-PROBE</body>")); err != nil {
 		t.Skipf("skipping live browser test: %v", err)
 	}
 
@@ -106,8 +105,17 @@ func TestBrowserEvalLiveSuccess(t *testing.T) {
 	if err := cmd.RunE(cmd, []string{"liveeval", "2 + 2"}); err != nil {
 		t.Fatalf("eval failed: %v", err)
 	}
-
 	if !strings.Contains(stdout.String(), "4") {
 		t.Fatalf("expected output '4', got: %s", stdout.String())
+	}
+
+	// The eval must run in the session's open page, not a fresh blank tab:
+	// reading the page body is the command's documented use case.
+	stdout.Reset()
+	if err := cmd.RunE(cmd, []string{"liveeval", "document.body.innerText"}); err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "HELLO-EVAL-PROBE") {
+		t.Fatalf("expected the open page's body text, got: %s", stdout.String())
 	}
 }

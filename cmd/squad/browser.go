@@ -48,6 +48,7 @@ Typical workflow:
 
 func newBrowserOpenCmd() *cobra.Command {
 	var wait bool
+	var remoteDebug bool
 	cmd := &cobra.Command{
 		Use:   "open NAME [URL]",
 		Short: "Open a profile in Chrome for interactive setup",
@@ -58,6 +59,11 @@ needs later.
 By default this command starts Chrome and returns immediately, leaving
 the browser window open for you to interact with. Use --wait to block
 until you quit Chrome.
+
+Pass --remote-debug to enable Chrome's remote-debugging endpoint so
+"squad browser eval" can attach to the session. Leave it off when just
+signing into sites: the endpoint lets any local process drive the
+browser and read its cookies.
 `,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -78,13 +84,16 @@ until you quit Chrome.
 					"Sign in / set things up, then quit Chrome to save the session.\n",
 				name, dir)
 			return browser.Launch(name, browser.LaunchOptions{
-				URL:    url,
-				Wait:   wait,
-				Stderr: os.Stderr,
+				URL:         url,
+				Wait:        wait,
+				RemoteDebug: remoteDebug,
+				Stderr:      os.Stderr,
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&wait, "wait", false, "Block until Chrome quits (default: start and return)")
+	cmd.Flags().BoolVar(&remoteDebug, "remote-debug", false,
+		"Enable Chrome remote debugging so `squad browser eval` can attach (exposes browser control to local processes)")
 	return cmd
 }
 

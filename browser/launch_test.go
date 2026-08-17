@@ -133,9 +133,9 @@ func TestChromeCandidatesDefaults(t *testing.T) {
 func TestFindChromeNoCandidates(t *testing.T) {
 	// Empty SQUAD_BROWSER_BIN with PATH that contains no chrome binaries.
 	t.Setenv("SQUAD_BROWSER_BIN", filepath.Join(t.TempDir(), "absent"))
-	_, err := findChrome()
+	_, err := FindChrome()
 	if !errors.Is(err, ErrChromeNotFound) {
-		t.Fatalf("findChrome() err = %v, want ErrChromeNotFound", err)
+		t.Fatalf("FindChrome() err = %v, want ErrChromeNotFound", err)
 	}
 }
 
@@ -162,7 +162,7 @@ func TestFindChromeEnvBareNameResolves(t *testing.T) {
 	// Set env to the bare filename, not the absolute path.
 	base := filepath.Base(path)
 	t.Setenv("SQUAD_BROWSER_BIN", base)
-	resolved, err := findChrome()
+	resolved, err := FindChrome()
 	if err != nil {
 		t.Fatalf("findChrome error: %v", err)
 	}

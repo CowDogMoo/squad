@@ -21,7 +21,7 @@ func ActivePort(name string) (string, error) {
 	data, err := os.ReadFile(portFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("no active browser session found for profile %q (DevToolsActivePort not found)", name)
+			return "", fmt.Errorf("no active browser session found for profile %q (DevToolsActivePort not found; launch one with `squad browser open %s --remote-debug`)", name, name)
 		}
 		return "", fmt.Errorf("read DevToolsActivePort: %w", err)
 	}
