@@ -41,13 +41,13 @@ func TestMCPServerBrowserCmd(t *testing.T) {
 	}
 }
 
-func TestMCPServerRunBrowserServerInvalidPath(t *testing.T) {
+func TestMCPServerRunBrowserServerCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	cancel()
 
-	err := runBrowserServer(ctx, "/dev/null/invalid_dir_path", true)
+	err := runBrowserServer(ctx, "", true)
 	if err == nil {
-		t.Fatal("expected error from invalid user data dir, got nil")
+		t.Fatal("expected error from cancelled context, got nil")
 	}
 }
 
