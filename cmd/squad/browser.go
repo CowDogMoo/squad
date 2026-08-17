@@ -31,6 +31,13 @@ reference a profile by name from agent.yaml:
         - chrome-devtools-mcp@latest
         - --userDataDir={{.BrowserProfile "amazon"}}
 
+or via the built-in browser MCP server (no npx needed):
+
+  mcp_servers:
+    - name: browser
+      command: squad
+      args: [mcp, server, browser, --profile, amazon]
+
 Typical workflow:
 
   squad browser open amazon https://www.amazon.com/

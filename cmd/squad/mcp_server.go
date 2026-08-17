@@ -52,16 +52,23 @@ func newMCPServerBrowserCmd() *cobra.Command {
 		Use:   "browser",
 		Short: "Run the built-in browser MCP server",
 		Long: `Run an MCP server exposing browser automation tools (navigate,
-read_page, evaluate_js, click).
+read_page, evaluate_js, click). It speaks standard MCP over stdio, so
+any squad agent can use it regardless of model provider.
 
 By default a headless browser is launched for the server's own use. Pass
 --profile to instead attach to the already-running Chrome session of a
-squad browser profile — the way Claude Code's Chrome integration works —
-so the tools drive a real, logged-in browser and nothing new is
-launched:
+squad browser profile, so the tools drive a real, logged-in browser and
+nothing new is launched:
 
   squad browser open myprofile --remote-debug
   squad mcp server browser --profile myprofile
+
+Wire it into any agent via agent.yaml:
+
+  mcp_servers:
+    - name: browser
+      command: squad
+      args: [mcp, server, browser, --profile, myprofile]
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBrowserServerIO(cmd.Context(), opts, cmd.InOrStdin(), cmd.OutOrStdout())
