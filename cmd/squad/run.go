@@ -281,7 +281,14 @@ func newRunCmd() *cobra.Command {
 		Long: `Run an agent workflow with an optional prompt.
 
 If no prompt is provided via arguments or stdin, the agent's default
-user_prompt will be used (if configured in the agent's manifest).`,
+user_prompt will be used (if configured in the agent's manifest).
+
+With --system and no --agent, squad runs its built-in pure-text
+transform: the piped input (or prompt argument) is transformed per the
+injected system prompt and the result printed — readonly, no tools, no
+actionable-output requirement. Example:
+
+  git diff --staged | squad run --system "$(cat pattern/system.md)"`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				return nil
@@ -337,7 +344,7 @@ user_prompt will be used (if configured in the agent's manifest).`,
 	cmd.Flags().String("model", "", "Model name")
 	cmd.Flags().Float64("temperature", -1, "Sampling temperature (default from config)")
 	cmd.Flags().Int("max-tokens", -1, "Max output tokens (default from config)")
-	cmd.Flags().String("system", "", "System prompt override")
+	cmd.Flags().String("system", "", "System prompt override (with no --agent, runs the built-in pure-text transform)")
 	cmd.Flags().String("out", "", "Write response to a file")
 	cmd.Flags().Bool("print", true, "Print response to stdout")
 	cmd.Flags().String("bundle-out", "", "Write agent bundle to a file")

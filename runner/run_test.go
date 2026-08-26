@@ -425,6 +425,48 @@ func TestPrepareBundle(t *testing.T) {
 	}
 }
 
+func TestPrepareBundle_TransformNoSystem(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	_, err := prepareBundle(cmd, &RunOptions{}, "prompt", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "no agent specified") {
+		t.Fatalf("prepareBundle() error = %v, want no-agent error", err)
+	}
+}
+
+// TestPrepareBundle_Transform confirms --system with no --agent builds the
+// built-in transform bundle: no manifest on disk, readonly forced, and the
+// remote-only/no-Task flags set so the model gets no filesystem tools.
+func TestPrepareBundle_Transform(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	opts := &RunOptions{
+		System:          "Translate the input to pig latin.",
+		Provider:        "openai",
+		Model:           "test-model",
+		ConfigAvailable: true,
+	}
+	bundle, err := prepareBundle(cmd, opts, "some input", t.TempDir())
+	if err != nil {
+		t.Fatalf("prepareBundle() error = %v", err)
+	}
+	if bundle == nil {
+		t.Fatal("prepareBundle() bundle = nil, want transform bundle")
+	}
+	if opts.Agent != agent.TransformAgentName {
+		t.Errorf("opts.Agent = %q, want %q", opts.Agent, agent.TransformAgentName)
+	}
+	if opts.Mode != "readonly" {
+		t.Errorf("opts.Mode = %q, want readonly", opts.Mode)
+	}
+	if !bundle.RemoteOnly || !bundle.DisableTask {
+		t.Errorf("RemoteOnly = %v, DisableTask = %v, want both true", bundle.RemoteOnly, bundle.DisableTask)
+	}
+	if bundle.User != "some input" {
+		t.Errorf("bundle.User = %q, want the prompt", bundle.User)
+	}
+}
+
 // TestPrepareBundle_RequiresPreflightFails wires an agent with a requires
 // block that points at a tool guaranteed to be absent from PATH and
 // confirms prepareBundle surfaces the preflight error rather than building

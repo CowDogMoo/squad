@@ -654,8 +654,21 @@ func ResolveSkillCatalogPaths(cfg *config.Config) []string {
 	return mgr.CatalogPaths()
 }
 
-// prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
-func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir string) (*agent.Bundle, error) {
+// buildRunBundle constructs the bundle for a run. With no agent named, a
+// non-empty --system selects the built-in pure-text transform: the injected
+// override is the whole agent, so no manifest is loaded, readonly mode is
+// forced, and opts.Agent is set to the transform display name. Otherwise the
+// named agent's manifest bundle is built.
+func buildRunBundle(opts *RunOptions, prompt, workingDir string) (*agent.Bundle, error) {
+	if opts.Agent == "" {
+		if opts.System == "" {
+			return nil, fmt.Errorf("no agent specified: pass --agent NAME, or --system PROMPT alone to run the built-in pure-text transform")
+		}
+		opts.Agent = agent.TransformAgentName
+		opts.Mode = "readonly"
+		return agent.BuildTransformBundle(prompt, workingDir), nil
+	}
+
 	agentDir, err := FindAgentDir(opts.Agent, opts.AgentsDir, opts.Config)
 	if err != nil {
 		return nil, err
@@ -664,10 +677,16 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 	agentsDir := filepath.Dir(agentDir)
 	opts.AgentsDir = agentsDir
 
-	bundle, err := agent.BuildBundleWithOptions(agentsDir, opts.Agent, prompt, workingDir, opts.Mode, opts.Vars, &agent.BundleOptions{
+	return agent.BuildBundleWithOptions(agentsDir, opts.Agent, prompt, workingDir, opts.Mode, opts.Vars, &agent.BundleOptions{
 		SkillOverrides: opts.SkillOverrides,
 		CatalogPaths:   ResolveSkillCatalogPaths(opts.Config),
 	})
+}
+
+// prepareBundle builds the agent bundle and handles bundle output. Returns nil bundle for dry-run.
+func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir string) (*agent.Bundle, error) {
+	transform := opts.Agent == ""
+	bundle, err := buildRunBundle(opts, prompt, workingDir)
 	if err != nil {
 		return nil, err
 	}
@@ -698,12 +717,16 @@ func prepareBundle(cmd *cobra.Command, opts *RunOptions, prompt, workingDir stri
 	}
 
 	if opts.DryRun {
-		estimate, err := metrics.EstimateCost(agentsDir, opts.Agent, opts.Provider, opts.Model)
-		if err != nil {
-			logging.Warn("cost estimation failed: %v", err)
-		} else {
-			if _, fmtErr := fmt.Fprint(cmd.ErrOrStderr(), metrics.FormatEstimate(estimate, opts.Provider, opts.Model)); fmtErr != nil {
-				logging.Warn("failed to write cost estimate: %v", fmtErr)
+		// Cost estimation walks the agent manifest graph; the built-in
+		// transform has no manifest, so there is nothing to estimate.
+		if !transform {
+			estimate, err := metrics.EstimateCost(opts.AgentsDir, opts.Agent, opts.Provider, opts.Model)
+			if err != nil {
+				logging.Warn("cost estimation failed: %v", err)
+			} else {
+				if _, fmtErr := fmt.Fprint(cmd.ErrOrStderr(), metrics.FormatEstimate(estimate, opts.Provider, opts.Model)); fmtErr != nil {
+					logging.Warn("failed to write cost estimate: %v", fmtErr)
+				}
 			}
 		}
 		return nil, nil
