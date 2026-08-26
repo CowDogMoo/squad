@@ -425,6 +425,134 @@ func TestPrepareBundle(t *testing.T) {
 	}
 }
 
+func TestPrepareBundle_TransformNoSystem(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	_, err := prepareBundle(cmd, &RunOptions{}, "prompt", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "no agent specified") {
+		t.Fatalf("prepareBundle() error = %v, want no-agent error", err)
+	}
+}
+
+// TestPrepareBundle_Transform confirms --system with no --agent builds the
+// built-in transform bundle: no manifest on disk, readonly forced, and the
+// remote-only/no-Task flags set so the model gets no filesystem tools.
+func TestPrepareBundle_Transform(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	opts := &RunOptions{
+		System:          "Translate the input to pig latin.",
+		Provider:        "openai",
+		Model:           "test-model",
+		ConfigAvailable: true,
+	}
+	bundle, err := prepareBundle(cmd, opts, "some input", t.TempDir())
+	if err != nil {
+		t.Fatalf("prepareBundle() error = %v", err)
+	}
+	if bundle == nil {
+		t.Fatal("prepareBundle() bundle = nil, want transform bundle")
+	}
+	if opts.Agent != agent.TransformAgentName {
+		t.Errorf("opts.Agent = %q, want %q", opts.Agent, agent.TransformAgentName)
+	}
+	if opts.Mode != "readonly" {
+		t.Errorf("opts.Mode = %q, want readonly", opts.Mode)
+	}
+	if !bundle.RemoteOnly || !bundle.DisableTask {
+		t.Errorf("RemoteOnly = %v, DisableTask = %v, want both true", bundle.RemoteOnly, bundle.DisableTask)
+	}
+	if bundle.User != "some input" {
+		t.Errorf("bundle.User = %q, want the prompt", bundle.User)
+	}
+}
+
+// failWriter always errors, for exercising output-write failure paths.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, fmt.Errorf("write failed") }
+
+func TestBuildRunBundle_AgentLookupError(t *testing.T) {
+	t.Parallel()
+	// No explicit agents dir and no config: FindAgentDir has nowhere to look.
+	opts := &RunOptions{Agent: "no-such-agent"}
+	_, err := buildRunBundle(opts, "prompt", t.TempDir())
+	if err == nil {
+		t.Fatal("buildRunBundle() error = nil, want agent lookup error")
+	}
+}
+
+// TestPrepareBundle_TransformDryRun confirms a dry-run transform returns the
+// nil bundle without attempting cost estimation (there is no manifest graph
+// to estimate).
+func TestPrepareBundle_TransformDryRun(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	opts := &RunOptions{
+		System:   "Uppercase the input.",
+		Provider: "openai",
+		Model:    "test-model",
+		DryRun:   true,
+	}
+	bundle, err := prepareBundle(cmd, opts, "input", t.TempDir())
+	if err != nil {
+		t.Fatalf("prepareBundle() error = %v", err)
+	}
+	if bundle != nil {
+		t.Fatal("prepareBundle() bundle != nil, want nil for dry-run")
+	}
+}
+
+func TestPrepareBundle_PrintBundleWriteError(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	cmd.SetOut(failWriter{})
+	opts := &RunOptions{
+		System:          "Uppercase the input.",
+		Provider:        "openai",
+		Model:           "test-model",
+		PrintBundle:     true,
+		ConfigAvailable: true,
+	}
+	_, err := prepareBundle(cmd, opts, "input", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("prepareBundle() error = %v, want bundle write error", err)
+	}
+}
+
+func TestPrepareBundle_BundleOutWriteError(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	opts := &RunOptions{
+		System:          "Uppercase the input.",
+		Provider:        "openai",
+		Model:           "test-model",
+		BundleOut:       filepath.Join(t.TempDir(), "missing-dir", "bundle.txt"),
+		ConfigAvailable: true,
+	}
+	_, err := prepareBundle(cmd, opts, "input", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "failed to write bundle") {
+		t.Fatalf("prepareBundle() error = %v, want bundle file write error", err)
+	}
+}
+
+// TestPrepareBundle_DryRunEstimateWriteError confirms a failed cost-estimate
+// write is logged, not fatal: the dry-run still completes.
+func TestPrepareBundle_DryRunEstimateWriteError(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	cmd.SetErr(failWriter{})
+	agentsDir := writeTestAgent(t, "go-tests")
+	opts := &RunOptions{Agent: "go-tests", AgentsDir: agentsDir, DryRun: true}
+	bundle, err := prepareBundle(cmd, opts, "prompt", t.TempDir())
+	if err != nil {
+		t.Fatalf("prepareBundle() error = %v", err)
+	}
+	if bundle != nil {
+		t.Fatal("prepareBundle() bundle != nil, want nil for dry-run")
+	}
+}
+
 // TestPrepareBundle_RequiresPreflightFails wires an agent with a requires
 // block that points at a tool guaranteed to be absent from PATH and
 // confirms prepareBundle surfaces the preflight error rather than building
