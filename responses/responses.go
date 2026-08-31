@@ -364,7 +364,7 @@ func resolvePendingCalls(ctx context.Context, client openai.Client, resp *oaires
 	for _, call := range calls {
 		outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
 			OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
-				CallID: call.CallID,
+				CallID: openai.String(call.CallID),
 				Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 					OfString: openai.String("Tool call skipped: iteration budget exhausted."),
 				},
@@ -512,7 +512,7 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			logging.DebugContext(ctx, "responses API: unknown tool %s", call.Name)
 			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
 				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
-					CallID: call.CallID,
+					CallID: openai.String(call.CallID),
 					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 						OfString: openai.String(fmt.Sprintf("unknown tool: %s", call.Name)),
 					},
@@ -525,7 +525,7 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			logging.InfoContext(ctx, "responses API: %s denied by allowed-tools (active skill restriction)", call.Name)
 			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
 				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
-					CallID: call.CallID,
+					CallID: openai.String(call.CallID),
 					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 						OfString: openai.String(fmt.Sprintf("error: tool %q is not permitted by the active skill's allowed-tools", call.Name)),
 					},
@@ -538,7 +538,7 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			logging.InfoContext(ctx, "responses API: %s denied by readonly mode", call.Name)
 			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
 				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
-					CallID: call.CallID,
+					CallID: openai.String(call.CallID),
 					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 						OfString: openai.String(fmt.Sprintf("error: %s is not permitted in readonly mode (this run is analysis-only and must not modify files)", call.Name)),
 					},
@@ -551,7 +551,7 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 			logging.InfoContext(ctx, "responses API: %s denied pending plan sign-off", call.Name)
 			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
 				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
-					CallID: call.CallID,
+					CallID: openai.String(call.CallID),
 					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 						OfString: openai.String(denial),
 					},
@@ -619,7 +619,7 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 
 		outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
 			OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
-				CallID: call.CallID,
+				CallID: openai.String(call.CallID),
 				Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 					OfString: openai.String(output),
 				},
