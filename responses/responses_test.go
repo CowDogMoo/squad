@@ -295,7 +295,7 @@ func TestExecuteAndBuildOutputsDeniedByAllowedTools(t *testing.T) {
 		t.Fatalf("expected 2 outputs, got %d", len(outputs))
 	}
 	deniedOut := outputs[0].OfFunctionCallOutput
-	if deniedOut == nil || deniedOut.CallID != "call-denied" {
+	if deniedOut == nil || deniedOut.CallID.Value != "call-denied" {
 		t.Fatalf("first output should mirror the denied call, got %+v", deniedOut)
 	}
 	wantDenied := `error: tool "Bash" is not permitted by the active skill's allowed-tools`
@@ -306,7 +306,7 @@ func TestExecuteAndBuildOutputsDeniedByAllowedTools(t *testing.T) {
 		t.Fatalf("Bash handler was invoked %d times; denial must short-circuit", got)
 	}
 	allowedOut := outputs[1].OfFunctionCallOutput
-	if allowedOut == nil || allowedOut.CallID != "call-allowed" {
+	if allowedOut == nil || allowedOut.CallID.Value != "call-allowed" {
 		t.Fatalf("second output should mirror the allowed call, got %+v", allowedOut)
 	}
 	if !reflect.DeepEqual(allowedOut.Output.OfString, openai.String("read-ok")) {
@@ -336,7 +336,7 @@ func TestExecuteAndBuildOutputsDeniedByReadOnlyMode(t *testing.T) {
 		t.Fatalf("expected 2 outputs, got %d", len(outputs))
 	}
 	deniedOut := outputs[0].OfFunctionCallOutput
-	if deniedOut == nil || deniedOut.CallID != "call-denied" {
+	if deniedOut == nil || deniedOut.CallID.Value != "call-denied" {
 		t.Fatalf("first output should mirror the denied call, got %+v", deniedOut)
 	}
 	wantDenied := "error: Write is not permitted in readonly mode (this run is analysis-only and must not modify files)"
@@ -375,7 +375,7 @@ func TestExecuteAndBuildOutputsDeniedPendingSignOff(t *testing.T) {
 		t.Fatalf("expected 2 outputs, got %d", len(outputs))
 	}
 	deniedOut := outputs[0].OfFunctionCallOutput
-	if deniedOut == nil || deniedOut.CallID != "call-denied" {
+	if deniedOut == nil || deniedOut.CallID.Value != "call-denied" {
 		t.Fatalf("first output should mirror the denied call, got %+v", deniedOut)
 	}
 	wantDenied := "error: Write is locked until a plan is approved (interactive sign-off is enabled). " +
