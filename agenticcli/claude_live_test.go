@@ -298,6 +298,7 @@ func TestClaudeLiveArgs(t *testing.T) {
 	want := []string{
 		"--print", "--input-format", "stream-json", "--output-format", "stream-json",
 		"--verbose", "--permission-prompt-tool", "stdio", "--permission-mode", "default",
+		"--setting-sources", "",
 		"--append-system-prompt", "sys", "--model", "opus",
 		"--disallowed-tools", readOnlyDisallowedTools,
 	}

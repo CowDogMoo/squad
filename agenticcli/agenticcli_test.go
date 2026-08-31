@@ -46,6 +46,7 @@ func TestBuildArgs(t *testing.T) {
 			req:  Request{Provider: "claude-code", UserPrompt: "do the thing"},
 			wantArgs: []string{
 				"--print", "--output-format", "json", "--dangerously-skip-permissions",
+				"--setting-sources", "",
 			},
 			wantStdin: "do the thing",
 		},
@@ -57,6 +58,7 @@ func TestBuildArgs(t *testing.T) {
 			},
 			wantArgs: []string{
 				"--print", "--output-format", "json", "--dangerously-skip-permissions",
+				"--setting-sources", "",
 				"--append-system-prompt", "be brief",
 				"--model", "sonnet",
 				"--disallowed-tools", readOnlyDisallowedTools,
@@ -321,5 +323,33 @@ func TestRunNonZeroExit(t *testing.T) {
 	_, err := Run(context.Background(), Request{Provider: "claude-code", UserPrompt: "x", WorkDir: dir})
 	if err == nil || !strings.Contains(err.Error(), "auth expired") {
 		t.Fatalf("err = %v, want stderr tail included", err)
+	}
+}
+
+func TestSettingSourcesArgs(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		env  string
+		want []string
+	}{
+		{name: "unset is hermetic", env: "", want: []string{"--setting-sources", ""}},
+		{name: "whitespace is hermetic", env: "  ", want: []string{"--setting-sources", ""}},
+		{name: "inherit omits the flag", env: "inherit", want: nil},
+		{name: "explicit list passes through", env: "user,project", want: []string{"--setting-sources", "user,project"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := settingSourcesArgs(tt.env)
+			if len(got) != len(tt.want) {
+				t.Fatalf("settingSourcesArgs(%q) = %q, want %q", tt.env, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("settingSourcesArgs(%q)[%d] = %q, want %q", tt.env, i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
