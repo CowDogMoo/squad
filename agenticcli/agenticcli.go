@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -202,10 +203,39 @@ func NormalizeAntigravityModel(model string) string {
 	return m + "-low"
 }
 
+// SettingSourcesEnv opts a run back into the user's own Claude Code
+// settings.json files. Unset (the default) runs hermetically with no setting
+// sources; a comma-separated list ("user", "project", "local") passes that
+// list through; "inherit" omits the flag entirely, which is also the escape
+// hatch for a claude CLI predating --setting-sources.
+const SettingSourcesEnv = "SQUAD_CLAUDE_SETTING_SOURCES"
+
+// claudeSettingSourcesArgs isolates the run from the user's settings.json
+// files. Squad assembles the whole prompt, owns the tool policy, and already
+// bypasses the CLI's permission rules and MCP configuration, so inherited
+// settings only add non-determinism. Inherited hooks are worse than that: a
+// Stop hook answering "block" keeps a --print run going after the model has
+// already produced its answer, and the JSON envelope reports only the LAST
+// assistant message — so whatever the model says while arguing with the hook
+// silently replaces the run's real output.
+func claudeSettingSourcesArgs() []string {
+	return settingSourcesArgs(os.Getenv(SettingSourcesEnv))
+}
+
+// settingSourcesArgs maps the raw SettingSourcesEnv value onto the flag pair.
+func settingSourcesArgs(env string) []string {
+	sources := strings.TrimSpace(env)
+	if sources == "inherit" {
+		return nil
+	}
+	return []string{"--setting-sources", sources}
+}
+
 // claudeCommonArgs returns the claude flags shared by the single-shot and
-// live paths: system prompt, model, and the readonly tool restriction.
+// live paths: settings isolation, system prompt, model, and the readonly tool
+// restriction.
 func claudeCommonArgs(req Request) []string {
-	var args []string
+	args := claudeSettingSourcesArgs()
 	if req.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", req.SystemPrompt)
 	}

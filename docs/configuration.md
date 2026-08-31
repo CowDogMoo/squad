@@ -457,6 +457,18 @@ squad run --agent go-review --provider antigravity
 squad run --agent go-review --provider antigravity --model gemini-3.1-pro-high
 ```
 
+`claude-code` runs with `--setting-sources ""`, so the `claude` subprocess
+loads none of your `settings.json` files. Squad already assembles the whole
+prompt and bypasses the CLI's permission rules and MCP configuration, and
+inherited hooks corrupt the result: a `Stop` hook that answers `block` keeps a
+`--print` run alive after the model has produced its answer, and the CLI's
+JSON envelope returns only the *last* assistant message — so the model's
+argument with the hook replaces the run's real output. Set
+`SQUAD_CLAUDE_SETTING_SOURCES` to a comma-separated list (`user`, `project`,
+`local`) to load those sources anyway, or to `inherit` to drop the flag
+entirely (also the escape hatch for a `claude` CLI older than
+`--setting-sources`).
+
 Agent manifests can rank a CLI ahead of an API fallback; the CLI entry is
 selected only when its binary is on `PATH`:
 
