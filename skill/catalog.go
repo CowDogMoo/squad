@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/cowdogmoo/squad/config"
+	"github.com/cowdogmoo/squad/plugin"
 )
 
 // Scope identifies where a skill manifest lives. Scope ordering is meaningful:
@@ -134,14 +135,39 @@ func Discover(repoRoot string, catalogDirs ...string) (*Catalog, error) {
 		if dir == "" {
 			continue
 		}
-		if err := c.scanDir(dir, ScopeCatalog, dir); err != nil {
-			return nil, fmt.Errorf("scan catalog skills at %s: %w", dir, err)
+		for _, root := range c.catalogRoots(dir) {
+			if err := c.scanDir(root, ScopeCatalog, dir); err != nil {
+				return nil, fmt.Errorf("scan catalog skills at %s: %w", root, err)
+			}
 		}
 	}
 
 	c.resolveCollisions()
 	c.sortStable()
 	return c, nil
+}
+
+// catalogRoots expands a catalog directory into the set of roots to scan.
+// A plain directory scans as itself. A directory carrying a Claude Code
+// plugin manifest (.claude-plugin/plugin.json) additionally scans the
+// plugin's declared skill roots — the manifest is the declaration layer for
+// nested layouts the fixed-depth scan cannot see, such as category dirs
+// (cooking/<skill>/SKILL.md). A malformed manifest or invalid declared root
+// becomes a LoadError, never a discovery failure.
+func (c *Catalog) catalogRoots(dir string) []string {
+	roots := []string{dir}
+	m, err := plugin.Load(dir)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			c.loadErrors = append(c.loadErrors, LoadError{Path: plugin.ManifestPath(dir), Err: err})
+		}
+		return roots
+	}
+	declared, err := m.SkillRoots(dir)
+	if err != nil {
+		c.loadErrors = append(c.loadErrors, LoadError{Path: plugin.ManifestPath(dir), Err: err})
+	}
+	return append(roots, declared...)
 }
 
 // scanDir loads skills from dir. The Agent Skills spec defines a skill as a
