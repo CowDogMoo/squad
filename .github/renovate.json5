@@ -8,7 +8,16 @@
   ],
   postUpdateOptions: [
     'gomodTidy',
+    'gomodUpdateImportPaths',
   ],
+  constraints: {
+    go: '1.26',
+  },
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: {
+    labels: ['security'],
+    automerge: true,
+  },
   'pre-commit': {
     enabled: true,
   },
@@ -26,6 +35,15 @@
         'patch',
       ],
       automerge: true,
+    },
+    {
+      matchManagers: ['gomod'],
+      matchDepTypes: ['indirect'],
+      enabled: true,
+    },
+    {
+      matchPackageNames: ['github.com/moby/**'],
+      groupName: 'moby',
     },
   ],
 }

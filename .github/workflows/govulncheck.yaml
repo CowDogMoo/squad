@@ -1,7 +1,10 @@
 ---
 name: Govulncheck
 on:
-  # Gate PRs that actually change dependencies.
+  # Runs on every PR (no paths filter) so it can be a required status check:
+  # a path-filtered required check never reports on non-dependency PRs and
+  # would block them from merging forever.
+  merge_group:
   pull_request:
     branches:
       - main
@@ -9,11 +12,6 @@ on:
       - opened
       - synchronize
       - reopened
-    paths:
-      - go.mod
-      - go.sum
-      - .hooks/govulncheck-scan.sh
-      - .github/workflows/govulncheck.yaml
   push:
     branches:
       - main
