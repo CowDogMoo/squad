@@ -74,8 +74,9 @@ func New() *Registry {
 // redirected to /dev/null — the TUI reads progress from the session dir
 // the subprocess writes, not its streams.
 //
-// Returns the assigned Launched record (Status will be Running) and any
-// startup error.
+// Returns a snapshot of the assigned Launched record (Status will be
+// Running) and any startup error. The snapshot does not update as the
+// subprocess runs; poll Get for current state.
 func (r *Registry) Launch(workingDir string, args []string) (*Launched, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("launch: empty args")
@@ -104,10 +105,11 @@ func (r *Registry) Launch(workingDir string, args []string) (*Launched, error) {
 		Status:    StatusRunning,
 	}
 	r.all[id] = lr
+	snapshot := *lr
 	r.mu.Unlock()
 
 	go r.reap(lr)
-	return lr, nil
+	return &snapshot, nil
 }
 
 // reap waits for the subprocess to exit and records the outcome.
@@ -129,17 +131,17 @@ func (r *Registry) reap(lr *Launched) {
 func (r *Registry) Stop(id string) error {
 	r.mu.Lock()
 	lr, ok := r.all[id]
-	r.mu.Unlock()
 	if !ok {
+		r.mu.Unlock()
 		return fmt.Errorf("unknown launch: %s", id)
 	}
-	if lr.Status != StatusRunning {
+	running := lr.Status == StatusRunning
+	proc := lr.Cmd.Process
+	r.mu.Unlock()
+	if !running || proc == nil {
 		return nil
 	}
-	if lr.Cmd.Process == nil {
-		return nil
-	}
-	return lr.Cmd.Process.Signal(syscall.SIGTERM)
+	return proc.Signal(syscall.SIGTERM)
 }
 
 // All returns a snapshot of every launched subprocess, newest first.
