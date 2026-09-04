@@ -201,6 +201,20 @@ squad skill add myteam https://github.com/example/squad-skills.git
 squad skill update       # pull latest
 ```
 
+Catalog discovery is manifest-aware. A catalog directory is normally scanned
+one level deep (`<dir>/<name>/SKILL.md`), but when the directory carries a
+Claude Code plugin manifest (`.claude-plugin/plugin.json`), Squad also scans
+the manifest's declared skill roots — the `skills` list plus the format's
+default `skills/` directory. That makes nested category layouts like
+`cooking/<skill>/SKILL.md` discoverable as long as the plugin declares them:
+
+```json
+{ "name": "my-catalog", "skills": ["./cooking", "./testing"] }
+```
+
+A malformed manifest or a declared root that escapes the catalog directory is
+reported as a load warning; discovery of the remaining skills continues.
+
 ### Per-agent skill control
 
 Filter which skills an agent can see in `agent.yaml`:

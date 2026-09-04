@@ -673,3 +673,70 @@ func TestFindRepoRoot(t *testing.T) {
 		t.Errorf("FindRepoRoot outside a repo = %q, want %q", got, noRepo)
 	}
 }
+
+// TestDiscoverCatalogPluginManifestRoots verifies that a catalog dir carrying
+// a Claude Code plugin manifest also scans the manifest's declared skill
+// roots, so nested category layouts (cooking/<skill>/SKILL.md) are found.
+func TestDiscoverCatalogPluginManifestRoots(t *testing.T) {
+	withGlobalSkillsDir(t)
+	catalogDir := t.TempDir()
+
+	pluginDir := filepath.Join(catalogDir, ".claude-plugin")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"name": "cat", "skills": ["./groupa", "./groupb"]}`
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	writeSkill(t, filepath.Join(catalogDir, "groupa"), "alpha", "nested alpha", "body")
+	writeSkill(t, filepath.Join(catalogDir, "groupb"), "beta", "nested beta", "body")
+	writeSkill(t, catalogDir, "gamma", "flat gamma", "body") // depth-1 scan still works
+
+	cat, err := Discover("", catalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := entryNames(cat.Visible())
+	sort.Strings(names)
+	want := []string{"alpha", "beta", "gamma"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("visible = %v, want %v", names, want)
+	}
+	for _, e := range cat.Visible() {
+		if e.Scope != ScopeCatalog {
+			t.Fatalf("%s scope = %v, want catalog", e.Name(), e.Scope)
+		}
+		if e.Origin != catalogDir {
+			t.Fatalf("%s origin = %q, want %q", e.Name(), e.Origin, catalogDir)
+		}
+	}
+}
+
+// TestDiscoverCatalogMalformedPluginManifest verifies a broken plugin.json
+// surfaces as a LoadError while depth-1 discovery keeps working.
+func TestDiscoverCatalogMalformedPluginManifest(t *testing.T) {
+	withGlobalSkillsDir(t)
+	catalogDir := t.TempDir()
+
+	pluginDir := filepath.Join(catalogDir, ".claude-plugin")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(`{broken`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, catalogDir, "gamma", "flat gamma", "body")
+
+	cat, err := Discover("", catalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := entryNames(cat.Visible()); len(names) != 1 || names[0] != "gamma" {
+		t.Fatalf("visible = %v, want [gamma]", names)
+	}
+	if len(cat.LoadErrors()) != 1 {
+		t.Fatalf("load errors = %v, want exactly one for the manifest", cat.LoadErrors())
+	}
+}
