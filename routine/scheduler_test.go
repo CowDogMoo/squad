@@ -148,7 +148,7 @@ func TestSchedulerFiresOnInterval(t *testing.T) {
 	setupTempXDG(t)
 	store := NewStore()
 	ref := Ref{Scope: ScopeGlobal, ID: "fast"}
-	if _, err := store.Create(ref, &Routine{ID: "fast", Agent: "go", Schedule: "@every 200ms", Enabled: true}); err != nil {
+	if _, err := store.Create(ref, &Routine{ID: "fast", Agent: "go", Schedule: "@every 100ms", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	var (
@@ -179,13 +179,16 @@ func TestSchedulerFiresOnInterval(t *testing.T) {
 		_ = sched.Shutdown(shutCtx)
 	}()
 
+	// Generous ceiling: only proves the scheduler fires at all, so headroom
+	// matters more than precision — loaded CI runners have stalled >1.5s and
+	// flaked the old 2s window.
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		mu.Lock()
 		got := count
 		mu.Unlock()
-		t.Fatalf("expected 2 fires within 2s, got %d", got)
+		t.Fatalf("expected 2 fires within 10s, got %d", got)
 	}
 }
 
