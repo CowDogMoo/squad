@@ -13,6 +13,10 @@
   constraints: {
     go: '1.26',
   },
+  // Without strict filtering the go constraint is advisory only: a digest
+  // bump can pull a dep whose go.mod demands a newer Go and break CI
+  // (k8s.io/kube-openapi -> go 1.27, PR #233).
+  constraintsFiltering: 'strict',
   osvVulnerabilityAlerts: true,
   vulnerabilityAlerts: {
     labels: ['security'],
