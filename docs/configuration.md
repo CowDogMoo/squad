@@ -469,6 +469,15 @@ argument with the hook replaces the run's real output. Set
 entirely (also the escape hatch for a `claude` CLI older than
 `--setting-sources`).
 
+Independently of that, every `claude-code` run also passes
+`--settings '{"attribution":{"commit":"","pr":"","sessionUrl":false}}'`. Claude
+Code otherwise instructs the model to end pull request descriptions with
+a "Generated with Claude Code" footer and commit messages with a
+`Co-Authored-By: Claude` trailer, and a pattern that asks for a PR body or a
+commit message gets that text appended to its output. The inline `--settings`
+layer sits above every settings file, so the footer stays off even when
+`SQUAD_CLAUDE_SETTING_SOURCES` loads your own files.
+
 Agent manifests can rank a CLI ahead of an API fallback; the CLI entry is
 selected only when its binary is on `PATH`:
 

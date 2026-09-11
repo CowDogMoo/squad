@@ -231,11 +231,30 @@ func settingSourcesArgs(env string) []string {
 	return []string{"--setting-sources", sources}
 }
 
+// claudeAttributionOff is the --settings JSON that hides the commit trailer,
+// the PR-description footer, and the session link Claude Code otherwise
+// instructs the model to append. It is an inline settings layer, so it applies
+// even with --setting-sources "" and above any user or project file.
+//
+// Without it a `claude -p` run is told to end pull request descriptions with
+// "🤖 Generated with [Claude Code](...)" and commit messages with a
+// Co-Authored-By trailer, and the model obliges: a pattern asking for a PR
+// body gets the footer appended, and that text ends up verbatim in `gh pr
+// create`. Squad's output is consumed programmatically, so the branding is
+// noise here rather than attribution.
+const claudeAttributionOff = `{"attribution":{"commit":"","pr":"","sessionUrl":false}}`
+
+// claudeAttributionArgs returns the --settings flag pair carrying
+// claudeAttributionOff.
+func claudeAttributionArgs() []string {
+	return []string{"--settings", claudeAttributionOff}
+}
+
 // claudeCommonArgs returns the claude flags shared by the single-shot and
-// live paths: settings isolation, system prompt, model, and the readonly tool
-// restriction.
+// live paths: settings isolation, attribution suppression, system prompt,
+// model, and the readonly tool restriction.
 func claudeCommonArgs(req Request) []string {
-	args := claudeSettingSourcesArgs()
+	args := append(claudeSettingSourcesArgs(), claudeAttributionArgs()...)
 	if req.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", req.SystemPrompt)
 	}
