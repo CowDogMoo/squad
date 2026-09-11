@@ -46,6 +46,18 @@
       enabled: true,
     },
     {
+      // Indirect deps only get minor/patch bumps. A Go major changes the
+      // module path (/v2, .v5) and nothing here imports the new path, so the
+      // bump is reverted by `go mod tidy` (PRs #247-#250). Digest bumps of
+      // pseudo-versioned modules bypass constraintsFiltering and can drag in
+      // a newer Go requirement (k8s.io/kube-openapi -> go 1.27, PRs #233,
+      // #258).
+      matchManagers: ['gomod'],
+      matchDepTypes: ['indirect'],
+      matchUpdateTypes: ['major', 'digest'],
+      enabled: false,
+    },
+    {
       matchPackageNames: ['github.com/moby/**'],
       groupName: 'moby',
     },
