@@ -10,12 +10,16 @@
     'gomodTidy',
     'gomodUpdateImportPaths',
   ],
-  constraints: {
-    go: '1.26',
-  },
-  // Without strict filtering the go constraint is advisory only: a digest
-  // bump can pull a dep whose go.mod demands a newer Go and break CI
-  // (k8s.io/kube-openapi -> go 1.27, PR #233).
+  // No explicit constraints.go: the toolchain used for `go mod tidy` and the
+  // strict filter below both derive from go.mod's `go` directive. A manual
+  // value is also run through strict-semver validation during filtering,
+  // and "1.26" fails it, logging "Invalid constraint used with strict
+  // constraintsFiltering" for every Go dep while contributing nothing.
+  //
+  // Strict filtering drops candidate releases whose own go.mod demands a
+  // newer Go than ours; without it a bump can break CI (k8s.io/kube-openapi
+  // -> go 1.27, PR #233). It cannot see pseudo-versions, hence the indirect
+  // digest exclusion in packageRules.
   constraintsFiltering: 'strict',
   osvVulnerabilityAlerts: true,
   vulnerabilityAlerts: {
