@@ -2,8 +2,10 @@ package agenticcli
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -47,6 +49,7 @@ func TestBuildArgs(t *testing.T) {
 			wantArgs: []string{
 				"--print", "--output-format", "json", "--dangerously-skip-permissions",
 				"--setting-sources", "",
+				"--settings", claudeAttributionOff,
 			},
 			wantStdin: "do the thing",
 		},
@@ -59,6 +62,7 @@ func TestBuildArgs(t *testing.T) {
 			wantArgs: []string{
 				"--print", "--output-format", "json", "--dangerously-skip-permissions",
 				"--setting-sources", "",
+				"--settings", claudeAttributionOff,
 				"--append-system-prompt", "be brief",
 				"--model", "sonnet",
 				"--disallowed-tools", readOnlyDisallowedTools,
@@ -323,6 +327,46 @@ func TestRunNonZeroExit(t *testing.T) {
 	_, err := Run(context.Background(), Request{Provider: "claude-code", UserPrompt: "x", WorkDir: dir})
 	if err == nil || !strings.Contains(err.Error(), "auth expired") {
 		t.Fatalf("err = %v, want stderr tail included", err)
+	}
+}
+
+func TestClaudeAttributionArgs(t *testing.T) {
+	t.Parallel()
+	got := claudeAttributionArgs()
+	if len(got) != 2 || got[0] != "--settings" {
+		t.Fatalf("claudeAttributionArgs() = %q, want --settings pair", got)
+	}
+	var settings struct {
+		Attribution struct {
+			Commit     *string `json:"commit"`
+			PR         *string `json:"pr"`
+			SessionURL *bool   `json:"sessionUrl"`
+		} `json:"attribution"`
+	}
+	if err := json.Unmarshal([]byte(got[1]), &settings); err != nil {
+		t.Fatalf("--settings payload is not JSON: %v", err)
+	}
+	a := settings.Attribution
+	if a.Commit == nil || *a.Commit != "" {
+		t.Errorf("attribution.commit = %v, want empty string (hidden)", a.Commit)
+	}
+	if a.PR == nil || *a.PR != "" {
+		t.Errorf("attribution.pr = %v, want empty string (hidden)", a.PR)
+	}
+	if a.SessionURL == nil || *a.SessionURL {
+		t.Errorf("attribution.sessionUrl = %v, want false", a.SessionURL)
+	}
+}
+
+// TestClaudeCommonArgsAlwaysHideAttribution guards the shared path: whatever
+// SQUAD_CLAUDE_SETTING_SOURCES says, the attribution override must be present,
+// because inherited user settings can re-enable the footer.
+func TestClaudeCommonArgsAlwaysHideAttribution(t *testing.T) {
+	t.Setenv(SettingSourcesEnv, "inherit")
+	got := claudeCommonArgs(Request{Provider: "claude-code"})
+	want := []string{"--settings", claudeAttributionOff}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("claudeCommonArgs with inherit = %q, want %q", got, want)
 	}
 }
 

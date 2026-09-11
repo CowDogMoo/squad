@@ -299,6 +299,7 @@ func TestClaudeLiveArgs(t *testing.T) {
 		"--print", "--input-format", "stream-json", "--output-format", "stream-json",
 		"--verbose", "--permission-prompt-tool", "stdio", "--permission-mode", "default",
 		"--setting-sources", "",
+		"--settings", claudeAttributionOff,
 		"--append-system-prompt", "sys", "--model", "opus",
 		"--disallowed-tools", readOnlyDisallowedTools,
 	}
