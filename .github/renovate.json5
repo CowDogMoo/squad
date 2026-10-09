@@ -21,6 +21,20 @@
   // -> go 1.27, PR #233). It cannot see pseudo-versions, hence the indirect
   // digest exclusion in packageRules.
   constraintsFiltering: 'strict',
+  // Built-in managers can't see versions held in workflow `env:` values
+  // (setup-python reports `${{ env.PYTHON_VERSION }}` as invalid-value) or
+  // in `run:` scripts (`go install ...@vX`, the Task installer). Annotate
+  // each such pin with a `# renovate:` comment on the line above it:
+  //   # renovate: datasource=<ds> depName=<name> [extractVersion=<regex>]
+  customManagers: [
+    {
+      customType: 'regex',
+      managerFilePatterns: ['/^\\.github/workflows/[^/]+\\.ya?ml$/'],
+      matchStrings: [
+        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\s*\\n[^\\n]*?(?::\\s*|@)(?<currentValue>v?\\d+\\.\\d+\\.\\d+)',
+      ],
+    },
+  ],
   osvVulnerabilityAlerts: true,
   vulnerabilityAlerts: {
     labels: ['security'],
@@ -67,10 +81,13 @@
       // reads its toolchain from go.mod (setup-go go-version-file), so a
       // stale directive leaves stdlib CVEs unpatched and reddens govulncheck.
       // Patch bumps automerge via the rule above; minor (1.27) waits for a
-      // human since it raises the floor for every consumer.
+      // human since it raises the floor for every consumer. Without
+      // separateMinorPatch, Renovate offers only the newest release (1.27.x),
+      // so the 1.26.x security patch would sit behind that manual PR.
       matchManagers: ['gomod'],
       matchDepTypes: ['golang'],
       rangeStrategy: 'bump',
+      separateMinorPatch: true,
     },
     {
       matchManagers: ['gomod'],
