@@ -62,6 +62,23 @@
       enabled: false,
     },
     {
+      // The `go` directive is a minimum, so the default rangeStrategy treats
+      // 1.26.6 as already satisfied by 1.26.9 and never proposes a bump. CI
+      // reads its toolchain from go.mod (setup-go go-version-file), so a
+      // stale directive leaves stdlib CVEs unpatched and reddens govulncheck.
+      // Patch bumps automerge via the rule above; minor (1.27) waits for a
+      // human since it raises the floor for every consumer.
+      matchManagers: ['gomod'],
+      matchDepTypes: ['golang'],
+      rangeStrategy: 'bump',
+    },
+    {
+      matchManagers: ['gomod'],
+      matchDepTypes: ['golang'],
+      matchUpdateTypes: ['minor', 'major'],
+      automerge: false,
+    },
+    {
       matchPackageNames: ['github.com/moby/**'],
       groupName: 'moby',
     },
