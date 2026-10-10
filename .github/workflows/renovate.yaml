@@ -36,6 +36,7 @@ concurrency:
 
 # Retrieve BOT_USER_ID via `curl -s "https://api.github.com/users/${BOT_USERNAME}%5Bbot%5D" | jq .id`
 env:
+  # renovate: datasource=python-version depName=python
   PYTHON_VERSION: 3.13.3
   RENOVATE_GIT_AUTHOR: "${{ secrets.BOT_USERNAME }} <${{ secrets.BOT_USER_ID }}+${{ secrets.BOT_USERNAME }}[bot]@users.noreply.github.com>"
 
@@ -91,6 +92,7 @@ jobs:
 
           # Install golangci-lint (pinned; go install verifies via the Go
           # module checksum database instead of curl|sh)
+          # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
 
           # Install gocritic
