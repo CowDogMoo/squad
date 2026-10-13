@@ -24,7 +24,7 @@ concurrency:
 env:
   DEBIAN_FRONTEND: noninteractive
   # renovate: datasource=python-version depName=python
-  PYTHON_VERSION: 3.14.8
+  PYTHON_VERSION: 3.15.0
   # renovate: datasource=github-releases depName=go-task/task extractVersion=^v(?<version>.+)$
   TASK_VERSION: 3.54.0
   TASK_X_REMOTE_TASKFILES: 1
