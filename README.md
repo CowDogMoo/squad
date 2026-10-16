@@ -9,8 +9,7 @@
 [![Release](https://img.shields.io/github/v/release/CowDogMoo/squad?label=Release&logo=github)](https://github.com/CowDogMoo/squad/releases)
 [![codecov](https://codecov.io/github/CowDogMoo/squad/graph/badge.svg?token=O74GTQA4J7)](https://codecov.io/github/CowDogMoo/squad)
 <br />
-[![Tests](https://github.com/CowDogMoo/squad/actions/workflows/tests.yaml/badge.svg)](https://github.com/CowDogMoo/squad/actions/workflows/tests.yaml)
-[![Pre-Commit](https://github.com/CowDogMoo/squad/actions/workflows/pre-commit.yaml/badge.svg)](https://github.com/CowDogMoo/squad/actions/workflows/pre-commit.yaml)
+[![Go CI](https://github.com/CowDogMoo/squad/actions/workflows/go-ci.yaml/badge.svg)](https://github.com/CowDogMoo/squad/actions/workflows/go-ci.yaml)
 [![Semgrep](https://github.com/CowDogMoo/squad/actions/workflows/semgrep.yaml/badge.svg)](https://github.com/CowDogMoo/squad/actions/workflows/semgrep.yaml)
 [![Renovate](https://github.com/CowDogMoo/squad/actions/workflows/renovate.yaml/badge.svg)](https://github.com/CowDogMoo/squad/actions/workflows/renovate.yaml)
 
@@ -634,7 +633,7 @@ docs/                     # User documentation (linked below)
 
 - Go 1.27+
 - [pre-commit](https://pre-commit.com/) (recommended)
-- [golangci-lint](https://golangci-lint.run/) (CI uses v2.11.4)
+- [golangci-lint](https://golangci-lint.run/) v2 (CI uses the latest release)
 
 ### Build & Test
 
