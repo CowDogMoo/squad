@@ -1,0 +1,37 @@
+---
+name: Go CI
+on:
+  merge_group:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+  push:
+    branches:
+      - main
+  schedule:
+    # Run once a week (see https://crontab.guru)
+    - cron: "0 0 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+permissions: {}
+
+jobs:
+  go-ci:
+    uses: CowDogMoo/renovate-config/.github/workflows/go-ci.yaml@main
+    permissions:
+      contents: read
+    with:
+      python-version: "3.15"
+      apt-packages: build-essential btrfs-progs libgpgme-dev libbtrfs-dev pkg-config
+      # The goreleaser-check hook runs `goreleaser check`.
+      go-installs: github.com/goreleaser/goreleaser/v2@latest
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
