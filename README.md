@@ -633,7 +633,7 @@ docs/                     # User documentation (linked below)
 
 - Go 1.27+
 - [pre-commit](https://pre-commit.com/) (recommended)
-- [golangci-lint](https://golangci-lint.run/) (CI uses v2.11.4)
+- [golangci-lint](https://golangci-lint.run/) v2 (CI uses the latest release)
 
 ### Build & Test
 
