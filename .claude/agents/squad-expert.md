@@ -337,7 +337,7 @@ If a user is scaffolding an agent and the body looks like reference + checklist,
 
 ## Important Context
 
-- **Module:** `github.com/cowdogmoo/squad`. Go 1.24+ required; go.mod declares `go 1.26.3`.
+- **Module:** `github.com/cowdogmoo/squad`. Required Go version is the `go` directive in go.mod.
 - **Build:** `task build` (Taskfile.yaml is the canonical build surface). Direct: `go build -o squad ./cmd/squad`.
 - **Tests:** `task test` or `go test ./...`. Coverage written to `coverage.out`.
 - **Lint / pre-commit:** `.pre-commit-config.yaml` runs `golangci-lint`, `go vet`, `gofmt`, `goimports`, codespell, markdownlint. Commits are always done via `fabric_commit`, which runs all hooks. Do NOT use `--no-verify`.

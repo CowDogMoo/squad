@@ -73,8 +73,17 @@ jobs:
           # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
-          # Install gocritic
-          go install github.com/go-critic/go-critic/cmd/gocritic@latest
+          # Install gocritic, built against the latest golang.org/x/tools:
+          # the x/tools version gocritic pins can lag the Go toolchain and
+          # then misreads newer type info (false sloppyTypeAssert/caseOrder).
+          gocritic_mod="$(mktemp -d)"
+          (
+            cd "$gocritic_mod"
+            go mod init gocritic-build
+            go get github.com/go-critic/go-critic/cmd/gocritic@latest golang.org/x/tools@latest
+            go install github.com/go-critic/go-critic/cmd/gocritic
+          )
+          rm -rf "$gocritic_mod"
 
           # Add Go bin directory to PATH
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"

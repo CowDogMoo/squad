@@ -97,7 +97,7 @@ Agents run in a bounded tool loop with per-run cost caps, structured event logs,
 
 | Requirement    | Version | Notes                                                                |
 | -------------- | ------- | -------------------------------------------------------------------- |
-| **Go**         | 1.26+   | Required for `go install`                                            |
+| **Go**         | 1.27+   | Required for `go install`                                            |
 | **LLM access** | -       | OpenAI, Anthropic, Google AI, Ollama, or any OpenAI-compatible endpoint |
 | **Git**        | -       | Required for agent-repository fetching and worktree isolation         |
 
@@ -632,7 +632,7 @@ docs/                     # User documentation (linked below)
 
 ### Prerequisites
 
-- Go 1.26+
+- Go 1.27+
 - [pre-commit](https://pre-commit.com/) (recommended)
 - [golangci-lint](https://golangci-lint.run/) (CI uses v2.11.4)
 

@@ -70,5 +70,13 @@
       matchPackageNames: ['github.com/moby/**'],
       groupName: 'moby',
     },
+    {
+      // chromedp pins the cdproto API it was built against; a standalone
+      // cdproto digest bump (PR #302) was incompatible with chromedp v0.16.0
+      // and broke its build. cdproto only moves when a chromedp bump raises
+      // it through go mod tidy.
+      matchPackageNames: ['github.com/chromedp/cdproto'],
+      enabled: false,
+    },
   ],
 }
