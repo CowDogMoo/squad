@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/cowdogmoo/squad/logging"
@@ -50,16 +51,17 @@ const removeIndicatorJS = `(() => {
 // can see it happening.
 func installAttachIndicator(tabCtx context.Context) (func(), error) {
 	var scriptID page.ScriptIdentifier
-	err := chromedp.Run(tabCtx,
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			id, err := page.AddScriptToEvaluateOnNewDocument(attachIndicatorJS).Do(ctx)
+	err := chromedp.Do(tabCtx,
+		chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+			res, err := cdp.Call(ctx, t, page.AddScriptToEvaluateOnNewDocument,
+				page.AddScriptToEvaluateOnNewDocumentParams{Source: attachIndicatorJS})
 			if err != nil {
 				return err
 			}
-			scriptID = id
+			scriptID = res.Identifier
 			return nil
 		}),
-		chromedp.Evaluate(attachIndicatorJS, nil),
+		chromedp.Evaluate[chromedp.Void](attachIndicatorJS),
 	)
 	if err != nil {
 		return nil, err
@@ -70,11 +72,13 @@ func installAttachIndicator(tabCtx context.Context) (func(), error) {
 		// gone by detach time, and detaching must not hang on it.
 		rmCtx, cancel := context.WithTimeout(tabCtx, 5*time.Second)
 		defer cancel()
-		err := chromedp.Run(rmCtx,
-			chromedp.ActionFunc(func(ctx context.Context) error {
-				return page.RemoveScriptToEvaluateOnNewDocument(scriptID).Do(ctx)
+		err := chromedp.Do(rmCtx,
+			chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+				_, err := cdp.Call(ctx, t, page.RemoveScriptToEvaluateOnNewDocument,
+					page.RemoveScriptToEvaluateOnNewDocumentParams{Identifier: scriptID})
+				return err
 			}),
-			chromedp.Evaluate(removeIndicatorJS, nil),
+			chromedp.Evaluate[chromedp.Void](removeIndicatorJS),
 		)
 		if err != nil {
 			logging.Debug("squad browser: remove attach indicator: %v", err)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/remote"
 	"github.com/cowdogmoo/squad/browser"
 )
 
@@ -82,6 +83,7 @@ func TestBrowserEvalLiveSuccess(t *testing.T) {
 	opts := chromeExecOpts(
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("remote-debugging-port", "0"),
+		remote.WebSocket,
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -92,7 +94,7 @@ func TestBrowserEvalLiveSuccess(t *testing.T) {
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	defer cancelBrowser()
 
-	if err := chromedp.Run(browserCtx, chromedp.Navigate("data:text/html,<body>HELLO-EVAL-PROBE</body>")); err != nil {
+	if err := chromedp.Do(browserCtx, chromedp.Navigate("data:text/html,<body>HELLO-EVAL-PROBE</body>")); err != nil {
 		t.Skipf("skipping live browser test: %v", err)
 	}
 
@@ -118,5 +120,20 @@ func TestBrowserEvalLiveSuccess(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "HELLO-EVAL-PROBE") {
 		t.Fatalf("expected the open page's body text, got: %s", stdout.String())
+	}
+
+	for script, want := range map[string]string{
+		"undefined":         "undefined",
+		"null":              "null",
+		"({a: [1, 'b']})":   `{"a":[1,"b"]}`,
+		"'quoted \"text\"'": `"quoted \"text\""`,
+	} {
+		stdout.Reset()
+		if err := cmd.RunE(cmd, []string{"liveeval", script}); err != nil {
+			t.Fatalf("eval %q failed: %v", script, err)
+		}
+		if got := strings.TrimSpace(stdout.String()); got != want {
+			t.Errorf("eval %q = %s, want %s", script, got, want)
+		}
 	}
 }

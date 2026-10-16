@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/remote"
 	"github.com/cowdogmoo/squad/browser"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -73,7 +74,7 @@ func requireChrome(t *testing.T) {
 		defer cancelAlloc()
 		browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 		defer cancelBrowser()
-		chromeCheckErr = chromedp.Run(browserCtx, chromedp.Navigate("about:blank"))
+		chromeCheckErr = chromedp.Do(browserCtx, chromedp.Navigate("about:blank"))
 	})
 	if chromeCheckErr != nil {
 		t.Skipf("chrome unavailable: %v", chromeCheckErr)
@@ -253,7 +254,7 @@ func TestMCPServerRegisterBrowserTools_LiveExecution(t *testing.T) {
 	// Mirror connectBrowserServer's init: the browser and its tab must be
 	// owned by the long-lived context before any tool call derives a
 	// short-lived one from it.
-	if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
+	if err := chromedp.Do(ctx, chromedp.Navigate("about:blank")); err != nil {
 		t.Skipf("skipping live browser test: %v", err)
 	}
 
@@ -286,13 +287,14 @@ func TestMCPServerAttachMode(t *testing.T) {
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, chromeExecOpts(
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("remote-debugging-port", "0"),
+		remote.WebSocket,
 	)...)
 	defer cancelAlloc()
 
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	defer cancelBrowser()
 
-	if err := chromedp.Run(browserCtx, chromedp.Navigate("data:text/html,<body>HELLO-ATTACH</body>")); err != nil {
+	if err := chromedp.Do(browserCtx, chromedp.Navigate("data:text/html,<body>HELLO-ATTACH</body>")); err != nil {
 		t.Skipf("skipping live browser test: %v", err)
 	}
 
@@ -325,8 +327,8 @@ func TestMCPServerAttachMode(t *testing.T) {
 	cleanup()
 
 	// Detach must remove the indicator but leave the page itself alone.
-	var indicatorAfter bool
-	if err := chromedp.Run(browserCtx, chromedp.Evaluate(indicatorCheck, &indicatorAfter)); err != nil {
+	indicatorAfter, err := chromedp.Run(browserCtx, chromedp.Evaluate[bool](indicatorCheck))
+	if err != nil {
 		t.Fatalf("evaluate after cleanup: %v", err)
 	}
 	if indicatorAfter {

@@ -3,12 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/remote"
 	"github.com/cowdogmoo/squad/browser"
 	"github.com/spf13/cobra"
 )
@@ -39,14 +40,8 @@ Example:
 			}
 			defer cleanup()
 
-			var res json.RawMessage
-			err = chromedp.Run(tabCtx, chromedp.Evaluate(script, &res))
-			switch {
-			case errors.Is(err, chromedp.ErrJSUndefined):
-				res = json.RawMessage("undefined")
-			case errors.Is(err, chromedp.ErrJSNull):
-				res = json.RawMessage("null")
-			case err != nil:
+			res, err := chromedp.Run(tabCtx, evaluateJSON(script))
+			if err != nil {
 				return fmt.Errorf("evaluate failed: %w", err)
 			}
 
@@ -57,19 +52,40 @@ Example:
 	return cmd
 }
 
+// evaluateJSON evaluates script and returns its result as JSON, or the
+// literal undefined when the script produces no value, so callers print
+// exactly what the page produced.
+func evaluateJSON(script string) chromedp.Action[json.RawMessage] {
+	eval := chromedp.Evaluate[*runtime.RemoteObject](script, func(p *runtime.EvaluateParams) {
+		p.ReturnByValue = new(true)
+	})
+	return func(ctx context.Context, t *chromedp.Target) (json.RawMessage, error) {
+		obj, err := eval(ctx, t)
+		switch {
+		case err != nil:
+			return nil, err
+		case obj.Type == runtime.RemoteObjectTypeUndefined:
+			return json.RawMessage("undefined"), nil
+		case len(obj.Value) == 0:
+			return json.RawMessage("null"), nil
+		}
+		return json.RawMessage(obj.Value), nil
+	}
+}
+
 // attachToActivePage connects to the active browser session for the named
 // profile (via its DevToolsActivePort endpoint) and returns a context
 // attached to the session's first real page, plus a cleanup func. The
-// cleanup detaches WITHOUT closing the page: chromedp's own context cancel
-// sends Target.closeTarget to any attached target, which would close the
-// user's tab out from under them.
+// cleanup detaches WITHOUT closing the page: by default chromedp's context
+// cancel sends Target.closeTarget to an attached target, which would close
+// the user's tab out from under them.
 func attachToActivePage(ctx context.Context, profile string) (context.Context, func(), error) {
 	wsURL, err := browser.ActivePort(profile)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(ctx, wsURL)
+	allocCtx, cancelAlloc := remote.NewAllocator(ctx, wsURL)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	teardown := func() {
 		cancelBrowser()
@@ -82,15 +98,11 @@ func attachToActivePage(ctx context.Context, profile string) (context.Context, f
 		return nil, nil, err
 	}
 
-	tabCtx, cancelTab := chromedp.NewContext(browserCtx, chromedp.WithTargetID(page.TargetID))
+	tabCtx, cancelTab := chromedp.NewContext(browserCtx,
+		chromedp.WithTargetID(page.TargetID),
+		chromedp.WithDetachOnCancel(),
+	)
 	cleanup := func() {
-		// Drop the attachment before cancelling so chromedp's cleanup
-		// goroutine (which fires Target.closeTarget on a non-nil Target)
-		// leaves the page open. The CDP session itself dies with the
-		// websocket connection.
-		if c := chromedp.FromContext(tabCtx); c != nil {
-			c.Target = nil
-		}
 		cancelTab()
 		teardown()
 	}
@@ -98,7 +110,7 @@ func attachToActivePage(ctx context.Context, profile string) (context.Context, f
 	// Attach now, on the long-lived context: chromedp binds the session's
 	// event handling to the context of the first Run, and callers may only
 	// ever Run with short-lived contexts derived from tabCtx.
-	if err := chromedp.Run(tabCtx); err != nil {
+	if err := chromedp.Do(tabCtx); err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("attach to page: %w", err)
 	}
