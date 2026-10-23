@@ -19,7 +19,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/google/uuid v1.6.0
-	github.com/mark3labs/mcp-go v1.0.0
+	github.com/mark3labs/mcp-go v1.3.0
 	github.com/mattn/go-isatty v0.0.24
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.2
