@@ -4,10 +4,11 @@ name: Renovate
 on:
   schedule:
     - cron: "0 */6 * * *"
+  # Every merge to main, not only config changes: the merge queue drops
+  # Renovate PRs that conflict on go.mod/go.sum with whatever landed first,
+  # and waiting for the next cron run leaves them stuck for up to 6 hours.
   push:
     branches: ["main"]
-    paths:
-      - .github/renovate.json5
   workflow_dispatch:
     inputs:
       dry-run:

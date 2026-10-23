@@ -78,5 +78,13 @@
       matchPackageNames: ['github.com/chromedp/cdproto'],
       enabled: false,
     },
+    {
+      // generative-ai-go pins the cloud.google.com/go/ai protos it was
+      // generated against; a standalone bump to v0.20.0 (PR #351) renamed
+      // VideoMetadata fields and broke generative-ai-go v0.20.1's build. ai
+      // only moves when a generative-ai-go bump raises it through go mod tidy.
+      matchPackageNames: ['cloud.google.com/go/ai'],
+      enabled: false,
+    },
   ],
 }
