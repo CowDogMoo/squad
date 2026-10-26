@@ -18,8 +18,8 @@ cloud.google.com/go/compute/metadata v0.10.0 h1:pyKMUQSwchgkIBBJGdILqQbs/BNJXqwS
 cloud.google.com/go/compute/metadata v0.10.0/go.mod h1:rGFHRrIif570kSibjFTMbt6/4/tzgJWFGI/HVol4GIk=
 cloud.google.com/go/iam v1.15.0 h1:U/wqjfrM0ceBFdPlOI2+cu68yPAxh72M8fe9uLG0+ZE=
 cloud.google.com/go/iam v1.15.0/go.mod h1:HAVf7PNhTrNTrEc6fVB21l8ejkbzNTulJHYf7QtD424=
-cloud.google.com/go/longrunning v1.3.0 h1:lZ6c8SJJBmILp/Wnr3vGnBLa0q+cYfSHRCcUfVI2hpI=
-cloud.google.com/go/longrunning v1.3.0/go.mod h1:wpgLxCn+UA3/TZ1bj/fW39mfDpwVlMPu1xKJyoMt7V0=
+cloud.google.com/go/longrunning v1.4.0 h1:l53OXv/ZAQCvATPqdYIqxruIUa1+eeX3Ckg0EBMpZLM=
+cloud.google.com/go/longrunning v1.4.0/go.mod h1:HAJuq0kD9eDyV6DtaN+0b6niPzFFFf9QMMHkHD7DvMc=
 cloud.google.com/go/vertexai v0.19.0 h1:s2ycqpWiLtydvs8u86fwFG1P4ovdHmiYtSZ2Qtd9vnM=
 cloud.google.com/go/vertexai v0.19.0/go.mod h1:LDCXm7/7mi+MdbwhSSZ/qvNSqxvrGiwqUeC/OBlC3oY=
 dario.cat/mergo v1.0.2 h1:85+piFYR1tMbRrLcDwR18y4UKJ3aH1Tbzi24VRW1TK8=
