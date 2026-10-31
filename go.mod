@@ -48,7 +48,7 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.3.0 // indirect
 	cloud.google.com/go/compute/metadata v0.10.0 // indirect
 	cloud.google.com/go/iam v1.15.0 // indirect
-	cloud.google.com/go/longrunning v1.4.0 // indirect
+	cloud.google.com/go/longrunning v1.4.1 // indirect
 	cloud.google.com/go/vertexai v0.19.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Microsoft/go-winio v0.6.4 // indirect
