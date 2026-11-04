@@ -11,8 +11,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.81.2
 	github.com/bmatcuk/doublestar/v4 v4.10.4
 	github.com/charmbracelet/x/ansi v0.11.9
-	github.com/chromedp/cdproto v0.157.8
-	github.com/chromedp/chromedp v0.21.0
+	github.com/chromedp/cdproto v0.159.0
+	github.com/chromedp/chromedp v0.21.1
 	github.com/fatih/color v1.19.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-co-op/gocron/v2 v2.23.0
