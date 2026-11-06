@@ -4,6 +4,9 @@
       "pattern": "^mailto:"
     },
     {
+      "pattern": "^https://img\\.shields\\.io/"
+    },
+    {
       "pattern": "^https://github\\.com/CowDogMoo/squad"
     },
     {
