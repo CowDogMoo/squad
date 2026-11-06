@@ -22,6 +22,7 @@ fi
 IGNORED_VULNS=(
     "GO-2026-4887" # github.com/docker/docker - AuthZ plugin bypass (Fixed in: N/A)
     "GO-2026-4883" # github.com/docker/docker - Off-by-one plugin privilege validation (Fixed in: N/A)
+    "GO-2026-6911" # github.com/mark3labs/mcp-go - StreamableHTTP redirect leaks headers/tokens (Fixed in: N/A; mitigated: mcp/client.go refuses HTTP redirects)
 )
 
 # Run govulncheck vulnerability scan
