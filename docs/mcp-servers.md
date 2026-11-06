@@ -196,6 +196,12 @@ with an error. There is no silent degradation or partial tool availability.
 Check server names, commands, and URLs before running if you see connection
 errors.
 
+SSE and Streamable HTTP connections never follow HTTP redirects, so configured
+headers and tokens are only sent to the configured `url`. A server that answers
+with a 3xx fails to connect with `refusing to follow HTTP redirect`; set `url`
+to the final endpoint (for example `https://` instead of `http://`, or the
+exact path including any trailing slash).
+
 ## Inspecting Servers (`squad mcp`)
 
 The `squad mcp` subcommand lets you exercise a server without running an
