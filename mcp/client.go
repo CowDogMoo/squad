@@ -60,7 +60,9 @@ func createSSETransport(ctx context.Context, cfg ServerConfig) (mcpclient.MCPCli
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("mcp server %q missing url for sse transport", cfg.Name)
 	}
-	var opts []transport.ClientOption
+	opts := []transport.ClientOption{
+		transport.WithHTTPClient(newNoRedirectHTTPClient()),
+	}
 	if len(cfg.Headers) > 0 {
 		hdrs := make(map[string]string, len(cfg.Headers))
 		for _, h := range cfg.Headers {
@@ -117,13 +119,14 @@ func createStreamableHTTPTransport(ctx context.Context, cfg ServerConfig) (mcpcl
 
 // errRedirectRefused is returned when an MCP server answers with an HTTP
 // redirect. mcp-go's Streamable HTTP transport re-sends custom headers and
-// OAuth tokens to whatever host a redirect names (GO-2026-6911), so squad
-// never follows one.
+// OAuth tokens to whatever host a redirect names (GO-2026-6911), and its SSE
+// transport forwards custom headers the same way, so squad's SSE and
+// Streamable HTTP transports never follow one.
 var errRedirectRefused = errors.New("mcp: refusing to follow HTTP redirect")
 
-// newNoRedirectHTTPClient returns the HTTP client used by the Streamable HTTP
-// transport. It refuses every redirect so configured headers and tokens are
-// only ever sent to the configured server URL.
+// newNoRedirectHTTPClient returns the HTTP client used by the SSE and
+// Streamable HTTP transports. It refuses every redirect so configured headers
+// and tokens are only ever sent to the configured server URL.
 func newNoRedirectHTTPClient() *http.Client {
 	return &http.Client{
 		CheckRedirect: func(req *http.Request, _ []*http.Request) error {

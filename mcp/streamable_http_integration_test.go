@@ -222,82 +222,87 @@ func TestStreamableHTTP_HeadersForwarded(t *testing.T) {
 	}
 }
 
-// TestStreamableHTTP_RefusesRedirect guards the GO-2026-6911 mitigation:
+// TestHTTPTransports_RefuseRedirect guards the GO-2026-6911 mitigation:
 // mcp-go's Streamable HTTP transport would follow a 3xx to any host and
-// re-send the configured headers there. squad's client must refuse the
-// redirect, so the redirect target never receives a request or a token.
-func TestStreamableHTTP_RefusesRedirect(t *testing.T) {
+// re-send the configured headers there, and its SSE transport would forward
+// them too. squad's client must refuse the redirect on both transports, so
+// the redirect target never receives a request or a token.
+func TestHTTPTransports_RefuseRedirect(t *testing.T) {
 	const sentinel = "Bearer redirect-secret"
 
-	targetHits := make(chan string, 16)
-	target := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	for _, transport := range []string{"streamable_http", "sse"} {
+		t.Run(transport, func(t *testing.T) {
+			targetHits := make(chan string, 16)
+			target := &http.Server{
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					select {
+					case targetHits <- r.Header.Get("Authorization"):
+					default:
+					}
+					w.WriteHeader(http.StatusOK)
+				}),
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+			targetLn, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen target: %v", err)
+			}
+			go func() { _ = target.Serve(targetLn) }()
+			targetURL := "http://" + targetLn.Addr().String() + "/mcp"
+
+			originHits := make(chan string, 16)
+			origin := &http.Server{
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					select {
+					case originHits <- r.Header.Get("Authorization"):
+					default:
+					}
+					http.Redirect(w, r, targetURL, http.StatusTemporaryRedirect)
+				}),
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+			originLn, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen origin: %v", err)
+			}
+			go func() { _ = origin.Serve(originLn) }()
+
+			t.Cleanup(func() {
+				shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = origin.Shutdown(shutCtx)
+				_ = target.Shutdown(shutCtx)
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			client, err := mcppkg.Connect(ctx, mcppkg.ServerConfig{
+				Name:      "redirect",
+				Transport: transport,
+				URL:       "http://" + originLn.Addr().String() + "/mcp",
+				Headers:   []string{"Authorization=" + sentinel},
+			})
+			if err == nil {
+				_ = client.Close()
+				t.Fatal("Connect succeeded through a redirect; want it refused")
+			}
+			if !strings.Contains(err.Error(), "refusing to follow HTTP redirect") {
+				t.Errorf("Connect error = %v, want redirect refusal", err)
+			}
+
 			select {
-			case targetHits <- r.Header.Get("Authorization"):
+			case h := <-originHits:
+				if h != sentinel {
+					t.Errorf("origin Authorization = %q, want %q", h, sentinel)
+				}
+			default:
+				t.Fatal("origin server never saw the request")
+			}
+			select {
+			case h := <-targetHits:
+				t.Fatalf("redirect target received a request (Authorization=%q); redirect was followed", h)
 			default:
 			}
-			w.WriteHeader(http.StatusOK)
-		}),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	targetLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen target: %v", err)
-	}
-	go func() { _ = target.Serve(targetLn) }()
-	targetURL := "http://" + targetLn.Addr().String() + "/mcp"
-
-	originHits := make(chan string, 16)
-	origin := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			select {
-			case originHits <- r.Header.Get("Authorization"):
-			default:
-			}
-			http.Redirect(w, r, targetURL, http.StatusTemporaryRedirect)
-		}),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	originLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen origin: %v", err)
-	}
-	go func() { _ = origin.Serve(originLn) }()
-
-	t.Cleanup(func() {
-		shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = origin.Shutdown(shutCtx)
-		_ = target.Shutdown(shutCtx)
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	client, err := mcppkg.Connect(ctx, mcppkg.ServerConfig{
-		Name:      "redirect",
-		Transport: "streamable_http",
-		URL:       "http://" + originLn.Addr().String() + "/mcp",
-		Headers:   []string{"Authorization=" + sentinel},
-	})
-	if err == nil {
-		_ = client.Close()
-		t.Fatal("Connect succeeded through a redirect; want it refused")
-	}
-	if !strings.Contains(err.Error(), "refusing to follow HTTP redirect") {
-		t.Errorf("Connect error = %v, want redirect refusal", err)
-	}
-
-	select {
-	case h := <-originHits:
-		if h != sentinel {
-			t.Errorf("origin Authorization = %q, want %q", h, sentinel)
-		}
-	default:
-		t.Fatal("origin server never saw the request")
-	}
-	select {
-	case h := <-targetHits:
-		t.Fatalf("redirect target received a request (Authorization=%q); redirect was followed", h)
-	default:
+		})
 	}
 }
