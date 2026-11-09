@@ -26,7 +26,7 @@ require (
 	github.com/openai/openai-go/v3 v3.96.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/spf13/viper v1.21.0
 	github.com/tmc/langchaingo v0.1.15
 	go.opentelemetry.io/otel v1.47.0
