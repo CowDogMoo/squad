@@ -219,7 +219,7 @@ Prompt tokens that go through a provider's prompt cache are billed at their own 
 | Component   | Tokens                                   | Rate                                                                                       |
 | ----------- | ---------------------------------------- | ------------------------------------------------------------------------------------------ |
 | input       | Prompt tokens that did not use the cache | The model's input price                                                                    |
-| cache read  | Prompt tokens served from the cache      | The model's cache-read price (on Claude, 0.1x the input price for most models)             |
+| cache read  | Prompt tokens served from the cache      | The model's cache-read price (on Claude, 0.1x the input price)                             |
 | cache write | Prompt tokens written to the cache       | The model's cache-write price (on Claude, 1.25x the input price, or 2x for a 1-hour cache) |
 | output      | Generated tokens                         | The model's output price                                                                   |
 

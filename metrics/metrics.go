@@ -375,7 +375,7 @@ func (p Pricing) Cost(u Usage) CostBreakdown {
 // price. These are the multipliers from Anthropic's pricing documentation,
 // https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching
 // (read 2026-11-11): a five-minute cache write costs 1.25x, a one-hour cache
-// write costs 2x, and a cache read costs 0.1x on most models.
+// write costs 2x, and a cache read costs 0.1x.
 //
 // They are the fallback for a Claude model whose LiteLLM entry carries no
 // cache prices; an entry's own per-model cache prices take precedence.
@@ -384,34 +384,6 @@ const (
 	anthropicCacheWrite1hMultiplier = 2.0
 	anthropicCacheReadMultiplier    = 0.1
 )
-
-// anthropicCacheReadOverrides lists the models the same pricing page prices
-// below the standard cache-read multiplier: 0.025x for Claude Fable and
-// Mythos 5.1 and 5.2, and 0.05x for Claude Opus 5.5 and Sonnet 5.5. Each key
-// is matched as a substring of the lower-cased model name so dated and
-// platform-prefixed names resolve too.
-var anthropicCacheReadOverrides = []struct {
-	model      string
-	multiplier float64
-}{
-	{"claude-fable-5-2", 0.025},
-	{"claude-mythos-5-2", 0.025},
-	{"claude-fable-5-1", 0.025},
-	{"claude-mythos-5-1", 0.025},
-	{"claude-opus-5-5", 0.05},
-	{"claude-sonnet-5-5", 0.05},
-}
-
-// anthropicCacheReadMultiplierFor returns the cache-read multiplier for a
-// lower-cased Claude model name.
-func anthropicCacheReadMultiplierFor(model string) float64 {
-	for _, o := range anthropicCacheReadOverrides {
-		if strings.Contains(model, o.model) {
-			return o.multiplier
-		}
-	}
-	return anthropicCacheReadMultiplier
-}
 
 // isAnthropicModel reports whether provider and model (both lower-cased)
 // name a Claude model, whichever platform serves it.
@@ -435,7 +407,7 @@ func pricingFromEntry(provider, model string, entry liteLLMModel) Pricing {
 	if p.CacheReadPerMillion <= 0 {
 		p.CacheReadPerMillion = p.InputPerMillion
 		if anthropic {
-			p.CacheReadPerMillion = p.InputPerMillion * anthropicCacheReadMultiplierFor(model)
+			p.CacheReadPerMillion = p.InputPerMillion * anthropicCacheReadMultiplier
 		}
 	}
 	if p.CacheWritePerMillion <= 0 {
@@ -777,6 +749,22 @@ func (m *Metrics) UsageLogLine() string {
 	return fmt.Sprintf("tokens: input=%d cache_read=%d cache_write=%d output=%d; cost: input=$%.4f cache_read=$%.4f cache_write=$%.4f output=$%.4f total=$%.4f",
 		u.InputTokens, u.CacheReadTokens, u.TotalCacheWriteTokens(), u.OutputTokens,
 		b.Input, b.CacheRead, b.CacheWrite, b.Output, b.Total())
+}
+
+// ProgressTokens returns the run's own token counts for a per-iteration log
+// line as "tokens=<input>/<output>", where input is every prompt token. The
+// share of that input read from or written to a prompt cache follows only
+// when it is non-zero, so a run that never used the cache logs the short form.
+func (m *Metrics) ProgressTokens() string {
+	u := m.Usage()
+	s := fmt.Sprintf("tokens=%d/%d", u.TotalInputTokens(), u.OutputTokens)
+	if u.CacheReadTokens > 0 {
+		s += fmt.Sprintf(", cache_read=%d", u.CacheReadTokens)
+	}
+	if w := u.TotalCacheWriteTokens(); w > 0 {
+		s += fmt.Sprintf(", cache_write=%d", w)
+	}
+	return s
 }
 
 // Summary returns a multi-line summary of the recorded metrics.

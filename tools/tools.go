@@ -418,9 +418,8 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 // logIterationStart logs the current iteration number with cost/token info if metrics are available.
 func logIterationStart(ctx context.Context, i, maxIter int, m *metrics.Metrics) {
 	if m != nil {
-		u := m.Usage()
-		logging.InfoContext(ctx, "model iteration %d/%d (cost=$%.4f, tokens: input=%d cache_read=%d cache_write=%d output=%d)",
-			i+1, maxIter, m.TotalCostWithChildren(), u.InputTokens, u.CacheReadTokens, u.TotalCacheWriteTokens(), u.OutputTokens)
+		logging.InfoContext(ctx, "model iteration %d/%d (cost=$%.4f, %s)",
+			i+1, maxIter, m.TotalCostWithChildren(), m.ProgressTokens())
 	} else {
 		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxIter)
 	}
@@ -841,16 +840,18 @@ func usageFromGenerationInfo(gi map[string]any) metrics.Usage {
 	return u
 }
 
-func extractTokenUsage(gi map[string]any, m *metrics.Metrics, ctx ...context.Context) {
+// extractTokenUsage adds the token counts in gi to m and reports whether gi
+// carried any.
+func extractTokenUsage(gi map[string]any, m *metrics.Metrics, ctx ...context.Context) bool {
 	if m == nil {
-		return
+		return false
 	}
 	usage := usageFromGenerationInfo(gi)
 	input := usage.TotalInputTokens()
-
-	if input > 0 || usage.OutputTokens > 0 {
-		m.AddUsage(usage)
+	if input == 0 && usage.OutputTokens == 0 {
+		return false
 	}
+	m.AddUsage(usage)
 
 	// Feed actual input token count into calibration if context is available.
 	if input > 0 && len(ctx) > 0 {
@@ -858,6 +859,19 @@ func extractTokenUsage(gi map[string]any, m *metrics.Metrics, ctx ...context.Con
 			// We don't have the exact estimated count here, but we record
 			// it so the overall ratio can be calibrated from total counts.
 			tc.Record(int(input), int(input)) // self-calibrating baseline
+		}
+	}
+	return true
+}
+
+// recordResponseUsage adds one response's token usage to m. Usage belongs to
+// the response, but providers copy it into every choice's GenerationInfo, and
+// Anthropic returns each content block as its own choice, so it is read from
+// the first choice that reports tokens.
+func recordResponseUsage(ctx context.Context, choices []*llms.ContentChoice, m *metrics.Metrics) {
+	for _, ch := range choices {
+		if extractTokenUsage(ch.GenerationInfo, m, ctx) {
+			return
 		}
 	}
 }
@@ -871,15 +885,13 @@ func mergeChoices(ctx context.Context, choices []*llms.ContentChoice, m *metrics
 	for _, ch := range choices {
 		if gi := ch.GenerationInfo; gi != nil {
 			logging.DebugContext(ctx, "generation info: %v", gi)
-			if m != nil {
-				extractTokenUsage(gi, m, ctx)
-			}
 		}
 		if ch.Content != "" {
 			content = ch.Content
 		}
 		toolCalls = append(toolCalls, ch.ToolCalls...)
 	}
+	recordResponseUsage(ctx, choices, m)
 	return content, toolCalls
 }
 
@@ -935,9 +947,7 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 	if err == nil && response != nil && len(response.Choices) > 0 {
 		if m != nil {
 			m.IncrementIterations()
-			if gi := response.Choices[0].GenerationInfo; gi != nil {
-				extractTokenUsage(gi, m, ctx)
-			}
+			recordResponseUsage(ctx, response.Choices, m)
 		}
 		if response.Choices[0].Content != "" {
 			logging.InfoContext(ctx, "final call produced response (%d bytes)", len(response.Choices[0].Content))

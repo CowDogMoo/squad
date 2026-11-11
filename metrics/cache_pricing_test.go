@@ -156,10 +156,6 @@ func TestGetPricingCacheRates(t *testing.T) {
 			CacheReadInputTokenCost: 1e-7, CacheCreationInputTokenCost: 3e-6, CacheCreationInputTokenCost1h: 5e-6,
 		},
 		baselineModel:           {InputCostPerToken: 2e-6, OutputCostPerToken: 1e-5},
-		"claude-sonnet-5-5":     {InputCostPerToken: 2e-6, OutputCostPerToken: 1e-5},
-		"claude-opus-5-5":       {InputCostPerToken: 4e-6, OutputCostPerToken: 2e-5},
-		"claude-fable-5-2":      {InputCostPerToken: 8e-6, OutputCostPerToken: 4e-5},
-		"claude-mythos-5-1":     {InputCostPerToken: 1e-5, OutputCostPerToken: 5e-5},
 		"gpt-cached-test":       {InputCostPerToken: 1e-6, OutputCostPerToken: 8e-6, CacheReadInputTokenCost: 1e-7},
 		"gpt-uncached-test":     {InputCostPerToken: 1e-6, OutputCostPerToken: 8e-6},
 		"bedrock/claude-hosted": {InputCostPerToken: 3e-6, OutputCostPerToken: 1.5e-5},
@@ -172,10 +168,6 @@ func TestGetPricingCacheRates(t *testing.T) {
 		{"listed cache prices", "anthropic", "claude-listed-test", 0.10, 3.00, 5.00},
 		{"standard multipliers", "anthropic", baselineModel, 0.20, 2.50, 4.00},
 		{"claude-code uses the same rates", "claude-code", baselineModel, 0.20, 2.50, 4.00},
-		{"sonnet 5.5 cache read", "anthropic", "claude-sonnet-5-5", 0.10, 2.50, 4.00},
-		{"opus 5.5 cache read", "anthropic", "claude-opus-5-5", 0.20, 5.00, 8.00},
-		{"fable 5.2 cache read", "claude-code", "claude-fable-5-2", 0.20, 10.00, 16.00},
-		{"mythos 5.1 cache read", "anthropic", "claude-mythos-5-1", 0.25, 12.50, 20.00},
 		{"claude on another platform", "anthropic", "claude-hosted", 0.30, 3.75, 6.00},
 		{"other provider with a listed cache read price", "openai", "gpt-cached-test", 0.10, 1.00, 1.00},
 		{"other provider without cache prices", "openai", "gpt-uncached-test", 1.00, 1.00, 1.00},
@@ -220,6 +212,35 @@ func TestSummaryNamesCacheComponents(t *testing.T) {
 	plain.Finish()
 	if s := plain.Summary(); strings.Contains(s, "cache") || strings.Contains(s, "Cost split") {
 		t.Errorf("Summary of an uncached run names cache components:\n%s", s)
+	}
+}
+
+func TestProgressTokensNamesCacheFieldsOnlyWhenUsed(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		usage Usage
+		want  string
+	}{
+		{"no tokens yet", Usage{}, "tokens=0/0"},
+		{"no cache activity", Usage{InputTokens: 1000, OutputTokens: 500}, "tokens=1000/500"},
+		{
+			"cache read and write",
+			Usage{InputTokens: 100, CacheReadTokens: 9000, CacheWriteTokens: 400, CacheWrite1hTokens: 300, OutputTokens: 50},
+			"tokens=9800/50, cache_read=9000, cache_write=700",
+		},
+		{"cache read only", Usage{InputTokens: 200, CacheReadTokens: 800, OutputTokens: 50}, "tokens=1000/50, cache_read=800"},
+		{"cache write only", Usage{InputTokens: 200, CacheWriteTokens: 800, OutputTokens: 50}, "tokens=1000/50, cache_write=800"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := New("anthropic", "claude-test")
+			m.AddUsage(tt.usage)
+			if got := m.ProgressTokens(); got != tt.want {
+				t.Errorf("ProgressTokens = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

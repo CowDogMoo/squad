@@ -240,9 +240,8 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 
 		logEvent(logger, session.EventIteration, map[string]any{"index": i + 1, "tool_calls": len(calls)})
 		if m != nil {
-			u := m.Usage()
-			logging.InfoContext(ctx, "responses API: iteration %d/%d with %d tool call(s) (cost=$%.4f, tokens: input=%d cache_read=%d cache_write=%d output=%d)",
-				i+1, maxIter, len(calls), m.TotalCostWithChildren(), u.InputTokens, u.CacheReadTokens, u.TotalCacheWriteTokens(), u.OutputTokens)
+			logging.InfoContext(ctx, "responses API: iteration %d/%d with %d tool call(s) (cost=$%.4f, %s)",
+				i+1, maxIter, len(calls), m.TotalCostWithChildren(), m.ProgressTokens())
 		} else {
 			logging.InfoContext(ctx, "responses API: iteration %d/%d with %d tool call(s)", i+1, maxIter, len(calls))
 		}

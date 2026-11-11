@@ -3753,3 +3753,76 @@ func TestUsageFromGenerationInfoSplitsCachedTokens(t *testing.T) {
 		})
 	}
 }
+
+// Anthropic returns each content block as its own choice and repeats the
+// response's usage on every one of them. A response's usage must be counted
+// once however many blocks it has, on both the tool-loop and final-call paths.
+func TestRunWithToolsCountsMultiBlockResponseUsageOnce(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		maxIterations int
+	}{
+		{"second response ends the tool loop", 2},
+		{"second response is the final call after the iteration limit", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hello"), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+
+			toolTurnUsage := func() map[string]any {
+				return map[string]any{
+					"InputTokens": 100, "OutputTokens": 50,
+					"CacheReadInputTokens": 9000, "CacheCreationInputTokens": 700,
+				}
+			}
+			finalTurnUsage := func() map[string]any {
+				return map[string]any{
+					"InputTokens": 20, "OutputTokens": 10,
+					"CacheReadInputTokens": 9700, "CacheCreationInputTokens": 150,
+				}
+			}
+			llm := &fakeLLM{responses: []*llms.ContentResponse{
+				{Choices: []*llms.ContentChoice{
+					{Content: "Reading the note.", GenerationInfo: toolTurnUsage()},
+					{
+						ToolCalls: []llms.ToolCall{{
+							ID:           "toolu_1",
+							Type:         "function",
+							FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{"path":"note.txt"}`},
+						}},
+						GenerationInfo: toolTurnUsage(),
+					},
+				}},
+				{Choices: []*llms.ContentChoice{
+					{Content: "The note says hello.", GenerationInfo: finalTurnUsage()},
+					{Content: "Nothing else to report.", GenerationInfo: finalTurnUsage()},
+				}},
+			}}
+
+			m := metrics.New("anthropic", "claude-test")
+			if _, err := RunWithTools(context.Background(), llm, "", "user", dir, RunWithToolsConfig{
+				MaxIterations: tt.maxIterations,
+				Metrics:       m,
+				Executor:      &executor.LocalExecutor{WorkingDir: dir},
+			}); err != nil {
+				t.Fatalf("RunWithTools() error = %v", err)
+			}
+			if llm.calls != 2 {
+				t.Fatalf("model calls = %d, want 2", llm.calls)
+			}
+
+			want := metrics.Usage{InputTokens: 120, CacheReadTokens: 18700, CacheWriteTokens: 850, OutputTokens: 60}
+			if got := m.Usage(); got != want {
+				t.Errorf("usage = %+v, want %+v (each response counted once)", got, want)
+			}
+			if got := m.InputTokens(); got != 19670 {
+				t.Errorf("InputTokens = %d, want 19670", got)
+			}
+		})
+	}
+}
