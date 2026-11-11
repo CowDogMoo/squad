@@ -3684,3 +3684,72 @@ func TestExecuteToolCallDeniesUnallowedTool(t *testing.T) {
 		t.Errorf("response Name = %q, want Bash", resp.Name)
 	}
 }
+
+func TestUsageFromGenerationInfoSplitsCachedTokens(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		gi   map[string]any
+		want metrics.Usage
+	}{
+		{
+			// Anthropic counts cached tokens outside InputTokens.
+			name: "anthropic cache read and write",
+			gi: map[string]any{
+				"InputTokens": 100, "OutputTokens": 50,
+				"CacheReadInputTokens": 9000, "CacheCreationInputTokens": 700,
+			},
+			want: metrics.Usage{InputTokens: 100, CacheReadTokens: 9000, CacheWriteTokens: 700, OutputTokens: 50},
+		},
+		{
+			name: "anthropic without cache activity",
+			gi: map[string]any{
+				"InputTokens": 100, "OutputTokens": 50,
+				"CacheReadInputTokens": 0, "CacheCreationInputTokens": 0,
+			},
+			want: metrics.Usage{InputTokens: 100, OutputTokens: 50},
+		},
+		{
+			// OpenAI counts cached tokens inside PromptTokens.
+			name: "openai cached prompt tokens",
+			gi: map[string]any{
+				"PromptTokens": 1000, "CompletionTokens": 50, "PromptCachedTokens": 800,
+			},
+			want: metrics.Usage{InputTokens: 200, CacheReadTokens: 800, OutputTokens: 50},
+		},
+		{
+			// Gemini also counts cached tokens inside PromptTokens, and
+			// reports them under the Anthropic-style key.
+			name: "gemini cached content tokens",
+			gi: map[string]any{
+				"PromptTokens": 1000, "CompletionTokens": 50,
+				"CacheReadInputTokens": 600, "NonCachedInputTokens": 400,
+			},
+			want: metrics.Usage{InputTokens: 400, CacheReadTokens: 600, OutputTokens: 50},
+		},
+		{
+			name: "cached count larger than the prompt is clamped",
+			gi:   map[string]any{"PromptTokens": 100, "PromptCachedTokens": 500},
+			want: metrics.Usage{CacheReadTokens: 100},
+		},
+		{
+			name: "provider without cache data",
+			gi:   map[string]any{"PromptTokens": 300, "CompletionTokens": 20},
+			want: metrics.Usage{InputTokens: 300, OutputTokens: 20},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := usageFromGenerationInfo(tt.gi); got != tt.want {
+				t.Errorf("usageFromGenerationInfo = %+v, want %+v", got, tt.want)
+			}
+
+			m := metrics.New("anthropic", "claude-test")
+			extractTokenUsage(tt.gi, m)
+			if got := m.Usage(); got != tt.want {
+				t.Errorf("metrics usage = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}

@@ -75,7 +75,7 @@ func TestNewSetsSessionLayout(t *testing.T) {
 func TestUpdateMetricsAndFinishPersistMeta(t *testing.T) {
 	l, _ := newTestLogger(t)
 	l.SetLastResponseID("resp_abc123")
-	l.UpdateMetrics(100, 50, 0.0123, 3)
+	l.UpdateMetrics(TokenTotals{Input: 100, CacheRead: 70, CacheWrite: 20, Output: 50}, 0.0123, 3)
 	l.Finish(StatusCompleted, "")
 
 	meta := readMeta(t, l)
@@ -87,6 +87,9 @@ func TestUpdateMetricsAndFinishPersistMeta(t *testing.T) {
 	}
 	if meta.InputTokens != 100 || meta.OutputTokens != 50 || meta.Iterations != 3 {
 		t.Fatalf("metrics not persisted: %+v", meta)
+	}
+	if meta.CacheReadTokens != 70 || meta.CacheWriteTokens != 20 {
+		t.Fatalf("cache tokens not persisted: %+v", meta)
 	}
 }
 
@@ -245,7 +248,7 @@ func TestNilLoggerSafe(t *testing.T) {
 		t.Fatalf("Append on nil: %v", err)
 	}
 	l.SetLastResponseID("x")
-	l.UpdateMetrics(1, 2, 3, 4)
+	l.UpdateMetrics(TokenTotals{Input: 1, Output: 2}, 3, 4)
 	l.Finish(StatusCompleted, "")
 	if err := l.Close(); err != nil {
 		t.Fatalf("Close on nil: %v", err)
@@ -470,7 +473,7 @@ func TestPersistenceErrorsAreLogged(t *testing.T) {
 	// logging.Warn branch on writeMeta failure.
 	l.SetLastResponseID("resp-x")
 	l.SetRoutineID("global:any")
-	l.UpdateMetrics(1, 2, 0.5, 3)
+	l.UpdateMetrics(TokenTotals{Input: 1, Output: 2}, 0.5, 3)
 
 	// Finish exercises both the appendLocked failure path and the
 	// trailing writeMeta failure path.

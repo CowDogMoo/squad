@@ -129,10 +129,28 @@ func TestParseOutput(t *testing.T) {
 		wantInput  int64
 		wantOutput int64
 		wantTurns  int
+		// Prompt-cache counts, which must stay out of wantInput: they are
+		// billed at their own rates.
+		wantCacheRead    int64
+		wantCacheWrite   int64
+		wantCacheWrite1h int64
 	}{
 		{
 			name: "claude success", provider: "claude-code", stdout: claudeSuccess,
-			wantResp: "done", wantInput: 306, wantOutput: 9, wantTurns: 3,
+			wantResp: "done", wantInput: 6, wantOutput: 9, wantTurns: 3,
+			wantCacheRead: 200, wantCacheWrite: 100,
+		},
+		{
+			name: "claude splits cache writes by lifetime", provider: "claude-code",
+			stdout:   `{"is_error":false,"num_turns":1,"result":"done","usage":{"input_tokens":6,"cache_creation_input_tokens":100,"cache_read_input_tokens":200,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":70},"output_tokens":9}}`,
+			wantResp: "done", wantInput: 6, wantOutput: 9, wantTurns: 1,
+			wantCacheRead: 200, wantCacheWrite: 30, wantCacheWrite1h: 70,
+		},
+		{
+			name: "claude one-hour share never exceeds the reported writes", provider: "claude-code",
+			stdout:   `{"is_error":false,"num_turns":1,"result":"done","usage":{"input_tokens":6,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_1h_input_tokens":500},"output_tokens":9}}`,
+			wantResp: "done", wantInput: 6, wantOutput: 9, wantTurns: 1,
+			wantCacheWrite1h: 100,
 		},
 		{
 			name: "claude is_error", provider: "claude-code",
@@ -184,6 +202,11 @@ func TestParseOutput(t *testing.T) {
 			}
 			if res.InputTokens != tt.wantInput || res.OutputTokens != tt.wantOutput {
 				t.Errorf("tokens = %d/%d, want %d/%d", res.InputTokens, res.OutputTokens, tt.wantInput, tt.wantOutput)
+			}
+			if res.CacheReadTokens != tt.wantCacheRead || res.CacheWriteTokens != tt.wantCacheWrite || res.CacheWrite1hTokens != tt.wantCacheWrite1h {
+				t.Errorf("cache tokens = %d read / %d write / %d one-hour write, want %d / %d / %d",
+					res.CacheReadTokens, res.CacheWriteTokens, res.CacheWrite1hTokens,
+					tt.wantCacheRead, tt.wantCacheWrite, tt.wantCacheWrite1h)
 			}
 			if res.Turns != tt.wantTurns {
 				t.Errorf("Turns = %d, want %d", res.Turns, tt.wantTurns)

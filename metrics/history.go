@@ -11,16 +11,21 @@ import (
 )
 
 // HistorySample records the token usage from a single agent run.
+//
+// InputTokens is every prompt token the run sent. CacheReadTokens and
+// CacheWriteTokens say how many of those went through the prompt cache.
 type HistorySample struct {
-	Agent        string    `json:"agent"`
-	Model        string    `json:"model"`
-	Provider     string    `json:"provider"`
-	InputTokens  int64     `json:"input_tokens"`
-	OutputTokens int64     `json:"output_tokens"`
-	Iterations   int       `json:"iterations"`
-	Cost         float64   `json:"cost"`
-	DurationSecs float64   `json:"duration_secs"`
-	Timestamp    time.Time `json:"timestamp"`
+	Agent            string    `json:"agent"`
+	Model            string    `json:"model"`
+	Provider         string    `json:"provider"`
+	InputTokens      int64     `json:"input_tokens"`
+	CacheReadTokens  int64     `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64     `json:"cache_write_tokens,omitempty"`
+	OutputTokens     int64     `json:"output_tokens"`
+	Iterations       int       `json:"iterations"`
+	Cost             float64   `json:"cost"`
+	DurationSecs     float64   `json:"duration_secs"`
+	Timestamp        time.Time `json:"timestamp"`
 }
 
 // HistoryFile holds the list of samples for an agent.
@@ -52,16 +57,19 @@ func LogRunHistory(cacheDir, agentName string, m *Metrics) {
 		_ = json.Unmarshal(data, &hf) // ignore parse errors on corrupt file
 	}
 
+	usage := m.Usage()
 	sample := HistorySample{
-		Agent:        agentName,
-		Model:        m.Model,
-		Provider:     m.Provider,
-		InputTokens:  m.InputTokens(),
-		OutputTokens: m.OutputTokens(),
-		Iterations:   m.Iterations(),
-		Cost:         m.TotalCostWithChildren(),
-		DurationSecs: m.Duration().Seconds(),
-		Timestamp:    time.Now().UTC(),
+		Agent:            agentName,
+		Model:            m.Model,
+		Provider:         m.Provider,
+		InputTokens:      usage.TotalInputTokens(),
+		CacheReadTokens:  usage.CacheReadTokens,
+		CacheWriteTokens: usage.TotalCacheWriteTokens(),
+		OutputTokens:     usage.OutputTokens,
+		Iterations:       m.Iterations(),
+		Cost:             m.TotalCostWithChildren(),
+		DurationSecs:     m.Duration().Seconds(),
+		Timestamp:        time.Now().UTC(),
 	}
 
 	hf.Samples = append(hf.Samples, sample)

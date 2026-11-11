@@ -303,3 +303,36 @@ func TestExecuteRunAgenticCLIOutsideGitRepo(t *testing.T) {
 		t.Error("RequireActionable still true, want auto-disabled outside a git repo")
 	}
 }
+
+// A claude run that leans on the prompt cache must reach the metrics with
+// the cached tokens kept apart from fresh input, so they are not all priced
+// at the full input rate.
+func TestInvokeAgenticCLIKeepsCacheTokensSeparate(t *testing.T) {
+	repo := initTestGitRepo(t)
+	binDir := t.TempDir()
+	script := "#!/bin/sh\ncat > /dev/null\n" +
+		`printf '%s' '{"is_error":false,"num_turns":2,"result":"done","usage":{"input_tokens":100,"cache_creation_input_tokens":235567,"cache_read_input_tokens":3423514,"cache_creation":{"ephemeral_5m_input_tokens":200000,"ephemeral_1h_input_tokens":35567},"output_tokens":50728}}'` + "\n"
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	bundle := &agent.Bundle{WorkDir: repo, User: "review the repo"}
+	_, m, err := invokeAgenticCLI(context.Background(), &RunOptions{}, "claude-code", "", "sys", bundle, metrics.New("claude-code", ""))
+	if err != nil {
+		t.Fatalf("invokeAgenticCLI: %v", err)
+	}
+	want := metrics.Usage{
+		InputTokens:        100,
+		CacheReadTokens:    3423514,
+		CacheWriteTokens:   200000,
+		CacheWrite1hTokens: 35567,
+		OutputTokens:       50728,
+	}
+	if got := m.Usage(); got != want {
+		t.Errorf("usage = %+v, want %+v", got, want)
+	}
+	if got := m.InputTokens(); got != 3659181 {
+		t.Errorf("InputTokens = %d, want 3659181 (every prompt token)", got)
+	}
+}

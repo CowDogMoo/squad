@@ -418,8 +418,9 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 // logIterationStart logs the current iteration number with cost/token info if metrics are available.
 func logIterationStart(ctx context.Context, i, maxIter int, m *metrics.Metrics) {
 	if m != nil {
-		logging.InfoContext(ctx, "model iteration %d/%d (cost=$%.4f, tokens=%d/%d)",
-			i+1, maxIter, m.TotalCostWithChildren(), m.InputTokens(), m.OutputTokens())
+		u := m.Usage()
+		logging.InfoContext(ctx, "model iteration %d/%d (cost=$%.4f, tokens: input=%d cache_read=%d cache_write=%d output=%d)",
+			i+1, maxIter, m.TotalCostWithChildren(), u.InputTokens, u.CacheReadTokens, u.TotalCacheWriteTokens(), u.OutputTokens)
 	} else {
 		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxIter)
 	}
@@ -809,18 +810,46 @@ func extractToolResults(messages []llms.MessageContent) map[string]string {
 	return results
 }
 
+// usageFromGenerationInfo reads a provider's token counts out of a response's
+// GenerationInfo and splits the prompt tokens by billing class, so cached
+// tokens can be priced at their own rate instead of the full input rate.
+//
+// Providers disagree on whether the prompt count includes cached tokens:
+//
+//   - Anthropic reports "InputTokens" as fresh input only, with cache reads
+//     ("CacheReadInputTokens") and cache writes ("CacheCreationInputTokens")
+//     counted separately. It does not say how long a write lives, so writes
+//     are priced at the five-minute rate, which is the lifetime squad asks for.
+//   - OpenAI and Gemini report "PromptTokens" as the whole prompt, with the
+//     cached share ("PromptCachedTokens", or Gemini's "CacheReadInputTokens")
+//     already inside it.
+//
+// A provider that reports no cache counts yields plain input and output.
+func usageFromGenerationInfo(gi map[string]any) metrics.Usage {
+	u := metrics.Usage{
+		OutputTokens: extractTokenValue(gi, []string{"CompletionTokens", "completion_tokens", "OutputTokens", "output_tokens"}),
+	}
+	if prompt := extractTokenValue(gi, []string{"PromptTokens", "prompt_tokens"}); prompt > 0 {
+		cached := min(extractTokenValue(gi, []string{"PromptCachedTokens", "CacheReadInputTokens"}), prompt)
+		u.InputTokens = prompt - cached
+		u.CacheReadTokens = cached
+		return u
+	}
+	u.InputTokens = extractTokenValue(gi, []string{"InputTokens", "input_tokens"})
+	u.CacheReadTokens = extractTokenValue(gi, []string{"CacheReadInputTokens"})
+	u.CacheWriteTokens = extractTokenValue(gi, []string{"CacheCreationInputTokens"})
+	return u
+}
+
 func extractTokenUsage(gi map[string]any, m *metrics.Metrics, ctx ...context.Context) {
 	if m == nil {
 		return
 	}
-	inputKeys := []string{"PromptTokens", "prompt_tokens", "InputTokens", "input_tokens"}
-	outputKeys := []string{"CompletionTokens", "completion_tokens", "OutputTokens", "output_tokens"}
+	usage := usageFromGenerationInfo(gi)
+	input := usage.TotalInputTokens()
 
-	input := extractTokenValue(gi, inputKeys)
-	output := extractTokenValue(gi, outputKeys)
-
-	if input > 0 || output > 0 {
-		m.AddTokens(input, output)
+	if input > 0 || usage.OutputTokens > 0 {
+		m.AddUsage(usage)
 	}
 
 	// Feed actual input token count into calibration if context is available.

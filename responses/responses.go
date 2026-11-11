@@ -192,7 +192,23 @@ func trackResponseMetrics(resp *oairesponses.Response, m *metrics.Metrics) {
 	}
 	m.IncrementIterations()
 	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
-		m.AddTokens(resp.Usage.InputTokens, resp.Usage.OutputTokens)
+		m.AddUsage(responseUsage(resp))
+	}
+}
+
+// responseUsage splits a response's token counts by billing class. The
+// Responses API reports input_tokens as the whole prompt, with the tokens it
+// read from and wrote to the prompt cache broken out in input_tokens_details,
+// so both are taken out of the fresh-input count and priced at their own rate.
+func responseUsage(resp *oairesponses.Response) metrics.Usage {
+	input := max(resp.Usage.InputTokens, 0)
+	cacheRead := min(max(resp.Usage.InputTokensDetails.CachedTokens, 0), input)
+	cacheWrite := min(max(resp.Usage.InputTokensDetails.CacheWriteTokens, 0), input-cacheRead)
+	return metrics.Usage{
+		InputTokens:      input - cacheRead - cacheWrite,
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
+		OutputTokens:     resp.Usage.OutputTokens,
 	}
 }
 
@@ -224,8 +240,9 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 
 		logEvent(logger, session.EventIteration, map[string]any{"index": i + 1, "tool_calls": len(calls)})
 		if m != nil {
-			logging.InfoContext(ctx, "responses API: iteration %d/%d with %d tool call(s) (cost=$%.4f, tokens=%d/%d)",
-				i+1, maxIter, len(calls), m.TotalCostWithChildren(), m.InputTokens(), m.OutputTokens())
+			u := m.Usage()
+			logging.InfoContext(ctx, "responses API: iteration %d/%d with %d tool call(s) (cost=$%.4f, tokens: input=%d cache_read=%d cache_write=%d output=%d)",
+				i+1, maxIter, len(calls), m.TotalCostWithChildren(), u.InputTokens, u.CacheReadTokens, u.TotalCacheWriteTokens(), u.OutputTokens)
 		} else {
 			logging.InfoContext(ctx, "responses API: iteration %d/%d with %d tool call(s)", i+1, maxIter, len(calls))
 		}

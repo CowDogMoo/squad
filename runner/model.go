@@ -350,6 +350,8 @@ func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPro
 	}
 	span.SetAttributes(
 		attribute.Int64("gen_ai.usage.input_tokens", m.InputTokens()),
+		attribute.Int64("gen_ai.usage.cache_read.input_tokens", m.Usage().CacheReadTokens),
+		attribute.Int64("gen_ai.usage.cache_creation.input_tokens", m.Usage().TotalCacheWriteTokens()),
 		attribute.Int64("gen_ai.usage.output_tokens", m.OutputTokens()),
 		attribute.Float64("gen_ai.usage.cost_usd", m.Cost()),
 		attribute.Int("gen_ai.usage.iterations", m.Iterations()),

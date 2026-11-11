@@ -60,7 +60,13 @@ func invokeAgenticCLI(ctx context.Context, opts *RunOptions, provider, model, sy
 		ReadOnly:     modeRestrictsEdits(opts.Mode),
 	}
 	res, gate, err := runAgenticCLI(ctx, req)
-	m.AddTokens(res.InputTokens, res.OutputTokens)
+	m.AddUsage(metrics.Usage{
+		InputTokens:        res.InputTokens,
+		CacheReadTokens:    res.CacheReadTokens,
+		CacheWriteTokens:   res.CacheWriteTokens,
+		CacheWrite1hTokens: res.CacheWrite1hTokens,
+		OutputTokens:       res.OutputTokens,
+	})
 	m.AddIterations(res.Turns)
 	if gate != nil && gate.wasRejected() {
 		// The rejection interrupt cuts the CLI off mid-turn, so its result
@@ -77,6 +83,7 @@ func invokeAgenticCLI(ctx context.Context, opts *RunOptions, provider, model, sy
 	}
 	logging.InfoContext(ctx, "agentic CLI run finished in %s (turns=%d response-bytes=%d)",
 		m.Duration().Round(time.Millisecond), res.Turns, len(res.Response))
+	logging.InfoContext(ctx, "agentic CLI usage: %s", m.UsageLogLine())
 	return res.Response, m, nil
 }
 

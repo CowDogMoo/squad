@@ -74,12 +74,26 @@ type Meta struct {
 	LastResponseID    string    `json:"last_response_id,omitempty"`
 	// RoutineID identifies the routine that produced this session (qualified
 	// form: "global:nightly" / "repo:audit"). Empty for non-routine runs.
-	RoutineID    string  `json:"routine_id,omitempty"`
-	Status       string  `json:"status"`
-	InputTokens  int64   `json:"input_tokens"`
-	OutputTokens int64   `json:"output_tokens"`
-	Cost         float64 `json:"cost"`
-	Iterations   int     `json:"iterations"`
+	RoutineID string `json:"routine_id,omitempty"`
+	Status    string `json:"status"`
+	// InputTokens is every prompt token the run sent. CacheReadTokens and
+	// CacheWriteTokens say how many of those went through the prompt cache.
+	InputTokens      int64   `json:"input_tokens"`
+	CacheReadTokens  int64   `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64   `json:"cache_write_tokens,omitempty"`
+	OutputTokens     int64   `json:"output_tokens"`
+	Cost             float64 `json:"cost"`
+	Iterations       int     `json:"iterations"`
+}
+
+// TokenTotals is a run's cumulative token counts as recorded in meta.json.
+// Input is every prompt token; CacheRead and CacheWrite are the parts of it
+// that went through the prompt cache.
+type TokenTotals struct {
+	Input      int64
+	CacheRead  int64
+	CacheWrite int64
+	Output     int64
 }
 
 // Event is one append-only record written to events.jsonl.
@@ -300,14 +314,16 @@ func (l *Logger) SetRoutineID(id string) {
 
 // UpdateMetrics overwrites the cumulative token + cost fields in meta.json.
 // Pass the current totals from *metrics.Metrics; this is not additive.
-func (l *Logger) UpdateMetrics(inputTokens, outputTokens int64, cost float64, iterations int) {
+func (l *Logger) UpdateMetrics(tokens TokenTotals, cost float64, iterations int) {
 	if l == nil {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.meta.InputTokens = inputTokens
-	l.meta.OutputTokens = outputTokens
+	l.meta.InputTokens = tokens.Input
+	l.meta.CacheReadTokens = tokens.CacheRead
+	l.meta.CacheWriteTokens = tokens.CacheWrite
+	l.meta.OutputTokens = tokens.Output
 	l.meta.Cost = cost
 	l.meta.Iterations = iterations
 	l.meta.Updated = time.Now().UTC()
