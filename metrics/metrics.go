@@ -375,7 +375,9 @@ func (p Pricing) Cost(u Usage) CostBreakdown {
 // price. These are the multipliers from Anthropic's pricing documentation,
 // https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching
 // (read 2026-11-11): a five-minute cache write costs 1.25x, a one-hour cache
-// write costs 2x, and a cache read costs 0.1x.
+// write costs 2x, and a cache read costs 0.1x on most models. The page prices
+// cache reads lower on some newer models; those prices reach squad through
+// the models' LiteLLM entries.
 //
 // They are the fallback for a Claude model whose LiteLLM entry carries no
 // cache prices; an entry's own per-model cache prices take precedence.
