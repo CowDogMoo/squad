@@ -1369,3 +1369,59 @@ func TestFormatLargeResultPlaceholderContent(t *testing.T) {
 		})
 	}
 }
+
+// The Responses API counts cached tokens inside input_tokens; they must be
+// taken back out so they can be priced at the cached rate.
+func TestTrackResponseMetricsSplitsCachedTokens(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		usage oairesponses.ResponseUsage
+		want  metrics.Usage
+	}{
+		{
+			name: "cache read",
+			usage: oairesponses.ResponseUsage{
+				InputTokens:        1000,
+				InputTokensDetails: oairesponses.ResponseUsageInputTokensDetails{CachedTokens: 800},
+				OutputTokens:       500,
+			},
+			want: metrics.Usage{InputTokens: 200, CacheReadTokens: 800, OutputTokens: 500},
+		},
+		{
+			name: "cache read and write",
+			usage: oairesponses.ResponseUsage{
+				InputTokens:        1000,
+				InputTokensDetails: oairesponses.ResponseUsageInputTokensDetails{CachedTokens: 600, CacheWriteTokens: 300},
+				OutputTokens:       500,
+			},
+			want: metrics.Usage{InputTokens: 100, CacheReadTokens: 600, CacheWriteTokens: 300, OutputTokens: 500},
+		},
+		{
+			name: "details larger than the prompt are clamped",
+			usage: oairesponses.ResponseUsage{
+				InputTokens:        1000,
+				InputTokensDetails: oairesponses.ResponseUsageInputTokensDetails{CachedTokens: 900, CacheWriteTokens: 300},
+			},
+			want: metrics.Usage{CacheReadTokens: 900, CacheWriteTokens: 100},
+		},
+		{
+			name:  "no cache activity",
+			usage: oairesponses.ResponseUsage{InputTokens: 1000, OutputTokens: 500},
+			want:  metrics.Usage{InputTokens: 1000, OutputTokens: 500},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := metrics.New("openai", "gpt-test")
+			trackResponseMetrics(&oairesponses.Response{Usage: tt.usage}, m)
+			if got := m.Usage(); got != tt.want {
+				t.Errorf("usage = %+v, want %+v", got, tt.want)
+			}
+			if got := m.InputTokens(); got != tt.usage.InputTokens {
+				t.Errorf("InputTokens = %d, want %d (every prompt token)", got, tt.usage.InputTokens)
+			}
+		})
+	}
+}

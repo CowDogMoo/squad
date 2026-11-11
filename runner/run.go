@@ -830,7 +830,13 @@ func closeSession(l *session.Logger, m *metrics.Metrics, runErr error) {
 		return
 	}
 	if m != nil {
-		l.UpdateMetrics(m.InputTokens(), m.OutputTokens(), m.TotalCostWithChildren(), m.Iterations())
+		u := m.Usage()
+		l.UpdateMetrics(session.TokenTotals{
+			Input:      u.TotalInputTokens(),
+			CacheRead:  u.CacheReadTokens,
+			CacheWrite: u.TotalCacheWriteTokens(),
+			Output:     u.OutputTokens,
+		}, m.TotalCostWithChildren(), m.Iterations())
 	}
 	status := session.StatusCompleted
 	errMsg := ""

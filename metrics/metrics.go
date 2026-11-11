@@ -25,15 +25,96 @@ const (
 // ErrBudgetExceeded is returned when the configured cost budget is exhausted.
 var ErrBudgetExceeded = fmt.Errorf("cost budget exceeded")
 
+// Usage is a token count split into the classes providers bill at different
+// rates. The four input-side classes are disjoint: a prompt token is counted
+// in exactly one of them.
+type Usage struct {
+	// InputTokens is fresh input: prompt tokens neither read from nor
+	// written to a prompt cache.
+	InputTokens int64
+	// CacheReadTokens is prompt tokens served from a prompt cache.
+	CacheReadTokens int64
+	// CacheWriteTokens is prompt tokens written to a prompt cache with the
+	// provider's default lifetime (five minutes on Anthropic), or with a
+	// lifetime the provider did not report.
+	CacheWriteTokens int64
+	// CacheWrite1hTokens is prompt tokens written to a one-hour prompt cache.
+	CacheWrite1hTokens int64
+	// OutputTokens is generated tokens.
+	OutputTokens int64
+}
+
+// TotalInputTokens returns every prompt token: fresh input plus cache reads
+// and cache writes.
+func (u Usage) TotalInputTokens() int64 {
+	return u.InputTokens + u.CacheReadTokens + u.TotalCacheWriteTokens()
+}
+
+// TotalCacheWriteTokens returns cache writes of every lifetime.
+func (u Usage) TotalCacheWriteTokens() int64 {
+	return u.CacheWriteTokens + u.CacheWrite1hTokens
+}
+
+// add returns the element-wise sum of u and o.
+func (u Usage) add(o Usage) Usage {
+	return Usage{
+		InputTokens:        u.InputTokens + o.InputTokens,
+		CacheReadTokens:    u.CacheReadTokens + o.CacheReadTokens,
+		CacheWriteTokens:   u.CacheWriteTokens + o.CacheWriteTokens,
+		CacheWrite1hTokens: u.CacheWrite1hTokens + o.CacheWrite1hTokens,
+		OutputTokens:       u.OutputTokens + o.OutputTokens,
+	}
+}
+
+// CostBreakdown is a cost in USD split by the component that incurred it.
+type CostBreakdown struct {
+	Input      float64
+	CacheRead  float64
+	CacheWrite float64
+	Output     float64
+}
+
+// Total returns the sum of every component.
+func (c CostBreakdown) Total() float64 {
+	return c.Input + c.CacheRead + c.CacheWrite + c.Output
+}
+
 // ChildMetrics holds token usage from a single child agent run,
 // recorded in the parent [Metrics] by [Metrics.AddChild].
+//
+// InputTokens is every prompt token the child sent. The cache fields say how
+// many of those were cache reads and cache writes, so they are never larger
+// than InputTokens.
 type ChildMetrics struct {
-	Agent        string
-	InputTokens  int64
-	OutputTokens int64
-	Iterations   int
-	Model        string
-	Provider     string
+	Agent              string
+	InputTokens        int64
+	CacheReadTokens    int64
+	CacheWriteTokens   int64
+	CacheWrite1hTokens int64
+	OutputTokens       int64
+	Iterations         int
+	Model              string
+	Provider           string
+}
+
+// Usage returns the child's tokens split by billing class.
+func (c ChildMetrics) Usage() Usage {
+	fresh := c.InputTokens - c.CacheReadTokens - c.CacheWriteTokens - c.CacheWrite1hTokens
+	if fresh < 0 {
+		fresh = 0
+	}
+	return Usage{
+		InputTokens:        fresh,
+		CacheReadTokens:    c.CacheReadTokens,
+		CacheWriteTokens:   c.CacheWriteTokens,
+		CacheWrite1hTokens: c.CacheWrite1hTokens,
+		OutputTokens:       c.OutputTokens,
+	}
+}
+
+// Cost returns the child's estimated cost in USD at its own model's rates.
+func (c ChildMetrics) Cost() float64 {
+	return GetPricing(c.Provider, c.Model).Cost(c.Usage()).Total()
 }
 
 // Metrics tracks resource usage for an agent run.
@@ -45,11 +126,10 @@ type Metrics struct {
 	Provider  string
 	MaxCost   float64
 
-	mu           sync.Mutex
-	inputTokens  int64
-	outputTokens int64
-	iterations   int
-	Children     []ChildMetrics
+	mu         sync.Mutex
+	usage      Usage
+	iterations int
+	Children   []ChildMetrics
 }
 
 // New returns a Metrics instance with its start time set to now.
@@ -114,12 +194,25 @@ func (m *Metrics) MaxCostValue() float64 {
 	return m.MaxCost
 }
 
-// AddTokens adds input and output token counts to the run totals.
+// AddTokens adds fresh input and output token counts to the run totals.
+// Providers that report prompt-cache counts use [Metrics.AddUsage] instead so
+// the cached share is priced at its own rate.
 func (m *Metrics) AddTokens(input, output int64) {
+	m.AddUsage(Usage{InputTokens: input, OutputTokens: output})
+}
+
+// AddUsage adds token counts split by billing class to the run totals.
+func (m *Metrics) AddUsage(u Usage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.inputTokens += input
-	m.outputTokens += output
+	m.usage = m.usage.add(u)
+}
+
+// Usage returns the run's own token counts split by billing class.
+func (m *Metrics) Usage() Usage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.usage
 }
 
 // IncrementIterations increments the recorded model iteration count.
@@ -141,18 +234,19 @@ func (m *Metrics) AddIterations(n int) {
 	m.iterations += n
 }
 
-// InputTokens returns the current input token count.
+// InputTokens returns every prompt token sent so far: fresh input plus cache
+// reads and cache writes. [Metrics.Usage] splits the total by billing class.
 func (m *Metrics) InputTokens() int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.inputTokens
+	return m.usage.TotalInputTokens()
 }
 
 // OutputTokens returns the current output token count.
 func (m *Metrics) OutputTokens() int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.outputTokens
+	return m.usage.OutputTokens
 }
 
 // Iterations returns the current iteration count.
@@ -169,13 +263,17 @@ func (m *Metrics) AddChild(agent string, child *Metrics) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	u := child.Usage()
 	m.Children = append(m.Children, ChildMetrics{
-		Agent:        agent,
-		InputTokens:  child.InputTokens(),
-		OutputTokens: child.OutputTokens(),
-		Iterations:   child.Iterations(),
-		Model:        child.Model,
-		Provider:     child.Provider,
+		Agent:              agent,
+		InputTokens:        u.TotalInputTokens(),
+		CacheReadTokens:    u.CacheReadTokens,
+		CacheWriteTokens:   u.CacheWriteTokens,
+		CacheWrite1hTokens: u.CacheWrite1hTokens,
+		OutputTokens:       u.OutputTokens,
+		Iterations:         child.Iterations(),
+		Model:              child.Model,
+		Provider:           child.Provider,
 	})
 }
 
@@ -185,10 +283,7 @@ func (m *Metrics) TotalCostWithChildren() float64 {
 	defer m.mu.Unlock()
 	total := m.costLocked()
 	for _, c := range m.Children {
-		pricing := GetPricing(c.Provider, c.Model)
-		inputCost := float64(c.InputTokens) / 1_000_000 * pricing.InputPerMillion
-		outputCost := float64(c.OutputTokens) / 1_000_000 * pricing.OutputPerMillion
-		total += inputCost + outputCost
+		total += c.Cost()
 	}
 	return total
 }
@@ -197,7 +292,7 @@ func (m *Metrics) TotalCostWithChildren() float64 {
 func (m *Metrics) TotalTokensWithChildren() int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	total := m.inputTokens + m.outputTokens
+	total := m.usage.TotalInputTokens() + m.usage.OutputTokens
 	for _, c := range m.Children {
 		total += c.InputTokens + c.OutputTokens
 	}
@@ -225,7 +320,7 @@ func (m *Metrics) Duration() time.Duration {
 func (m *Metrics) TotalTokens() int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.inputTokens + m.outputTokens
+	return m.usage.TotalInputTokens() + m.usage.OutputTokens
 }
 
 // Cost calculates the estimated cost in USD based on model pricing.
@@ -235,25 +330,113 @@ func (m *Metrics) Cost() float64 {
 	return m.costLocked()
 }
 
+// CostBreakdown returns the run's own estimated cost in USD, split into
+// input, cache read, cache write, and output. Child runs are not included.
+func (m *Metrics) CostBreakdown() CostBreakdown {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return GetPricing(m.Provider, m.Model).Cost(m.usage)
+}
+
 // costLocked calculates cost; caller must hold m.mu.
 func (m *Metrics) costLocked() float64 {
-	pricing := GetPricing(m.Provider, m.Model)
-	inputCost := float64(m.inputTokens) / 1_000_000 * pricing.InputPerMillion
-	outputCost := float64(m.outputTokens) / 1_000_000 * pricing.OutputPerMillion
-	return inputCost + outputCost
+	return GetPricing(m.Provider, m.Model).Cost(m.usage).Total()
 }
 
 // Pricing holds per-million-token pricing for a model.
 type Pricing struct {
 	InputPerMillion  float64
 	OutputPerMillion float64
+	// CacheReadPerMillion prices prompt tokens served from a prompt cache.
+	CacheReadPerMillion float64
+	// CacheWritePerMillion prices prompt tokens written to a prompt cache
+	// with the default (five-minute) lifetime.
+	CacheWritePerMillion float64
+	// CacheWrite1hPerMillion prices prompt tokens written to a one-hour
+	// prompt cache.
+	CacheWrite1hPerMillion float64
+}
+
+// Cost prices u, charging each class of token at its own rate.
+func (p Pricing) Cost(u Usage) CostBreakdown {
+	perToken := func(tokens int64, perMillion float64) float64 {
+		return float64(tokens) / 1_000_000 * perMillion
+	}
+	return CostBreakdown{
+		Input:     perToken(u.InputTokens, p.InputPerMillion),
+		CacheRead: perToken(u.CacheReadTokens, p.CacheReadPerMillion),
+		CacheWrite: perToken(u.CacheWriteTokens, p.CacheWritePerMillion) +
+			perToken(u.CacheWrite1hTokens, p.CacheWrite1hPerMillion),
+		Output: perToken(u.OutputTokens, p.OutputPerMillion),
+	}
+}
+
+// Anthropic bills prompt-cache tokens as a multiple of the model's base input
+// price. These are the multipliers from Anthropic's pricing documentation,
+// https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching
+// (read 2026-11-11): a five-minute cache write costs 1.25x, a one-hour cache
+// write costs 2x, and a cache read costs 0.1x on most models. The page prices
+// cache reads lower on some newer models; those prices reach squad through
+// the models' LiteLLM entries.
+//
+// They are the fallback for a model on the anthropic or claude-code provider
+// whose LiteLLM entry carries no cache prices; an entry's own per-model cache
+// prices take precedence.
+const (
+	anthropicCacheWrite5mMultiplier = 1.25
+	anthropicCacheWrite1hMultiplier = 2.0
+	anthropicCacheReadMultiplier    = 0.1
+)
+
+// isAnthropicProvider reports whether provider (lower-cased) bills prompt-cache
+// tokens at Anthropic's rates.
+func isAnthropicProvider(provider string) bool {
+	return provider == "anthropic" || provider == "claude-code"
+}
+
+// pricingFromEntry converts a LiteLLM entry to per-million prices. Cache
+// prices come from the entry when it has them. Otherwise a model on an
+// Anthropic provider gets Anthropic's documented multiples of its input price,
+// and a model on any other provider is charged the plain input price for
+// cached tokens.
+func pricingFromEntry(provider string, entry liteLLMModel) Pricing {
+	p := Pricing{
+		InputPerMillion:        entry.InputCostPerToken * 1_000_000,
+		OutputPerMillion:       entry.OutputCostPerToken * 1_000_000,
+		CacheReadPerMillion:    entry.CacheReadInputTokenCost * 1_000_000,
+		CacheWritePerMillion:   entry.CacheCreationInputTokenCost * 1_000_000,
+		CacheWrite1hPerMillion: entry.CacheCreationInputTokenCost1h * 1_000_000,
+	}
+	anthropic := isAnthropicProvider(provider)
+	if p.CacheReadPerMillion <= 0 {
+		p.CacheReadPerMillion = p.InputPerMillion
+		if anthropic {
+			p.CacheReadPerMillion = p.InputPerMillion * anthropicCacheReadMultiplier
+		}
+	}
+	if p.CacheWritePerMillion <= 0 {
+		p.CacheWritePerMillion = p.InputPerMillion
+		if anthropic {
+			p.CacheWritePerMillion = p.InputPerMillion * anthropicCacheWrite5mMultiplier
+		}
+	}
+	if p.CacheWrite1hPerMillion <= 0 {
+		p.CacheWrite1hPerMillion = p.CacheWritePerMillion
+		if anthropic {
+			p.CacheWrite1hPerMillion = p.InputPerMillion * anthropicCacheWrite1hMultiplier
+		}
+	}
+	return p
 }
 
 type liteLLMModel struct {
-	InputCostPerToken  float64 `json:"input_cost_per_token"`
-	OutputCostPerToken float64 `json:"output_cost_per_token"`
-	LiteLLMProvider    string  `json:"litellm_provider"`
-	Mode               string  `json:"mode"`
+	InputCostPerToken             float64 `json:"input_cost_per_token"`
+	OutputCostPerToken            float64 `json:"output_cost_per_token"`
+	CacheReadInputTokenCost       float64 `json:"cache_read_input_token_cost"`
+	CacheCreationInputTokenCost   float64 `json:"cache_creation_input_token_cost"`
+	CacheCreationInputTokenCost1h float64 `json:"cache_creation_input_token_cost_above_1hr"`
+	LiteLLMProvider               string  `json:"litellm_provider"`
+	Mode                          string  `json:"mode"`
 }
 
 var (
@@ -485,27 +668,18 @@ func lookupLiteLLMPricing(provider, model string) (Pricing, bool) {
 
 	// Try exact match with provider prefix (e.g., "openai/gpt-4o")
 	if entry, ok := pricingCache[provider+"/"+model]; ok {
-		return Pricing{
-			InputPerMillion:  entry.InputCostPerToken * 1_000_000,
-			OutputPerMillion: entry.OutputCostPerToken * 1_000_000,
-		}, true
+		return pricingFromEntry(provider, entry), true
 	}
 
 	// Try just the model name (many entries don't have provider prefix)
 	if entry, ok := pricingCache[model]; ok {
-		return Pricing{
-			InputPerMillion:  entry.InputCostPerToken * 1_000_000,
-			OutputPerMillion: entry.OutputCostPerToken * 1_000_000,
-		}, true
+		return pricingFromEntry(provider, entry), true
 	}
 
 	if prefixes, ok := providerMappings[provider]; ok {
 		for _, prefix := range prefixes {
 			if entry, found := pricingCache[prefix+"/"+model]; found {
-				return Pricing{
-					InputPerMillion:  entry.InputCostPerToken * 1_000_000,
-					OutputPerMillion: entry.OutputCostPerToken * 1_000_000,
-				}, true
+				return pricingFromEntry(provider, entry), true
 			}
 		}
 	}
@@ -520,7 +694,7 @@ func GetPricing(provider, model string) Pricing {
 
 	// Ollama is always free (local inference)
 	if provider == "ollama" {
-		return Pricing{InputPerMillion: 0, OutputPerMillion: 0}
+		return Pricing{}
 	}
 
 	// Try LiteLLM lookup
@@ -528,32 +702,82 @@ func GetPricing(provider, model string) Pricing {
 		return pricing
 	}
 
-	return Pricing{InputPerMillion: 0, OutputPerMillion: 0}
+	return Pricing{}
 }
 
 // String returns a one-line summary of the recorded metrics.
 func (m *Metrics) String() string {
 	cost := m.Cost()
 	costStr := m.costString(cost)
-	in := m.InputTokens()
-	out := m.OutputTokens()
+	u := m.Usage()
+	in := u.TotalInputTokens()
+	out := u.OutputTokens
 
+	tokens := fmt.Sprintf("%d in / %d out (%d total)", in, out, in+out)
+	if hasCacheTokens(u) {
+		tokens += fmt.Sprintf(" | Input: %s", inputComponents(u))
+	}
 	return fmt.Sprintf(
-		"Duration: %s | Iterations: %d | Tokens: %d in / %d out (%d total) | Cost: %s",
+		"Duration: %s | Iterations: %d | Tokens: %s | Cost: %s",
 		m.Duration().Round(time.Millisecond),
 		m.Iterations(),
-		in,
-		out,
-		in+out,
+		tokens,
 		costStr,
 	)
+}
+
+// hasCacheTokens reports whether any of u's prompt tokens went through a
+// prompt cache, which is when the input and cost components are worth
+// spelling out.
+func hasCacheTokens(u Usage) bool {
+	return u.CacheReadTokens > 0 || u.TotalCacheWriteTokens() > 0
+}
+
+// inputComponents names the classes that make up u's prompt tokens.
+func inputComponents(u Usage) string {
+	return fmt.Sprintf("%d input / %d cache read / %d cache write",
+		u.InputTokens, u.CacheReadTokens, u.TotalCacheWriteTokens())
+}
+
+// costComponents names the classes that make up a cost.
+func costComponents(b CostBreakdown) string {
+	return fmt.Sprintf("input $%.4f / cache read $%.4f / cache write $%.4f / output $%.4f",
+		b.Input, b.CacheRead, b.CacheWrite, b.Output)
+}
+
+// UsageLogLine returns the run's own tokens and cost with every component
+// named, for a single log line.
+func (m *Metrics) UsageLogLine() string {
+	u := m.Usage()
+	b := m.CostBreakdown()
+	return fmt.Sprintf("tokens: input=%d cache_read=%d cache_write=%d output=%d; cost: input=$%.4f cache_read=$%.4f cache_write=$%.4f output=$%.4f total=$%.4f",
+		u.InputTokens, u.CacheReadTokens, u.TotalCacheWriteTokens(), u.OutputTokens,
+		b.Input, b.CacheRead, b.CacheWrite, b.Output, b.Total())
+}
+
+// ProgressTokens returns the run's own token counts for a per-iteration log
+// line as "tokens=<input>/<output>", where input is every prompt token. The
+// share of that input read from or written to a prompt cache follows only
+// when it is non-zero, so a run that never used the cache logs the short form.
+func (m *Metrics) ProgressTokens() string {
+	u := m.Usage()
+	s := fmt.Sprintf("tokens=%d/%d", u.TotalInputTokens(), u.OutputTokens)
+	if u.CacheReadTokens > 0 {
+		s += fmt.Sprintf(", cache_read=%d", u.CacheReadTokens)
+	}
+	if w := u.TotalCacheWriteTokens(); w > 0 {
+		s += fmt.Sprintf(", cache_write=%d", w)
+	}
+	return s
 }
 
 // Summary returns a multi-line summary of the recorded metrics.
 func (m *Metrics) Summary() string {
 	cost := m.Cost()
-	in := m.InputTokens()
-	out := m.OutputTokens()
+	usage := m.Usage()
+	breakdown := m.CostBreakdown()
+	in := usage.TotalInputTokens()
+	out := usage.OutputTokens
 	total := in + out
 
 	m.mu.Lock()
@@ -568,15 +792,31 @@ func (m *Metrics) Summary() string {
 	// run. The per-child breakdown and "TOTAL (all agents)" line below stay
 	// computed from the parent's own counters + children, so no double-count.
 	dispIn, dispOut, dispIters, dispCost := in, out, m.Iterations(), cost
+	dispUsage, dispBreakdown := usage, breakdown
 	if total == 0 && len(children) > 0 {
 		for _, c := range children {
 			dispIn += c.InputTokens
 			dispOut += c.OutputTokens
 			dispIters += c.Iterations
+			dispUsage = dispUsage.add(c.Usage())
+			cb := GetPricing(c.Provider, c.Model).Cost(c.Usage())
+			dispBreakdown.Input += cb.Input
+			dispBreakdown.CacheRead += cb.CacheRead
+			dispBreakdown.CacheWrite += cb.CacheWrite
+			dispBreakdown.Output += cb.Output
 		}
 		dispCost = m.TotalCostWithChildren()
 	}
 	costLine := "  Cost:       " + m.costString(dispCost)
+	// Cached prompt tokens are billed at their own rates, so when a run used
+	// the prompt cache, name the components behind both totals.
+	var inputLine string
+	if hasCacheTokens(dispUsage) {
+		inputLine = "  Input:      " + inputComponents(dispUsage) + "\n"
+		if dispCost > 0 {
+			costLine += "\n  Cost split: " + costComponents(dispBreakdown)
+		}
+	}
 
 	var warningLine string
 	loaded, _, err := PricingStatus()
@@ -591,7 +831,7 @@ Agent Metrics
   Iterations: %d
   Model:      %s (%s)
   Tokens:     %d input / %d output (%d total)
-%s%s
+%s%s%s
 `,
 		m.Duration().Round(time.Millisecond),
 		dispIters,
@@ -600,6 +840,7 @@ Agent Metrics
 		dispIn,
 		dispOut,
 		dispIn+dispOut,
+		inputLine,
 		costLine,
 		warningLine,
 	)
@@ -617,9 +858,7 @@ Agent Metrics
 	var totalChildCost float64
 	for _, c := range children {
 		tokens := c.InputTokens + c.OutputTokens
-		pricing := GetPricing(c.Provider, c.Model)
-		childCost := float64(c.InputTokens)/1_000_000*pricing.InputPerMillion +
-			float64(c.OutputTokens)/1_000_000*pricing.OutputPerMillion
+		childCost := c.Cost()
 		totalChildTokens += tokens
 		totalChildCost += childCost
 		costStr := "N/A"

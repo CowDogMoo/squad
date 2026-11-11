@@ -3684,3 +3684,167 @@ func TestExecuteToolCallDeniesUnallowedTool(t *testing.T) {
 		t.Errorf("response Name = %q, want Bash", resp.Name)
 	}
 }
+
+func TestUsageFromGenerationInfoSplitsCachedTokens(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		gi   map[string]any
+		want metrics.Usage
+	}{
+		{
+			// Anthropic counts cached tokens outside InputTokens.
+			name: "anthropic cache read and write",
+			gi: map[string]any{
+				"InputTokens": 100, "OutputTokens": 50,
+				"CacheReadInputTokens": 9000, "CacheCreationInputTokens": 700,
+			},
+			want: metrics.Usage{InputTokens: 100, CacheReadTokens: 9000, CacheWriteTokens: 700, OutputTokens: 50},
+		},
+		{
+			name: "anthropic without cache activity",
+			gi: map[string]any{
+				"InputTokens": 100, "OutputTokens": 50,
+				"CacheReadInputTokens": 0, "CacheCreationInputTokens": 0,
+			},
+			want: metrics.Usage{InputTokens: 100, OutputTokens: 50},
+		},
+		{
+			// OpenAI counts cached tokens inside PromptTokens.
+			name: "openai cached prompt tokens",
+			gi: map[string]any{
+				"PromptTokens": 1000, "CompletionTokens": 50, "PromptCachedTokens": 800,
+			},
+			want: metrics.Usage{InputTokens: 200, CacheReadTokens: 800, OutputTokens: 50},
+		},
+		{
+			name: "cached count larger than the prompt is clamped",
+			gi:   map[string]any{"PromptTokens": 100, "PromptCachedTokens": 500},
+			want: metrics.Usage{CacheReadTokens: 100},
+		},
+		{
+			name: "provider without cache data",
+			gi:   map[string]any{"PromptTokens": 300, "CompletionTokens": 20},
+			want: metrics.Usage{InputTokens: 300, OutputTokens: 20},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := usageFromGenerationInfo(tt.gi); got != tt.want {
+				t.Errorf("usageFromGenerationInfo = %+v, want %+v", got, tt.want)
+			}
+
+			m := metrics.New("anthropic", "claude-test")
+			extractTokenUsage(tt.gi, m)
+			if got := m.Usage(); got != tt.want {
+				t.Errorf("metrics usage = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Anthropic returns a text block and a tool_use block as two choices that both
+// carry the response's usage. The response must record that usage once.
+func TestMergeChoicesCountsTextPlusToolUseUsageOnce(t *testing.T) {
+	t.Parallel()
+	usage := func() map[string]any {
+		return map[string]any{
+			"InputTokens": 100, "OutputTokens": 50,
+			"CacheReadInputTokens": 9000, "CacheCreationInputTokens": 700,
+		}
+	}
+	choices := []*llms.ContentChoice{
+		{Content: "Reading the note.", GenerationInfo: usage()},
+		{
+			ToolCalls: []llms.ToolCall{{
+				ID:           "toolu_1",
+				Type:         "function",
+				FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{"path":"note.txt"}`},
+			}},
+			GenerationInfo: usage(),
+		},
+	}
+
+	m := metrics.New("anthropic", "claude-test")
+	content, toolCalls := mergeChoices(context.Background(), choices, m)
+	if content != "Reading the note." || len(toolCalls) != 1 {
+		t.Fatalf("mergeChoices = %q with %d tool call(s), want the text and 1 tool call", content, len(toolCalls))
+	}
+	want := metrics.Usage{InputTokens: 100, CacheReadTokens: 9000, CacheWriteTokens: 700, OutputTokens: 50}
+	if got := m.Usage(); got != want {
+		t.Errorf("usage = %+v, want %+v", got, want)
+	}
+}
+
+// A response's usage must be counted once however many blocks it has, on both
+// the tool-loop and final-call paths.
+func TestRunWithToolsCountsMultiBlockResponseUsageOnce(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		maxIterations int
+	}{
+		{"second response ends the tool loop", 2},
+		{"second response is the final call after the iteration limit", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hello"), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+
+			toolTurnUsage := func() map[string]any {
+				return map[string]any{
+					"InputTokens": 100, "OutputTokens": 50,
+					"CacheReadInputTokens": 9000, "CacheCreationInputTokens": 700,
+				}
+			}
+			finalTurnUsage := func() map[string]any {
+				return map[string]any{
+					"InputTokens": 20, "OutputTokens": 10,
+					"CacheReadInputTokens": 9700, "CacheCreationInputTokens": 150,
+				}
+			}
+			llm := &fakeLLM{responses: []*llms.ContentResponse{
+				{Choices: []*llms.ContentChoice{
+					{Content: "Reading the note.", GenerationInfo: toolTurnUsage()},
+					{
+						ToolCalls: []llms.ToolCall{{
+							ID:           "toolu_1",
+							Type:         "function",
+							FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{"path":"note.txt"}`},
+						}},
+						GenerationInfo: toolTurnUsage(),
+					},
+				}},
+				{Choices: []*llms.ContentChoice{
+					{Content: "The note says hello.", GenerationInfo: finalTurnUsage()},
+					{Content: "Nothing else to report.", GenerationInfo: finalTurnUsage()},
+				}},
+			}}
+
+			m := metrics.New("anthropic", "claude-test")
+			if _, err := RunWithTools(context.Background(), llm, "", "user", dir, RunWithToolsConfig{
+				MaxIterations: tt.maxIterations,
+				Metrics:       m,
+				Executor:      &executor.LocalExecutor{WorkingDir: dir},
+			}); err != nil {
+				t.Fatalf("RunWithTools() error = %v", err)
+			}
+			if llm.calls != 2 {
+				t.Fatalf("model calls = %d, want 2", llm.calls)
+			}
+
+			want := metrics.Usage{InputTokens: 120, CacheReadTokens: 18700, CacheWriteTokens: 850, OutputTokens: 60}
+			if got := m.Usage(); got != want {
+				t.Errorf("usage = %+v, want %+v (each response counted once)", got, want)
+			}
+			if got := m.InputTokens(); got != 19670 {
+				t.Errorf("InputTokens = %d, want 19670", got)
+			}
+		})
+	}
+}

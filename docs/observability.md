@@ -214,6 +214,21 @@ Budget enforcement is a hard stop. When the limit is reached the run exits with 
 
 Pricing is fetched from the LiteLLM community database at startup. Local Ollama models always show $0.00.
 
+Prompt tokens that go through a provider's prompt cache are billed at their own rates, and the budget counts them that way. A run's cost is the sum of four components:
+
+| Component   | Tokens                                   | Rate                                                                                       |
+| ----------- | ---------------------------------------- | ------------------------------------------------------------------------------------------ |
+| input       | Prompt tokens that did not use the cache | The model's input price                                                                    |
+| cache read  | Prompt tokens served from the cache      | The model's cache-read price (on Claude, 0.1x the input price for most models)             |
+| cache write | Prompt tokens written to the cache       | The model's cache-write price (on Claude, 1.25x the input price, or 2x for a 1-hour cache) |
+| output      | Generated tokens                         | The model's output price                                                                   |
+
+Cache prices come from the same LiteLLM entry as the input and output prices. When the entry has none and the provider is `anthropic` or `claude-code`, squad applies the multipliers from [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching). On any other provider, a model without cache prices has its cached tokens charged at the input price, whatever the model is called.
+
+The `claude-code`, `anthropic`, `openai`, and `openai-responses` providers report cache counts, as does an `openai-compat` endpoint that returns them. When a run used the cache, the metrics summary and the run logs name each component, and `meta.json` records `cache_read_tokens` and `cache_write_tokens` next to `input_tokens`, which stays the count of every prompt token.
+
+The `gemini` provider is not covered yet: squad does not read the 32-bit token counts its client reports, so a Gemini model's usage is recorded as zero tokens and no cost, and does not count toward `--max-cost`.
+
 ### Cost hints in agent.yaml
 
 Agents can declare budget hints that inform cost estimates before a run:

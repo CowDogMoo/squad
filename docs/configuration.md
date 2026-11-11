@@ -501,7 +501,11 @@ Behavior differences from API providers:
 
 - The CLI runs its own agent loop, so squad's tool surface, `--max-iterations`,
   `--temperature`, `--max-tokens`, and `--stream` do not apply.
-- Cost is reported as `$0` — usage is billed through the CLI's subscription.
+- Usage is billed through the CLI's subscription, so the cost squad reports is
+  an estimate at API prices (see
+  [Cost budgeting](./observability.md#cost-budgeting)). A model name with no
+  published price, such as the alias `sonnet` or the CLI's own default, is
+  reported as `$0.00 (subscription)`.
 - `--mode readonly` maps to `claude`'s native restrictions (edit tools
   disallowed). `antigravity` is rejected in readonly and plan mode: the agy
   CLI's print mode auto-approves permissions and its plan mode does not block

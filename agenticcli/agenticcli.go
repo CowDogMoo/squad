@@ -84,11 +84,24 @@ type Request struct {
 }
 
 // Result is the parsed outcome of a print-mode run.
+//
+// The four input-side counts are disjoint, matching how the CLI reports
+// them: InputTokens is fresh input only, and prompt tokens that went through
+// the prompt cache are counted in the cache fields instead. They are kept
+// apart because each is billed at a different rate.
 type Result struct {
-	Response     string
-	InputTokens  int64
-	OutputTokens int64
-	Turns        int
+	Response    string
+	InputTokens int64
+	// CacheReadTokens is prompt tokens served from the prompt cache.
+	CacheReadTokens int64
+	// CacheWriteTokens is prompt tokens written to the five-minute prompt
+	// cache, or to a cache whose lifetime the CLI did not report.
+	CacheWriteTokens int64
+	// CacheWrite1hTokens is prompt tokens written to the one-hour prompt
+	// cache.
+	CacheWrite1hTokens int64
+	OutputTokens       int64
+	Turns              int
 }
 
 // Run executes the CLI for req and parses its JSON output. The subprocess
@@ -276,7 +289,13 @@ type claudeOutput struct {
 		InputTokens              int64 `json:"input_tokens"`
 		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-		OutputTokens             int64 `json:"output_tokens"`
+		// CacheCreation splits CacheCreationInputTokens by cache lifetime.
+		// Older CLI versions omit it.
+		CacheCreation struct {
+			Ephemeral5mInputTokens int64 `json:"ephemeral_5m_input_tokens"`
+			Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
+		} `json:"cache_creation"`
+		OutputTokens int64 `json:"output_tokens"`
 	} `json:"usage"`
 }
 
@@ -334,11 +353,19 @@ func parseOutput(provider string, stdout []byte) (Result, error) {
 // single-shot path (whole-stdout envelope) and the live path (the terminal
 // `result` stream event, whose fields are a superset of the envelope).
 func claudeResult(out claudeOutput) (Result, error) {
+	// One-hour cache writes cost more than five-minute ones, so take the
+	// one-hour share from the lifetime breakdown when the CLI sends it. Any
+	// write the breakdown does not account for is priced at the five-minute
+	// rate, which is also what happens to all of them when it is absent.
+	cacheWrite1h := min(max(out.Usage.CacheCreation.Ephemeral1hInputTokens, 0), out.Usage.CacheCreationInputTokens)
 	res := Result{
-		Response:     out.Result,
-		InputTokens:  out.Usage.InputTokens + out.Usage.CacheCreationInputTokens + out.Usage.CacheReadInputTokens,
-		OutputTokens: out.Usage.OutputTokens,
-		Turns:        out.NumTurns,
+		Response:           out.Result,
+		InputTokens:        out.Usage.InputTokens,
+		CacheReadTokens:    out.Usage.CacheReadInputTokens,
+		CacheWriteTokens:   out.Usage.CacheCreationInputTokens - cacheWrite1h,
+		CacheWrite1hTokens: cacheWrite1h,
+		OutputTokens:       out.Usage.OutputTokens,
+		Turns:              out.NumTurns,
 	}
 	if out.IsError {
 		return res, fmt.Errorf("claude run failed: %s", strings.TrimSpace(out.Result))

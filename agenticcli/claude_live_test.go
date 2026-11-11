@@ -34,6 +34,15 @@ func installFakeClaude(t *testing.T, env map[string]string) {
 	fakeclaude.Install(t, env)
 }
 
+// wantCacheTokens checks the prompt-cache counts of a parsed result.
+func wantCacheTokens(t *testing.T, res Result, read, write, writeOneHour int64) {
+	t.Helper()
+	if res.CacheReadTokens != read || res.CacheWriteTokens != write || res.CacheWrite1hTokens != writeOneHour {
+		t.Errorf("cache tokens = %d read / %d write / %d one-hour write, want %d / %d / %d",
+			res.CacheReadTokens, res.CacheWriteTokens, res.CacheWrite1hTokens, read, write, writeOneHour)
+	}
+}
+
 // askRecord captures one CanUseTool invocation.
 type askRecord struct {
 	tool  string
@@ -68,11 +77,12 @@ func TestRunLive_AllowEverything(t *testing.T) {
 	if res.Response != "fake done" || res.Turns != 1 {
 		t.Errorf("result = %+v, want Response=fake done Turns=1", res)
 	}
-	// Token mapping parity with the single-shot path: input + both cache
-	// counters summed.
-	if res.InputTokens != 115 || res.OutputTokens != 20 {
-		t.Errorf("tokens = %d/%d, want 115/20", res.InputTokens, res.OutputTokens)
+	// Token mapping parity with the single-shot path: fresh input and both
+	// cache counters stay separate, since each is billed at its own rate.
+	if res.InputTokens != 100 || res.OutputTokens != 20 {
+		t.Errorf("tokens = %d/%d, want 100/20", res.InputTokens, res.OutputTokens)
 	}
+	wantCacheTokens(t, res, 5, 10, 0)
 	if len(asks) != 1 {
 		t.Fatalf("CanUseTool called %d times, want 1", len(asks))
 	}
@@ -459,9 +469,11 @@ func TestGoldenSessionReplay(t *testing.T) {
 	if s.res.Response != wantResp || s.res.Turns != 3 {
 		t.Errorf("res = %+v, want Response=%q Turns=3", s.res, wantResp)
 	}
-	if s.res.InputTokens != 26+18216+80481 || s.res.OutputTokens != 530 {
-		t.Errorf("tokens = %d/%d, want 98723/530", s.res.InputTokens, s.res.OutputTokens)
+	if s.res.InputTokens != 26 || s.res.OutputTokens != 530 {
+		t.Errorf("tokens = %d/%d, want 26/530", s.res.InputTokens, s.res.OutputTokens)
 	}
+	// The recorded session wrote its whole cache with the one-hour lifetime.
+	wantCacheTokens(t, s.res, 80481, 0, 18216)
 
 	// The recorded parent stream is: initial user message, deny, allow,
 	// interrupt probe. The replayed loop covers the two control responses.

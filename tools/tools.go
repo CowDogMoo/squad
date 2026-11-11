@@ -418,8 +418,8 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 // logIterationStart logs the current iteration number with cost/token info if metrics are available.
 func logIterationStart(ctx context.Context, i, maxIter int, m *metrics.Metrics) {
 	if m != nil {
-		logging.InfoContext(ctx, "model iteration %d/%d (cost=$%.4f, tokens=%d/%d)",
-			i+1, maxIter, m.TotalCostWithChildren(), m.InputTokens(), m.OutputTokens())
+		logging.InfoContext(ctx, "model iteration %d/%d (cost=$%.4f, %s)",
+			i+1, maxIter, m.TotalCostWithChildren(), m.ProgressTokens())
 	} else {
 		logging.InfoContext(ctx, "model iteration %d/%d", i+1, maxIter)
 	}
@@ -809,18 +809,45 @@ func extractToolResults(messages []llms.MessageContent) map[string]string {
 	return results
 }
 
+// usageFromGenerationInfo reads a provider's token counts out of a response's
+// GenerationInfo and splits the prompt tokens by billing class, so cached
+// tokens can be priced at their own rate instead of the full input rate.
+//
+// Providers disagree on whether the prompt count includes cached tokens:
+//
+//   - Anthropic reports "InputTokens" as fresh input only, with cache reads
+//     ("CacheReadInputTokens") and cache writes ("CacheCreationInputTokens")
+//     counted separately. It does not say how long a write lives, so writes
+//     are priced at the five-minute rate, which is the lifetime squad asks for.
+//   - OpenAI reports "PromptTokens" as the whole prompt, with the cached
+//     share ("PromptCachedTokens") already inside it.
+//
+// A provider that reports no cache counts yields plain input and output.
+func usageFromGenerationInfo(gi map[string]any) metrics.Usage {
+	u := metrics.Usage{
+		OutputTokens: extractTokenValue(gi, []string{"CompletionTokens", "completion_tokens", "OutputTokens", "output_tokens"}),
+	}
+	if prompt := extractTokenValue(gi, []string{"PromptTokens", "prompt_tokens"}); prompt > 0 {
+		cached := min(extractTokenValue(gi, []string{"PromptCachedTokens"}), prompt)
+		u.InputTokens = prompt - cached
+		u.CacheReadTokens = cached
+		return u
+	}
+	u.InputTokens = extractTokenValue(gi, []string{"InputTokens", "input_tokens"})
+	u.CacheReadTokens = extractTokenValue(gi, []string{"CacheReadInputTokens"})
+	u.CacheWriteTokens = extractTokenValue(gi, []string{"CacheCreationInputTokens"})
+	return u
+}
+
 func extractTokenUsage(gi map[string]any, m *metrics.Metrics, ctx ...context.Context) {
 	if m == nil {
 		return
 	}
-	inputKeys := []string{"PromptTokens", "prompt_tokens", "InputTokens", "input_tokens"}
-	outputKeys := []string{"CompletionTokens", "completion_tokens", "OutputTokens", "output_tokens"}
+	usage := usageFromGenerationInfo(gi)
+	input := usage.TotalInputTokens()
 
-	input := extractTokenValue(gi, inputKeys)
-	output := extractTokenValue(gi, outputKeys)
-
-	if input > 0 || output > 0 {
-		m.AddTokens(input, output)
+	if input > 0 || usage.OutputTokens > 0 {
+		m.AddUsage(usage)
 	}
 
 	// Feed actual input token count into calibration if context is available.
@@ -833,6 +860,16 @@ func extractTokenUsage(gi map[string]any, m *metrics.Metrics, ctx ...context.Con
 	}
 }
 
+// recordResponseUsage adds one response's token usage to m. Usage belongs to
+// the response, but providers copy it into every choice's GenerationInfo, and
+// Anthropic returns each content block as its own choice, so it is read from
+// the first choice only.
+func recordResponseUsage(ctx context.Context, choices []*llms.ContentChoice, m *metrics.Metrics) {
+	if len(choices) > 0 {
+		extractTokenUsage(choices[0].GenerationInfo, m, ctx)
+	}
+}
+
 // mergeChoices collects text and tool calls across all response choices.
 // Anthropic returns separate content blocks (text, tool_use) as separate
 // Choices; we must collect tool calls across all of them.
@@ -842,15 +879,13 @@ func mergeChoices(ctx context.Context, choices []*llms.ContentChoice, m *metrics
 	for _, ch := range choices {
 		if gi := ch.GenerationInfo; gi != nil {
 			logging.DebugContext(ctx, "generation info: %v", gi)
-			if m != nil {
-				extractTokenUsage(gi, m, ctx)
-			}
 		}
 		if ch.Content != "" {
 			content = ch.Content
 		}
 		toolCalls = append(toolCalls, ch.ToolCalls...)
 	}
+	recordResponseUsage(ctx, choices, m)
 	return content, toolCalls
 }
 
@@ -906,9 +941,7 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 	if err == nil && response != nil && len(response.Choices) > 0 {
 		if m != nil {
 			m.IncrementIterations()
-			if gi := response.Choices[0].GenerationInfo; gi != nil {
-				extractTokenUsage(gi, m, ctx)
-			}
+			recordResponseUsage(ctx, response.Choices, m)
 		}
 		if response.Choices[0].Content != "" {
 			logging.InfoContext(ctx, "final call produced response (%d bytes)", len(response.Choices[0].Content))
