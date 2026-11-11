@@ -3718,16 +3718,6 @@ func TestUsageFromGenerationInfoSplitsCachedTokens(t *testing.T) {
 			want: metrics.Usage{InputTokens: 200, CacheReadTokens: 800, OutputTokens: 50},
 		},
 		{
-			// Gemini also counts cached tokens inside PromptTokens, and
-			// reports them under the Anthropic-style key.
-			name: "gemini cached content tokens",
-			gi: map[string]any{
-				"PromptTokens": 1000, "CompletionTokens": 50,
-				"CacheReadInputTokens": 600, "NonCachedInputTokens": 400,
-			},
-			want: metrics.Usage{InputTokens: 400, CacheReadTokens: 600, OutputTokens: 50},
-		},
-		{
 			name: "cached count larger than the prompt is clamped",
 			gi:   map[string]any{"PromptTokens": 100, "PromptCachedTokens": 500},
 			want: metrics.Usage{CacheReadTokens: 100},
@@ -3754,9 +3744,41 @@ func TestUsageFromGenerationInfoSplitsCachedTokens(t *testing.T) {
 	}
 }
 
-// Anthropic returns each content block as its own choice and repeats the
-// response's usage on every one of them. A response's usage must be counted
-// once however many blocks it has, on both the tool-loop and final-call paths.
+// Anthropic returns a text block and a tool_use block as two choices that both
+// carry the response's usage. The response must record that usage once.
+func TestMergeChoicesCountsTextPlusToolUseUsageOnce(t *testing.T) {
+	t.Parallel()
+	usage := func() map[string]any {
+		return map[string]any{
+			"InputTokens": 100, "OutputTokens": 50,
+			"CacheReadInputTokens": 9000, "CacheCreationInputTokens": 700,
+		}
+	}
+	choices := []*llms.ContentChoice{
+		{Content: "Reading the note.", GenerationInfo: usage()},
+		{
+			ToolCalls: []llms.ToolCall{{
+				ID:           "toolu_1",
+				Type:         "function",
+				FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{"path":"note.txt"}`},
+			}},
+			GenerationInfo: usage(),
+		},
+	}
+
+	m := metrics.New("anthropic", "claude-test")
+	content, toolCalls := mergeChoices(context.Background(), choices, m)
+	if content != "Reading the note." || len(toolCalls) != 1 {
+		t.Fatalf("mergeChoices = %q with %d tool call(s), want the text and 1 tool call", content, len(toolCalls))
+	}
+	want := metrics.Usage{InputTokens: 100, CacheReadTokens: 9000, CacheWriteTokens: 700, OutputTokens: 50}
+	if got := m.Usage(); got != want {
+		t.Errorf("usage = %+v, want %+v", got, want)
+	}
+}
+
+// A response's usage must be counted once however many blocks it has, on both
+// the tool-loop and final-call paths.
 func TestRunWithToolsCountsMultiBlockResponseUsageOnce(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

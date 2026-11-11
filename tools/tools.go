@@ -819,9 +819,8 @@ func extractToolResults(messages []llms.MessageContent) map[string]string {
 //     ("CacheReadInputTokens") and cache writes ("CacheCreationInputTokens")
 //     counted separately. It does not say how long a write lives, so writes
 //     are priced at the five-minute rate, which is the lifetime squad asks for.
-//   - OpenAI and Gemini report "PromptTokens" as the whole prompt, with the
-//     cached share ("PromptCachedTokens", or Gemini's "CacheReadInputTokens")
-//     already inside it.
+//   - OpenAI reports "PromptTokens" as the whole prompt, with the cached
+//     share ("PromptCachedTokens") already inside it.
 //
 // A provider that reports no cache counts yields plain input and output.
 func usageFromGenerationInfo(gi map[string]any) metrics.Usage {
@@ -829,7 +828,7 @@ func usageFromGenerationInfo(gi map[string]any) metrics.Usage {
 		OutputTokens: extractTokenValue(gi, []string{"CompletionTokens", "completion_tokens", "OutputTokens", "output_tokens"}),
 	}
 	if prompt := extractTokenValue(gi, []string{"PromptTokens", "prompt_tokens"}); prompt > 0 {
-		cached := min(extractTokenValue(gi, []string{"PromptCachedTokens", "CacheReadInputTokens"}), prompt)
+		cached := min(extractTokenValue(gi, []string{"PromptCachedTokens"}), prompt)
 		u.InputTokens = prompt - cached
 		u.CacheReadTokens = cached
 		return u
@@ -840,18 +839,16 @@ func usageFromGenerationInfo(gi map[string]any) metrics.Usage {
 	return u
 }
 
-// extractTokenUsage adds the token counts in gi to m and reports whether gi
-// carried any.
-func extractTokenUsage(gi map[string]any, m *metrics.Metrics, ctx ...context.Context) bool {
+func extractTokenUsage(gi map[string]any, m *metrics.Metrics, ctx ...context.Context) {
 	if m == nil {
-		return false
+		return
 	}
 	usage := usageFromGenerationInfo(gi)
 	input := usage.TotalInputTokens()
-	if input == 0 && usage.OutputTokens == 0 {
-		return false
+
+	if input > 0 || usage.OutputTokens > 0 {
+		m.AddUsage(usage)
 	}
-	m.AddUsage(usage)
 
 	// Feed actual input token count into calibration if context is available.
 	if input > 0 && len(ctx) > 0 {
@@ -861,18 +858,15 @@ func extractTokenUsage(gi map[string]any, m *metrics.Metrics, ctx ...context.Con
 			tc.Record(int(input), int(input)) // self-calibrating baseline
 		}
 	}
-	return true
 }
 
 // recordResponseUsage adds one response's token usage to m. Usage belongs to
 // the response, but providers copy it into every choice's GenerationInfo, and
 // Anthropic returns each content block as its own choice, so it is read from
-// the first choice that reports tokens.
+// the first choice only.
 func recordResponseUsage(ctx context.Context, choices []*llms.ContentChoice, m *metrics.Metrics) {
-	for _, ch := range choices {
-		if extractTokenUsage(ch.GenerationInfo, m, ctx) {
-			return
-		}
+	if len(choices) > 0 {
+		extractTokenUsage(choices[0].GenerationInfo, m, ctx)
 	}
 }
 
