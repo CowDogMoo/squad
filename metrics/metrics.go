@@ -379,25 +379,27 @@ func (p Pricing) Cost(u Usage) CostBreakdown {
 // cache reads lower on some newer models; those prices reach squad through
 // the models' LiteLLM entries.
 //
-// They are the fallback for a Claude model whose LiteLLM entry carries no
-// cache prices; an entry's own per-model cache prices take precedence.
+// They are the fallback for a model on the anthropic or claude-code provider
+// whose LiteLLM entry carries no cache prices; an entry's own per-model cache
+// prices take precedence.
 const (
 	anthropicCacheWrite5mMultiplier = 1.25
 	anthropicCacheWrite1hMultiplier = 2.0
 	anthropicCacheReadMultiplier    = 0.1
 )
 
-// isAnthropicModel reports whether provider and model (both lower-cased)
-// name a Claude model, whichever platform serves it.
-func isAnthropicModel(provider, model string) bool {
-	return provider == "anthropic" || provider == "claude-code" || strings.Contains(model, "claude")
+// isAnthropicProvider reports whether provider (lower-cased) bills prompt-cache
+// tokens at Anthropic's rates.
+func isAnthropicProvider(provider string) bool {
+	return provider == "anthropic" || provider == "claude-code"
 }
 
 // pricingFromEntry converts a LiteLLM entry to per-million prices. Cache
-// prices come from the entry when it has them. Otherwise a Claude model gets
-// Anthropic's documented multiples of its input price, and any other model is
-// charged the plain input price for cached tokens.
-func pricingFromEntry(provider, model string, entry liteLLMModel) Pricing {
+// prices come from the entry when it has them. Otherwise a model on an
+// Anthropic provider gets Anthropic's documented multiples of its input price,
+// and a model on any other provider is charged the plain input price for
+// cached tokens.
+func pricingFromEntry(provider string, entry liteLLMModel) Pricing {
 	p := Pricing{
 		InputPerMillion:        entry.InputCostPerToken * 1_000_000,
 		OutputPerMillion:       entry.OutputCostPerToken * 1_000_000,
@@ -405,7 +407,7 @@ func pricingFromEntry(provider, model string, entry liteLLMModel) Pricing {
 		CacheWritePerMillion:   entry.CacheCreationInputTokenCost * 1_000_000,
 		CacheWrite1hPerMillion: entry.CacheCreationInputTokenCost1h * 1_000_000,
 	}
-	anthropic := isAnthropicModel(provider, model)
+	anthropic := isAnthropicProvider(provider)
 	if p.CacheReadPerMillion <= 0 {
 		p.CacheReadPerMillion = p.InputPerMillion
 		if anthropic {
@@ -666,18 +668,18 @@ func lookupLiteLLMPricing(provider, model string) (Pricing, bool) {
 
 	// Try exact match with provider prefix (e.g., "openai/gpt-4o")
 	if entry, ok := pricingCache[provider+"/"+model]; ok {
-		return pricingFromEntry(provider, model, entry), true
+		return pricingFromEntry(provider, entry), true
 	}
 
 	// Try just the model name (many entries don't have provider prefix)
 	if entry, ok := pricingCache[model]; ok {
-		return pricingFromEntry(provider, model, entry), true
+		return pricingFromEntry(provider, entry), true
 	}
 
 	if prefixes, ok := providerMappings[provider]; ok {
 		for _, prefix := range prefixes {
 			if entry, found := pricingCache[prefix+"/"+model]; found {
-				return pricingFromEntry(provider, model, entry), true
+				return pricingFromEntry(provider, entry), true
 			}
 		}
 	}

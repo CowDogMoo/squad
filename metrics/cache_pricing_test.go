@@ -169,6 +169,7 @@ func TestGetPricingCacheRates(t *testing.T) {
 		{"standard multipliers", "anthropic", baselineModel, 0.20, 2.50, 4.00},
 		{"claude-code uses the same rates", "claude-code", baselineModel, 0.20, 2.50, 4.00},
 		{"claude on another platform", "anthropic", "claude-hosted", 0.30, 3.75, 6.00},
+		{"claude model on openai-compat keeps the input price", "openai-compat", baselineModel, 2.00, 2.00, 2.00},
 		{"other provider with a listed cache read price", "openai", "gpt-cached-test", 0.10, 1.00, 1.00},
 		{"other provider without cache prices", "openai", "gpt-uncached-test", 1.00, 1.00, 1.00},
 	}

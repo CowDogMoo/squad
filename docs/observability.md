@@ -223,7 +223,7 @@ Prompt tokens that go through a provider's prompt cache are billed at their own 
 | cache write | Prompt tokens written to the cache       | The model's cache-write price (on Claude, 1.25x the input price, or 2x for a 1-hour cache) |
 | output      | Generated tokens                         | The model's output price                                                                   |
 
-Cache prices come from the same LiteLLM entry as the input and output prices. When a Claude model's entry has none, squad applies the multipliers from [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching). For any other model without cache prices, cached tokens are charged at the input price.
+Cache prices come from the same LiteLLM entry as the input and output prices. When the entry has none and the provider is `anthropic` or `claude-code`, squad applies the multipliers from [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching). On any other provider, a model without cache prices has its cached tokens charged at the input price, whatever the model is called.
 
 The `claude-code`, `anthropic`, `openai`, and `openai-responses` providers report cache counts, as does an `openai-compat` endpoint that returns them. When a run used the cache, the metrics summary and the run logs name each component, and `meta.json` records `cache_read_tokens` and `cache_write_tokens` next to `input_tokens`, which stays the count of every prompt token.
 
