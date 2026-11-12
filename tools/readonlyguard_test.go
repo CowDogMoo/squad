@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cowdogmoo/squad/executor"
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -191,4 +192,168 @@ func TestToolLoopEditModeStillNudgesAndBlocks(t *testing.T) {
 	if !strings.Contains(text, "BASH READ BLOCKED") {
 		t.Fatalf("edit-capable agent must still have reads blocked after ignored nudges; messages:\n%s", text)
 	}
+}
+
+// runBudgetReadLoop drives RunWithTools through four reads of the same file
+// (one fresh read, then three cache hits, which trips the read-loop notice)
+// with a cost cap whose 25% threshold the first response crosses. It returns
+// everything the model was shown.
+func runBudgetReadLoop(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	// gpt-4o pricing puts 100k input + 10k output at 35% of a $1.00 cap.
+	m := metrics.New("openai", "gpt-4o")
+	m.SetMaxCost(1.00)
+
+	var responses []*llms.ContentResponse
+	for i := 0; i < 4; i++ {
+		choice := &llms.ContentChoice{ToolCalls: []llms.ToolCall{{
+			ID:           fmt.Sprintf("r%d", i),
+			Type:         "function",
+			FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{"path":"a.txt"}`},
+		}}}
+		if i == 0 {
+			choice.GenerationInfo = map[string]any{
+				"PromptTokens":     int64(100000),
+				"CompletionTokens": int64(10000),
+			}
+		}
+		responses = append(responses, &llms.ContentResponse{Choices: []*llms.ContentChoice{choice}})
+	}
+
+	llm := &captureLLM{responses: responses}
+	out, err := RunWithTools(ctx, llm, "sys", "user", dir, RunWithToolsConfig{
+		Metrics:  m,
+		Executor: &executor.LocalExecutor{WorkingDir: dir},
+	})
+	if err != nil {
+		t.Fatalf("RunWithTools() error = %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("run must reach the final answer, got %q", out)
+	}
+	return capturedText(llm)
+}
+
+// TestReadOnlyBudgetAndReadLoopWordingIsEditFree covers the edit pressure that
+// does not come from the enforcers: the 25% budget warning and the read-cache
+// notices. A readonly agent cannot edit, so neither may tell it to.
+func TestReadOnlyBudgetAndReadLoopWordingIsEditFree(t *testing.T) {
+	t.Parallel()
+	text := runBudgetReadLoop(t, InitReadOnlyMode(context.Background()))
+
+	for _, want := range []string{
+		"[BUDGET WARNING] You have used 25% of your cost budget ($",
+		"[CACHE HIT — file 'a.txt' unchanged",
+		"[READ LOOP DETECTED — 3 consecutive re-reads of cached files.",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("readonly agent must still be shown %q; messages:\n%s", want, text)
+		}
+	}
+	if strings.Contains(strings.ToLower(text), "edit") {
+		t.Fatalf("readonly agent must not be told to edit; messages:\n%s", text)
+	}
+	for _, marker := range []string{"[PROGRESS CHECK]", "Read is disabled", "Do not read more files"} {
+		if strings.Contains(text, marker) {
+			t.Fatalf("readonly agent must not see %q; messages:\n%s", marker, text)
+		}
+	}
+}
+
+// TestEditModeBudgetAndReadLoopWordingUnchanged pins the wording edit-capable
+// agents already received, and proves the readonly test above can fail.
+func TestEditModeBudgetAndReadLoopWordingUnchanged(t *testing.T) {
+	t.Parallel()
+	text := runBudgetReadLoop(t, context.Background())
+
+	for _, want := range []string{
+		"[PROGRESS CHECK] You have used 25% of your cost budget ($",
+		" remaining). Have you made any edits yet? If not, you should have enough context — start editing NOW. " +
+			"List what you plan to change and begin immediately. Do not read more files.",
+		"Content was already provided. Write edits from your notes — do NOT re-read.]",
+		"[READ LOOP DETECTED — 3 consecutive re-reads of cached files. " +
+			"Read is disabled until you make an Edit or Write call. " +
+			"File 'a.txt' unchanged since iteration 0 (1 lines). " +
+			"Use your notes to write Edit calls NOW.]",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("edit-capable agent must still be shown %q; messages:\n%s", want, text)
+		}
+	}
+}
+
+// compactionSummaryFor runs a conversation large enough to be compacted through
+// compactMessages and returns the session-state summary it inserts.
+func compactionSummaryFor(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	ctx = InitReadCache(ctx)
+	GetReadCache(ctx).Store("f0.go", "hash", 1, 1, 0, "")
+
+	messages := buildInitialMessages("sys", "user", false)
+	for i := 0; i < 30; i++ {
+		id := fmt.Sprintf("call-%d", i)
+		messages = append(messages,
+			llms.MessageContent{
+				Role: llms.ChatMessageTypeAI,
+				Parts: []llms.ContentPart{llms.ToolCall{
+					ID:           id,
+					FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: fmt.Sprintf(`{"path":"f%d.go"}`, i)},
+				}},
+			},
+			llms.MessageContent{
+				Role:  llms.ChatMessageTypeTool,
+				Parts: []llms.ContentPart{llms.ToolCallResponse{ToolCallID: id, Content: strings.Repeat("x", 10000)}},
+			},
+		)
+	}
+
+	for _, msg := range compactMessages(ctx, messages, nil) {
+		for _, part := range msg.Parts {
+			if tc, ok := part.(llms.TextContent); ok && strings.Contains(tc.Text, "[SESSION STATE after context compaction]") {
+				return tc.Text
+			}
+		}
+	}
+	t.Fatal("compaction must insert a session-state summary")
+	return ""
+}
+
+// TestCompactionSummaryWordingByMode checks the summary a compacted run is
+// shown: a readonly agent is pointed back at its analysis, never at edits.
+func TestCompactionSummaryWordingByMode(t *testing.T) {
+	t.Parallel()
+
+	t.Run("readonly mode is edit-free", func(t *testing.T) {
+		t.Parallel()
+		summary := compactionSummaryFor(t, InitReadOnlyMode(context.Background()))
+		for _, want := range []string{
+			"Files previously read (do NOT re-read — use these summaries to continue your analysis):",
+			"Do NOT re-read files listed above — continue your analysis from the summaries and your notes.",
+		} {
+			if !strings.Contains(summary, want) {
+				t.Fatalf("readonly summary must contain %q, got:\n%s", want, summary)
+			}
+		}
+		if strings.Contains(strings.ToLower(summary), "edit") {
+			t.Fatalf("readonly summary must not mention edits, got:\n%s", summary)
+		}
+	})
+
+	t.Run("edit-capable mode keeps its wording", func(t *testing.T) {
+		t.Parallel()
+		summary := compactionSummaryFor(t, context.Background())
+		for _, want := range []string{
+			"Files previously read (do NOT re-read — use these summaries to write edits):",
+			"Do NOT re-read files listed above — write edits from the summaries and your notes.",
+		} {
+			if !strings.Contains(summary, want) {
+				t.Fatalf("edit-capable summary must contain %q, got:\n%s", want, summary)
+			}
+		}
+	})
 }
