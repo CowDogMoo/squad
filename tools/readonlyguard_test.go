@@ -438,7 +438,10 @@ func compactionSummaryFor(t *testing.T, ctx context.Context) string {
 		)
 	}
 
-	for _, msg := range compactMessages(ctx, messages, nil) {
+	// msg is declared with its type because the per-file go-critic runner
+	// cannot resolve compactMessages, defined in a sibling file.
+	var msg llms.MessageContent
+	for _, msg = range compactMessages(ctx, messages, nil) {
 		for _, part := range msg.Parts {
 			if tc, ok := part.(llms.TextContent); ok && strings.Contains(tc.Text, "[SESSION STATE after context compaction]") {
 				return tc.Text

@@ -319,7 +319,7 @@ type RunWithToolsConfig struct {
 	MaxIterations int
 	// EditDeadline is the iteration number after which read-only tools are
 	// blocked to force the model to commit pending edits. Zero disables the
-	// deadline.
+	// deadline, and it is ignored in readonly mode.
 	EditDeadline int
 	// TaskCfg wires in the Task/TaskResult tools and child-agent dispatch.
 	// Nil disables the Task tool entirely.

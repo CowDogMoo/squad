@@ -568,8 +568,9 @@ func TruncateToLines(content string, headLines, tailLines int) string {
 	return fmt.Sprintf("%s\n... [%d lines omitted — use Read with offset/limit] ...\n\n%s", head, omitted, tail)
 }
 
-// ToolEfficiencyPrompt is injected into all agent system prompts to encourage
-// batching of tool calls and efficient file reading.
+// ToolEfficiencyPrompt is unused by squad: agent system prompts get the
+// mode-aware Tool Efficiency block built by toolEfficiencyPrompt in the agent
+// package instead.
 const ToolEfficiencyPrompt = `## Tool Efficiency
 
 When you need to perform multiple independent operations, invoke ALL relevant tools in a single response:
