@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/tmc/langchaingo/llms"
@@ -194,15 +195,42 @@ func TestToolLoopEditModeStillNudgesAndBlocks(t *testing.T) {
 	}
 }
 
-// runBudgetReadLoop drives RunWithTools through four reads of the same file
-// (one fresh read, then three cache hits, which trips the read-loop notice)
-// with a cost cap whose 25% threshold the first response crosses. It returns
-// everything the model was shown.
-func runBudgetReadLoop(t *testing.T, ctx context.Context) string {
+// runBudgetReadLoop builds a real agent bundle for mode and drives RunWithTools
+// with its system prompt through four reads of the same file (one fresh read,
+// then three cache hits, which trips the read-loop notice) with a cost cap
+// whose 25% threshold the first response crosses. The context is made readonly
+// exactly when the runner would make it so. It returns everything the model
+// was shown, with the working directory path elided.
+func runBudgetReadLoop(t *testing.T, mode string) string {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o600); err != nil {
 		t.Fatalf("seed file: %v", err)
+	}
+
+	// Skills are disabled so the prompt does not depend on what the host has installed.
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, "reviewer")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agent: %v", err)
+	}
+	for name, content := range map[string]string{
+		"agent.yaml": "name: reviewer\nversion: 1\nentrypoint: system.md\nwrapper: wrapper.md\nskills:\n  enabled: false\n",
+		"system.md":  "Review the code.",
+		"wrapper.md": "You are a reviewer.",
+	} {
+		if err := os.WriteFile(filepath.Join(agentDir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	bundle, err := agent.BuildBundle(agentsDir, "reviewer", "user", dir, mode, nil)
+	if err != nil {
+		t.Fatalf("BuildBundle() error = %v", err)
+	}
+
+	ctx := context.Background()
+	if agent.ModeRestrictsEdits(mode) {
+		ctx = InitReadOnlyMode(ctx)
 	}
 
 	// gpt-4o pricing puts 100k input + 10k output at 35% of a $1.00 cap.
@@ -226,7 +254,7 @@ func runBudgetReadLoop(t *testing.T, ctx context.Context) string {
 	}
 
 	llm := &captureLLM{responses: responses}
-	out, err := RunWithTools(ctx, llm, "sys", "user", dir, RunWithToolsConfig{
+	out, err := RunWithTools(ctx, llm, bundle.System, bundle.User, dir, RunWithToolsConfig{
 		Metrics:  m,
 		Executor: &executor.LocalExecutor{WorkingDir: dir},
 	})
@@ -236,42 +264,53 @@ func runBudgetReadLoop(t *testing.T, ctx context.Context) string {
 	if out != "done" {
 		t.Fatalf("run must reach the final answer, got %q", out)
 	}
-	return capturedText(llm)
+	return strings.ReplaceAll(capturedText(llm), dir, "<workdir>")
 }
 
-// TestReadOnlyBudgetAndReadLoopWordingIsEditFree covers the edit pressure that
-// does not come from the enforcers: the 25% budget warning and the read-cache
-// notices. A readonly agent cannot edit, so neither may tell it to.
-func TestReadOnlyBudgetAndReadLoopWordingIsEditFree(t *testing.T) {
+// TestReadOnlyRunIsNeverToldToEdit covers the edit pressure that does not come
+// from the enforcers: the system prompt's Tool Efficiency block, the 25% budget
+// warning and the read-cache notices. An agent in a mode that restricts edits
+// cannot edit, so none of them may tell it to.
+func TestReadOnlyRunIsNeverToldToEdit(t *testing.T) {
 	t.Parallel()
-	text := runBudgetReadLoop(t, InitReadOnlyMode(context.Background()))
+	for _, mode := range []string{"readonly", "plan"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			text := runBudgetReadLoop(t, mode)
 
-	for _, want := range []string{
-		"[BUDGET WARNING] You have used 25% of your cost budget ($",
-		"[CACHE HIT — file 'a.txt' unchanged",
-		"[READ LOOP DETECTED — 3 consecutive re-reads of cached files.",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("readonly agent must still be shown %q; messages:\n%s", want, text)
-		}
-	}
-	if strings.Contains(strings.ToLower(text), "edit") {
-		t.Fatalf("readonly agent must not be told to edit; messages:\n%s", text)
-	}
-	for _, marker := range []string{"[PROGRESS CHECK]", "Read is disabled", "Do not read more files"} {
-		if strings.Contains(text, marker) {
-			t.Fatalf("readonly agent must not see %q; messages:\n%s", marker, text)
-		}
+			for _, want := range []string{
+				"Mode: " + mode + "\n",
+				"## Tool Efficiency",
+				"[BUDGET WARNING] You have used 25% of your cost budget ($",
+				"[CACHE HIT — file 'a.txt' unchanged",
+				"[READ LOOP DETECTED — 3 consecutive re-reads of cached files.",
+			} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("%s agent must still be shown %q; messages:\n%s", mode, want, text)
+				}
+			}
+			if strings.Contains(strings.ToLower(text), "edit") {
+				t.Fatalf("%s agent must not be told to edit; messages:\n%s", mode, text)
+			}
+			for _, marker := range []string{"[PROGRESS CHECK]", "Read is disabled", "Do not read more files"} {
+				if strings.Contains(text, marker) {
+					t.Fatalf("%s agent must not see %q; messages:\n%s", mode, marker, text)
+				}
+			}
+		})
 	}
 }
 
-// TestEditModeBudgetAndReadLoopWordingUnchanged pins the wording edit-capable
-// agents already received, and proves the readonly test above can fail.
-func TestEditModeBudgetAndReadLoopWordingUnchanged(t *testing.T) {
+// TestEditModeRunKeepsEditWording pins the wording edit-capable agents already
+// received, and proves the readonly test above can fail.
+func TestEditModeRunKeepsEditWording(t *testing.T) {
 	t.Parallel()
-	text := runBudgetReadLoop(t, context.Background())
+	text := runBudgetReadLoop(t, "edit")
 
 	for _, want := range []string{
+		"- Making multiple edits: call Edit for ALL of them in one response.\n",
+		"Do NOT read files you have already read unless you need to verify edits you just made.\n",
+		"Do NOT spend more than a few iterations exploring before making your first edit.\n",
 		"[PROGRESS CHECK] You have used 25% of your cost budget ($",
 		" remaining). Have you made any edits yet? If not, you should have enough context — start editing NOW. " +
 			"List what you plan to change and begin immediately. Do not read more files.",

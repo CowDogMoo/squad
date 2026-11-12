@@ -1616,3 +1616,106 @@ func TestSharded(t *testing.T) {
 		})
 	}
 }
+
+// editCapableToolEfficiencyBlock is the Tool Efficiency block as edit-capable
+// agents have always received it.
+const editCapableToolEfficiencyBlock = `## Tool Efficiency
+
+When you need to perform multiple independent operations, invoke ALL relevant tools in a single response:
+- Reading multiple files: call Read for ALL of them in one response, not one at a time.
+- Making multiple edits: call Edit for ALL of them in one response.
+- Multiple searches: call Grep for ALL patterns in one response.
+
+Do NOT read files you have already read unless you need to verify edits you just made.
+Do NOT spend more than a few iterations exploring before making your first edit.
+Prefer using Read with offset/limit for large files instead of reading the entire file.
+`
+
+// readOnlyToolEfficiencyBlock is the same block without its edit-directed lines.
+const readOnlyToolEfficiencyBlock = `## Tool Efficiency
+
+When you need to perform multiple independent operations, invoke ALL relevant tools in a single response:
+- Reading multiple files: call Read for ALL of them in one response, not one at a time.
+- Multiple searches: call Grep for ALL patterns in one response.
+
+Do NOT read files you have already read.
+Prefer using Read with offset/limit for large files instead of reading the entire file.
+`
+
+// TestBuildBundle_ToolEfficiencyByMode builds real bundles through every
+// builder and checks the system prompt each mode is handed: a mode that
+// restricts edits must not be pushed toward editing, and edit-capable modes
+// keep the full block.
+func TestBuildBundle_ToolEfficiencyByMode(t *testing.T) {
+	t.Parallel()
+
+	promptFiles := map[string]string{
+		"system.md":  "Review the code.",
+		"wrapper.md": "You are a reviewer.",
+	}
+	builders := map[string]func(t *testing.T, mode string) (*Bundle, error){
+		"manifest agent": func(t *testing.T, mode string) (*Bundle, error) {
+			files := map[string]string{"agent.yaml": "name: reviewer\nversion: 1\nentrypoint: system.md\nwrapper: wrapper.md\n"}
+			for name, content := range promptFiles {
+				files[name] = content
+			}
+			dir, _ := setupTestAgent(t, "reviewer", files)
+			return BuildBundle(dir, "reviewer", "go", t.TempDir(), mode, nil)
+		},
+		"inline-prompt agent": func(t *testing.T, mode string) (*Bundle, error) {
+			dir, _ := setupTestAgent(t, "reviewer", map[string]string{
+				"agent.yaml": "name: reviewer\nversion: 1\nprompt: \"Review the code.\"\n",
+			})
+			return BuildBundle(dir, "reviewer", "go", t.TempDir(), mode, nil)
+		},
+		"inline stage": func(t *testing.T, mode string) (*Bundle, error) {
+			baseDir := t.TempDir()
+			writeTestFiles(t, baseDir, promptFiles)
+			cfg := &InlineAgentConfig{Name: "reviewer", EntryPoint: "system.md", Wrapper: "wrapper.md"}
+			return BuildBundleInline(baseDir, cfg, "go", t.TempDir(), mode, nil)
+		},
+	}
+	editLines := []string{
+		"Making multiple edits: call Edit for ALL of them in one response.",
+		"unless you need to verify edits you just made",
+		"Do NOT spend more than a few iterations exploring before making your first edit.",
+	}
+
+	for name, build := range builders {
+		for _, mode := range []string{"readonly", "plan"} {
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				t.Parallel()
+				bundle, err := build(t, mode)
+				if err != nil {
+					t.Fatalf("build bundle: %v", err)
+				}
+				assertContains(t, bundle.System, "Mode: "+mode+"\n", "system prompt")
+				assertContains(t, bundle.System, readOnlyToolEfficiencyBlock, "system prompt")
+				for _, line := range editLines {
+					assertNotContains(t, bundle.System, line, "system prompt")
+					assertNotContains(t, string(bundle.Combined), line, "combined prompt")
+				}
+			})
+		}
+		for _, mode := range []string{"", "edit"} {
+			t.Run(name+"/edit-capable mode "+mode, func(t *testing.T) {
+				t.Parallel()
+				bundle, err := build(t, mode)
+				if err != nil {
+					t.Fatalf("build bundle: %v", err)
+				}
+				assertContains(t, bundle.System, editCapableToolEfficiencyBlock, "system prompt")
+				assertContains(t, string(bundle.Combined), editCapableToolEfficiencyBlock, "combined prompt")
+			})
+		}
+	}
+}
+
+func TestModeRestrictsEdits(t *testing.T) {
+	t.Parallel()
+	for mode, want := range map[string]bool{"readonly": true, "plan": true, "edit": false, "": false} {
+		if got := ModeRestrictsEdits(mode); got != want {
+			t.Errorf("ModeRestrictsEdits(%q) = %v, want %v", mode, got, want)
+		}
+	}
+}

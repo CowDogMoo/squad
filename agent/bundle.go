@@ -505,6 +505,13 @@ func resolveDisplayMode(mode string) string {
 	return mode
 }
 
+// ModeRestrictsEdits reports whether mode forbids file mutations. "plan" is
+// the plan-review flavor of readonly (offered by the TUI launcher and stage
+// manifests): the agent analyzes and proposes, but changes nothing.
+func ModeRestrictsEdits(mode string) bool {
+	return mode == "readonly" || mode == "plan"
+}
+
 // processTemplate executes a Go text/template with the given data.
 // Templates can use {{if eq .Mode "edit"}}...{{end}} conditionals.
 // Templates can use {{include "hard-rules/universal.md"}} to include shared content.
@@ -771,19 +778,26 @@ func loadAndProcessPrompts(agentPath, agentsDir string, manifest *Manifest, data
 	return system, wrapper, task, nil
 }
 
-// toolEfficiencyPrompt is injected into all agent system prompts to encourage
-// batching of tool calls and efficient file reading.
-const toolEfficiencyPrompt = `## Tool Efficiency
-
-When you need to perform multiple independent operations, invoke ALL relevant tools in a single response:
-- Reading multiple files: call Read for ALL of them in one response, not one at a time.
-- Making multiple edits: call Edit for ALL of them in one response.
-- Multiple searches: call Grep for ALL patterns in one response.
-
-Do NOT read files you have already read unless you need to verify edits you just made.
-Do NOT spend more than a few iterations exploring before making your first edit.
-Prefer using Read with offset/limit for large files instead of reading the entire file.
-`
+// toolEfficiencyPrompt returns the block injected into all agent system prompts
+// to encourage batching of tool calls and efficient file reading. A mode that
+// restricts edits gets it without the edit-directed lines: such an agent cannot
+// edit, so pushing it toward a first edit only cuts its reading short.
+func toolEfficiencyPrompt(mode string) string {
+	editBatching := "- Making multiple edits: call Edit for ALL of them in one response.\n"
+	rereadException := " unless you need to verify edits you just made"
+	firstEditDeadline := "Do NOT spend more than a few iterations exploring before making your first edit.\n"
+	if ModeRestrictsEdits(mode) {
+		editBatching, rereadException, firstEditDeadline = "", "", ""
+	}
+	return "## Tool Efficiency\n\n" +
+		"When you need to perform multiple independent operations, invoke ALL relevant tools in a single response:\n" +
+		"- Reading multiple files: call Read for ALL of them in one response, not one at a time.\n" +
+		editBatching +
+		"- Multiple searches: call Grep for ALL patterns in one response.\n\n" +
+		"Do NOT read files you have already read" + rereadException + ".\n" +
+		firstEditDeadline +
+		"Prefer using Read with offset/limit for large files instead of reading the entire file.\n"
+}
 
 // compactRepoSummary generates a brief structural overview of the working directory.
 // This is injected into the system prompt so agents don't waste iterations
@@ -1007,7 +1021,7 @@ func buildSystemMessage(manifest *Manifest, displayMode, workingDir, wrapperCont
 
 	// Inject tool efficiency instructions into all agents.
 	sys.WriteString("\n\n")
-	sys.WriteString(toolEfficiencyPrompt)
+	sys.WriteString(toolEfficiencyPrompt(displayMode))
 
 	if skillBlock != "" {
 		sys.WriteString("\n")
@@ -1158,7 +1172,7 @@ func buildInlineSystemMessage(manifest *Manifest, displayMode, workingDir, promp
 	}
 
 	sys.WriteString("\n\n")
-	sys.WriteString(toolEfficiencyPrompt)
+	sys.WriteString(toolEfficiencyPrompt(displayMode))
 
 	if skillBlock != "" {
 		sys.WriteString("\n")
