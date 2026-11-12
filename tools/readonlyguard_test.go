@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,5 +82,113 @@ func TestReadOnlyModeAllowsReadOnlyTool(t *testing.T) {
 	}
 	if !strings.Contains(resp.Content, "hello") {
 		t.Fatalf("expected file contents in Read response, got: %s", resp.Content)
+	}
+}
+
+func TestInitToolLoopEnforcersReadOnly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("readonly mode creates no enforcers", func(t *testing.T) {
+		t.Parallel()
+		ctx, ee, pe := initToolLoopEnforcers(InitReadOnlyMode(context.Background()), 4)
+		if ee != nil || pe != nil {
+			t.Fatalf("readonly mode must not create enforcers, got edit=%v phase=%v", ee, pe)
+		}
+		if GetEditEnforcer(ctx) != nil || GetPhaseEnforcer(ctx) != nil {
+			t.Fatal("readonly mode must not attach enforcers to ctx")
+		}
+		if shouldBlockReadTools(ctx) {
+			t.Fatal("readonly mode must never block reads")
+		}
+	})
+
+	t.Run("edit-capable mode keeps both enforcers", func(t *testing.T) {
+		t.Parallel()
+		ctx, ee, pe := initToolLoopEnforcers(context.Background(), 4)
+		if ee == nil || pe == nil {
+			t.Fatalf("edit mode must create enforcers, got edit=%v phase=%v", ee, pe)
+		}
+		if GetEditEnforcer(ctx) != ee || GetPhaseEnforcer(ctx) != pe {
+			t.Fatal("edit mode must attach enforcers to ctx")
+		}
+	})
+}
+
+// readOnlyLoopResponses scripts n iterations of read-like Bash calls that do
+// not populate the read cache (so discovery progress never resets the enforcers) followed by a
+// final answer.
+func readOnlyLoopResponses(n int) []*llms.ContentResponse {
+	var out []*llms.ContentResponse
+	for i := 0; i < n; i++ {
+		out = append(out, &llms.ContentResponse{Choices: []*llms.ContentChoice{{
+			ToolCalls: []llms.ToolCall{{
+				ID:   fmt.Sprintf("c%d", i),
+				Type: "function",
+				FunctionCall: &llms.FunctionCall{
+					Name:      "Bash",
+					Arguments: fmt.Sprintf(`{"command":"ls nomatch%d"}`, i),
+				},
+			}},
+		}}})
+	}
+	return out
+}
+
+func runReadOnlyLoop(t *testing.T, ctx context.Context, iters, editDeadline int) (*captureLLM, error, bool) {
+	t.Helper()
+	dir := t.TempDir()
+	handlers, _ := BuildHandlers(dir, nil, &executor.LocalExecutor{WorkingDir: dir})
+	llm := &captureLLM{responses: readOnlyLoopResponses(iters)}
+	_, _, err, done := toolLoop(ctx, llm, buildInitialMessages("sys", "user", false), handlers, iters+5, RunWithToolsConfig{EditDeadline: editDeadline}, nil)
+	return llm, err, done
+}
+
+func capturedText(llm *captureLLM) string {
+	var sb strings.Builder
+	for _, msgs := range llm.captured {
+		for _, msg := range msgs {
+			for _, part := range msg.Parts {
+				switch p := part.(type) {
+				case llms.TextContent:
+					sb.WriteString(p.Text)
+					sb.WriteString("\n")
+				case llms.ToolCallResponse:
+					sb.WriteString(p.Content)
+					sb.WriteString("\n")
+				}
+			}
+		}
+	}
+	return sb.String()
+}
+
+// TestToolLoopReadOnlyNeverNudgedOrBlocked is the regression test for readonly
+// agents stalling: they cannot edit, so many read-only iterations must produce
+// no "start editing" nudge, no read blocking, and no edit-deadline stop.
+func TestToolLoopReadOnlyNeverNudgedOrBlocked(t *testing.T) {
+	t.Parallel()
+	llm, err, done := runReadOnlyLoop(t, InitReadOnlyMode(context.Background()), 12, 4)
+	if err != nil || !done {
+		t.Fatalf("readonly loop must run to completion, err=%v done=%v", err, done)
+	}
+	text := capturedText(llm)
+	for _, marker := range []string{"[PROGRESS CHECK]", "[URGENT", "[FINAL WARNING]", "READ BLOCKED"} {
+		if strings.Contains(text, marker) {
+			t.Fatalf("readonly agent must not see %q; messages:\n%s", marker, text)
+		}
+	}
+}
+
+// TestToolLoopEditModeStillNudgesAndBlocks pins the unchanged behavior for
+// edit-capable agents, and proves the readonly test above can fail.
+func TestToolLoopEditModeStillNudgesAndBlocks(t *testing.T) {
+	t.Parallel()
+	llm, _, _ := runReadOnlyLoop(t, context.Background(), 12, 0)
+	text := capturedText(llm)
+	if !strings.Contains(text, "[PROGRESS CHECK]") || !strings.Contains(text, "[URGENT") {
+		t.Fatalf("edit-capable agent must still receive escalating nudges; messages:\n%s", text)
+	}
+	if !strings.Contains(text, "BASH READ BLOCKED") {
+		t.Fatalf("edit-capable agent must still have reads blocked after ignored nudges; messages:\n%s", text)
 	}
 }

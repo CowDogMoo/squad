@@ -641,7 +641,12 @@ func budgetWarningMessage(pctInt int, remaining float64) string {
 }
 
 // initToolLoopEnforcers creates and attaches edit/phase enforcers to the context.
+// Both measure progress as edits, so they are skipped in readonly mode: the
+// agent cannot edit by design, and nudging or blocking its reads would stall it.
 func initToolLoopEnforcers(ctx context.Context, editDeadline int) (context.Context, *EditEnforcer, *PhaseEnforcer) {
+	if IsReadOnlyMode(ctx) {
+		return ctx, nil, nil
+	}
 	editEnforcer := NewEditEnforcer(editDeadline)
 	if editEnforcer != nil {
 		ctx = SetEditEnforcer(ctx, editEnforcer)
