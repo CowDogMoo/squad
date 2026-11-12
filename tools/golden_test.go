@@ -62,7 +62,7 @@ func TestGolden_TruncateToLines(t *testing.T) {
 func TestGolden_CompactionSummary(t *testing.T) {
 	t.Parallel()
 	messages := buildCompactionTestMessages()
-	result := CompactionSummary(messages, nil)
+	result := CompactionSummary(messages, nil, false)
 	goldenTest(t, "compaction_summary", result)
 }
 

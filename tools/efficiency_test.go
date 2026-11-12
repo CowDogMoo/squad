@@ -297,7 +297,7 @@ func TestCompactionSummary(t *testing.T) {
 		},
 	}
 
-	summary := CompactionSummary(messages, nil)
+	summary := CompactionSummary(messages, nil, false)
 	if summary == "" {
 		t.Fatal("expected non-empty summary")
 	}
@@ -328,7 +328,7 @@ func TestCompactionSummaryEmpty(t *testing.T) {
 			Parts: []llms.ContentPart{llms.TextContent{Text: "hello"}},
 		},
 	}
-	if summary := CompactionSummary(messages, nil); summary != "" {
+	if summary := CompactionSummary(messages, nil, false); summary != "" {
 		t.Fatalf("expected empty summary for no tool calls, got: %s", summary)
 	}
 }
@@ -888,7 +888,7 @@ func TestCompactionSummaryWithCache(t *testing.T) {
 		},
 	}
 
-	summary := CompactionSummary(messages, rc)
+	summary := CompactionSummary(messages, rc, false)
 	if !strings.Contains(summary, "previously read") {
 		t.Fatalf("expected 'previously read' header with cache, got: %s", summary)
 	}

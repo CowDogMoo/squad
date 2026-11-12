@@ -123,7 +123,7 @@ Only `name`, `entrypoint`, `wrapper`, and `task` are required. Everything else i
 
 - `comments_only` is for cleanup agents (e.g. `go-scrub-comments`). When set, the Edit and MultiEdit tools reject any change that touches non-comment lines, so an LLM hallucinating new code can't silently mutate the codebase.
 - `disable_task` removes the `Task` tool from the agent, useful for leaf agents that shouldn't dispatch child runs.
-- `edit_deadline` enters a grace period after N iterations without an Edit; reads are blocked so the model is forced to commit pending fixes.
+- `edit_deadline` enters a grace period after N iterations without an Edit; reads are blocked so the model is forced to commit pending fixes. It is not enforced in readonly or plan mode, where the agent cannot edit.
 - `isolation` defers to the CLI `--isolate` flag and, ultimately, the config default. `worktree` is the safest for agents that apply diffs.
 
 ### system.md (Main Prompt)

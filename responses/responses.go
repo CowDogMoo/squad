@@ -225,7 +225,11 @@ func newClient(apiKey, baseURL, organization string) openai.Client {
 
 func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config, maxIter, editDeadline int, m *metrics.Metrics) (*oairesponses.Response, string, error) {
 	var repeat tools.RepeatTracker
-	editEnforcer := tools.NewEditEnforcer(editDeadline)
+	var editEnforcer *tools.EditEnforcer
+	if !tools.IsReadOnlyMode(ctx) {
+		// A readonly agent cannot edit, so the edit deadline never applies.
+		editEnforcer = tools.NewEditEnforcer(editDeadline)
+	}
 	logger := session.FromContext(ctx)
 	for i := 0; i < maxIter; i++ {
 		calls := ExtractFunctionCalls(resp)

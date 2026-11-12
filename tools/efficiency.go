@@ -414,11 +414,18 @@ func writeCappedList(sb *strings.Builder, label string, items []string, cap int)
 // they are compacted, preserving the agent's "mental map" of what it has done.
 // When rc is non-nil, per-file summaries (line count + declarations) are
 // included so the model can write edits without re-reading files.
-func CompactionSummary(messages []llms.MessageContent, rc *ReadCache) string {
+// When readOnly is set the guidance does not mention edits, since the agent
+// cannot make any.
+func CompactionSummary(messages []llms.MessageContent, rc *ReadCache, readOnly bool) string {
 	s := collectCompactionStats(messages)
 
 	if len(s.filesRead) == 0 && len(s.editsApplied) == 0 {
 		return ""
+	}
+
+	next := "write edits"
+	if readOnly {
+		next = "continue your analysis"
 	}
 
 	var sb strings.Builder
@@ -427,7 +434,7 @@ func CompactionSummary(messages []llms.MessageContent, rc *ReadCache) string {
 	if len(s.filesRead) > 0 {
 		summaries := rc.Summaries()
 		if len(summaries) > 0 {
-			sb.WriteString("Files previously read (do NOT re-read — use these summaries to write edits):\n")
+			fmt.Fprintf(&sb, "Files previously read (do NOT re-read — use these summaries to %s):\n", next)
 			keys := sortedKeys(s.filesRead)
 			cap := 30
 			for i, path := range keys {
@@ -464,7 +471,7 @@ func CompactionSummary(messages []llms.MessageContent, rc *ReadCache) string {
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("Do NOT re-read files listed above — write edits from the summaries and your notes.\n")
+	fmt.Fprintf(&sb, "Do NOT re-read files listed above — %s from the summaries and your notes.\n", next)
 	return sb.String()
 }
 
@@ -561,8 +568,9 @@ func TruncateToLines(content string, headLines, tailLines int) string {
 	return fmt.Sprintf("%s\n... [%d lines omitted — use Read with offset/limit] ...\n\n%s", head, omitted, tail)
 }
 
-// ToolEfficiencyPrompt is injected into all agent system prompts to encourage
-// batching of tool calls and efficient file reading.
+// ToolEfficiencyPrompt is unused by squad: agent system prompts get the
+// mode-aware Tool Efficiency block built by toolEfficiencyPrompt in the agent
+// package instead.
 const ToolEfficiencyPrompt = `## Tool Efficiency
 
 When you need to perform multiple independent operations, invoke ALL relevant tools in a single response:
@@ -580,6 +588,11 @@ Prefer using Read with offset/limit for large files instead of reading the entir
 const ProgressCheckPrompt = "[PROGRESS CHECK] You have used 25%% of your cost budget ($%.2f remaining). " +
 	"Have you made any edits yet? If not, you should have enough context — start editing NOW. " +
 	"List what you plan to change and begin immediately. Do not read more files."
+
+// ReadOnlyProgressCheckPrompt replaces ProgressCheckPrompt for readonly agents,
+// which cannot edit and whose work is reading.
+const ReadOnlyProgressCheckPrompt = "[BUDGET WARNING] You have used 25%% of your cost budget ($%.2f remaining). " +
+	"Focus on what matters most for your task and leave enough budget to produce your final output."
 
 // TokenCalibration tracks the ratio between estimated and actual token counts
 // to improve the accuracy of estimateTokens over time.

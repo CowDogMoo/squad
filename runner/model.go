@@ -175,17 +175,10 @@ func rehydrateSkillStack(rt *tools.SkillRuntime, workingDir string, logger *sess
 	_ = workingDir // reserved for future use if absolute paths need rebasing
 }
 
-// modeRestrictsEdits reports whether mode forbids file mutations. "plan" is
-// the plan-review flavor of readonly (offered by the TUI launcher and stage
-// manifests): the agent analyzes and proposes, but changes nothing.
-func modeRestrictsEdits(mode string) bool {
-	return mode == "readonly" || mode == "plan"
-}
-
 // applyReadOnlyMode enables the readonly tool gate on ctx when mode
 // restricts edits ("readonly", "plan"), and returns ctx unchanged otherwise.
 func applyReadOnlyMode(ctx context.Context, mode string) context.Context {
-	if !modeRestrictsEdits(mode) {
+	if !agent.ModeRestrictsEdits(mode) {
 		return ctx
 	}
 	logging.InfoContext(ctx, "%s mode: Write/Edit/MultiEdit will be rejected", mode)

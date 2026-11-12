@@ -1425,3 +1425,74 @@ func TestTrackResponseMetricsSplitsCachedTokens(t *testing.T) {
 		})
 	}
 }
+
+// runEditDeadlineLoop drives RunWithTools through `calls` read-only tool-call
+// responses followed by a final text answer, with editDeadline set to 2.
+// It returns the final text, the run error, and whether the edit deadline
+// stopped the loop.
+func runEditDeadlineLoop(t *testing.T, ctx context.Context, calls int) (string, error, bool) {
+	t.Helper()
+	base := func(output []map[string]any) map[string]any {
+		return map[string]any{
+			"id": "resp", "object": "response", "created_at": 0,
+			"model": "gpt-4o", "parallel_tool_calls": false,
+			"temperature": 0, "tool_choice": "auto", "tools": []any{},
+			"top_p":              1,
+			"error":              map[string]any{"code": "server_error", "message": ""},
+			"incomplete_details": map[string]any{"reason": ""},
+			"instructions":       "system",
+			"metadata":           map[string]any{},
+			"output":             output,
+		}
+	}
+	var served int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := int(atomic.AddInt32(&served, 1))
+		w.Header().Set("Content-Type", "application/json")
+		payload := base([]map[string]any{{
+			"id": "msg", "type": "message", "role": "assistant", "status": "completed",
+			"content": []map[string]any{{"type": "output_text", "text": "final answer"}},
+		}})
+		if n <= calls {
+			payload = base([]map[string]any{{
+				"id": fmt.Sprintf("fc-%d", n), "type": "function_call",
+				"call_id": fmt.Sprintf("call-%d", n), "name": "Glob",
+				"arguments": fmt.Sprintf(`{"pattern":"*.nomatch%d"}`, n),
+			}})
+		}
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer server.Close()
+
+	ctx = tools.InitEditDeadline(ctx)
+	td := t.TempDir()
+	text, err := RunWithTools(ctx, "key", server.URL, "gpt-4o", "system", "user", td, "", "",
+		0.4, 0, calls+5, 2, nil, nil, nil, &executor.LocalExecutor{WorkingDir: td}, nil, nil)
+	return text, err, tools.EditDeadlineReached(ctx)
+}
+
+// TestToolLoopReadOnlyIgnoresEditDeadline guards readonly agents against the
+// edit deadline: they cannot edit, so reading must never trip it.
+func TestToolLoopReadOnlyIgnoresEditDeadline(t *testing.T) {
+	t.Parallel()
+	text, err, reached := runEditDeadlineLoop(t, tools.InitReadOnlyMode(context.Background()), 6)
+	if err != nil {
+		t.Fatalf("RunWithTools() error = %v", err)
+	}
+	if reached {
+		t.Fatal("readonly run must not trip the edit deadline")
+	}
+	if text != "final answer" {
+		t.Fatalf("readonly run must reach the final answer, got %q", text)
+	}
+}
+
+// TestToolLoopEditModeStillHonorsEditDeadline pins the unchanged behavior for
+// edit-capable runs, and proves the readonly test above can fail.
+func TestToolLoopEditModeStillHonorsEditDeadline(t *testing.T) {
+	t.Parallel()
+	// The mock has no text to give once the loop stops early, so the run error is ignored.
+	if _, _, reached := runEditDeadlineLoop(t, context.Background(), 6); !reached {
+		t.Fatal("edit-capable run must still trip the edit deadline after read-only iterations")
+	}
+}

@@ -319,7 +319,7 @@ type RunWithToolsConfig struct {
 	MaxIterations int
 	// EditDeadline is the iteration number after which read-only tools are
 	// blocked to force the model to commit pending edits. Zero disables the
-	// deadline.
+	// deadline, and it is ignored in readonly mode.
 	EditDeadline int
 	// TaskCfg wires in the Task/TaskResult tools and child-agent dispatch.
 	// Nil disables the Task tool entirely.
@@ -520,7 +520,13 @@ func getGraceState(ctx context.Context) *graceState {
 // Either enforcer can independently trigger blocking.
 // However, if an Edit just failed during the grace period, reads are
 // temporarily unblocked so the agent can re-read and retry its edit.
+// Reads are never blocked in readonly mode: the agent cannot edit, so nothing
+// would unblock it, whether the enforcers are its own or inherited from a
+// parent's context.
 func shouldBlockReadTools(ctx context.Context) bool {
+	if IsReadOnlyMode(ctx) {
+		return false
+	}
 	// Grace-period edit failure overrides all blocking — the agent
 	// genuinely needs to re-read to construct a valid Edit.
 	if gs := getGraceState(ctx); gs != nil && gs.editFailedInGrace {
@@ -618,7 +624,7 @@ func injectBudgetWarnings(ctx context.Context, m *metrics.Metrics, warned []bool
 		warned[idx] = true
 		pctInt := int(threshold * 100)
 		remaining := m.RemainingBudget()
-		msg := budgetWarningMessage(pctInt, remaining)
+		msg := budgetWarningMessage(pctInt, remaining, IsReadOnlyMode(ctx))
 		logging.InfoContext(ctx, "injecting budget warning at %d%% (remaining=$%.4f)", pctInt, remaining)
 		messages = append(messages, llms.MessageContent{
 			Role:  llms.ChatMessageTypeHuman,
@@ -629,8 +635,12 @@ func injectBudgetWarnings(ctx context.Context, m *metrics.Metrics, warned []bool
 }
 
 // budgetWarningMessage returns the warning text for a given budget percentage.
-func budgetWarningMessage(pctInt int, remaining float64) string {
+// A readonly agent cannot edit, so its 25% message carries no edit pressure.
+func budgetWarningMessage(pctInt int, remaining float64, readOnly bool) string {
 	if pctInt == 25 {
+		if readOnly {
+			return fmt.Sprintf(ReadOnlyProgressCheckPrompt, remaining)
+		}
 		return fmt.Sprintf(ProgressCheckPrompt, remaining)
 	}
 	return fmt.Sprintf(
@@ -641,7 +651,12 @@ func budgetWarningMessage(pctInt int, remaining float64) string {
 }
 
 // initToolLoopEnforcers creates and attaches edit/phase enforcers to the context.
+// Both measure progress as edits, so they are skipped in readonly mode: the
+// agent cannot edit by design, and nudging or blocking its reads would stall it.
 func initToolLoopEnforcers(ctx context.Context, editDeadline int) (context.Context, *EditEnforcer, *PhaseEnforcer) {
+	if IsReadOnlyMode(ctx) {
+		return ctx, nil, nil
+	}
 	editEnforcer := NewEditEnforcer(editDeadline)
 	if editEnforcer != nil {
 		ctx = SetEditEnforcer(ctx, editEnforcer)
@@ -1537,9 +1552,17 @@ func checkReadCache(ctx context.Context, resolvedPath, displayPath string, data 
 	}
 	streak := rc.IncrementStreak()
 	logReadCacheHit(ctx, displayPath, entry)
+	readOnly := IsReadOnlyMode(ctx)
 
 	// Circuit breaker: after too many consecutive cache hits, hard block.
 	if streak >= cacheHitStreakThreshold {
+		if readOnly {
+			return fmt.Sprintf(
+				"[READ LOOP DETECTED — %d consecutive re-reads of cached files. "+
+					"File '%s' unchanged since iteration %d (%d lines); its content was already provided. "+
+					"You likely have enough to conclude — move on with what you have.]",
+				streak, displayPath, entry.Iteration, entry.Lines), true
+		}
 		return fmt.Sprintf(
 			"[READ LOOP DETECTED — %d consecutive re-reads of cached files. "+
 				"Read is disabled until you make an Edit or Write call. "+
@@ -1553,10 +1576,14 @@ func checkReadCache(ctx context.Context, resolvedPath, displayPath string, data 
 	if entry.Summary != "" {
 		summaryHint = " Content summary: " + entry.Summary + "."
 	}
+	next := "Write edits from your notes"
+	if readOnly {
+		next = "Work from your notes"
+	}
 	return fmt.Sprintf(
 		"[CACHE HIT — file '%s' unchanged since iteration %d (%d lines, %d bytes).%s "+
-			"Content was already provided. Write edits from your notes — do NOT re-read.]",
-		displayPath, entry.Iteration, entry.Lines, entry.Bytes, summaryHint), true
+			"Content was already provided. %s — do NOT re-read.]",
+		displayPath, entry.Iteration, entry.Lines, entry.Bytes, summaryHint, next), true
 }
 
 func readTool(workingDir string) func(ctx context.Context, rawArgs []byte) (string, error) {
@@ -2144,7 +2171,7 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent, m *met
 	compactEnd := len(messages) - protectedTail
 
 	middleMessages := messages[protectedHead:compactEnd]
-	summary := CompactionSummary(middleMessages, GetReadCache(ctx))
+	summary := CompactionSummary(middleMessages, GetReadCache(ctx), IsReadOnlyMode(ctx))
 
 	editedFiles := CollectEditedFiles(messages[:compactEnd])
 	recentFiles := ExtractRecentFiles(messages[compactEnd:])
