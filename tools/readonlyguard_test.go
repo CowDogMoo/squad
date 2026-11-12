@@ -195,6 +195,93 @@ func TestToolLoopEditModeStillNudgesAndBlocks(t *testing.T) {
 	}
 }
 
+// inheritedEnforcerContexts returns contexts as a Task child receives them from
+// an edit-capable parent: each carries one parent enforcer that has already
+// tripped read blocking.
+func inheritedEnforcerContexts(t *testing.T) map[string]context.Context {
+	t.Helper()
+	pe := NewPhaseEnforcer(defaultPhaseNudgeIters)
+	for i := 0; i < 2*defaultPhaseNudgeIters; i++ {
+		pe.ObserveTools([]string{"Task"})
+	}
+	ee := NewEditEnforcer(4)
+	for i := 0; i < 4; i++ {
+		ee.CheckNames([]string{"Task"})
+	}
+	if !pe.ShouldBlockReads() || !ee.ShouldBlockReads() {
+		t.Fatalf("parent enforcers must be tripped, got phase=%v edit=%v", pe.ShouldBlockReads(), ee.ShouldBlockReads())
+	}
+	return map[string]context.Context{
+		"phase enforcer": SetPhaseEnforcer(context.Background(), pe),
+		"edit enforcer":  SetEditEnforcer(context.Background(), ee),
+	}
+}
+
+func seededReadHandlers(t *testing.T) map[string]Handler {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("file body"), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	handlers, _ := BuildHandlers(dir, nil, &executor.LocalExecutor{WorkingDir: dir})
+	return handlers
+}
+
+var (
+	readCall = llms.ToolCall{ID: "r", Type: "function", FunctionCall: &llms.FunctionCall{Name: "Read", Arguments: `{"path":"a.txt"}`}}
+	lsCall   = llms.ToolCall{ID: "b", Type: "function", FunctionCall: &llms.FunctionCall{Name: "Bash", Arguments: `{"command":"ls"}`}}
+)
+
+// TestToolLoopReadOnlyChildIgnoresInheritedEnforcers is the regression test for
+// a readonly Task child of an edit-capable parent: the child's context is
+// derived from the parent's, so it can see enforcers the parent has already
+// tripped. It cannot edit to clear them, so they must not block its reads.
+func TestToolLoopReadOnlyChildIgnoresInheritedEnforcers(t *testing.T) {
+	t.Parallel()
+	for name, parentCtx := range inheritedEnforcerContexts(t) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			handlers := seededReadHandlers(t)
+			llm := &captureLLM{responses: []*llms.ContentResponse{
+				{Choices: []*llms.ContentChoice{{ToolCalls: []llms.ToolCall{readCall}}}},
+				{Choices: []*llms.ContentChoice{{ToolCalls: []llms.ToolCall{lsCall}}}},
+			}}
+			_, _, err, done := toolLoop(InitReadOnlyMode(parentCtx), llm, buildInitialMessages("sys", "user", false), handlers, 5, RunWithToolsConfig{}, nil)
+			if err != nil || !done {
+				t.Fatalf("readonly child must run to completion, err=%v done=%v", err, done)
+			}
+			text := capturedText(llm)
+			if strings.Contains(text, "READ BLOCKED") {
+				t.Fatalf("readonly child must not have reads blocked by an inherited enforcer; messages:\n%s", text)
+			}
+			if !strings.Contains(text, "file body") {
+				t.Fatalf("readonly child's Read must return the file; messages:\n%s", text)
+			}
+			if !strings.Contains(text, "a.txt") {
+				t.Fatalf("readonly child's read-like Bash command must run; messages:\n%s", text)
+			}
+		})
+	}
+}
+
+// TestTrippedEnforcersStillBlockEditCapableReads pins the unchanged behavior
+// outside readonly mode, and proves the readonly test above can fail.
+func TestTrippedEnforcersStillBlockEditCapableReads(t *testing.T) {
+	t.Parallel()
+	for name, ctx := range inheritedEnforcerContexts(t) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			handlers := seededReadHandlers(t)
+			if got := executeToolCall(ctx, readCall, handlers).Content; !strings.HasPrefix(got, "READ BLOCKED") {
+				t.Fatalf("edit-capable Read must still be blocked, got: %s", got)
+			}
+			if got := executeToolCall(ctx, lsCall, handlers).Content; !strings.HasPrefix(got, "BASH READ BLOCKED") {
+				t.Fatalf("edit-capable read-like Bash must still be blocked, got: %s", got)
+			}
+		})
+	}
+}
+
 // runBudgetReadLoop builds a real agent bundle for mode and drives RunWithTools
 // with its system prompt through four reads of the same file (one fresh read,
 // then three cache hits, which trips the read-loop notice) with a cost cap

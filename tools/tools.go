@@ -520,7 +520,13 @@ func getGraceState(ctx context.Context) *graceState {
 // Either enforcer can independently trigger blocking.
 // However, if an Edit just failed during the grace period, reads are
 // temporarily unblocked so the agent can re-read and retry its edit.
+// Reads are never blocked in readonly mode: the agent cannot edit, so nothing
+// would unblock it, whether the enforcers are its own or inherited from a
+// parent's context.
 func shouldBlockReadTools(ctx context.Context) bool {
+	if IsReadOnlyMode(ctx) {
+		return false
+	}
 	// Grace-period edit failure overrides all blocking — the agent
 	// genuinely needs to re-read to construct a valid Edit.
 	if gs := getGraceState(ctx); gs != nil && gs.editFailedInGrace {
