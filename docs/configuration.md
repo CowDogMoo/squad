@@ -553,10 +553,14 @@ The default is 32768 tokens. Increase it for agents that process large files.
 
 The window is shared between the prompt and the reply. squad gives the reply
 an eighth of `num_ctx` (4096 tokens at the default), or a quarter with
-`--ollama-think`, and never more than `--max-tokens`. It sends that amount to
-Ollama as `num_predict` and sets the same amount aside when it sizes the
-prompt, so the two always fit the window together. Raise `--num-ctx` to give
-the reply more room.
+`--ollama-think`. It sends that amount to Ollama as `num_predict` and sets the
+same amount aside when it sizes the prompt, so the two always fit the window
+together. Raise `--num-ctx` to give the reply more room.
+
+`--max-tokens` rarely matters for Ollama. squad raises it to at least 16384
+for every agent run, and it lowers the reply budget only when it is below the
+reply's share of the window. That takes a `num_ctx` above 131072, or above
+65536 with `--ollama-think`.
 
 Ollama cuts a prompt that does not fit `num_ctx` from the front, which loses
 the system prompt and agent instructions. So before each request, squad

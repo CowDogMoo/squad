@@ -234,19 +234,59 @@ func TestThinkingOnlyTurnIsRetried(t *testing.T) {
 }
 
 // TestEmptyTurnTwiceFails checks that a second empty turn is an error naming
-// the cause, never a silent empty final answer.
+// the cause, never a silent empty final answer. When the reply ran into its
+// budget, the error must name the setting that holds the budget down, and
+// only that one: raising the other changes nothing. 16384 is the least the
+// runner ever passes as max tokens.
 func TestEmptyTurnTwiceFails(t *testing.T) {
 	t.Parallel()
-	_, srv := newFakeOllama(t, fakeReply{body: thinkingOnlyReply}, fakeReply{body: thinkingOnlyReply})
-	llm := New(srv.URL, "qwen3", 65536, WithThink(true))
-	_, err := llm.GenerateContent(context.Background(), userMsg("weather?"), weatherOpts()...)
-	if !errors.Is(err, ErrEmptyTurn) {
-		t.Fatalf("error = %v, want ErrEmptyTurn", err)
+	tests := []struct {
+		name      string
+		numCtx    int
+		think     bool
+		maxTokens int
+		want      []string
+		notWant   []string
+	}{
+		{
+			name:   "the reply's share of the window is the bound",
+			numCtx: 32768, maxTokens: 16384,
+			want:    []string{"num_predict=4096", "raise --num-ctx"},
+			notWant: []string{"--max-tokens"},
+		},
+		{
+			name:   "the caller's max tokens is the bound",
+			numCtx: 65536, think: true, maxTokens: 1024,
+			want:    []string{"num_predict=1024", "raise --max-tokens above 1024"},
+			notWant: []string{"--num-ctx"},
+		},
+		{
+			name:   "both are the bound",
+			numCtx: 65536, think: true, maxTokens: 16384,
+			want: []string{"num_predict=16384", "raise --num-ctx", "raise --max-tokens above 16384"},
+		},
 	}
-	for _, want := range []string{"qwen3", "done_reason=length", "num_predict=1024", "--max-tokens", "--num-ctx"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error %q must mention %q", err, want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, srv := newFakeOllama(t, fakeReply{body: thinkingOnlyReply}, fakeReply{body: thinkingOnlyReply})
+			llm := New(srv.URL, "qwen3", tt.numCtx, WithThink(tt.think))
+			opts := append(weatherOpts(), llms.WithMaxTokens(tt.maxTokens))
+			_, err := llm.GenerateContent(context.Background(), userMsg("weather?"), opts...)
+			if !errors.Is(err, ErrEmptyTurn) {
+				t.Fatalf("error = %v, want ErrEmptyTurn", err)
+			}
+			for _, want := range append([]string{"qwen3", "done_reason=length"}, tt.want...) {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q must mention %q", err, want)
+				}
+			}
+			for _, notWant := range tt.notWant {
+				if strings.Contains(err.Error(), notWant) {
+					t.Fatalf("error %q must not point at %q", err, notWant)
+				}
+			}
+		})
 	}
 }
 

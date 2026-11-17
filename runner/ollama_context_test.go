@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/ollama"
 )
 
 // probeMessage is the part of an Ollama chat message the fake model reads.
@@ -411,6 +413,55 @@ func TestOllamaDefaultWindowKeepsReadsThatFit(t *testing.T) {
 			}
 			if strings.Contains(logs.String(), "raise the model's context window") {
 				t.Fatalf("squad warned that the window is too small:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+// TestOllamaEmptyTurnErrorNamesNumCtx is the regression test for the
+// empty-turn error sending users to --max-tokens. The runner raises max
+// tokens to at least 16384 before the Ollama client sees it, so at the
+// default window the reply budget is its share of num_ctx whatever
+// --max-tokens says: a user who raised --max-tokens as the error advised got
+// the same failure with the same num_predict. Through InvokeModel, a model
+// whose replies run into the budget without answering must produce an error
+// that points at --num-ctx and not at --max-tokens.
+func TestOllamaEmptyTurnErrorNamesNumCtx(t *testing.T) {
+	t.Parallel()
+	for _, maxTokens := range []int{1024, 8192} {
+		t.Run(fmt.Sprintf("max tokens %d", maxTokens), func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				mu.Lock()
+				requests++
+				mu.Unlock()
+				_, _ = w.Write([]byte(`{"model":"qwen3","message":{"role":"assistant","content":"","thinking":"still reasoning"},"done":true,"done_reason":"length","prompt_eval_count":10,"eval_count":4096}`))
+			}))
+			defer srv.Close()
+
+			opts := &RunOptions{
+				Provider: "ollama", Model: "qwen3", BaseURL: srv.URL, NumCtx: 32768, MaxTokens: maxTokens,
+				MaxIterations: 5, MaxIterationsExplicit: true,
+			}
+			bundle := &agent.Bundle{System: "You map web applications.", User: "Map the target.", WorkDir: t.TempDir()}
+			_, _, err := InvokeModel(context.Background(), opts, bundle)
+			if !errors.Is(err, ollama.ErrEmptyTurn) {
+				t.Fatalf("InvokeModel() error = %v, want ollama.ErrEmptyTurn", err)
+			}
+			for _, want := range []string{"num_predict=4096", "raise --num-ctx"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q must mention %q", err, want)
+				}
+			}
+			if strings.Contains(err.Error(), "--max-tokens") {
+				t.Fatalf("error %q must not point at --max-tokens: raising it does not change the reply budget here", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if requests != 2 {
+				t.Fatalf("requests = %d, want the first attempt and one retry", requests)
 			}
 		})
 	}

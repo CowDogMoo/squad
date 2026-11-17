@@ -181,7 +181,7 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	if !isEmptyTurn(second) {
 		return convertResponse(second), nil
 	}
-	return nil, emptyTurnError(o.model, reqBody.Options["num_predict"], first, second)
+	return nil, o.emptyTurnError(opts.MaxTokens, first, second)
 }
 
 // chat performs one POST to /api/chat, decodes the reply, and feeds the
@@ -284,16 +284,33 @@ func describeTurn(resp chatResponse) string {
 	return fmt.Sprintf("thinking=%d bytes, done_reason=%s, eval_count=%d", thinking, reason, resp.EvalCount)
 }
 
-// emptyTurnError explains why both attempts came back empty. The error is
-// typed so that callers classifying errors by code never read the counters
-// in its message as an HTTP status and retry the call.
-func emptyTurnError(model string, numPredict any, first, second chatResponse) error {
+// emptyTurnError explains why both attempts of a request made with maxTokens
+// came back empty. When a reply ran into its budget, the error names the
+// setting that holds the budget down: --num-ctx when it is the reply's share
+// of the window, --max-tokens when the caller's cap is lower than that share,
+// and both when the two are equal. The error is typed so that callers
+// classifying errors by code never read the counters in its message as an
+// HTTP status and retry the call.
+func (o *LLM) emptyTurnError(maxTokens int, first, second chatResponse) error {
 	hint := ""
-	if first.DoneReason == "length" || second.DoneReason == "length" {
-		hint = fmt.Sprintf("; the reply hit num_predict=%v before it produced an answer; that budget is the lower of --max-tokens and an eighth of --num-ctx (a quarter with thinking on), so raise whichever is lower", numPredict)
+	budget := o.replyBudget(maxTokens)
+	if budget > 0 && (first.DoneReason == "length" || second.DoneReason == "length") {
+		const share = "its share of num_ctx (an eighth, or a quarter with thinking on)"
+		byWindow := o.numCtx > 0 && budget == o.replyShare()
+		byCap := budget == maxTokens
+		bound, remedy := share, "raise --num-ctx"
+		switch {
+		case byWindow && byCap:
+			bound = "both " + share + " and the max-tokens cap"
+			remedy = fmt.Sprintf("raise --num-ctx and raise --max-tokens above %d", budget)
+		case byCap:
+			bound = "the max-tokens cap"
+			remedy = fmt.Sprintf("raise --max-tokens above %d", budget)
+		}
+		hint = fmt.Sprintf("; the reply hit num_predict=%d, %s, before it produced an answer, so %s", budget, bound, remedy)
 	}
 	msg := fmt.Sprintf("%s gave no text and no tool calls, first (%s) and again after a retry with thinking off and a nudge (%s)%s",
-		model, describeTurn(first), describeTurn(second), hint)
+		o.model, describeTurn(first), describeTurn(second), hint)
 	return llms.NewError(errCodeEmptyTurn, "ollama", msg).WithCause(ErrEmptyTurn)
 }
 

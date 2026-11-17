@@ -66,14 +66,20 @@ func (o *LLM) replyBudget(maxTokens int) int {
 	if o.numCtx <= 0 {
 		return maxTokens
 	}
-	budget := o.numCtx / replyShareDivisor
-	if o.think {
-		budget = o.numCtx / thinkingReplyShareDivisor
-	}
+	budget := o.replyShare()
 	if maxTokens > 0 {
 		budget = min(budget, maxTokens)
 	}
 	return budget
+}
+
+// replyShare returns the reply's share of num_ctx: an eighth, or a quarter
+// with thinking on.
+func (o *LLM) replyShare() int {
+	if o.think {
+		return o.numCtx / thinkingReplyShareDivisor
+	}
+	return o.numCtx / replyShareDivisor
 }
 
 // ContextBudget returns how many prompt tokens the messages of a request made
