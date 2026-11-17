@@ -80,12 +80,22 @@ type RunOptions struct {
 	DryRun bool
 	// RequireActionable reports whether the run must produce file edits.
 	RequireActionable bool
+	// EditsOptional reports that the caller explicitly said the run need not
+	// produce edits (--require-actionable=false). It turns off the edit
+	// deadline, phase nudges, and read blocking for the agent, the stages of
+	// a composed agent, and their Task children. It is never inferred from
+	// RequireActionable being unset, so callers that set neither, such as
+	// the routine daemon, keep those guards.
+	EditsOptional bool
 	// Apply reports whether to apply a unified diff from the response.
 	Apply bool
 	// ApplyFallback reports whether to attempt diff parsing as a fallback.
 	ApplyFallback bool
 	// NumCtx is the context window size for Ollama models.
 	NumCtx int
+	// OllamaThink is sent as Ollama's think option. It is off by default,
+	// which stops a thinking model from reasoning before every reply.
+	OllamaThink bool
 	// MaxIterations caps the number of model iterations (0 = unlimited).
 	MaxIterations int
 	// MaxIterationsExplicit reports whether MaxIterations came from an

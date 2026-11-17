@@ -1487,6 +1487,23 @@ func TestToolLoopReadOnlyIgnoresEditDeadline(t *testing.T) {
 	}
 }
 
+// TestToolLoopEditsOptionalIgnoresEditDeadline guards runs whose edits are
+// optional (--require-actionable=false, remote-only agents) against the edit
+// deadline: a probing agent only reads, so reading must never stop it.
+func TestToolLoopEditsOptionalIgnoresEditDeadline(t *testing.T) {
+	t.Parallel()
+	text, err, reached := runEditDeadlineLoop(t, tools.InitEditsOptional(context.Background()), 6)
+	if err != nil {
+		t.Fatalf("RunWithTools() error = %v", err)
+	}
+	if reached {
+		t.Fatal("edits-optional run must not trip the edit deadline")
+	}
+	if text != "final answer" {
+		t.Fatalf("edits-optional run must reach the final answer, got %q", text)
+	}
+}
+
 // TestToolLoopEditModeStillHonorsEditDeadline pins the unchanged behavior for
 // edit-capable runs, and proves the readonly test above can fail.
 func TestToolLoopEditModeStillHonorsEditDeadline(t *testing.T) {

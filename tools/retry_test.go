@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cowdogmoo/squad/ollama"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -90,6 +94,34 @@ func TestIsRetryable(t *testing.T) {
 				t.Errorf("isRetryable(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestRetryGenerateContentEmptyOllamaTurnNotRetried is the regression test
+// for an Ollama empty-turn failure being retried as a server error. With
+// --max-tokens 5000 the failure quotes eval_count=5000 and num_predict=5000,
+// which the substring classifier read as HTTP 500. The client has already
+// retried once itself, so the server must see exactly two requests.
+func TestRetryGenerateContentEmptyOllamaTurnNotRetried(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"model":"qwen3","message":{"role":"assistant","content":"","thinking":"hmm"},"done":true,"done_reason":"length","prompt_eval_count":401,"eval_count":5000}`))
+	}))
+	defer server.Close()
+
+	llm := ollama.New(server.URL, "qwen3", 65536)
+	msgs := []llms.MessageContent{{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart("map the target")}}}
+	_, err := retryGenerateContent(context.Background(), llm, msgs, []llms.CallOption{llms.WithMaxTokens(5000)}, 3)
+	if !errors.Is(err, ollama.ErrEmptyTurn) {
+		t.Fatalf("error = %v, want ollama.ErrEmptyTurn", err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("requests = %d, want 2: an empty turn must not be retried as a transient error", got)
+	}
+	if isRetryable(err) {
+		t.Fatalf("empty-turn error %q must not be retryable", err)
 	}
 }
 

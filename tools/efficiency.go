@@ -414,8 +414,9 @@ func writeCappedList(sb *strings.Builder, label string, items []string, cap int)
 // they are compacted, preserving the agent's "mental map" of what it has done.
 // When rc is non-nil, per-file summaries (line count + declarations) are
 // included so the model can write edits without re-reading files.
-// When readOnly is set the guidance does not mention edits, since the agent
-// cannot make any.
+// When readOnly is set the guidance does not mention edits. The tool loop
+// sets it whenever edits are not expected (see [EditsExpected]): in readonly
+// mode, and for a run whose edits are optional.
 func CompactionSummary(messages []llms.MessageContent, rc *ReadCache, readOnly bool) string {
 	s := collectCompactionStats(messages)
 
@@ -589,8 +590,9 @@ const ProgressCheckPrompt = "[PROGRESS CHECK] You have used 25%% of your cost bu
 	"Have you made any edits yet? If not, you should have enough context — start editing NOW. " +
 	"List what you plan to change and begin immediately. Do not read more files."
 
-// ReadOnlyProgressCheckPrompt replaces ProgressCheckPrompt for readonly agents,
-// which cannot edit and whose work is reading.
+// ReadOnlyProgressCheckPrompt replaces ProgressCheckPrompt for agents that are
+// not expected to edit (see [EditsExpected]): readonly agents, which cannot,
+// and agents whose edits are optional. It carries no edit pressure.
 const ReadOnlyProgressCheckPrompt = "[BUDGET WARNING] You have used 25%% of your cost budget ($%.2f remaining). " +
 	"Focus on what matters most for your task and leave enough budget to produce your final output."
 

@@ -1289,6 +1289,81 @@ func TestBindRunFlagsInteractive(t *testing.T) {
 	}
 }
 
+// TestNewRunOptionsEditsOptional checks that squad run marks edits optional
+// only when --require-actionable is set to false.
+func TestNewRunOptionsEditsOptional(t *testing.T) {
+	tests := []struct {
+		name         string
+		flag         string
+		wantOptional bool
+	}{
+		{"default requires actionable output", "", false},
+		{"explicit true", "true", false},
+		{"explicit false", "false", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRunCmd()
+			v := viper.New()
+			if err := bindRunFlags(cmd, v); err != nil {
+				t.Fatalf("bindRunFlags: %v", err)
+			}
+			if tt.flag != "" {
+				if err := cmd.Flags().Set("require-actionable", tt.flag); err != nil {
+					t.Fatalf("Set require-actionable: %v", err)
+				}
+			}
+			ctx := withViper(context.Background(), v)
+			cmd.SetContext(withConfig(ctx, config.Defaults()))
+
+			opts := newRunOptions(cmd)
+			if opts.EditsOptional != tt.wantOptional {
+				t.Errorf("EditsOptional = %v, want %v", opts.EditsOptional, tt.wantOptional)
+			}
+			if opts.RequireActionable == tt.wantOptional {
+				t.Errorf("RequireActionable = %v, want %v", opts.RequireActionable, !tt.wantOptional)
+			}
+		})
+	}
+}
+
+// TestNewRunOptionsOllamaThink checks that --ollama-think is a plain on/off
+// switch that is off by default.
+func TestNewRunOptionsOllamaThink(t *testing.T) {
+	tests := []struct {
+		name string
+		flag string
+		want bool
+	}{
+		{"off by default", "", false},
+		{"true", "true", true},
+		{"false", "false", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRunCmd()
+			v := viper.New()
+			if err := bindRunFlags(cmd, v); err != nil {
+				t.Fatalf("bindRunFlags: %v", err)
+			}
+			if tt.flag != "" {
+				if err := cmd.Flags().Set("ollama-think", tt.flag); err != nil {
+					t.Fatalf("Set ollama-think: %v", err)
+				}
+			}
+			ctx := withViper(context.Background(), v)
+			cmd.SetContext(withConfig(ctx, config.Defaults()))
+
+			if got := newRunOptions(cmd).OllamaThink; got != tt.want {
+				t.Errorf("OllamaThink = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if err := newRunCmd().Flags().Set("ollama-think", "high"); err == nil {
+		t.Error("--ollama-think must reject values other than true and false")
+	}
+}
+
 func TestNewRunOptionsInteractive(t *testing.T) {
 	for _, interactive := range []bool{true, false} {
 		v := viper.New()

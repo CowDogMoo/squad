@@ -103,7 +103,18 @@ func TestConvertMessages(t *testing.T) {
 				}},
 				{Role: llms.ChatMessageTypeTool, Parts: []llms.ContentPart{llms.ToolCallResponse{Content: "tool output"}}},
 			},
-			3,
+			2,
+			false,
+		},
+		{
+			"several tool responses in one message add no blank tool reply",
+			[]llms.MessageContent{
+				{Role: llms.ChatMessageTypeTool, Parts: []llms.ContentPart{
+					llms.ToolCallResponse{Content: "first"},
+					llms.ToolCallResponse{Content: "second"},
+				}},
+			},
+			2,
 			false,
 		},
 		{
@@ -440,8 +451,8 @@ func TestReadFullResponse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("readFullResponse() error = %v", err)
 		}
-		if resp.Choices[0].Content != "hello" {
-			t.Fatalf("content = %q, want hello", resp.Choices[0].Content)
+		if resp.Message.Content != "hello" {
+			t.Fatalf("content = %q, want hello", resp.Message.Content)
 		}
 	})
 
@@ -492,8 +503,8 @@ func TestReadStream(t *testing.T) {
 		if err != nil {
 			t.Fatalf("readStream() error = %v", err)
 		}
-		if resp.Choices[0].Content != "good morning" {
-			t.Fatalf("content = %q, want 'good morning'", resp.Choices[0].Content)
+		if resp.Message.Content != "good morning" {
+			t.Fatalf("content = %q, want 'good morning'", resp.Message.Content)
 		}
 		if len(chunks) != 2 {
 			t.Fatalf("chunks = %v, want 2 chunks", chunks)
@@ -517,8 +528,8 @@ func TestReadStream(t *testing.T) {
 		if err != nil {
 			t.Fatalf("readStream() error = %v", err)
 		}
-		if resp.Choices[0].Content != "ok" {
-			t.Fatalf("content = %q, want ok", resp.Choices[0].Content)
+		if resp.Message.Content != "ok" {
+			t.Fatalf("content = %q, want ok", resp.Message.Content)
 		}
 		if len(chunks) != 1 {
 			t.Fatalf("chunks = %d, want 1 (bad line skipped)", len(chunks))

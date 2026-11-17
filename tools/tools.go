@@ -319,7 +319,8 @@ type RunWithToolsConfig struct {
 	MaxIterations int
 	// EditDeadline is the iteration number after which read-only tools are
 	// blocked to force the model to commit pending edits. Zero disables the
-	// deadline, and it is ignored in readonly mode.
+	// deadline, and it is ignored when edits are not expected (see
+	// [EditsExpected]).
 	EditDeadline int
 	// TaskCfg wires in the Task/TaskResult tools and child-agent dispatch.
 	// Nil disables the Task tool entirely.
@@ -520,11 +521,12 @@ func getGraceState(ctx context.Context) *graceState {
 // Either enforcer can independently trigger blocking.
 // However, if an Edit just failed during the grace period, reads are
 // temporarily unblocked so the agent can re-read and retry its edit.
-// Reads are never blocked in readonly mode: the agent cannot edit, so nothing
-// would unblock it, whether the enforcers are its own or inherited from a
-// parent's context.
+// Reads are never blocked when edits are not expected (readonly mode, or a
+// run whose edits are optional): nothing obliges the agent to edit, so
+// nothing would unblock it, whether the enforcers are its own or inherited
+// from a parent's context.
 func shouldBlockReadTools(ctx context.Context) bool {
-	if IsReadOnlyMode(ctx) {
+	if !EditsExpected(ctx) {
 		return false
 	}
 	// Grace-period edit failure overrides all blocking — the agent
@@ -624,7 +626,7 @@ func injectBudgetWarnings(ctx context.Context, m *metrics.Metrics, warned []bool
 		warned[idx] = true
 		pctInt := int(threshold * 100)
 		remaining := m.RemainingBudget()
-		msg := budgetWarningMessage(pctInt, remaining, IsReadOnlyMode(ctx))
+		msg := budgetWarningMessage(pctInt, remaining, !EditsExpected(ctx))
 		logging.InfoContext(ctx, "injecting budget warning at %d%% (remaining=$%.4f)", pctInt, remaining)
 		messages = append(messages, llms.MessageContent{
 			Role:  llms.ChatMessageTypeHuman,
@@ -635,10 +637,11 @@ func injectBudgetWarnings(ctx context.Context, m *metrics.Metrics, warned []bool
 }
 
 // budgetWarningMessage returns the warning text for a given budget percentage.
-// A readonly agent cannot edit, so its 25% message carries no edit pressure.
-func budgetWarningMessage(pctInt int, remaining float64, readOnly bool) string {
+// An agent that is not expected to edit gets a 25% message with no edit
+// pressure.
+func budgetWarningMessage(pctInt int, remaining float64, noEdits bool) string {
 	if pctInt == 25 {
-		if readOnly {
+		if noEdits {
 			return fmt.Sprintf(ReadOnlyProgressCheckPrompt, remaining)
 		}
 		return fmt.Sprintf(ProgressCheckPrompt, remaining)
@@ -651,10 +654,12 @@ func budgetWarningMessage(pctInt int, remaining float64, readOnly bool) string {
 }
 
 // initToolLoopEnforcers creates and attaches edit/phase enforcers to the context.
-// Both measure progress as edits, so they are skipped in readonly mode: the
-// agent cannot edit by design, and nudging or blocking its reads would stall it.
+// Both measure progress as edits, so they are skipped when edits are not
+// expected: in readonly mode the agent cannot edit, and when edits are
+// optional (a probing agent, --require-actionable=false) it need not. Nudging
+// or blocking its reads would stall it either way.
 func initToolLoopEnforcers(ctx context.Context, editDeadline int) (context.Context, *EditEnforcer, *PhaseEnforcer) {
-	if IsReadOnlyMode(ctx) {
+	if !EditsExpected(ctx) {
 		return ctx, nil, nil
 	}
 	editEnforcer := NewEditEnforcer(editDeadline)
@@ -710,8 +715,10 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 	for i := 0; i < maxIter; i++ {
 		SetIteration(ctx, i)
 		logIterationStart(ctx, i, maxIter, m)
+		iterOpts := resolveIterOpts(callOpts, cfg.ForceFirstToolCall, i)
+		messages = fitContextWindow(ctx, llm, messages, iterOpts)
 		iterStart := time.Now()
-		response, err := retryGenerateContent(ctx, llm, messages, resolveIterOpts(callOpts, cfg.ForceFirstToolCall, i), cfg.MaxRetries)
+		response, err := retryGenerateContent(ctx, llm, messages, iterOpts, cfg.MaxRetries)
 		iterDuration := time.Since(iterStart)
 		if err := validateResponse(ctx, response, err, iterDuration); err != nil {
 			return lastContent, messages, err, false
@@ -952,6 +959,7 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 	copy(finalOpts, callOpts)
 	finalOpts = append(finalOpts, llms.WithToolChoice("none"))
 
+	messages = fitContextWindow(ctx, llm, messages, finalOpts)
 	response, err := retryGenerateContent(ctx, llm, messages, finalOpts, maxRetries)
 	if err == nil && response != nil && len(response.Choices) > 0 {
 		if m != nil {
@@ -1552,11 +1560,11 @@ func checkReadCache(ctx context.Context, resolvedPath, displayPath string, data 
 	}
 	streak := rc.IncrementStreak()
 	logReadCacheHit(ctx, displayPath, entry)
-	readOnly := IsReadOnlyMode(ctx)
+	noEdits := !EditsExpected(ctx)
 
 	// Circuit breaker: after too many consecutive cache hits, hard block.
 	if streak >= cacheHitStreakThreshold {
-		if readOnly {
+		if noEdits {
 			return fmt.Sprintf(
 				"[READ LOOP DETECTED — %d consecutive re-reads of cached files. "+
 					"File '%s' unchanged since iteration %d (%d lines); its content was already provided. "+
@@ -1577,7 +1585,7 @@ func checkReadCache(ctx context.Context, resolvedPath, displayPath string, data 
 		summaryHint = " Content summary: " + entry.Summary + "."
 	}
 	next := "Write edits from your notes"
-	if readOnly {
+	if noEdits {
 		next = "Work from your notes"
 	}
 	return fmt.Sprintf(
@@ -2149,6 +2157,23 @@ func isToolResultForEditedFile(aiMsg llms.MessageContent, toolCallID string, edi
 	return false
 }
 
+// stubToolOutputs returns a copy of parts in which every tool output longer
+// than 200 bytes is replaced by a note of its size, and how many it replaced.
+func stubToolOutputs(parts []llms.ContentPart) ([]llms.ContentPart, int) {
+	stubbed := make([]llms.ContentPart, len(parts))
+	replaced := 0
+	for j, part := range parts {
+		if resp, ok := part.(llms.ToolCallResponse); ok && len(resp.Content) > 200 {
+			resp.Content = fmt.Sprintf("[tool output compacted — was %d bytes]", len(resp.Content))
+			stubbed[j] = resp
+			replaced++
+			continue
+		}
+		stubbed[j] = part
+	}
+	return stubbed, replaced
+}
+
 func compactMessages(ctx context.Context, messages []llms.MessageContent, m *metrics.Metrics) []llms.MessageContent {
 	tokens := estimateTokensCalibrated(ctx, messages)
 	var bq BudgetQuerier
@@ -2171,7 +2196,7 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent, m *met
 	compactEnd := len(messages) - protectedTail
 
 	middleMessages := messages[protectedHead:compactEnd]
-	summary := CompactionSummary(middleMessages, GetReadCache(ctx), IsReadOnlyMode(ctx))
+	summary := CompactionSummary(middleMessages, GetReadCache(ctx), !EditsExpected(ctx))
 
 	editedFiles := CollectEditedFiles(messages[:compactEnd])
 	recentFiles := ExtractRecentFiles(messages[compactEnd:])
@@ -2195,19 +2220,7 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent, m *met
 		if compacted[i].Role != llms.ChatMessageTypeTool {
 			continue
 		}
-		newParts := make([]llms.ContentPart, len(compacted[i].Parts))
-		for j, part := range compacted[i].Parts {
-			if resp, ok := part.(llms.ToolCallResponse); ok {
-				origLen := len(resp.Content)
-				if origLen > 200 {
-					resp.Content = fmt.Sprintf("[tool output compacted — was %d bytes]", origLen)
-				}
-				newParts[j] = resp
-			} else {
-				newParts[j] = part
-			}
-		}
-		compacted[i].Parts = newParts
+		compacted[i].Parts, _ = stubToolOutputs(compacted[i].Parts)
 	}
 
 	if summary != "" {

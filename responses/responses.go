@@ -226,8 +226,9 @@ func newClient(apiKey, baseURL, organization string) openai.Client {
 func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Response, handlers map[string]tools.Handler, rc *Config, maxIter, editDeadline int, m *metrics.Metrics) (*oairesponses.Response, string, error) {
 	var repeat tools.RepeatTracker
 	var editEnforcer *tools.EditEnforcer
-	if !tools.IsReadOnlyMode(ctx) {
-		// A readonly agent cannot edit, so the edit deadline never applies.
+	if tools.EditsExpected(ctx) {
+		// A readonly agent cannot edit and an edits-optional run need not,
+		// so the edit deadline applies to neither.
 		editEnforcer = tools.NewEditEnforcer(editDeadline)
 	}
 	logger := session.FromContext(ctx)

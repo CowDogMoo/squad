@@ -243,6 +243,7 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 	temp := flagOrViperFloat(cmd, "temperature", v, "model.temperature")
 	maxTokens := flagOrViperInt(cmd, "max-tokens", v, "model.max_tokens")
 	numCtx := flagOrViperInt(cmd, "num-ctx", v, "provider.num_ctx")
+	ollamaThink := flagOrViperBool(cmd, "ollama-think", v, "provider.ollama_think")
 	maxIter := clampInt(flagOrViperInt(cmd, "max-iterations", v, "run.max_iterations"), 10, 1000)
 	maxCost := flagOrViperFloat(cmd, "max-cost", v, "run.max_cost")
 	if maxCost < 0 {
@@ -250,6 +251,13 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 	}
 
 	mode, _ := cmd.Flags().GetString("mode")
+
+	// Only an explicit false counts: a command without the flag, or a config
+	// that never sets the key, leaves the stages' edit-pressure guards on.
+	editsOptional := false
+	if cmd.Flags().Lookup("require-actionable") != nil {
+		editsOptional = !flagOrViperBool(cmd, "require-actionable", v, "run.require_actionable")
+	}
 
 	// Interactive-tool and tool-surface flags must survive into stage
 	// invocations: without AutoConfirm every Confirm call inside a
@@ -275,9 +283,11 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 		Temperature:           temp,
 		MaxTokens:             maxTokens,
 		NumCtx:                numCtx,
+		OllamaThink:           ollamaThink,
 		MaxIterations:         maxIter,
 		MaxIterationsExplicit: cmd.Flags().Changed("max-iterations"),
 		MaxCost:               maxCost,
+		EditsOptional:         editsOptional,
 		ConfigAvailable:       cfg != nil,
 		Config:                cfg,
 	}

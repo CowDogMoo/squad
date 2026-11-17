@@ -8,8 +8,10 @@ import (
 )
 
 // ComposedFlags lists flags that are incompatible with composed agents.
-// `require-actionable` is deliberately omitted: it is leaf-only and a no-op on
-// the pipeline path, so it is tolerated rather than rejected.
+// `require-actionable` is deliberately omitted, so it is tolerated rather
+// than rejected: a false value makes edits optional for every stage and its
+// Task children, which turns off their edit deadline, phase nudges, and read
+// blocking. The post-run actionable check itself stays leaf-only.
 var ComposedFlags = []string{
 	"system",
 	"print-bundle",
