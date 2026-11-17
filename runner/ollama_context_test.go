@@ -259,6 +259,48 @@ func denseOutput(turn, size int) string {
 	return b.String()[:size]
 }
 
+// requireSystemPrompt fails unless request n, counted from 1, starts with the
+// whole system prompt.
+func requireSystemPrompt(t *testing.T, n int, req probeRequest, system string) {
+	t.Helper()
+	if got := req.Messages[0]; got.Role != "system" || got.Content != system {
+		t.Fatalf("request %d does not start with the whole system prompt: %.120q", n, got.Content)
+	}
+}
+
+// countToolOutputs returns how many tool outputs in msgs are whole, at least
+// wholeBytes long, and how many compaction replaced.
+func countToolOutputs(msgs []probeMessage, wholeBytes int) (whole, replaced int) {
+	for _, m := range msgs {
+		switch {
+		case m.Role != "tool":
+		case strings.HasPrefix(m.Content, "[tool output compacted"):
+			replaced++
+		case len(m.Content) >= wholeBytes:
+			whole++
+		}
+	}
+	return whole, replaced
+}
+
+// requireReadsWholeOrReplaced fails if request n, counted from 1, carries a
+// read that is neither whole, at least readBytes long, nor replaced by
+// compaction. It returns the number of whole reads.
+func requireReadsWholeOrReplaced(t *testing.T, n int, msgs []probeMessage, readBytes int) int {
+	t.Helper()
+	whole := 0
+	for _, m := range msgs {
+		switch {
+		case m.Role != "tool":
+		case len(m.Content) >= readBytes:
+			whole++
+		case !strings.HasPrefix(m.Content, "[tool output compacted"):
+			t.Fatalf("request %d carries a read that is neither whole nor replaced: %.120q", n, m.Content)
+		}
+	}
+	return whole
+}
+
 // TestOllamaConversationStaysInsideWindow is the regression test for the
 // context balloon: a mapper's conversation grew far past num_ctx, so Ollama
 // cut the prompt from the front and the model lost its instructions. Through
@@ -301,7 +343,7 @@ func TestOllamaConversationStaysInsideWindow(t *testing.T) {
 	if len(requests) != turns+1 {
 		t.Fatalf("requests = %d, want %d", len(requests), turns+1)
 	}
-	compacted := false
+	compacted := 0
 	for i, req := range requests {
 		if req.NumCtx != numCtx || req.NumPredict <= 0 {
 			t.Fatalf("request %d has num_ctx=%d num_predict=%d", i+1, req.NumCtx, req.NumPredict)
@@ -309,27 +351,17 @@ func TestOllamaConversationStaysInsideWindow(t *testing.T) {
 		if req.Tokens+req.NumPredict > req.NumCtx {
 			t.Fatalf("request %d holds %d tokens: with %d for the reply it overflows num_ctx=%d", i+1, req.Tokens, req.NumPredict, req.NumCtx)
 		}
-		if got := req.Messages[0]; got.Role != "system" || got.Content != system {
-			t.Fatalf("request %d does not start with the whole system prompt: %.120q", i+1, got.Content)
-		}
+		requireSystemPrompt(t, i+1, req, system)
 		if got := req.Messages[1]; got.Role != "user" || got.Content != task {
 			t.Fatalf("request %d lost the task: %.120q", i+1, got.Content)
 		}
-		whole := 0
-		for _, m := range req.Messages {
-			switch {
-			case m.Role != "tool":
-			case strings.HasPrefix(m.Content, "[tool output compacted"):
-				compacted = true
-			case len(m.Content) >= outputBytes:
-				whole++
-			}
-		}
+		whole, replaced := countToolOutputs(req.Messages, outputBytes)
+		compacted += replaced
 		if want := min(i, 3); whole < want {
 			t.Fatalf("request %d carries %d whole tool outputs, want at least the %d newest", i+1, whole, want)
 		}
 	}
-	if !compacted {
+	if compacted == 0 {
 		t.Fatal("no request was compacted, so the test did not reach the window")
 	}
 }
@@ -391,22 +423,11 @@ func TestOllamaDefaultWindowKeepsReadsThatFit(t *testing.T) {
 			}
 			whole := 0
 			for i, req := range requests[1:] {
-				if got := req.Messages[0]; got.Role != "system" || got.Content != system {
-					t.Fatalf("request %d does not start with the whole system prompt", i+2)
-				}
+				requireSystemPrompt(t, i+2, req, system)
 				if got := lastToolOutput(req.Messages); len(got) < readBytes {
 					t.Fatalf("request %d carries the newest read as %d bytes, want all %d", i+2, len(got), readBytes)
 				}
-				whole = 0
-				for _, m := range req.Messages {
-					switch {
-					case m.Role != "tool":
-					case len(m.Content) >= readBytes:
-						whole++
-					case !strings.HasPrefix(m.Content, "[tool output compacted"):
-						t.Fatalf("request %d carries a read that is neither whole nor replaced: %.120q", i+2, m.Content)
-					}
-				}
+				whole = requireReadsWholeOrReplaced(t, i+2, req.Messages, readBytes)
 			}
 			if whole < tt.wantWhole {
 				t.Fatalf("the last request carries %d whole reads, want at least %d", whole, tt.wantWhole)

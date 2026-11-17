@@ -106,7 +106,12 @@ func isStub(msg llms.MessageContent) bool {
 }
 
 func toolOutput(msg llms.MessageContent) string {
-	return msg.Parts[0].(llms.ToolCallResponse).Content
+	return partOutput(msg.Parts[0])
+}
+
+// partOutput returns the content of one tool output part.
+func partOutput(part llms.ContentPart) string {
+	return part.(llms.ToolCallResponse).Content
 }
 
 // TestFitContextWindowKeepsPromptsAndModelMessages checks what compaction to
@@ -251,14 +256,14 @@ func TestFitContextWindowShortensLatestOutputs(t *testing.T) {
 		}
 	}
 	latest := out[len(out)-1].Parts
-	cut := latest[0].(llms.ToolCallResponse).Content
+	cut := partOutput(latest[0])
 	if len(cut) >= len(big) || len(cut) < minKeptLatestOutput {
 		t.Fatalf("the oversized output is %d bytes after compaction, want between %d and %d", len(cut), minKeptLatestOutput, len(big))
 	}
 	if !strings.HasPrefix(cut, "big line 0 ") || !strings.HasSuffix(cut, big[len(big)-100:]) || !strings.Contains(cut, "lines omitted from tool output") {
 		t.Fatalf("a shortened output must keep its start and end around a notice, got %.120q ... %.120q", cut, cut[max(0, len(cut)-120):])
 	}
-	if got := latest[1].(llms.ToolCallResponse).Content; got != small {
+	if got := partOutput(latest[1]); got != small {
 		t.Fatal("an output that fits must not be shortened")
 	}
 }

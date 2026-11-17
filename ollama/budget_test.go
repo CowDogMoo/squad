@@ -115,13 +115,20 @@ func TestContextBudget(t *testing.T) {
 				opt(&opts)
 			}
 			req := llm.buildChatRequest(nil, opts)
-			sent, _ := req.Options["num_predict"].(int)
+			sent := intOption(req.Options, "num_predict")
 			tools := tokensFor(jsonBytes(req.Tools), defaultBytesPerToken)
 			if left := tt.numCtx - got - tools - tt.numCtx/headroomDivisor; left != sent {
 				t.Fatalf("the budget leaves %d tokens for the reply, but the request asks for num_predict=%d", left, sent)
 			}
 		})
 	}
+}
+
+// intOption returns the int request option key, or 0 when it is unset or not
+// an int.
+func intOption(options map[string]any, key string) int {
+	n, _ := options[key].(int)
+	return n
 }
 
 // llmsWeatherTools returns the tool definitions weatherOpts passes.
