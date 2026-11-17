@@ -252,6 +252,13 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 
 	mode, _ := cmd.Flags().GetString("mode")
 
+	// Only an explicit false counts: a command without the flag, or a config
+	// that never sets the key, leaves the stages' edit-pressure guards on.
+	editsOptional := false
+	if cmd.Flags().Lookup("require-actionable") != nil {
+		editsOptional = !flagOrViperBool(cmd, "require-actionable", v, "run.require_actionable")
+	}
+
 	// Interactive-tool and tool-surface flags must survive into stage
 	// invocations: without AutoConfirm every Confirm call inside a
 	// pipeline sub-agent resolves as "abort", and --mcp-server /
@@ -280,6 +287,7 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 		MaxIterations:         maxIter,
 		MaxIterationsExplicit: cmd.Flags().Changed("max-iterations"),
 		MaxCost:               maxCost,
+		EditsOptional:         editsOptional,
 		ConfigAvailable:       cfg != nil,
 		Config:                cfg,
 	}

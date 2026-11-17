@@ -64,8 +64,6 @@ type LLM struct {
 	// httpClient sends the requests. Its timeout is requestTimeout, or
 	// thinkingRequestTimeout when think is on.
 	httpClient *http.Client
-	// onTrim, when set, is called each time a request is trimmed.
-	onTrim func(ctx context.Context)
 
 	// mu guards bytesPerToken, the client's current bytes-per-token
 	// estimate. It starts at defaultBytesPerToken and calibrate only ever
@@ -83,17 +81,6 @@ type Option func(*LLM)
 // WithThink sets the value sent as Ollama's think field.
 func WithThink(think bool) Option {
 	return func(o *LLM) { o.think = think }
-}
-
-// WithTrimObserver registers fn to be called each time a request is trimmed
-// to fit num_ctx, with the context passed to GenerateContent. After a trim
-// the model no longer receives every earlier message in full: older tool
-// outputs are replaced by a placeholder, turns are removed, or the latest
-// outputs are cut down. A caller that tracks what the model has been shown,
-// as the agent loop's read cache does, must stop counting earlier content
-// as delivered.
-func WithTrimObserver(fn func(ctx context.Context)) Option {
-	return func(o *LLM) { o.onTrim = fn }
 }
 
 // New creates a new Ollama LLM client. Thinking is off unless [WithThink]
@@ -176,9 +163,11 @@ func readFullResponse(body io.Reader) (chatResponse, error) {
 }
 
 // GenerateContent implements llms.Model via Ollama's native /api/chat endpoint.
-// The request is trimmed to fit num_ctx first. A turn with no text and no
-// tool calls is retried once with thinking off and a nudge; a second empty
-// turn fails with [ErrEmptyTurn] instead of ending the agent loop silently.
+// The conversation is sent as given: keeping it inside num_ctx is the agent
+// loop's job, with the budget [LLM.ContextBudget] reports. A turn with no
+// text and no tool calls is retried once with thinking off and a nudge; a
+// second empty turn fails with [ErrEmptyTurn] instead of ending the agent
+// loop silently.
 func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error) {
 	opts := llms.CallOptions{}
 	for _, opt := range options {
@@ -191,7 +180,6 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	}
 
 	reqBody := o.buildChatRequest(chatMsgs, opts)
-	reqBody.Messages = o.fitContext(ctx, reqBody)
 
 	first, err := o.chat(ctx, reqBody, opts.StreamingFunc)
 	if err != nil {
@@ -206,7 +194,6 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	retry.Think = false
 	retry.Options = maps.Clone(reqBody.Options)
 	retry.Messages = append(slices.Clone(chatMsgs), ollamaMessage{Role: "user", Content: emptyTurnNudge})
-	retry.Messages = o.fitContext(ctx, retry)
 	second, err := o.chat(ctx, retry, opts.StreamingFunc)
 	if err != nil {
 		return nil, fmt.Errorf("ollama: retry after an empty turn failed: %w", err)

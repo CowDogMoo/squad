@@ -202,6 +202,24 @@ func applyEditRestrictions(ctx context.Context, bundle *agent.Bundle) context.Co
 	return ctx
 }
 
+// applyEditsOptional marks ctx as a run that need not produce edits when the
+// caller said so (--require-actionable=false) or the agent is remote-only,
+// which turns off the edit deadline, phase nudges, and read blocking. It runs
+// here, the chokepoint shared by leaf, composed-stage, and Task-child
+// invocations, so all of them follow the same rule. Neither condition is ever
+// inferred from an unset option, so callers that set nothing, such as the
+// routine daemon, keep the guards.
+func applyEditsOptional(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) context.Context {
+	if !opts.EditsOptional && !bundle.RemoteOnly {
+		return ctx
+	}
+	if tools.EditsOptional(ctx) {
+		return ctx
+	}
+	logging.InfoContext(ctx, "edits not required: edit deadline, phase nudges, and read blocking are off")
+	return tools.InitEditsOptional(ctx)
+}
+
 // InvokeModel resolves provider settings and calls the appropriate model backend.
 // It is exported so the pipeline runner can call it directly.
 //
@@ -228,6 +246,7 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 	// enforcement applies uniformly here.
 	ctx = applyReadOnlyMode(ctx, opts.Mode)
 	ctx = applyEditRestrictions(ctx, bundle)
+	ctx = applyEditsOptional(ctx, opts, bundle)
 
 	// Create metrics early so partial cost is always available, even if
 	// we fail during executor or MCP setup.
@@ -667,11 +686,7 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 	if numCtx <= 0 {
 		numCtx = 32768
 	}
-	return ollama.New(baseURL, model, numCtx,
-		ollama.WithThink(opts.OllamaThink),
-		ollama.WithTrimObserver(func(ctx context.Context) {
-			tools.GetReadCache(ctx).BumpCompactionEpoch()
-		}))
+	return ollama.New(baseURL, model, numCtx, ollama.WithThink(opts.OllamaThink))
 }
 
 func isOpenAICompatProvider(provider string) bool {

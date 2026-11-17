@@ -1664,37 +1664,6 @@ func TestInitRunContext_Normal(t *testing.T) {
 	}
 }
 
-// TestInitRunContext_EditsOptional checks that only an explicit choice turns
-// off the edit-pressure guards: the caller's EditsOptional, or a remote-only
-// agent. Options that leave RequireActionable unset, as the routine daemon's
-// do, must keep them.
-func TestInitRunContext_EditsOptional(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name         string
-		opts         *RunOptions
-		bundle       *agent.Bundle
-		wantOptional bool
-	}{
-		{"nothing set keeps the guards", &RunOptions{}, &agent.Bundle{}, false},
-		{"require-actionable keeps the guards", &RunOptions{RequireActionable: true}, &agent.Bundle{}, false},
-		{"explicit edits-optional turns them off", &RunOptions{EditsOptional: true}, &agent.Bundle{}, true},
-		{"remote-only agent turns them off", &RunOptions{}, &agent.Bundle{RemoteOnly: true}, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			ctx := initRunContext(context.Background(), tt.opts, tt.bundle)
-			if got := tools.EditsOptional(ctx); got != tt.wantOptional {
-				t.Errorf("EditsOptional = %v, want %v", got, tt.wantOptional)
-			}
-			if got := tools.EditsExpected(ctx); got == tt.wantOptional {
-				t.Errorf("EditsExpected = %v, want %v", got, !tt.wantOptional)
-			}
-		})
-	}
-}
-
 func TestInitRunContext_Interactive(t *testing.T) {
 	t.Parallel()
 	ctx := initRunContext(context.Background(), &RunOptions{Interactive: true}, &agent.Bundle{})

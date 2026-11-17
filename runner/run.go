@@ -82,7 +82,8 @@ type RunOptions struct {
 	RequireActionable bool
 	// EditsOptional reports that the caller explicitly said the run need not
 	// produce edits (--require-actionable=false). It turns off the edit
-	// deadline, phase nudges, and read blocking. It is never inferred from
+	// deadline, phase nudges, and read blocking for the agent, the stages of
+	// a composed agent, and their Task children. It is never inferred from
 	// RequireActionable being unset, so callers that set neither, such as
 	// the routine daemon, keep those guards.
 	EditsOptional bool
@@ -313,14 +314,6 @@ func invokeAndHandle(ctx context.Context, cmd *cobra.Command, opts *RunOptions, 
 func initRunContext(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) context.Context {
 	ctx = tools.InitEdits(ctx)
 	ctx = tools.InitEditDeadline(ctx)
-	if opts.EditsOptional || bundle.RemoteOnly {
-		// The edit deadline, phase nudges, and read blocking exist to push
-		// an editing agent to edit; they would stall a run that only probes
-		// or reports. Both conditions are explicit choices: the caller's, or
-		// the manifest's for an agent with no local filesystem.
-		ctx = tools.InitEditsOptional(ctx)
-		logging.InfoContext(ctx, "edits not required: edit deadline, phase nudges, and read blocking are off")
-	}
 	if bundle.CommentsOnly {
 		ctx = tools.InitCommentsOnlyMode(ctx)
 		logging.InfoContext(ctx, "comments-only mode: Edit/MultiEdit will reject non-comment changes")

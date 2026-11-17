@@ -3,16 +3,11 @@ package ollama
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"slices"
+	"math"
 	"strings"
-	"sync"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/tmc/langchaingo/llms"
@@ -47,289 +42,108 @@ func longConversation(turns, outputBytes int) []llms.MessageContent {
 	return msgs
 }
 
-// assertWellFormed checks the invariants every trimmed request must keep:
-// instructions first and intact, and no tool result without a preceding
-// assistant turn.
-func assertWellFormed(t *testing.T, msgs []ollamaMessage) {
-	t.Helper()
-	if len(msgs) < 2 || msgs[0].Role != "system" || msgs[0].Content != testSystemPrompt {
-		t.Fatalf("system prompt must stay first and intact, got %+v", msgs[0])
-	}
-	if msgs[1].Role != "user" || msgs[1].Content != testTask {
-		t.Fatalf("task must stay second and intact, got %+v", msgs[1])
-	}
-	for i, m := range msgs {
-		if m.Role != "tool" {
-			continue
-		}
-		if i == 0 || (msgs[i-1].Role != "assistant" && msgs[i-1].Role != "tool") {
-			t.Fatalf("tool message %d follows %q, not an assistant turn", i, msgs[i-1].Role)
-		}
-	}
-}
-
-// TestContextBalloonIsTrimmed is the regression test for the context
-// balloon: the agent loop's history grew far past num_ctx, so Ollama cut the
-// prompt from the front and the model lost its instructions. The request
-// that reaches Ollama must fit num_ctx minus the reply reserve, with the
-// system prompt, the task, and the latest tool output intact.
-func TestContextBalloonIsTrimmed(t *testing.T) {
+// TestGenerateContentSendsWholeConversation checks that the client sends the
+// conversation it is given, however long: fitting it into num_ctx is the
+// agent loop's job, so that the loop's history, its read cache, and the
+// request always agree.
+func TestGenerateContentSendsWholeConversation(t *testing.T) {
 	t.Parallel()
-	const numCtx = 16384
 	f, srv := newFakeOllama(t, fakeReply{body: toolOnlyReply})
-	llm := New(srv.URL, "qwen3", numCtx)
-	// ~400K tokens by squad's estimate, in enough turns that replacing old
-	// tool outputs alone cannot fit them, so the oldest turns are removed too.
 	msgs := longConversation(400, 3_000)
-	if _, err := llm.GenerateContent(context.Background(), msgs, weatherOpts()...); err != nil {
+	if _, err := New(srv.URL, "qwen3", 16384).GenerateContent(context.Background(), msgs, weatherOpts()...); err != nil {
 		t.Fatalf("GenerateContent() error = %v", err)
 	}
+	want, err := convertMessages(msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
 	reqs, _ := f.requests()
-	sent := reqs[0]
-	// weatherOpts asks for 1024 output tokens and thinking is off, so 1024
-	// is the reply reserve. A tenth of the window stays free as headroom.
-	budget := numCtx - 1024 - numCtx/headroomDivisor - tokensFor(jsonBytes(sent.Tools), defaultBytesPerToken)
-	if got := estimateTokens(sent.Messages, defaultBytesPerToken); got > budget {
-		t.Fatalf("request estimate %d tokens exceeds budget %d", got, budget)
+	sent := reqs[0].Messages
+	if len(sent) != len(want) {
+		t.Fatalf("request carries %d messages, want all %d", len(sent), len(want))
 	}
-	assertWellFormed(t, sent.Messages)
-	last := sent.Messages[len(sent.Messages)-1]
-	if last.Role != "tool" || !strings.HasPrefix(last.Content, "turn-399-output:") {
-		t.Fatalf("latest tool output must be kept, got %q", truncate(last.Content))
-	}
-	prev := sent.Messages[len(sent.Messages)-2]
-	if prev.Role != "assistant" || len(prev.ToolCalls) != 1 {
-		t.Fatalf("latest assistant tool call must be kept, got %+v", prev)
-	}
-	if last.Content != msgs[len(msgs)-1].Parts[0].(llms.ToolCallResponse).Content {
-		t.Fatal("latest tool output must not be shortened when dropping old turns is enough")
-	}
-	if !strings.Contains(sent.Messages[2].Content, "squad removed the") {
-		t.Fatalf("a note must replace the removed turns, got %q", truncate(sent.Messages[2].Content))
-	}
-}
-
-func TestContextUnderBudgetUnchanged(t *testing.T) {
-	t.Parallel()
-	llm := New("http://x", "qwen3", 65536)
-	chatMsgs, err := convertMessages(longConversation(3, 1000))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := llm.buildChatRequest(chatMsgs, llms.CallOptions{MaxTokens: 1024})
-	got := llm.fitContext(context.Background(), req)
-	if len(got) != len(chatMsgs) {
-		t.Fatalf("messages = %d, want %d unchanged", len(got), len(chatMsgs))
-	}
-	for i := range got {
-		if got[i].Content != chatMsgs[i].Content {
-			t.Fatalf("message %d changed under budget", i)
+	for i := range want {
+		if sent[i].Role != want[i].Role || sent[i].Content != want[i].Content {
+			t.Fatalf("message %d was changed on the way to Ollama", i)
 		}
 	}
 }
 
-// TestTrimPrefersOldToolOutputs checks the first, gentlest step: when
-// replacing older tool outputs is enough, every turn survives.
-func TestTrimPrefersOldToolOutputs(t *testing.T) {
+// TestContextBudget pins the prompt budget the agent loop compacts to:
+// num_ctx less the reply reserve, a tenth of the window as headroom, and the
+// tool definitions.
+func TestContextBudget(t *testing.T) {
 	t.Parallel()
-	msgs, err := convertMessages(longConversation(10, 3000))
-	if err != nil {
-		t.Fatal(err)
+	noTools := tokensFor(jsonBytes([]ollamaTool(nil)), defaultBytesPerToken)
+	weatherTools := tokensFor(jsonBytes(convertTools(llmsWeatherTools())), defaultBytesPerToken)
+	if weatherTools <= noTools {
+		t.Fatalf("tool definitions must cost tokens: %d with, %d without", weatherTools, noTools)
 	}
-	budget := estimateTokens(msgs, defaultBytesPerToken) - 3000
-	out, stats := trimToBudget(msgs, budget, 32768, defaultBytesPerToken)
-	if stats.dropped != 0 || stats.truncated != 0 || stats.compacted == 0 {
-		t.Fatalf("want only older outputs replaced, got %s", stats)
+	tests := []struct {
+		name   string
+		numCtx int
+		think  bool
+		opts   []llms.CallOption
+		want   int
+	}{
+		{"reply cap reserved", 65536, false, []llms.CallOption{llms.WithMaxTokens(1024)}, 65536 - 1024 - 6553 - noTools},
+		{"no reply cap reserves the default", 65536, false, nil, 65536 - 4096 - 6553 - noTools},
+		{"thinking reserves its raised reply cap", 65536, true, []llms.CallOption{llms.WithMaxTokens(1024)}, 65536 - 8192 - 6553 - noTools},
+		{"reserve stops at half the window", 8192, false, []llms.CallOption{llms.WithMaxTokens(16384)}, 8192 - 4096 - 819 - noTools},
+		{"tool definitions are counted", 65536, false, weatherOpts(), 65536 - 1024 - 6553 - weatherTools},
+		{"tools left out of a final call are not", 65536, false, append(weatherOpts(), llms.WithToolChoice("none")), 65536 - 1024 - 6553 - noTools},
+		{"no num_ctx means no window to keep to", 0, false, weatherOpts(), math.MaxInt},
 	}
-	if len(out) != len(msgs) {
-		t.Fatalf("messages = %d, want %d", len(out), len(msgs))
-	}
-	if !strings.Contains(out[3].Content, "older tool output removed") {
-		t.Fatalf("oldest tool output must be replaced first, got %q", truncate(out[3].Content))
-	}
-	if out[len(out)-1].Content != msgs[len(msgs)-1].Content {
-		t.Fatal("latest tool output must be untouched")
-	}
-	if got := estimateTokens(out, defaultBytesPerToken); got > budget {
-		t.Fatalf("estimate %d over budget %d", got, budget)
-	}
-	if msgs[3].Content == out[3].Content {
-		t.Fatal("trimming must not be a no-op")
-	}
-	if strings.Contains(msgs[3].Content, "older tool output removed") {
-		t.Fatal("trimming must not modify the caller's messages")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, _ := New("http://x", "qwen3", tt.numCtx, WithThink(tt.think)).ContextBudget(tt.opts...)
+			if got != tt.want {
+				t.Fatalf("budget = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 
-// TestTrimShortensHugeLatestOutput covers a single tool output bigger than
-// the whole window: it is cut in the middle, keeping its start and end.
-func TestTrimShortensHugeLatestOutput(t *testing.T) {
+// llmsWeatherTools returns the tool definitions weatherOpts passes.
+func llmsWeatherTools() []llms.Tool {
+	opts := llms.CallOptions{}
+	for _, opt := range weatherOpts() {
+		opt(&opts)
+	}
+	return opts.Tools
+}
+
+// TestContextBudgetEstimate checks the estimate the agent loop plans its
+// compaction with: it counts text, tool calls, and tool outputs at the
+// client's bytes-per-token ratio, and adds up message by message.
+func TestContextBudgetEstimate(t *testing.T) {
 	t.Parallel()
-	msgs, err := convertMessages(longConversation(1, 200_000))
-	if err != nil {
-		t.Fatal(err)
-	}
-	msgs[len(msgs)-1].Content += "END-MARKER"
-	out, stats := trimToBudget(msgs, 4000, 8192, defaultBytesPerToken)
-	if stats.truncated == 0 {
-		t.Fatalf("want the latest output shortened, got %s", stats)
-	}
-	if got := estimateTokens(out, defaultBytesPerToken); got > 4000 {
-		t.Fatalf("estimate %d over budget 4000", got)
-	}
-	assertWellFormed(t, out)
-	last := out[len(out)-1].Content
-	if !strings.HasPrefix(last, "turn-0-output:") || !strings.HasSuffix(last, "END-MARKER") || !strings.Contains(last, "bytes removed by squad") {
-		t.Fatalf("shortened output must keep its start and end, got %q", truncate(last))
-	}
-}
+	_, estimate := New("http://x", "qwen3", 65536).ContextBudget()
 
-// TestTrimNeverDropsInstructions checks that a head bigger than the budget is
-// sent as is: squad never drops the system prompt or the task.
-func TestTrimNeverDropsInstructions(t *testing.T) {
-	t.Parallel()
-	msgs := []ollamaMessage{
-		{Role: "system", Content: strings.Repeat("s", 30_000)},
-		{Role: "user", Content: "task"},
+	text := []llms.MessageContent{{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(strings.Repeat("x", 2500))}}}
+	if got, want := estimate(text), 1000+messageOverheadTokens; got != want {
+		t.Fatalf("2500 bytes of text = %d tokens, want %d", got, want)
 	}
-	out, _ := trimToBudget(msgs, 100, 4096, defaultBytesPerToken)
-	if len(out) != 2 || out[0].Content != msgs[0].Content {
-		t.Fatal("instructions must never be dropped or cut")
-	}
-}
 
-// TestTrimIsStableAcrossTurns checks that as the conversation grows one turn
-// per request, the trimmed prefix changes only every few requests, so
-// Ollama can reuse its prompt cache instead of re-reading the whole prompt.
-func TestTrimIsStableAcrossTurns(t *testing.T) {
-	t.Parallel()
-	full, err := convertMessages(longConversation(48, 3000))
-	if err != nil {
-		t.Fatal(err)
-	}
-	const budget = 20_000
-	boundaries := map[int]bool{}
-	for turns := 40; turns <= 48; turns++ {
-		msgs := full[:2+2*turns]
-		_, stats := trimToBudget(msgs, budget, 32768, defaultBytesPerToken)
-		if stats.compacted%trimStep != 0 {
-			t.Fatalf("turns=%d: replaced %d outputs, want a multiple of %d", turns, stats.compacted, trimStep)
+	msgs := longConversation(6, 3000)
+	sum := 0
+	for i := range msgs {
+		one := estimate(msgs[i : i+1])
+		if one <= 0 {
+			t.Fatalf("message %d (%s) is estimated at %d tokens", i, msgs[i].Role, one)
 		}
-		boundaries[stats.compacted] = true
+		sum += one
 	}
-	if len(boundaries) > 2 {
-		t.Fatalf("trim boundary moved %d times over 9 requests; want at most 2 distinct boundaries", len(boundaries))
+	if got := estimate(msgs); got != sum {
+		t.Fatalf("conversation = %d tokens, but its messages add up to %d", got, sum)
 	}
-}
 
-func TestTruncateMiddleKeepsUTF8Valid(t *testing.T) {
-	t.Parallel()
-	s := strings.Repeat("héllo wörld ✓ ", 2000)
-	got := truncateMiddle(s, 1001, 8192)
-	if !utf8.ValidString(got) {
-		t.Fatal("truncated string must stay valid UTF-8")
-	}
-	if len(got) >= len(s) {
-		t.Fatal("string must shrink")
-	}
-}
-
-// denseOutput returns size bytes of the tool output a web-app mapper collects:
-// compact JSON with short keys, hex IDs, and digit runs. Tokenizers split such
-// text into far more tokens per byte than prose.
-func denseOutput(turn, size int) string {
-	var b strings.Builder
-	for i := 0; b.Len() < size; i++ {
-		fmt.Fprintf(&b, `{"id":"%08x","ts":17317%05d,"ok":true,"n":[%d,%d,%d]},`, turn*7919+i, i, i, i+1, i+2)
-	}
-	return b.String()[:size]
-}
-
-// denseConversation is longConversation with token-dense tool outputs.
-func denseConversation(turns, outputBytes int) []llms.MessageContent {
-	msgs := longConversation(turns, 0)
-	for i := 0; i < turns; i++ {
-		result := &msgs[3+2*i]
-		resp := result.Parts[0].(llms.ToolCallResponse)
-		resp.Content = denseOutput(i, outputBytes)
-		result.Parts[0] = resp
-	}
-	return msgs
-}
-
-// denseTokenizer is a fake Ollama whose tokenizer yields one token per
-// bytesPerToken bytes of message content, tool calls, and tool definitions.
-// Like Ollama, it reports that count as prompt_eval_count, capped at num_ctx
-// because an over-long prompt is truncated to fit.
-type denseTokenizer struct {
-	mu     sync.Mutex
-	counts []int
-}
-
-func newDenseTokenizer(t *testing.T, bytesPerToken int) (*denseTokenizer, *httptest.Server) {
-	t.Helper()
-	d := &denseTokenizer{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Messages []struct {
-				Content   string          `json:"content"`
-				ToolCalls json.RawMessage `json:"tool_calls"`
-			} `json:"messages"`
-			Tools   json.RawMessage `json:"tools"`
-			Options struct {
-				NumCtx int `json:"num_ctx"`
-			} `json:"options"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		n := len(req.Tools)
-		for _, m := range req.Messages {
-			n += len(m.Content) + len(m.ToolCalls)
-		}
-		tokens := (n + bytesPerToken - 1) / bytesPerToken
-		d.mu.Lock()
-		d.counts = append(d.counts, tokens)
-		d.mu.Unlock()
-		_, _ = fmt.Fprintf(w, `{"model":"qwen3","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"get_weather","arguments":{"city":"Paris"}}}]},"done":true,"done_reason":"stop","prompt_eval_count":%d,"eval_count":20}`,
-			min(tokens, req.Options.NumCtx))
-	}))
-	t.Cleanup(srv.Close)
-	return d, srv
-}
-
-// promptTokens returns the uncapped token count of every request received.
-func (d *denseTokenizer) promptTokens() []int {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return append([]int(nil), d.counts...)
-}
-
-// TestTokenDenseHistoryStaysInsideWindow is the regression test for an
-// estimate that undercounts: the model's tokenizer finds a token every 2
-// bytes of JSON-like tool output, denser than squad assumes by default. As
-// the history grows turn by turn, every request must still leave the model
-// its whole prompt plus room for the reply inside num_ctx, which requires
-// squad to learn the real density from prompt_eval_count.
-func TestTokenDenseHistoryStaysInsideWindow(t *testing.T) {
-	t.Parallel()
-	const numCtx, numPredict = 16384, 1024
-	tok, srv := newDenseTokenizer(t, 2)
-	llm := New(srv.URL, "qwen3", numCtx)
-	for turns := 1; turns <= 40; turns++ {
-		if _, err := llm.GenerateContent(context.Background(), denseConversation(turns, 4000), weatherOpts()...); err != nil {
-			t.Fatalf("turn %d: GenerateContent() error = %v", turns, err)
-		}
-	}
-	counts := tok.promptTokens()
-	if len(counts) != 40 {
-		t.Fatalf("requests = %d, want 40", len(counts))
-	}
-	for i, tokens := range counts {
-		if tokens+numPredict > numCtx {
-			t.Fatalf("request %d held %d real tokens: with %d for the reply it overflows num_ctx=%d", i+1, tokens, numPredict, numCtx)
-		}
+	broken := []llms.MessageContent{{Role: llms.ChatMessageTypeAI, Parts: []llms.ContentPart{llms.ToolCall{
+		ID: "c", Type: "function", FunctionCall: &llms.FunctionCall{Name: "Bash", Arguments: "not json"},
+	}}}}
+	if got := estimate(broken); got != 0 {
+		t.Fatalf("a conversation the client cannot send = %d tokens, want 0", got)
 	}
 }
 
@@ -370,29 +184,33 @@ func TestCalibrateOnlyTightens(t *testing.T) {
 	}
 }
 
-// TestCalibratedRatioTrimsHarder checks that the learned ratio reaches the
-// trimming budget: the same request fits before calibration and is trimmed
-// after Ollama reports half as many tokens again as squad estimated.
-func TestCalibratedRatioTrimsHarder(t *testing.T) {
+// TestCalibrationTightensContextBudget checks that the learned ratio reaches
+// what the agent loop sees: once Ollama reports half as many tokens again as
+// squad estimated, the same conversation is estimated higher and the same
+// tool definitions leave a smaller budget.
+func TestCalibrationTightensContextBudget(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	llm := New("http://x", "qwen3", 16384)
-	chatMsgs, err := convertMessages(denseConversation(8, 3000))
+	llm := New("http://x", "qwen3", 65536)
+	msgs := longConversation(8, 3000)
+	chatMsgs, err := convertMessages(msgs)
 	if err != nil {
 		t.Fatal(err)
 	}
+	budgetBefore, estimate := llm.ContextBudget(weatherOpts()...)
+	before := estimate(msgs)
+
 	req := llm.buildChatRequest(chatMsgs, llms.CallOptions{MaxTokens: 1024})
-	if got := llm.fitContext(ctx, req); estimateTokens(got, defaultBytesPerToken) != estimateTokens(chatMsgs, defaultBytesPerToken) {
-		t.Fatal("the request must fit untrimmed at the default ratio")
-	}
+	llm.calibrate(ctx, req, before*3/2)
 
-	llm.calibrate(ctx, req, estimateTokens(chatMsgs, defaultBytesPerToken)*3/2)
-
-	got := llm.fitContext(ctx, req)
-	if promptBytes(chatRequest{Messages: got}) >= promptBytes(chatRequest{Messages: chatMsgs}) {
-		t.Fatal("the request must be trimmed once the ratio is tightened")
+	budgetAfter, estimate := llm.ContextBudget(weatherOpts()...)
+	after := estimate(msgs)
+	if after < before*14/10 {
+		t.Fatalf("estimate after calibration = %d tokens, want about half as many again as %d", after, before)
 	}
-	assertWellFormed(t, got)
+	if budgetAfter >= budgetBefore {
+		t.Fatalf("budget after calibration = %d, want below %d", budgetAfter, budgetBefore)
+	}
 }
 
 // TestPromptNearNumCtxWarns checks that squad says so when Ollama reports a
@@ -426,221 +244,4 @@ func TestPromptNearNumCtxWarns(t *testing.T) {
 			}
 		})
 	}
-}
-
-// droppedNotePrefix starts the note that stands in for removed turns.
-const droppedNotePrefix = "[squad removed the"
-
-// TestTrimObserverCalledWheneverRequestIsTrimmed checks that the observer
-// hears of every trimmed request, whichever step did the trimming, and of
-// none that went out whole. The agent loop relies on it to return a trimmed
-// file on the next Read instead of answering that it was already provided.
-func TestTrimObserverCalledWheneverRequestIsTrimmed(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name          string
-		numCtx        int
-		turns         int
-		outputBytes   int
-		wantCalls     int
-		wantReplaced  bool
-		wantNote      bool
-		wantShortened bool
-	}{
-		{name: "under budget", numCtx: 65536, turns: 3, outputBytes: 1000},
-		{name: "older outputs replaced", numCtx: 8192, turns: 10, outputBytes: 3000, wantCalls: 1, wantReplaced: true},
-		{name: "oldest turns removed", numCtx: 16384, turns: 400, outputBytes: 3000, wantCalls: 1, wantReplaced: true, wantNote: true},
-		{name: "latest output shortened", numCtx: 8192, turns: 1, outputBytes: 200_000, wantCalls: 1, wantShortened: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			f, srv := newFakeOllama(t, fakeReply{body: toolOnlyReply})
-			calls := 0
-			llm := New(srv.URL, "qwen3", tt.numCtx, WithTrimObserver(func(context.Context) { calls++ }))
-			if _, err := llm.GenerateContent(context.Background(), longConversation(tt.turns, tt.outputBytes), weatherOpts()...); err != nil {
-				t.Fatalf("GenerateContent() error = %v", err)
-			}
-			reqs, _ := f.requests()
-			sent := reqs[0].Messages
-
-			replaced := slices.ContainsFunc(sent, func(m ollamaMessage) bool {
-				return m.Role == "tool" && strings.HasPrefix(m.Content, "[older tool output removed by squad")
-			})
-			if replaced != tt.wantReplaced {
-				t.Fatalf("older outputs replaced = %v, want %v", replaced, tt.wantReplaced)
-			}
-			hasNote := slices.ContainsFunc(sent, func(m ollamaMessage) bool {
-				return strings.HasPrefix(m.Content, droppedNotePrefix)
-			})
-			if hasNote != tt.wantNote {
-				t.Fatalf("turns removed = %v, want %v", hasNote, tt.wantNote)
-			}
-			shortened := strings.Contains(sent[len(sent)-1].Content, "bytes removed by squad")
-			if shortened != tt.wantShortened {
-				t.Fatalf("latest output shortened = %v, want %v", shortened, tt.wantShortened)
-			}
-			if calls != tt.wantCalls {
-				t.Fatalf("observer called %d times, want %d", calls, tt.wantCalls)
-			}
-		})
-	}
-}
-
-// TestEmptyTurnRetryIsTrimmedLikeTheFirstRequest checks the second request
-// squad sends after an empty turn: it is trimmed once, from the whole
-// conversation, and the observer hears of it too.
-func TestEmptyTurnRetryIsTrimmedLikeTheFirstRequest(t *testing.T) {
-	t.Parallel()
-	const (
-		numCtx     = 16384
-		emptyReply = `{"model":"qwen3","message":{"role":"assistant","content":"","thinking":"hmm"},"done":true,"done_reason":"stop","prompt_eval_count":40,"eval_count":5}`
-	)
-	f, srv := newFakeOllama(t, fakeReply{body: emptyReply}, fakeReply{body: toolOnlyReply})
-	calls := 0
-	llm := New(srv.URL, "qwen3", numCtx, WithTrimObserver(func(context.Context) { calls++ }))
-	if _, err := llm.GenerateContent(context.Background(), longConversation(400, 3_000), weatherOpts()...); err != nil {
-		t.Fatalf("GenerateContent() error = %v", err)
-	}
-	reqs, _ := f.requests()
-	if len(reqs) != 2 {
-		t.Fatalf("requests = %d, want 2 (original + one retry)", len(reqs))
-	}
-	retry := reqs[1].Messages
-	if last := retry[len(retry)-1]; last.Role != "user" || last.Content != emptyTurnNudge {
-		t.Fatalf("retry must end with the nudge, got %+v", last)
-	}
-	budget := numCtx - 1024 - numCtx/headroomDivisor - tokensFor(jsonBytes(reqs[1].Tools), defaultBytesPerToken)
-	if got := estimateTokens(retry, defaultBytesPerToken); got > budget {
-		t.Fatalf("retry estimate %d tokens exceeds budget %d", got, budget)
-	}
-	assertWellFormed(t, retry)
-	notes := 0
-	for _, m := range retry {
-		if strings.HasPrefix(m.Content, droppedNotePrefix) {
-			notes++
-		}
-	}
-	if notes != 1 {
-		t.Fatalf("retry carries %d removal notes, want 1", notes)
-	}
-	if calls != 2 {
-		t.Fatalf("observer called %d times, want once per trimmed request", calls)
-	}
-}
-
-// wholeOutputs returns how many of the tool outputs longConversation built
-// with outputBytes each are in sent untouched.
-func wholeOutputs(sent []ollamaMessage, outputBytes int) int {
-	return countMessages(sent, func(m ollamaMessage) bool {
-		return m.Role == "tool" && strings.HasPrefix(m.Content, "turn-") && len(m.Content) > outputBytes
-	})
-}
-
-// TestTrimKeepsEveryOutputThatFits is the regression test for rounding in a
-// window that holds only a few tool outputs. With 30 KB Bash outputs at
-// num_ctx=65536 four fit; rounding the number replaced up to a multiple of
-// trimStep replaced every older one, so the model saw only the latest.
-func TestTrimKeepsEveryOutputThatFits(t *testing.T) {
-	t.Parallel()
-	const (
-		numCtx      = 65536
-		outputBytes = 30_000
-		fits        = 4
-	)
-	for turns := 2; turns <= 24; turns++ {
-		t.Run(fmt.Sprintf("%d turns", turns), func(t *testing.T) {
-			t.Parallel()
-			f, srv := newFakeOllama(t, fakeReply{body: toolOnlyReply})
-			msgs := longConversation(turns, outputBytes)
-			if _, err := New(srv.URL, "qwen3", numCtx).GenerateContent(context.Background(), msgs, weatherOpts()...); err != nil {
-				t.Fatalf("GenerateContent() error = %v", err)
-			}
-			reqs, _ := f.requests()
-			sent := reqs[0].Messages
-			budget := numCtx - 1024 - numCtx/headroomDivisor - tokensFor(jsonBytes(reqs[0].Tools), defaultBytesPerToken)
-			if got := estimateTokens(sent, defaultBytesPerToken); got > budget {
-				t.Fatalf("request estimate %d tokens exceeds budget %d", got, budget)
-			}
-			assertWellFormed(t, sent)
-			if got, want := wholeOutputs(sent, outputBytes), min(turns, fits); got != want {
-				t.Fatalf("request carries %d whole tool outputs, want %d", got, want)
-			}
-			// The whole outputs are the newest ones.
-			for i, m := range sent[len(sent)-2*min(turns, fits):] {
-				if m.Role == "tool" && len(m.Content) <= outputBytes {
-					t.Fatalf("message %d from the end of the newest turns was trimmed: %q", i, truncate(m.Content))
-				}
-			}
-		})
-	}
-}
-
-// chattyConversation builds turns tool-calling turns in which the model also
-// writes chatterBytes of text, so the turns stay large after their tool
-// outputs are replaced.
-func chattyConversation(turns, chatterBytes int) []ollamaMessage {
-	msgs := []ollamaMessage{
-		{Role: "system", Content: testSystemPrompt},
-		{Role: "user", Content: testTask},
-	}
-	for i := 0; i < turns; i++ {
-		msgs = append(msgs,
-			ollamaMessage{Role: "assistant", Content: fmt.Sprintf("turn-%d-notes:", i) + strings.Repeat("n", chatterBytes)},
-			ollamaMessage{Role: "tool", ToolName: "Bash", Content: fmt.Sprintf("turn-%d-output:", i) + strings.Repeat("x", 500)},
-		)
-	}
-	return msgs
-}
-
-// TestTrimRemovesOnlyTheTurnsItMust covers the same rounding in step 2: when
-// fewer than trimStep turns would be left, only as many of the oldest turns
-// go as the budget needs. The rounding stays when plenty would be left.
-func TestTrimRemovesOnlyTheTurnsItMust(t *testing.T) {
-	t.Parallel()
-	const numCtx = 32768
-	turnsLeft := func(msgs []ollamaMessage) int {
-		return countMessages(msgs, func(m ollamaMessage) bool { return m.Role == "assistant" })
-	}
-
-	t.Run("few turns fit", func(t *testing.T) {
-		t.Parallel()
-		msgs := chattyConversation(12, 6000)
-		perTurn := messageTokens(msgs[2], defaultBytesPerToken) + messageTokens(msgs[3], defaultBytesPerToken)
-		// Room for the instructions and five and a half whole turns.
-		budget := estimateTokens(msgs[:2], defaultBytesPerToken) + perTurn*11/2
-		out, stats := trimToBudget(msgs, budget, numCtx, defaultBytesPerToken)
-		if got := estimateTokens(out, defaultBytesPerToken); got > budget {
-			t.Fatalf("estimate %d over budget %d", got, budget)
-		}
-		assertWellFormed(t, out)
-		if stats.dropped == 0 || stats.truncated != 0 {
-			t.Fatalf("want only whole turns removed, got %s", stats)
-		}
-		if got := turnsLeft(out); got != 5 {
-			t.Fatalf("%d turns left, want the 5 that fit (%s)", got, stats)
-		}
-	})
-
-	t.Run("many turns fit", func(t *testing.T) {
-		t.Parallel()
-		msgs := chattyConversation(60, 600)
-		perTurn := messageTokens(msgs[2], defaultBytesPerToken) + messageTokens(msgs[3], defaultBytesPerToken)
-		budget := estimateTokens(msgs[:2], defaultBytesPerToken) + perTurn*20
-		out, stats := trimToBudget(msgs, budget, numCtx, defaultBytesPerToken)
-		if got := estimateTokens(out, defaultBytesPerToken); got > budget {
-			t.Fatalf("estimate %d over budget %d", got, budget)
-		}
-		assertWellFormed(t, out)
-		if removed := 60 - turnsLeft(out); removed == 0 || removed%trimStep != 0 {
-			t.Fatalf("removed %d turns, want a multiple of %d (%s)", removed, trimStep, stats)
-		}
-	})
-}
-
-func truncate(s string) string {
-	if len(s) > 120 {
-		return s[:120] + "..."
-	}
-	return s
 }

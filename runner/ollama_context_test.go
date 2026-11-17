@@ -1,0 +1,341 @@
+package runner
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/cowdogmoo/squad/agent"
+	"github.com/cowdogmoo/squad/executor"
+	"github.com/cowdogmoo/squad/metrics"
+)
+
+// probeMessage is the part of an Ollama chat message the fake model reads.
+type probeMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// probeRequest is one request the fake Ollama received.
+type probeRequest struct {
+	Messages []probeMessage
+	// Tokens is the size of the prompt by the fake tokenizer.
+	Tokens     int
+	NumCtx     int
+	NumPredict int
+}
+
+// fakeOllamaAgent is a fake Ollama server that plays an agent. script picks
+// each reply from the request: a file to read, or the final answer. Its
+// tokenizer yields one token per bytesPerToken bytes of message content, tool
+// calls, and tool definitions, and like Ollama it reports that count as
+// prompt_eval_count, capped at num_ctx because an over-long prompt is cut to
+// fit.
+type fakeOllamaAgent struct {
+	bytesPerToken int
+	// script returns the path to read next, or "" and the final answer.
+	script func(msgs []probeMessage) (path, answer string)
+
+	mu       sync.Mutex
+	requests []probeRequest
+}
+
+func (f *fakeOllamaAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Messages []struct {
+			probeMessage
+			ToolCalls json.RawMessage `json:"tool_calls"`
+		} `json:"messages"`
+		Tools   json.RawMessage `json:"tools"`
+		Options struct {
+			NumCtx     int `json:"num_ctx"`
+			NumPredict int `json:"num_predict"`
+		} `json:"options"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	size := len(req.Tools)
+	msgs := make([]probeMessage, len(req.Messages))
+	for i, m := range req.Messages {
+		size += len(m.Content) + len(m.ToolCalls)
+		msgs[i] = m.probeMessage
+	}
+	tokens := (size + f.bytesPerToken - 1) / f.bytesPerToken
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests = append(f.requests, probeRequest{Messages: msgs, Tokens: tokens, NumCtx: req.Options.NumCtx, NumPredict: req.Options.NumPredict})
+
+	message := map[string]any{"role": "assistant", "content": ""}
+	if path, answer := f.script(msgs); path != "" {
+		message["tool_calls"] = []map[string]any{{
+			"id":       fmt.Sprintf("call-%d", len(f.requests)),
+			"function": map[string]any{"name": "Read", "arguments": map[string]any{"path": path}},
+		}}
+	} else {
+		message["content"] = answer
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"model": "qwen3", "message": message,
+		"done": true, "done_reason": "stop",
+		"prompt_eval_count": min(tokens, req.Options.NumCtx), "eval_count": 10,
+	})
+}
+
+func (f *fakeOllamaAgent) received() []probeRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]probeRequest(nil), f.requests...)
+}
+
+// runOllamaAgent runs the real tool loop with the real Ollama client against
+// model, the way squad run does for a leaf agent.
+func runOllamaAgent(t *testing.T, model *fakeOllamaAgent, dir string, numCtx, maxIter int, bundle *agent.Bundle) string {
+	t.Helper()
+	srv := httptest.NewServer(model)
+	defer srv.Close()
+	opts := &RunOptions{Provider: "ollama", BaseURL: srv.URL, NumCtx: numCtx, MaxIterations: maxIter}
+	bundle.WorkDir = dir
+	response, err := callLangChainLLM(
+		context.Background(),
+		opts,
+		"ollama",
+		"qwen3",
+		bundle.System,
+		bundle,
+		0.2,
+		1024,
+		opts.MaxIterations,
+		nil,
+		&executor.LocalExecutor{WorkingDir: dir},
+		metrics.New("ollama", "qwen3"),
+	)
+	if err != nil {
+		t.Fatalf("callLangChainLLM() error = %v", err)
+	}
+	return response
+}
+
+func firstToolOutput(msgs []probeMessage) string {
+	for _, m := range msgs {
+		if m.Role == "tool" {
+			return m.Content
+		}
+	}
+	return ""
+}
+
+func lastToolOutput(msgs []probeMessage) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "tool" {
+			return msgs[i].Content
+		}
+	}
+	return ""
+}
+
+// probeLines returns about size bytes of text in 250-byte lines.
+func probeLines(size int) string {
+	line := strings.Repeat("x", 249) + "\n"
+	return strings.Repeat(line, max(1, size/len(line)))
+}
+
+func writeProbeFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestOllamaCompactedReadIsServedAgain is the regression test for the read
+// cache not knowing what was cut from an Ollama request to fit num_ctx. It
+// runs the real tool loop, Read tool, and Ollama client against a fake Ollama
+// server: the agent reads a.go, keeps reading until that output has been
+// compacted out of the request, and reads a.go again. It must get the file,
+// where it used to get "[CACHE HIT ... Content was already provided]" and,
+// after three of those, "READ LOOP DETECTED". One case per compaction step.
+func TestOllamaCompactedReadIsServedAgain(t *testing.T) {
+	t.Parallel()
+	const (
+		target     = "a.go"
+		marker     = "// A-GO-FILE-MARKER"
+		maxFillers = 30
+	)
+	tests := []struct {
+		name        string
+		numCtx      int
+		targetBytes int
+		// compacted reports whether the request no longer carries the first
+		// Read of the target whole.
+		compacted func(msgs []probeMessage) bool
+	}{
+		{
+			name:        "older output replaced",
+			numCtx:      32768,
+			targetBytes: 3_000,
+			compacted: func(msgs []probeMessage) bool {
+				return strings.HasPrefix(firstToolOutput(msgs), "[tool output compacted")
+			},
+		},
+		{
+			// The file alone is bigger than the window.
+			name:        "latest output shortened",
+			numCtx:      8192,
+			targetBytes: 30_000,
+			compacted: func(msgs []probeMessage) bool {
+				return strings.Contains(lastToolOutput(msgs), "lines omitted from tool output")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeProbeFile(t, dir, target, marker+"\n"+probeLines(tt.targetBytes))
+			for i := 1; i <= maxFillers; i++ {
+				writeProbeFile(t, dir, fmt.Sprintf("filler-%02d.txt", i), fmt.Sprintf("filler %d\n", i)+probeLines(16_000))
+			}
+
+			var (
+				calls, fillers int
+				asked          bool
+				reread         string
+			)
+			model := &fakeOllamaAgent{bytesPerToken: 4}
+			model.script = func(msgs []probeMessage) (string, string) {
+				calls++
+				switch {
+				case calls == 1:
+					return target, ""
+				case asked:
+					if reread == "" {
+						reread = lastToolOutput(msgs)
+					}
+					return "", "done"
+				case tt.compacted(msgs):
+					asked = true
+					return target, ""
+				case fillers < maxFillers:
+					fillers++
+					return fmt.Sprintf("filler-%02d.txt", fillers), ""
+				default:
+					return "", "gave up"
+				}
+			}
+
+			response := runOllamaAgent(t, model, dir, tt.numCtx, maxFillers+10,
+				&agent.Bundle{System: "You fix Go code.", User: "Fix the bug in a.go."})
+
+			if !asked {
+				t.Fatalf("the first Read of %s was never compacted out of a request (%d requests, %d filler reads, response %q)",
+					target, calls, fillers, response)
+			}
+			if !strings.Contains(reread, marker) {
+				t.Fatalf("re-reading %s after its output was compacted must return the file, got: %.300s", target, reread)
+			}
+			for _, stub := range []string{"CACHE HIT", "READ LOOP DETECTED"} {
+				if strings.Contains(reread, stub) {
+					t.Fatalf("re-reading %s after its output was compacted returned a %s answer: %.300s", target, stub, reread)
+				}
+			}
+			if response != "done" {
+				t.Fatalf("response = %q, want done", response)
+			}
+		})
+	}
+}
+
+// denseOutput returns size bytes of the tool output a web-app mapper
+// collects: compact JSON with short keys, hex IDs, and digit runs. Tokenizers
+// split such text into far more tokens per byte than prose.
+func denseOutput(turn, size int) string {
+	var b strings.Builder
+	for i := 0; b.Len() < size; i++ {
+		fmt.Fprintf(&b, `{"id":"%08x","ts":17317%05d,"ok":true,"n":[%d,%d,%d]},`, turn*7919+i, i, i, i+1, i+2)
+	}
+	return b.String()[:size]
+}
+
+// TestOllamaConversationStaysInsideWindow is the regression test for the
+// context balloon: a mapper's conversation grew far past num_ctx, so Ollama
+// cut the prompt from the front and the model lost its instructions. Through
+// the real tool loop and Ollama client, an agent collects 40 token-dense
+// outputs, 240K tokens in all by a tokenizer that finds one every 2 bytes,
+// denser than squad assumes until it learns otherwise from prompt_eval_count.
+// Every request must leave the model its whole prompt plus room for the reply
+// inside num_ctx, start with the system prompt and the task, and still carry
+// the recent outputs that fit.
+func TestOllamaConversationStaysInsideWindow(t *testing.T) {
+	t.Parallel()
+	const (
+		numCtx      = 65536
+		turns       = 40
+		outputBytes = 12_000
+		system      = "SYSTEM: you are the webapp-map agent. Never lose these instructions."
+		task        = "TASK: map every endpoint of the target."
+	)
+	dir := t.TempDir()
+	for i := 1; i <= turns; i++ {
+		writeProbeFile(t, dir, fmt.Sprintf("page-%02d.json", i), denseOutput(i, outputBytes))
+	}
+
+	reads := 0
+	model := &fakeOllamaAgent{bytesPerToken: 2}
+	model.script = func([]probeMessage) (string, string) {
+		if reads == turns {
+			return "", "mapped"
+		}
+		reads++
+		return fmt.Sprintf("page-%02d.json", reads), ""
+	}
+
+	response := runOllamaAgent(t, model, dir, numCtx, turns+5, &agent.Bundle{System: system, User: task})
+	if response != "mapped" {
+		t.Fatalf("response = %q, want mapped", response)
+	}
+
+	requests := model.received()
+	if len(requests) != turns+1 {
+		t.Fatalf("requests = %d, want %d", len(requests), turns+1)
+	}
+	compacted := false
+	for i, req := range requests {
+		if req.NumCtx != numCtx || req.NumPredict <= 0 {
+			t.Fatalf("request %d has num_ctx=%d num_predict=%d", i+1, req.NumCtx, req.NumPredict)
+		}
+		if req.Tokens+req.NumPredict > req.NumCtx {
+			t.Fatalf("request %d holds %d tokens: with %d for the reply it overflows num_ctx=%d", i+1, req.Tokens, req.NumPredict, req.NumCtx)
+		}
+		if got := req.Messages[0]; got.Role != "system" || got.Content != system {
+			t.Fatalf("request %d does not start with the whole system prompt: %.120q", i+1, got.Content)
+		}
+		if got := req.Messages[1]; got.Role != "user" || got.Content != task {
+			t.Fatalf("request %d lost the task: %.120q", i+1, got.Content)
+		}
+		whole := 0
+		for _, m := range req.Messages {
+			switch {
+			case m.Role != "tool":
+			case strings.HasPrefix(m.Content, "[tool output compacted"):
+				compacted = true
+			case len(m.Content) >= outputBytes:
+				whole++
+			}
+		}
+		if want := min(i, 3); whole < want {
+			t.Fatalf("request %d carries %d whole tool outputs, want at least the %d newest", i+1, whole, want)
+		}
+	}
+	if !compacted {
+		t.Fatal("no request was compacted, so the test did not reach the window")
+	}
+}

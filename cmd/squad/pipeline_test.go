@@ -3,10 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cowdogmoo/squad/config"
@@ -1050,4 +1054,159 @@ func TestFlagOrViperTyped(t *testing.T) {
 			t.Fatalf("expected 42 from viper, got %v", got)
 		}
 	})
+}
+
+// TestBuildComposedRunOptsEditsOptional checks that a composed run tells its
+// stages that edits are optional only when --require-actionable is set to
+// false, and never because a command lacks the flag.
+func TestBuildComposedRunOptsEditsOptional(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		flag string
+		want bool
+	}{
+		{"default requires actionable output", "", false},
+		{"explicit true", "true", false},
+		{"explicit false", "false", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cmd := newTestRunCmdWithContext(nil)
+			if tt.flag != "" {
+				if err := cmd.Flags().Set("require-actionable", tt.flag); err != nil {
+					t.Fatalf("Set require-actionable: %v", err)
+				}
+			}
+			if got := buildComposedRunOpts(cmd, nil).EditsOptional; got != tt.want {
+				t.Fatalf("EditsOptional = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("command without the flag", func(t *testing.T) {
+		t.Parallel()
+		cmd := &cobra.Command{}
+		cmd.SetContext(withViper(context.Background(), viper.New()))
+		if buildComposedRunOpts(cmd, nil).EditsOptional {
+			t.Fatal("EditsOptional must not be inferred from a missing flag")
+		}
+	})
+}
+
+// stageProbe is a fake Ollama server playing a stage agent that only probes:
+// it reads a different missing file on each of its first probes requests,
+// then answers. It records how many user messages each request carried.
+type stageProbe struct {
+	probes int
+
+	mu           sync.Mutex
+	calls        int
+	userMessages []int
+}
+
+func (p *stageProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Messages []struct {
+			Role string `json:"role"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	users := 0
+	for _, m := range req.Messages {
+		if m.Role == "user" {
+			users++
+		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.userMessages = append(p.userMessages, users)
+	p.calls++
+
+	message := map[string]any{"role": "assistant", "content": "done"}
+	if p.calls <= p.probes {
+		message["content"] = ""
+		message["tool_calls"] = []map[string]any{{
+			"id":       fmt.Sprintf("call-%d", p.calls),
+			"function": map[string]any{"name": "Read", "arguments": map[string]any{"path": fmt.Sprintf("missing-%d.txt", p.calls)}},
+		}}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"model": "qwen3", "message": message,
+		"done": true, "done_reason": "stop", "prompt_eval_count": 10, "eval_count": 10,
+	})
+}
+
+// TestComposedStageEditsOptional is the regression test for
+// --require-actionable=false not reaching the stages of a composed agent.
+// A stage that only probes spends seven iterations without an edit, enough
+// for two "start editing" nudges. Run through the stage callback a composed
+// agent uses, it must be spared them when the flag is false and still get
+// them by default.
+func TestComposedStageEditsOptional(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		flag       string
+		wantNudged bool
+	}{
+		{"default keeps the guards", "", true},
+		{"--require-actionable=false turns them off", "false", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agentsDir := t.TempDir()
+			agentDir := filepath.Join(agentsDir, "test-leaf")
+			if err := os.MkdirAll(agentDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for name, content := range map[string]string{
+				"agent.yaml": "name: test-leaf\nversion: v1\nentrypoint: system.md\nwrapper: agent.md\n",
+				"system.md":  "system prompt",
+				"agent.md":   "agent wrapper",
+			} {
+				if err := os.WriteFile(filepath.Join(agentDir, name), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			probe := &stageProbe{probes: 7}
+			srv := httptest.NewServer(probe)
+			defer srv.Close()
+
+			cfg := &config.Config{}
+			cmd := newTestRunCmdWithContext(cfg)
+			flags := map[string]string{"provider": "ollama", "model": "qwen3", "base-url": srv.URL}
+			if tt.flag != "" {
+				flags["require-actionable"] = tt.flag
+			}
+			for name, value := range flags {
+				if err := cmd.Flags().Set(name, value); err != nil {
+					t.Fatalf("Set %s: %v", name, err)
+				}
+			}
+
+			pRunner := &pl.Runner{InlineAgents: make(map[string]*pl.InlineConfig)}
+			runStage := buildRunAgentFunc(buildComposedRunOpts(cmd, cfg), agentsDir, "", cfg, nil, pRunner)
+			response, _, err := runStage(context.Background(), "test-leaf", "map the target", t.TempDir(), "edit", nil)
+			if err != nil {
+				t.Fatalf("stage run error = %v", err)
+			}
+			if response != "done" {
+				t.Fatalf("stage response = %q, want done", response)
+			}
+
+			probe.mu.Lock()
+			defer probe.mu.Unlock()
+			last := probe.userMessages[len(probe.userMessages)-1]
+			if nudged := last > 1; nudged != tt.wantNudged {
+				t.Fatalf("the stage's last request carries %d user messages; nudged = %v, want %v", last, nudged, tt.wantNudged)
+			}
+		})
+	}
 }

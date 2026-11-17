@@ -714,8 +714,10 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 	for i := 0; i < maxIter; i++ {
 		SetIteration(ctx, i)
 		logIterationStart(ctx, i, maxIter, m)
+		iterOpts := resolveIterOpts(callOpts, cfg.ForceFirstToolCall, i)
+		messages = fitContextWindow(ctx, llm, messages, iterOpts)
 		iterStart := time.Now()
-		response, err := retryGenerateContent(ctx, llm, messages, resolveIterOpts(callOpts, cfg.ForceFirstToolCall, i), cfg.MaxRetries)
+		response, err := retryGenerateContent(ctx, llm, messages, iterOpts, cfg.MaxRetries)
 		iterDuration := time.Since(iterStart)
 		if err := validateResponse(ctx, response, err, iterDuration); err != nil {
 			return lastContent, messages, err, false
@@ -956,6 +958,7 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 	copy(finalOpts, callOpts)
 	finalOpts = append(finalOpts, llms.WithToolChoice("none"))
 
+	messages = fitContextWindow(ctx, llm, messages, finalOpts)
 	response, err := retryGenerateContent(ctx, llm, messages, finalOpts, maxRetries)
 	if err == nil && response != nil && len(response.Choices) > 0 {
 		if m != nil {
@@ -2153,6 +2156,23 @@ func isToolResultForEditedFile(aiMsg llms.MessageContent, toolCallID string, edi
 	return false
 }
 
+// stubToolOutputs returns a copy of parts in which every tool output longer
+// than 200 bytes is replaced by a note of its size, and how many it replaced.
+func stubToolOutputs(parts []llms.ContentPart) ([]llms.ContentPart, int) {
+	stubbed := make([]llms.ContentPart, len(parts))
+	replaced := 0
+	for j, part := range parts {
+		if resp, ok := part.(llms.ToolCallResponse); ok && len(resp.Content) > 200 {
+			resp.Content = fmt.Sprintf("[tool output compacted — was %d bytes]", len(resp.Content))
+			stubbed[j] = resp
+			replaced++
+			continue
+		}
+		stubbed[j] = part
+	}
+	return stubbed, replaced
+}
+
 func compactMessages(ctx context.Context, messages []llms.MessageContent, m *metrics.Metrics) []llms.MessageContent {
 	tokens := estimateTokensCalibrated(ctx, messages)
 	var bq BudgetQuerier
@@ -2199,19 +2219,7 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent, m *met
 		if compacted[i].Role != llms.ChatMessageTypeTool {
 			continue
 		}
-		newParts := make([]llms.ContentPart, len(compacted[i].Parts))
-		for j, part := range compacted[i].Parts {
-			if resp, ok := part.(llms.ToolCallResponse); ok {
-				origLen := len(resp.Content)
-				if origLen > 200 {
-					resp.Content = fmt.Sprintf("[tool output compacted — was %d bytes]", origLen)
-				}
-				newParts[j] = resp
-			} else {
-				newParts[j] = part
-			}
-		}
-		compacted[i].Parts = newParts
+		compacted[i].Parts, _ = stubToolOutputs(compacted[i].Parts)
 	}
 
 	if summary != "" {

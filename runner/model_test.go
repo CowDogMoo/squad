@@ -64,6 +64,105 @@ func TestApplyEditRestrictions(t *testing.T) {
 	}
 }
 
+// TestApplyEditsOptional checks that only an explicit choice turns off the
+// edit-pressure guards: the caller's EditsOptional, or a remote-only agent.
+// Options that leave RequireActionable unset, as the routine daemon's do,
+// must keep them.
+func TestApplyEditsOptional(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		opts         *RunOptions
+		bundle       *agent.Bundle
+		wantOptional bool
+	}{
+		{"nothing set keeps the guards", &RunOptions{}, &agent.Bundle{}, false},
+		{"require-actionable keeps the guards", &RunOptions{RequireActionable: true}, &agent.Bundle{}, false},
+		{"explicit edits-optional turns them off", &RunOptions{EditsOptional: true}, &agent.Bundle{}, true},
+		{"remote-only agent turns them off", &RunOptions{}, &agent.Bundle{RemoteOnly: true}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := applyEditsOptional(context.Background(), tt.opts, tt.bundle)
+			if got := tools.EditsOptional(ctx); got != tt.wantOptional {
+				t.Errorf("EditsOptional = %v, want %v", got, tt.wantOptional)
+			}
+			if got := tools.EditsExpected(ctx); got == tt.wantOptional {
+				t.Errorf("EditsExpected = %v, want %v", got, !tt.wantOptional)
+			}
+		})
+	}
+}
+
+// TestInvokeModelEditsOptional is the regression test for the edit-pressure
+// guards staying on for composed stages and Task children, which reach
+// InvokeModel without ExecuteRun. An agent that only probes spends seven
+// iterations without an edit, enough for two "start editing" nudges. Called
+// the way a stage or a Task child is, InvokeModel must spare it those when
+// the run was started with --require-actionable=false or the agent is
+// remote-only, and must still send them otherwise.
+func TestInvokeModelEditsOptional(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		opts       RunOptions
+		bundle     agent.Bundle
+		wantNudged bool
+	}{
+		{"no explicit choice keeps the guards", RunOptions{}, agent.Bundle{}, true},
+		{"--require-actionable=false", RunOptions{EditsOptional: true}, agent.Bundle{}, false},
+		{"remote-only agent", RunOptions{}, agent.Bundle{RemoteOnly: true}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			const probes = 7
+			calls := 0
+			model := &fakeOllamaAgent{bytesPerToken: 4}
+			model.script = func([]probeMessage) (string, string) {
+				if calls == probes {
+					return "", "done"
+				}
+				calls++
+				return fmt.Sprintf("missing-%d.txt", calls), ""
+			}
+			srv := httptest.NewServer(model)
+			defer srv.Close()
+
+			opts := tt.opts
+			opts.Provider = "ollama"
+			opts.Model = "qwen3"
+			opts.BaseURL = srv.URL
+			opts.MaxIterations = probes + 5
+			bundle := tt.bundle
+			bundle.System = "You map web applications."
+			bundle.User = "Map the target."
+			bundle.WorkDir = t.TempDir()
+			bundle.DisableTask = true
+
+			response, _, err := InvokeModel(context.Background(), &opts, &bundle)
+			if err != nil {
+				t.Fatalf("InvokeModel() error = %v", err)
+			}
+			if response != "done" {
+				t.Fatalf("response = %q, want done", response)
+			}
+			requests := model.received()
+			last := requests[len(requests)-1]
+			prompts := 0
+			for _, m := range last.Messages {
+				if m.Role == "user" {
+					prompts++
+				}
+			}
+			if nudged := prompts > 1; nudged != tt.wantNudged {
+				t.Fatalf("the last request carries %d user messages; nudged = %v, want %v", prompts, nudged, tt.wantNudged)
+			}
+		})
+	}
+}
+
 func TestLoadResumeTranscript(t *testing.T) {
 	t.Run("no resume id returns nil", func(t *testing.T) {
 		t.Parallel()

@@ -225,7 +225,7 @@ by the corresponding `squad run` flags.
 | `run.bundle_out` | string | `""` | Write agent bundle to a file |
 | `run.print_bundle` | bool | `false` | Print agent bundle to stdout |
 | `run.dry_run` | bool | `false` | Build bundle without calling the model |
-| `run.require_actionable` | bool | `true` | Require actionable output (diff/files/no changes). When set to false for `squad run`, the edit deadline, phase nudges, and read blocking are also off |
+| `run.require_actionable` | bool | `true` | Require actionable output (diff/files/no changes). When set to false for `squad run`, the edit deadline, phase nudges, and read blocking are also off, for the agent, every stage of a composed agent, and their Task children |
 | `run.apply` | bool | `false` | Apply unified diff from response to the working directory |
 | `run.apply_fallback` | bool | `false` | Fallback to `patch(1)` if `git apply` fails (may create `.rej`/`.orig` files) |
 | `run.mode` | string | `""` | Agent mode override (e.g., `readonly`) |
@@ -550,26 +550,32 @@ stored in manifests.
 
 Use `--num-ctx` (or `SQUAD_PROVIDER_NUM_CTX`) to control the context window size.
 The default is 32768 tokens. Increase it for agents that process large files.
-Before each request, squad estimates the prompt size and, if it would not fit
-in `num_ctx` with room left for the reply and a tenth of the window as
-headroom, trims the conversation in three steps, stopping as soon as it fits:
+Ollama cuts a prompt that does not fit `num_ctx` from the front, which loses
+the system prompt and agent instructions. So before each request, squad
+estimates the prompt size and, if it would not fit in `num_ctx` with room left
+for the reply and a tenth of the window as headroom, compacts the
+conversation in two steps, stopping as soon as it fits:
 
-1. Older tool outputs are replaced with a placeholder, oldest first.
-2. The oldest turns are removed, with one note left in their place.
-3. The largest tool outputs of the latest turn are cut in the middle. The
-   start and end of each stay, around a
-   `[... N bytes removed by squad to fit num_ctx=... ...]` marker.
+1. Older tool outputs are replaced with
+   `[tool output compacted — was N bytes]`, oldest first and only as many as
+   needed, so every recent output that fits stays whole.
+2. The largest tool outputs of the latest turn are shortened. The start and
+   end of each stay, around a
+   `... [N lines omitted from tool output — total N bytes] ...` marker.
 
-The system prompt and agent instructions are always kept whole. The latest
-turn is always kept too, with its tool outputs shortened only in step 3. Each
-trim is logged. When the agent reads a file again after its earlier `Read`
-output was trimmed in any of these steps, it gets the file's content back
-instead of a note that the content was already provided.
+Only tool outputs are changed. The system prompt, the agent instructions,
+every prompt (including the new prompt of a resumed run), and the model's own
+messages are always kept whole; if those alone no longer fit, squad logs a
+warning to raise `--num-ctx`. Each compaction is logged. When the agent reads
+a file again after its earlier `Read` output was compacted, it gets the file's
+content back instead of a note that the content was already provided. The
+token thresholds that compact long conversations for every provider still
+apply on top of this.
 
 squad cannot run the model's tokenizer, so the estimate starts from a cautious
 2.5 bytes per token. After each reply it compares that with the
 `prompt_eval_count` Ollama reports and, when the real count ran higher, lowers
-the ratio for the rest of the run so later requests are trimmed harder. It
+the ratio for the rest of the run so the conversation is compacted sooner. It
 logs a warning whenever `prompt_eval_count` comes within 5% of `num_ctx`,
 because Ollama drops the oldest part of a prompt that does not fit.
 
