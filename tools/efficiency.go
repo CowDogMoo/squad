@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 
@@ -36,9 +35,8 @@ const cacheHitStreakThreshold = 3
 type ReadCache struct {
 	entries         *csync.Map[string, ReadCacheEntry]
 	mu              sync.Mutex
-	cacheStreak     int   // consecutive cache-hit Read calls without edit or new read
-	compactionEpoch int   // incremented each time context compaction occurs
-	evicted         []int // messages the provider client last reported trimming
+	cacheStreak     int // consecutive cache-hit Read calls without edit or new read
+	compactionEpoch int // incremented each time context compaction occurs
 }
 
 // NewReadCache creates an empty ReadCache.
@@ -67,38 +65,14 @@ func HashContent(data []byte) string {
 
 // BumpCompactionEpoch increments the compaction epoch. Call this after
 // context compaction so that subsequent cache hits know the content has
-// been evicted from the conversation and should be served again. Compaction
-// rewrites the conversation, so the positions [ReadCache.MarkEvicted] last
-// recorded no longer name the same messages and are forgotten.
+// been evicted from the conversation and should be served again.
 func (rc *ReadCache) BumpCompactionEpoch() {
 	if rc == nil {
 		return
 	}
 	rc.mu.Lock()
 	rc.compactionEpoch++
-	rc.evicted = nil
 	rc.mu.Unlock()
-}
-
-// MarkEvicted records which messages of the conversation the model no longer
-// receives in full, because the provider client trimmed its request to fit
-// the context window. messages gives their positions in ascending order.
-// When they differ from the ones last recorded, content the model could see
-// until now is gone, so the compaction epoch moves on, as it does after a
-// compaction, and the next Read of a cached file returns its content again.
-// A client that trims every request the same way moves the epoch once, not
-// once per request, so re-reads of content still in the request stay cached.
-func (rc *ReadCache) MarkEvicted(messages []int) {
-	if rc == nil {
-		return
-	}
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-	if slices.Equal(messages, rc.evicted) {
-		return
-	}
-	rc.compactionEpoch++
-	rc.evicted = slices.Clone(messages)
 }
 
 // CompactionEpoch returns the current compaction epoch for the cache.

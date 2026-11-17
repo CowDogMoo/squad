@@ -24,14 +24,14 @@ type probeMessage struct {
 }
 
 const (
-	probeTarget       = "target.go"
-	probeTargetMarker = "// TARGET-FILE-MARKER"
+	probeTarget       = "a.go"
+	probeTargetMarker = "// A-GO-FILE-MARKER"
 	probeMaxFillers   = 30
 )
 
-// trimProbeModel is a fake Ollama server playing an agent that reads
-// target.go, keeps reading other files until squad has trimmed that first
-// output out of the request, and then reads target.go again.
+// trimProbeModel is a fake Ollama server playing an agent that reads a.go,
+// keeps reading other files until squad has trimmed that first output out of
+// the request, and then reads a.go again.
 type trimProbeModel struct {
 	// trimmed reports whether the request no longer carries the first Read
 	// of the target whole.
@@ -126,10 +126,12 @@ func probeLines(size int) string {
 }
 
 // TestOllamaTrimmedReadIsServedAgain is the regression test for the read
-// cache not knowing what the Ollama client trims. An agent reads a file, the
+// cache not knowing what the Ollama client trims. It runs the real tool loop
+// and Read tool against a fake Ollama server: the agent reads a.go, the
 // client later trims that output out of the request to fit num_ctx, and the
-// agent reads the file again: it must get the content, where it used to get
-// "[CACHE HIT ... Content was already provided]". One case per trimming step.
+// agent reads a.go again. It must get the file, where it used to get
+// "[CACHE HIT ... Content was already provided]" and, after three of those,
+// "READ LOOP DETECTED". One case per trimming step.
 func TestOllamaTrimmedReadIsServedAgain(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -196,7 +198,7 @@ func TestOllamaTrimmedReadIsServedAgain(t *testing.T) {
 			defer srv.Close()
 
 			opts := &RunOptions{Provider: "ollama", BaseURL: srv.URL, NumCtx: tt.numCtx, MaxIterations: probeMaxFillers + 10}
-			bundle := &agent.Bundle{System: "You fix Go code.", User: "Fix the bug in target.go.", WorkDir: dir}
+			bundle := &agent.Bundle{System: "You fix Go code.", User: "Fix the bug in a.go.", WorkDir: dir}
 			response, err := callLangChainLLM(
 				context.Background(),
 				opts,
@@ -223,6 +225,11 @@ func TestOllamaTrimmedReadIsServedAgain(t *testing.T) {
 			}
 			if !strings.Contains(model.reread, probeTargetMarker) {
 				t.Fatalf("re-reading %s after its output was trimmed must return the file, got: %.300s", probeTarget, model.reread)
+			}
+			for _, stub := range []string{"CACHE HIT", "READ LOOP DETECTED"} {
+				if strings.Contains(model.reread, stub) {
+					t.Fatalf("re-reading %s after its output was trimmed returned a %s answer: %.300s", probeTarget, stub, model.reread)
+				}
 			}
 			if response != "done" {
 				t.Fatalf("response = %q, want done", response)

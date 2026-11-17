@@ -669,8 +669,8 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 	}
 	return ollama.New(baseURL, model, numCtx,
 		ollama.WithThink(opts.OllamaThink),
-		ollama.WithTrimObserver(func(ctx context.Context, evicted []int) {
-			tools.GetReadCache(ctx).MarkEvicted(evicted)
+		ollama.WithTrimObserver(func(ctx context.Context) {
+			tools.GetReadCache(ctx).BumpCompactionEpoch()
 		}))
 }
 

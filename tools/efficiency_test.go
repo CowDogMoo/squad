@@ -850,7 +850,6 @@ func TestReadCacheCompactionEpoch(t *testing.T) {
 func TestReadCacheCompactionEpochNil(t *testing.T) {
 	var rc *ReadCache
 	rc.BumpCompactionEpoch() // should not panic
-	rc.MarkEvicted([]int{3})
 	if rc.CompactionEpoch() != 0 {
 		t.Fatal("nil cache epoch should be 0")
 	}

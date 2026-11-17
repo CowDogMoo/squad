@@ -51,7 +51,10 @@ const (
 	// trimStep rounds how many older outputs are replaced, and how many old
 	// turns are removed, up to a multiple of this. The trimmed prefix then
 	// holds steady for several turns instead of shifting every request,
-	// which keeps Ollama's prompt cache useful.
+	// which keeps Ollama's prompt cache useful. The rounding applies only
+	// while at least this many more would still be left once the request
+	// fits. A window too small for that is trimmed by exactly what the
+	// budget needs, so the model keeps every output that fits.
 	trimStep = 8
 )
 
@@ -60,9 +63,6 @@ type trimStats struct {
 	compacted int // older tool outputs replaced by a placeholder
 	dropped   int // oldest messages removed
 	truncated int // recent tool outputs cut down
-	// evicted lists, in ascending order, the indexes into the untrimmed
-	// messages of those whose content was replaced, removed, or cut down.
-	evicted []int
 }
 
 func (s trimStats) String() string {
@@ -76,7 +76,8 @@ func (s trimStats) String() string {
 // prompt and agent instructions, so squad trims first and always keeps
 // everything before the first assistant turn (the system prompt, agent
 // instructions, and task). The caller's messages are never modified. The trim
-// observer, if any, is told which of them the model no longer gets in full.
+// observer, if any, is told whenever the model no longer gets all of them in
+// full.
 func (o *LLM) fitContext(ctx context.Context, req chatRequest) []ollamaMessage {
 	if o.numCtx <= 0 {
 		return req.Messages
@@ -92,8 +93,8 @@ func (o *LLM) fitContext(ctx context.Context, req chatRequest) []ollamaMessage {
 	}
 
 	out, stats := trimToBudget(req.Messages, budget, o.numCtx, bytesPerToken)
-	if o.onTrim != nil && len(stats.evicted) > 0 {
-		o.onTrim(ctx, stats.evicted)
+	if o.onTrim != nil && stats != (trimStats{}) {
+		o.onTrim(ctx)
 	}
 	after := estimateTokens(out, bytesPerToken)
 	logging.InfoContext(ctx, "ollama: request of ~%d tokens exceeds the ~%d-token prompt budget (num_ctx=%d, %d reserved for the reply, %d kept as headroom, ~%d for tool definitions); trimmed to ~%d tokens: %s",
@@ -161,7 +162,9 @@ func replyReserve(req chatRequest, numCtx int) int {
 //     results), leaving one note in their place.
 //  3. Shorten the latest turn's tool outputs, largest first.
 //
-// Steps 1 and 2 work in multiples of trimStep. The head (everything before the first assistant message) is never
+// Steps 1 and 2 do only what the budget needs, rounded up to a multiple of
+// trimStep when at least trimStep more outputs, or turns, would still be
+// left. The head (everything before the first assistant message) is never
 // touched, and neither is the latest assistant message.
 func trimToBudget(msgs []ollamaMessage, budget, numCtx int, bytesPerToken float64) ([]ollamaMessage, trimStats) {
 	var stats trimStats
@@ -173,49 +176,59 @@ func trimToBudget(msgs []ollamaMessage, budget, numCtx int, bytesPerToken float6
 	tailStart := lastAssistant(out)
 	total := estimateTokens(out, bytesPerToken)
 
-	for i := head; i < tailStart && (total > budget || stats.compacted%trimStep != 0); i++ {
-		if out[i].Role != "tool" {
-			continue
+	next := head
+	replaceNext := func() {
+		if placeholder, ok := olderOutputPlaceholder(out[next], numCtx); ok {
+			old := messageTokens(out[next], bytesPerToken)
+			out[next].Content = placeholder
+			total += messageTokens(out[next], bytesPerToken) - old
+			stats.compacted++
 		}
-		placeholder := fmt.Sprintf("[older tool output removed by squad to fit num_ctx=%d; it was %d bytes]", numCtx, len(out[i].Content))
-		if len(out[i].Content) <= len(placeholder) {
-			continue
+		next++
+	}
+	for next < tailStart && total > budget {
+		replaceNext()
+	}
+	replaceable := func(m ollamaMessage) bool {
+		_, ok := olderOutputPlaceholder(m, numCtx)
+		return ok
+	}
+	if countMessages(out[next:tailStart], replaceable) >= trimStep {
+		for stats.compacted%trimStep != 0 {
+			replaceNext()
 		}
-		old := messageTokens(out[i], bytesPerToken)
-		out[i].Content = placeholder
-		total += messageTokens(out[i], bytesPerToken) - old
-		stats.compacted++
-		stats.evicted = append(stats.evicted, i)
 	}
 
-	// shift is how far removing turns moved the later messages toward the
-	// front, so out[i] is msgs[i+shift] from the latest turn on.
-	shift := 0
 	if total > budget && head < tailStart {
 		// Count the note up front (len(out) bounds the number it reports)
 		// so adding it cannot push the result back over budget.
 		noteCost := messageTokens(droppedNote(len(out), numCtx), bytesPerToken)
 		dropEnd, turns := head, 0
-		for dropEnd < tailStart && (total+noteCost > budget || turns%trimStep != 0) {
+		dropTurn := func() {
 			turns++
-			next := dropEnd + 1
-			for next < tailStart && out[next].Role != "assistant" {
-				next++
+			end := dropEnd + 1
+			for end < tailStart && out[end].Role != "assistant" {
+				end++
 			}
-			for _, m := range out[dropEnd:next] {
+			for _, m := range out[dropEnd:end] {
 				total -= messageTokens(m, bytesPerToken)
 			}
-			dropEnd = next
+			dropEnd = end
+		}
+		for dropEnd < tailStart && total+noteCost > budget {
+			dropTurn()
+		}
+		startsTurn := func(m ollamaMessage) bool { return m.Role == "assistant" }
+		if countMessages(out[dropEnd:tailStart], startsTurn) >= trimStep {
+			for turns%trimStep != 0 {
+				dropTurn()
+			}
 		}
 		stats.dropped = dropEnd - head
-		for i := head; i < dropEnd; i++ {
-			stats.evicted = append(stats.evicted, i)
-		}
 		note := droppedNote(stats.dropped, numCtx)
 		total += messageTokens(note, bytesPerToken)
 		out = slices.Concat(out[:head], []ollamaMessage{note}, out[dropEnd:])
 		tailStart = head + 1 + (tailStart - dropEnd)
-		shift = stats.dropped - 1
 	}
 
 	for total > budget {
@@ -230,11 +243,30 @@ func trimToBudget(msgs []ollamaMessage, budget, numCtx int, bytesPerToken float6
 		out[idx].Content = truncateMiddle(content, keep, numCtx)
 		total += messageTokens(out[idx], bytesPerToken) - old
 		stats.truncated++
-		stats.evicted = append(stats.evicted, idx+shift)
 	}
-	slices.Sort(stats.evicted)
-	stats.evicted = slices.Compact(stats.evicted)
 	return out, stats
+}
+
+// olderOutputPlaceholder returns what replaces m when it is an older tool
+// output, and whether it can be replaced: it must be a tool output longer
+// than the placeholder.
+func olderOutputPlaceholder(m ollamaMessage, numCtx int) (string, bool) {
+	if m.Role != "tool" {
+		return "", false
+	}
+	placeholder := fmt.Sprintf("[older tool output removed by squad to fit num_ctx=%d; it was %d bytes]", numCtx, len(m.Content))
+	return placeholder, len(m.Content) > len(placeholder)
+}
+
+// countMessages returns how many of msgs match.
+func countMessages(msgs []ollamaMessage, match func(ollamaMessage) bool) int {
+	n := 0
+	for _, m := range msgs {
+		if match(m) {
+			n++
+		}
+	}
+	return n
 }
 
 // droppedNote is the message that stands in for removed turns.

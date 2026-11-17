@@ -64,8 +64,8 @@ type LLM struct {
 	// httpClient sends the requests. Its timeout is requestTimeout, or
 	// thinkingRequestTimeout when think is on.
 	httpClient *http.Client
-	// onTrim, when set, is told which messages each trim evicted.
-	onTrim func(ctx context.Context, evicted []int)
+	// onTrim, when set, is called each time a request is trimmed.
+	onTrim func(ctx context.Context)
 
 	// mu guards bytesPerToken, the client's current bytes-per-token
 	// estimate. It starts at defaultBytesPerToken and calibrate only ever
@@ -86,14 +86,13 @@ func WithThink(think bool) Option {
 }
 
 // WithTrimObserver registers fn to be called each time a request is trimmed
-// to fit num_ctx. evicted lists, in ascending order, the messages the model
-// no longer receives in full: replaced by a placeholder, removed, or cut
-// down. Each is identified by its index in the conversation passed to
-// GenerateContent, once converted to Ollama messages, so a message keeps its
-// index from one request to the next as the conversation grows. A caller
-// that tracks what the model has been shown, as the agent loop's read cache
-// does, must stop counting that content as delivered.
-func WithTrimObserver(fn func(ctx context.Context, evicted []int)) Option {
+// to fit num_ctx, with the context passed to GenerateContent. After a trim
+// the model no longer receives every earlier message in full: older tool
+// outputs are replaced by a placeholder, turns are removed, or the latest
+// outputs are cut down. A caller that tracks what the model has been shown,
+// as the agent loop's read cache does, must stop counting earlier content
+// as delivered.
+func WithTrimObserver(fn func(ctx context.Context)) Option {
 	return func(o *LLM) { o.onTrim = fn }
 }
 

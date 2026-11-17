@@ -431,76 +431,45 @@ func TestPromptNearNumCtxWarns(t *testing.T) {
 // droppedNotePrefix starts the note that stands in for removed turns.
 const droppedNotePrefix = "[squad removed the"
 
-// notDeliveredInFull compares orig, a conversation before trimming, with
-// sent, the messages Ollama received for it, and returns the indexes into
-// orig of the messages that did not arrive whole: removed, or with different
-// content.
-func notDeliveredInFull(orig, sent []ollamaMessage) []int {
-	noteAt := slices.IndexFunc(sent, func(m ollamaMessage) bool {
-		return m.Role == "user" && strings.HasPrefix(m.Content, droppedNotePrefix)
-	})
-	removed := 0
-	if noteAt >= 0 {
-		// The note takes the place of the removed messages.
-		removed = len(orig) - len(sent) + 1
-	}
-	var evicted []int
-	for i, m := range orig {
-		j := i
-		if noteAt >= 0 && i >= noteAt {
-			if i < noteAt+removed {
-				evicted = append(evicted, i)
-				continue
-			}
-			j = i - removed + 1
-		}
-		if sent[j].Content != m.Content {
-			evicted = append(evicted, i)
-		}
-	}
-	return evicted
-}
-
-// TestTrimObserverNamesEveryEvictedMessage checks, for each trimming step,
-// that the observer is told exactly which messages Ollama does not receive
-// whole. The agent loop's read cache relies on that to return a trimmed file
-// again instead of answering that its content was already provided.
-func TestTrimObserverNamesEveryEvictedMessage(t *testing.T) {
+// TestTrimObserverCalledWheneverRequestIsTrimmed checks that the observer
+// hears of every trimmed request, whichever step did the trimming, and of
+// none that went out whole. The agent loop relies on it to return a trimmed
+// file on the next Read instead of answering that it was already provided.
+func TestTrimObserverCalledWheneverRequestIsTrimmed(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name          string
 		numCtx        int
 		turns         int
 		outputBytes   int
-		wantTrim      bool
+		wantCalls     int
+		wantReplaced  bool
 		wantNote      bool
 		wantShortened bool
 	}{
 		{name: "under budget", numCtx: 65536, turns: 3, outputBytes: 1000},
-		{name: "older outputs replaced", numCtx: 8192, turns: 10, outputBytes: 3000, wantTrim: true},
-		{name: "oldest turns removed", numCtx: 16384, turns: 400, outputBytes: 3000, wantTrim: true, wantNote: true},
-		{name: "latest output shortened", numCtx: 8192, turns: 1, outputBytes: 200_000, wantTrim: true, wantShortened: true},
-		{name: "turns removed and latest output shortened", numCtx: 8192, turns: 3, outputBytes: 200_000, wantTrim: true, wantNote: true, wantShortened: true},
+		{name: "older outputs replaced", numCtx: 8192, turns: 10, outputBytes: 3000, wantCalls: 1, wantReplaced: true},
+		{name: "oldest turns removed", numCtx: 16384, turns: 400, outputBytes: 3000, wantCalls: 1, wantReplaced: true, wantNote: true},
+		{name: "latest output shortened", numCtx: 8192, turns: 1, outputBytes: 200_000, wantCalls: 1, wantShortened: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			f, srv := newFakeOllama(t, fakeReply{body: toolOnlyReply})
-			var reported [][]int
-			llm := New(srv.URL, "qwen3", tt.numCtx, WithTrimObserver(func(_ context.Context, evicted []int) {
-				reported = append(reported, slices.Clone(evicted))
-			}))
-			msgs := longConversation(tt.turns, tt.outputBytes)
-			if _, err := llm.GenerateContent(context.Background(), msgs, weatherOpts()...); err != nil {
+			calls := 0
+			llm := New(srv.URL, "qwen3", tt.numCtx, WithTrimObserver(func(context.Context) { calls++ }))
+			if _, err := llm.GenerateContent(context.Background(), longConversation(tt.turns, tt.outputBytes), weatherOpts()...); err != nil {
 				t.Fatalf("GenerateContent() error = %v", err)
-			}
-			orig, err := convertMessages(msgs)
-			if err != nil {
-				t.Fatal(err)
 			}
 			reqs, _ := f.requests()
 			sent := reqs[0].Messages
 
+			replaced := slices.ContainsFunc(sent, func(m ollamaMessage) bool {
+				return m.Role == "tool" && strings.HasPrefix(m.Content, "[older tool output removed by squad")
+			})
+			if replaced != tt.wantReplaced {
+				t.Fatalf("older outputs replaced = %v, want %v", replaced, tt.wantReplaced)
+			}
 			hasNote := slices.ContainsFunc(sent, func(m ollamaMessage) bool {
 				return strings.HasPrefix(m.Content, droppedNotePrefix)
 			})
@@ -511,49 +480,27 @@ func TestTrimObserverNamesEveryEvictedMessage(t *testing.T) {
 			if shortened != tt.wantShortened {
 				t.Fatalf("latest output shortened = %v, want %v", shortened, tt.wantShortened)
 			}
-
-			want := notDeliveredInFull(orig, sent)
-			if (len(want) > 0) != tt.wantTrim {
-				t.Fatalf("request trimmed = %v, want %v", len(want) > 0, tt.wantTrim)
-			}
-			if !tt.wantTrim {
-				if len(reported) != 0 {
-					t.Fatalf("observer called %d times for an untrimmed request", len(reported))
-				}
-				return
-			}
-			if len(reported) != 1 {
-				t.Fatalf("observer called %d times, want once", len(reported))
-			}
-			if !slices.Equal(reported[0], want) {
-				t.Fatalf("observer was told %v, but the request lacks %v", reported[0], want)
+			if calls != tt.wantCalls {
+				t.Fatalf("observer called %d times, want %d", calls, tt.wantCalls)
 			}
 		})
 	}
 }
 
-// TestEmptyTurnRetryReportsWhatItTrimmed checks the second request squad
-// sends after an empty turn: it is trimmed like the first, and what the
-// observer was last told still names the messages that request lacks, by
-// their place in the caller's conversation.
-func TestEmptyTurnRetryReportsWhatItTrimmed(t *testing.T) {
+// TestEmptyTurnRetryIsTrimmedLikeTheFirstRequest checks the second request
+// squad sends after an empty turn: it is trimmed once, from the whole
+// conversation, and the observer hears of it too.
+func TestEmptyTurnRetryIsTrimmedLikeTheFirstRequest(t *testing.T) {
 	t.Parallel()
 	const (
 		numCtx     = 16384
 		emptyReply = `{"model":"qwen3","message":{"role":"assistant","content":"","thinking":"hmm"},"done":true,"done_reason":"stop","prompt_eval_count":40,"eval_count":5}`
 	)
 	f, srv := newFakeOllama(t, fakeReply{body: emptyReply}, fakeReply{body: toolOnlyReply})
-	var reported [][]int
-	llm := New(srv.URL, "qwen3", numCtx, WithTrimObserver(func(_ context.Context, evicted []int) {
-		reported = append(reported, slices.Clone(evicted))
-	}))
-	msgs := longConversation(400, 3_000)
-	if _, err := llm.GenerateContent(context.Background(), msgs, weatherOpts()...); err != nil {
+	calls := 0
+	llm := New(srv.URL, "qwen3", numCtx, WithTrimObserver(func(context.Context) { calls++ }))
+	if _, err := llm.GenerateContent(context.Background(), longConversation(400, 3_000), weatherOpts()...); err != nil {
 		t.Fatalf("GenerateContent() error = %v", err)
-	}
-	orig, err := convertMessages(msgs)
-	if err != nil {
-		t.Fatal(err)
 	}
 	reqs, _ := f.requests()
 	if len(reqs) != 2 {
@@ -577,13 +524,118 @@ func TestEmptyTurnRetryReportsWhatItTrimmed(t *testing.T) {
 	if notes != 1 {
 		t.Fatalf("retry carries %d removal notes, want 1", notes)
 	}
-	if len(reported) == 0 {
-		t.Fatal("observer was never told about the trim")
+	if calls != 2 {
+		t.Fatalf("observer called %d times, want once per trimmed request", calls)
 	}
-	asked := append(slices.Clone(orig), ollamaMessage{Role: "user", Content: emptyTurnNudge})
-	if want := notDeliveredInFull(asked, retry); !slices.Equal(reported[len(reported)-1], want) {
-		t.Fatalf("observer was last told %v, but the retry lacks %v", reported[len(reported)-1], want)
+}
+
+// wholeOutputs returns how many of the tool outputs longConversation built
+// with outputBytes each are in sent untouched.
+func wholeOutputs(sent []ollamaMessage, outputBytes int) int {
+	return countMessages(sent, func(m ollamaMessage) bool {
+		return m.Role == "tool" && strings.HasPrefix(m.Content, "turn-") && len(m.Content) > outputBytes
+	})
+}
+
+// TestTrimKeepsEveryOutputThatFits is the regression test for rounding in a
+// window that holds only a few tool outputs. With 30 KB Bash outputs at
+// num_ctx=65536 four fit; rounding the number replaced up to a multiple of
+// trimStep replaced every older one, so the model saw only the latest.
+func TestTrimKeepsEveryOutputThatFits(t *testing.T) {
+	t.Parallel()
+	const (
+		numCtx      = 65536
+		outputBytes = 30_000
+		fits        = 4
+	)
+	for turns := 2; turns <= 24; turns++ {
+		t.Run(fmt.Sprintf("%d turns", turns), func(t *testing.T) {
+			t.Parallel()
+			f, srv := newFakeOllama(t, fakeReply{body: toolOnlyReply})
+			msgs := longConversation(turns, outputBytes)
+			if _, err := New(srv.URL, "qwen3", numCtx).GenerateContent(context.Background(), msgs, weatherOpts()...); err != nil {
+				t.Fatalf("GenerateContent() error = %v", err)
+			}
+			reqs, _ := f.requests()
+			sent := reqs[0].Messages
+			budget := numCtx - 1024 - numCtx/headroomDivisor - tokensFor(jsonBytes(reqs[0].Tools), defaultBytesPerToken)
+			if got := estimateTokens(sent, defaultBytesPerToken); got > budget {
+				t.Fatalf("request estimate %d tokens exceeds budget %d", got, budget)
+			}
+			assertWellFormed(t, sent)
+			if got, want := wholeOutputs(sent, outputBytes), min(turns, fits); got != want {
+				t.Fatalf("request carries %d whole tool outputs, want %d", got, want)
+			}
+			// The whole outputs are the newest ones.
+			for i, m := range sent[len(sent)-2*min(turns, fits):] {
+				if m.Role == "tool" && len(m.Content) <= outputBytes {
+					t.Fatalf("message %d from the end of the newest turns was trimmed: %q", i, truncate(m.Content))
+				}
+			}
+		})
 	}
+}
+
+// chattyConversation builds turns tool-calling turns in which the model also
+// writes chatterBytes of text, so the turns stay large after their tool
+// outputs are replaced.
+func chattyConversation(turns, chatterBytes int) []ollamaMessage {
+	msgs := []ollamaMessage{
+		{Role: "system", Content: testSystemPrompt},
+		{Role: "user", Content: testTask},
+	}
+	for i := 0; i < turns; i++ {
+		msgs = append(msgs,
+			ollamaMessage{Role: "assistant", Content: fmt.Sprintf("turn-%d-notes:", i) + strings.Repeat("n", chatterBytes)},
+			ollamaMessage{Role: "tool", ToolName: "Bash", Content: fmt.Sprintf("turn-%d-output:", i) + strings.Repeat("x", 500)},
+		)
+	}
+	return msgs
+}
+
+// TestTrimRemovesOnlyTheTurnsItMust covers the same rounding in step 2: when
+// fewer than trimStep turns would be left, only as many of the oldest turns
+// go as the budget needs. The rounding stays when plenty would be left.
+func TestTrimRemovesOnlyTheTurnsItMust(t *testing.T) {
+	t.Parallel()
+	const numCtx = 32768
+	turnsLeft := func(msgs []ollamaMessage) int {
+		return countMessages(msgs, func(m ollamaMessage) bool { return m.Role == "assistant" })
+	}
+
+	t.Run("few turns fit", func(t *testing.T) {
+		t.Parallel()
+		msgs := chattyConversation(12, 6000)
+		perTurn := messageTokens(msgs[2], defaultBytesPerToken) + messageTokens(msgs[3], defaultBytesPerToken)
+		// Room for the instructions and five and a half whole turns.
+		budget := estimateTokens(msgs[:2], defaultBytesPerToken) + perTurn*11/2
+		out, stats := trimToBudget(msgs, budget, numCtx, defaultBytesPerToken)
+		if got := estimateTokens(out, defaultBytesPerToken); got > budget {
+			t.Fatalf("estimate %d over budget %d", got, budget)
+		}
+		assertWellFormed(t, out)
+		if stats.dropped == 0 || stats.truncated != 0 {
+			t.Fatalf("want only whole turns removed, got %s", stats)
+		}
+		if got := turnsLeft(out); got != 5 {
+			t.Fatalf("%d turns left, want the 5 that fit (%s)", got, stats)
+		}
+	})
+
+	t.Run("many turns fit", func(t *testing.T) {
+		t.Parallel()
+		msgs := chattyConversation(60, 600)
+		perTurn := messageTokens(msgs[2], defaultBytesPerToken) + messageTokens(msgs[3], defaultBytesPerToken)
+		budget := estimateTokens(msgs[:2], defaultBytesPerToken) + perTurn*20
+		out, stats := trimToBudget(msgs, budget, numCtx, defaultBytesPerToken)
+		if got := estimateTokens(out, defaultBytesPerToken); got > budget {
+			t.Fatalf("estimate %d over budget %d", got, budget)
+		}
+		assertWellFormed(t, out)
+		if removed := 60 - turnsLeft(out); removed == 0 || removed%trimStep != 0 {
+			t.Fatalf("removed %d turns, want a multiple of %d (%s)", removed, trimStep, stats)
+		}
+	})
 }
 
 func truncate(s string) string {
