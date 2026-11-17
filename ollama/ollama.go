@@ -386,7 +386,7 @@ func convertMessages(messages []llms.MessageContent) ([]ollamaMessage, error) {
 					})
 				}
 			case llms.ToolCallResponse:
-				if msg.Content != "" || len(msg.ToolCalls) > 0 {
+				if msg.hasPayload() {
 					if msg.Role == "" {
 						msg.Role = "assistant"
 					}
@@ -399,14 +399,19 @@ func convertMessages(messages []llms.MessageContent) ([]ollamaMessage, error) {
 		}
 		// Once tool results were emitted, an empty remainder is not a
 		// message: sending it would add a blank tool reply to every turn.
-		if emittedToolResult && msg.Content == "" && len(msg.ToolCalls) == 0 {
+		if emittedToolResult && !msg.hasPayload() {
 			continue
 		}
-		if msg.Role != "" || msg.Content != "" || len(msg.ToolCalls) > 0 {
+		if msg.Role != "" || msg.hasPayload() {
 			out = append(out, msg)
 		}
 	}
 	return out, nil
+}
+
+// hasPayload reports whether m carries text or tool calls.
+func (m ollamaMessage) hasPayload() bool {
+	return m.Content != "" || len(m.ToolCalls) > 0
 }
 
 func convertTools(tools []llms.Tool) []ollamaTool {

@@ -245,10 +245,8 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 	if err := bind("provider.num_ctx", "num-ctx"); err != nil {
 		return err
 	}
-	if err := bind("provider.ollama_think", "ollama-think"); err != nil {
-		return err
-	}
 	for _, pair := range [][2]string{
+		{"provider.ollama_think", "ollama-think"},
 		{"run.agent", "agent"},
 		{"run.agents_dir", "agents-dir"},
 		{"run.working_dir", "working-dir"},
