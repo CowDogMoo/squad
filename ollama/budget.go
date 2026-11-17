@@ -55,11 +55,14 @@ const (
 	trimStep = 8
 )
 
-// trimStats records what fitContext changed, for the log line.
+// trimStats records what fitContext changed.
 type trimStats struct {
 	compacted int // older tool outputs replaced by a placeholder
 	dropped   int // oldest messages removed
 	truncated int // recent tool outputs cut down
+	// evicted lists, in ascending order, the indexes into the untrimmed
+	// messages of those whose content was replaced, removed, or cut down.
+	evicted []int
 }
 
 func (s trimStats) String() string {
@@ -72,7 +75,8 @@ func (s trimStats) String() string {
 // Ollama truncates an over-long prompt from the front, which loses the system
 // prompt and agent instructions, so squad trims first and always keeps
 // everything before the first assistant turn (the system prompt, agent
-// instructions, and task). The caller's messages are never modified.
+// instructions, and task). The caller's messages are never modified. The trim
+// observer, if any, is told which of them the model no longer gets in full.
 func (o *LLM) fitContext(ctx context.Context, req chatRequest) []ollamaMessage {
 	if o.numCtx <= 0 {
 		return req.Messages
@@ -88,6 +92,9 @@ func (o *LLM) fitContext(ctx context.Context, req chatRequest) []ollamaMessage {
 	}
 
 	out, stats := trimToBudget(req.Messages, budget, o.numCtx, bytesPerToken)
+	if o.onTrim != nil && len(stats.evicted) > 0 {
+		o.onTrim(ctx, stats.evicted)
+	}
 	after := estimateTokens(out, bytesPerToken)
 	logging.InfoContext(ctx, "ollama: request of ~%d tokens exceeds the ~%d-token prompt budget (num_ctx=%d, %d reserved for the reply, %d kept as headroom, ~%d for tool definitions); trimmed to ~%d tokens: %s",
 		before, budget, o.numCtx, reserve, headroom, toolTokens, after, stats)
@@ -178,8 +185,12 @@ func trimToBudget(msgs []ollamaMessage, budget, numCtx int, bytesPerToken float6
 		out[i].Content = placeholder
 		total += messageTokens(out[i], bytesPerToken) - old
 		stats.compacted++
+		stats.evicted = append(stats.evicted, i)
 	}
 
+	// shift is how far removing turns moved the later messages toward the
+	// front, so out[i] is msgs[i+shift] from the latest turn on.
+	shift := 0
 	if total > budget && head < tailStart {
 		// Count the note up front (len(out) bounds the number it reports)
 		// so adding it cannot push the result back over budget.
@@ -197,10 +208,14 @@ func trimToBudget(msgs []ollamaMessage, budget, numCtx int, bytesPerToken float6
 			dropEnd = next
 		}
 		stats.dropped = dropEnd - head
+		for i := head; i < dropEnd; i++ {
+			stats.evicted = append(stats.evicted, i)
+		}
 		note := droppedNote(stats.dropped, numCtx)
 		total += messageTokens(note, bytesPerToken)
 		out = slices.Concat(out[:head], []ollamaMessage{note}, out[dropEnd:])
 		tailStart = head + 1 + (tailStart - dropEnd)
+		shift = stats.dropped - 1
 	}
 
 	for total > budget {
@@ -215,7 +230,10 @@ func trimToBudget(msgs []ollamaMessage, budget, numCtx int, bytesPerToken float6
 		out[idx].Content = truncateMiddle(content, keep, numCtx)
 		total += messageTokens(out[idx], bytesPerToken) - old
 		stats.truncated++
+		stats.evicted = append(stats.evicted, idx+shift)
 	}
+	slices.Sort(stats.evicted)
+	stats.evicted = slices.Compact(stats.evicted)
 	return out, stats
 }
 

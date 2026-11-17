@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -424,6 +425,164 @@ func TestPromptNearNumCtxWarns(t *testing.T) {
 				t.Fatalf("warning logged = %v, want %v; log:\n%s", got, tt.wantWarning, logs.String())
 			}
 		})
+	}
+}
+
+// droppedNotePrefix starts the note that stands in for removed turns.
+const droppedNotePrefix = "[squad removed the"
+
+// notDeliveredInFull compares orig, a conversation before trimming, with
+// sent, the messages Ollama received for it, and returns the indexes into
+// orig of the messages that did not arrive whole: removed, or with different
+// content.
+func notDeliveredInFull(orig, sent []ollamaMessage) []int {
+	noteAt := slices.IndexFunc(sent, func(m ollamaMessage) bool {
+		return m.Role == "user" && strings.HasPrefix(m.Content, droppedNotePrefix)
+	})
+	removed := 0
+	if noteAt >= 0 {
+		// The note takes the place of the removed messages.
+		removed = len(orig) - len(sent) + 1
+	}
+	var evicted []int
+	for i, m := range orig {
+		j := i
+		if noteAt >= 0 && i >= noteAt {
+			if i < noteAt+removed {
+				evicted = append(evicted, i)
+				continue
+			}
+			j = i - removed + 1
+		}
+		if sent[j].Content != m.Content {
+			evicted = append(evicted, i)
+		}
+	}
+	return evicted
+}
+
+// TestTrimObserverNamesEveryEvictedMessage checks, for each trimming step,
+// that the observer is told exactly which messages Ollama does not receive
+// whole. The agent loop's read cache relies on that to return a trimmed file
+// again instead of answering that its content was already provided.
+func TestTrimObserverNamesEveryEvictedMessage(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		numCtx        int
+		turns         int
+		outputBytes   int
+		wantTrim      bool
+		wantNote      bool
+		wantShortened bool
+	}{
+		{name: "under budget", numCtx: 65536, turns: 3, outputBytes: 1000},
+		{name: "older outputs replaced", numCtx: 8192, turns: 10, outputBytes: 3000, wantTrim: true},
+		{name: "oldest turns removed", numCtx: 16384, turns: 400, outputBytes: 3000, wantTrim: true, wantNote: true},
+		{name: "latest output shortened", numCtx: 8192, turns: 1, outputBytes: 200_000, wantTrim: true, wantShortened: true},
+		{name: "turns removed and latest output shortened", numCtx: 8192, turns: 3, outputBytes: 200_000, wantTrim: true, wantNote: true, wantShortened: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f, srv := newFakeOllama(t, fakeReply{body: toolOnlyReply})
+			var reported [][]int
+			llm := New(srv.URL, "qwen3", tt.numCtx, WithTrimObserver(func(_ context.Context, evicted []int) {
+				reported = append(reported, slices.Clone(evicted))
+			}))
+			msgs := longConversation(tt.turns, tt.outputBytes)
+			if _, err := llm.GenerateContent(context.Background(), msgs, weatherOpts()...); err != nil {
+				t.Fatalf("GenerateContent() error = %v", err)
+			}
+			orig, err := convertMessages(msgs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reqs, _ := f.requests()
+			sent := reqs[0].Messages
+
+			hasNote := slices.ContainsFunc(sent, func(m ollamaMessage) bool {
+				return strings.HasPrefix(m.Content, droppedNotePrefix)
+			})
+			if hasNote != tt.wantNote {
+				t.Fatalf("turns removed = %v, want %v", hasNote, tt.wantNote)
+			}
+			shortened := strings.Contains(sent[len(sent)-1].Content, "bytes removed by squad")
+			if shortened != tt.wantShortened {
+				t.Fatalf("latest output shortened = %v, want %v", shortened, tt.wantShortened)
+			}
+
+			want := notDeliveredInFull(orig, sent)
+			if (len(want) > 0) != tt.wantTrim {
+				t.Fatalf("request trimmed = %v, want %v", len(want) > 0, tt.wantTrim)
+			}
+			if !tt.wantTrim {
+				if len(reported) != 0 {
+					t.Fatalf("observer called %d times for an untrimmed request", len(reported))
+				}
+				return
+			}
+			if len(reported) != 1 {
+				t.Fatalf("observer called %d times, want once", len(reported))
+			}
+			if !slices.Equal(reported[0], want) {
+				t.Fatalf("observer was told %v, but the request lacks %v", reported[0], want)
+			}
+		})
+	}
+}
+
+// TestEmptyTurnRetryReportsWhatItTrimmed checks the second request squad
+// sends after an empty turn: it is trimmed like the first, and what the
+// observer was last told still names the messages that request lacks, by
+// their place in the caller's conversation.
+func TestEmptyTurnRetryReportsWhatItTrimmed(t *testing.T) {
+	t.Parallel()
+	const (
+		numCtx     = 16384
+		emptyReply = `{"model":"qwen3","message":{"role":"assistant","content":"","thinking":"hmm"},"done":true,"done_reason":"stop","prompt_eval_count":40,"eval_count":5}`
+	)
+	f, srv := newFakeOllama(t, fakeReply{body: emptyReply}, fakeReply{body: toolOnlyReply})
+	var reported [][]int
+	llm := New(srv.URL, "qwen3", numCtx, WithTrimObserver(func(_ context.Context, evicted []int) {
+		reported = append(reported, slices.Clone(evicted))
+	}))
+	msgs := longConversation(400, 3_000)
+	if _, err := llm.GenerateContent(context.Background(), msgs, weatherOpts()...); err != nil {
+		t.Fatalf("GenerateContent() error = %v", err)
+	}
+	orig, err := convertMessages(msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqs, _ := f.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("requests = %d, want 2 (original + one retry)", len(reqs))
+	}
+	retry := reqs[1].Messages
+	if last := retry[len(retry)-1]; last.Role != "user" || last.Content != emptyTurnNudge {
+		t.Fatalf("retry must end with the nudge, got %+v", last)
+	}
+	budget := numCtx - 1024 - numCtx/headroomDivisor - tokensFor(jsonBytes(reqs[1].Tools), defaultBytesPerToken)
+	if got := estimateTokens(retry, defaultBytesPerToken); got > budget {
+		t.Fatalf("retry estimate %d tokens exceeds budget %d", got, budget)
+	}
+	assertWellFormed(t, retry)
+	notes := 0
+	for _, m := range retry {
+		if strings.HasPrefix(m.Content, droppedNotePrefix) {
+			notes++
+		}
+	}
+	if notes != 1 {
+		t.Fatalf("retry carries %d removal notes, want 1", notes)
+	}
+	if len(reported) == 0 {
+		t.Fatal("observer was never told about the trim")
+	}
+	asked := append(slices.Clone(orig), ollamaMessage{Role: "user", Content: emptyTurnNudge})
+	if want := notDeliveredInFull(asked, retry); !slices.Equal(reported[len(reported)-1], want) {
+		t.Fatalf("observer was last told %v, but the retry lacks %v", reported[len(reported)-1], want)
 	}
 }
 

@@ -552,9 +552,19 @@ Use `--num-ctx` (or `SQUAD_PROVIDER_NUM_CTX`) to control the context window size
 The default is 32768 tokens. Increase it for agents that process large files.
 Before each request, squad estimates the prompt size and, if it would not fit
 in `num_ctx` with room left for the reply and a tenth of the window as
-headroom, trims the conversation: older tool outputs are replaced with a
-placeholder first, then the oldest turns are removed. The system prompt, agent
-instructions, and the latest turn are always kept, and each trim is logged.
+headroom, trims the conversation in three steps, stopping as soon as it fits:
+
+1. Older tool outputs are replaced with a placeholder, oldest first.
+2. The oldest turns are removed, with one note left in their place.
+3. The largest tool outputs of the latest turn are cut in the middle. The
+   start and end of each stay, around a
+   `[... N bytes removed by squad to fit num_ctx=... ...]` marker.
+
+The system prompt and agent instructions are always kept whole. The latest
+turn is always kept too, with its tool outputs shortened only in step 3. Each
+trim is logged. When the agent reads a file again after its earlier `Read`
+output was trimmed in any of these steps, it gets the file's content back
+instead of a note that the content was already provided.
 
 squad cannot run the model's tokenizer, so the estimate starts from a cautious
 2.5 bytes per token. After each reply it compares that with the
@@ -568,10 +578,11 @@ Use `--ollama-think` (or `provider.ollama_think: true`) to set Ollama's
 default: a thinking model such as qwen3 otherwise spends minutes, and often
 its whole output budget, reasoning before each tool call. With it on, squad
 raises `num_predict` to at least 8192 so the reasoning cannot use the whole
-reply. A model that cannot think rejects `think: true`, and the run fails with
-Ollama's error. If a turn comes back with no text and no tool call, squad
-retries once with thinking off and a nudge, then fails with an error that
-names the cause.
+reply, and waits up to 40 minutes for each reply instead of 5, since a longer
+reply takes longer to generate. A model that cannot think rejects
+`think: true`, and the run fails with Ollama's error. If a turn comes back
+with no text and no tool call, squad retries once with thinking off and a
+nudge, then fails with an error that names the cause.
 
 ```bash
 # Local Ollama

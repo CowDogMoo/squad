@@ -3105,6 +3105,56 @@ func TestReadToolCacheHitReturnsNoContent(t *testing.T) {
 	}
 }
 
+// TestReadToolServesFileAgainAfterProviderTrim is the regression test for a
+// provider client trimming a Read output out of its request without the read
+// cache hearing of it: the next Read must return the file, not the "already
+// provided" stub. A trim that removes nothing new leaves the cache working.
+func TestReadToolServesFileAgainAfterProviderTrim(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n\nfunc Alpha() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := InitReadCache(context.Background())
+	ctx = InitIterationCounter(ctx)
+	read := readTool(dir)
+	rc := GetReadCache(ctx)
+
+	steps := []struct {
+		name        string
+		compact     bool  // squad's own compaction ran before this read
+		evicted     []int // messages the provider reported trimming before this read
+		wantContent bool
+	}{
+		{name: "first read", wantContent: true},
+		{name: "output still in the request"},
+		{name: "output trimmed", evicted: []int{3, 5}, wantContent: true},
+		{name: "same trim repeated", evicted: []int{3, 5}},
+		{name: "trim reached further", evicted: []int{3, 5, 7}, wantContent: true},
+		{name: "compaction rewrote the conversation", compact: true, wantContent: true},
+		{name: "same positions trimmed after compaction", evicted: []int{3, 5, 7}, wantContent: true},
+	}
+	for i, step := range steps {
+		SetIteration(ctx, i)
+		if step.compact {
+			rc.BumpCompactionEpoch()
+		}
+		if step.evicted != nil {
+			rc.MarkEvicted(step.evicted)
+		}
+		out, err := read(ctx, []byte(`{"path":"a.go"}`))
+		if err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if got := strings.Contains(out, "func Alpha"); got != step.wantContent {
+			t.Fatalf("%s: file content returned = %v, want %v; got: %s", step.name, got, step.wantContent, out)
+		}
+		if !step.wantContent && !strings.Contains(out, "CACHE HIT") {
+			t.Fatalf("%s: want the cache-hit stub, got: %s", step.name, out)
+		}
+	}
+}
+
 // --- Rolling Compaction Tests ---
 
 // buildLargeConversation creates a conversation with enough tokens to trigger rolling compaction.

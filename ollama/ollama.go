@@ -20,7 +20,19 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
-var httpClient = &http.Client{Timeout: 5 * time.Minute}
+const (
+	// requestTimeout bounds one request, from sending it to reading the
+	// whole reply, for a client with thinking off.
+	requestTimeout = 5 * time.Minute
+
+	// thinkingRequestTimeout is that bound for a client with thinking on.
+	// Tool-calling requests are not streamed, so the whole reply must arrive
+	// inside it, and numPredict raises the reply cap of every such client's
+	// request from squad's default of 1024 tokens to thinkingMinPredict.
+	// The timeout is eight times longer to match, which leaves the token
+	// rate a model has to sustain where it was.
+	thinkingRequestTimeout = 40 * time.Minute
+)
 
 // ErrEmptyTurn reports that the model returned neither text nor tool calls,
 // even after squad retried with thinking off and a nudge to continue.
@@ -49,6 +61,11 @@ type LLM struct {
 	numCtx    int
 	// think is sent as the request's think field.
 	think bool
+	// httpClient sends the requests. Its timeout is requestTimeout, or
+	// thinkingRequestTimeout when think is on.
+	httpClient *http.Client
+	// onTrim, when set, is told which messages each trim evicted.
+	onTrim func(ctx context.Context, evicted []int)
 
 	// mu guards bytesPerToken, the client's current bytes-per-token
 	// estimate. It starts at defaultBytesPerToken and calibrate only ever
@@ -68,6 +85,18 @@ func WithThink(think bool) Option {
 	return func(o *LLM) { o.think = think }
 }
 
+// WithTrimObserver registers fn to be called each time a request is trimmed
+// to fit num_ctx. evicted lists, in ascending order, the messages the model
+// no longer receives in full: replaced by a placeholder, removed, or cut
+// down. Each is identified by its index in the conversation passed to
+// GenerateContent, once converted to Ollama messages, so a message keeps its
+// index from one request to the next as the conversation grows. A caller
+// that tracks what the model has been shown, as the agent loop's read cache
+// does, must stop counting that content as delivered.
+func WithTrimObserver(fn func(ctx context.Context, evicted []int)) Option {
+	return func(o *LLM) { o.onTrim = fn }
+}
+
 // New creates a new Ollama LLM client. Thinking is off unless [WithThink]
 // says otherwise: an agent loop needs a reply or a tool call every turn, and
 // a thinking model can spend minutes and its whole output budget reasoning.
@@ -82,6 +111,10 @@ func New(serverURL, model string, numCtx int, opts ...Option) *LLM {
 	}
 	for _, opt := range opts {
 		opt(o)
+	}
+	o.httpClient = &http.Client{Timeout: requestTimeout}
+	if o.think {
+		o.httpClient.Timeout = thinkingRequestTimeout
 	}
 	return o
 }
@@ -159,8 +192,7 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	}
 
 	reqBody := o.buildChatRequest(chatMsgs, opts)
-	fitted := o.fitContext(ctx, reqBody)
-	reqBody.Messages = fitted
+	reqBody.Messages = o.fitContext(ctx, reqBody)
 
 	first, err := o.chat(ctx, reqBody, opts.StreamingFunc)
 	if err != nil {
@@ -174,7 +206,7 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	retry := reqBody
 	retry.Think = false
 	retry.Options = maps.Clone(reqBody.Options)
-	retry.Messages = append(slices.Clone(fitted), ollamaMessage{Role: "user", Content: emptyTurnNudge})
+	retry.Messages = append(slices.Clone(chatMsgs), ollamaMessage{Role: "user", Content: emptyTurnNudge})
 	retry.Messages = o.fitContext(ctx, retry)
 	second, err := o.chat(ctx, retry, opts.StreamingFunc)
 	if err != nil {
@@ -200,7 +232,7 @@ func (o *LLM) chat(ctx context.Context, reqBody chatRequest, streamFn func(ctx c
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	httpResp, err := httpClient.Do(req)
+	httpResp, err := o.httpClient.Do(req)
 	if err != nil {
 		return chatResponse{}, fmt.Errorf("ollama request failed: %w", err)
 	}

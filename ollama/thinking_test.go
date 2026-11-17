@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tmc/langchaingo/llms"
 )
@@ -140,6 +141,46 @@ func TestThinkingRaisesNumPredict(t *testing.T) {
 				t.Fatalf("num_predict = %v, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestThinkingRaisesRequestTimeout checks that a client with thinking on
+// waits longer for each reply, by at least the factor it raises the reply cap,
+// and that a client with thinking off keeps the five-minute limit.
+func TestThinkingRaisesRequestTimeout(t *testing.T) {
+	t.Parallel()
+	off := New("http://x", "qwen3", 65536)
+	on := New("http://x", "qwen3", 65536, WithThink(true))
+	if got := off.httpClient.Timeout; got != 5*time.Minute {
+		t.Fatalf("thinking-off timeout = %s, want 5m0s", got)
+	}
+	const maxTokens = 1024
+	raised := on.numPredict(maxTokens) / off.numPredict(maxTokens)
+	if raised < 2 {
+		t.Fatalf("thinking raised the reply cap %d-fold; the test expects a raise", raised)
+	}
+	if want := time.Duration(raised) * off.httpClient.Timeout; on.httpClient.Timeout < want {
+		t.Fatalf("thinking-on timeout = %s, want at least %s for a reply cap %d times higher",
+			on.httpClient.Timeout, want, raised)
+	}
+}
+
+// TestRequestTimeoutBoundsTheReply checks that the client's own timeout is
+// the one that ends a request whose reply does not arrive.
+func TestRequestTimeoutBoundsTheReply(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(10 * time.Second):
+		}
+	}))
+	t.Cleanup(srv.Close)
+	llm := New(srv.URL, "qwen3", 65536)
+	llm.httpClient.Timeout = 50 * time.Millisecond
+	_, err := llm.GenerateContent(context.Background(), userMsg("weather?"), weatherOpts()...)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want a timeout", err)
 	}
 }
 
