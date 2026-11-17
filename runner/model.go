@@ -545,7 +545,7 @@ func buildCallOpts(opts *RunOptions, provider string, temperature float64, maxTo
 func buildLLM(ctx context.Context, opts *RunOptions, provider, model string) (llms.Model, error) {
 	switch provider {
 	case "ollama":
-		return buildNativeOllamaLLM(opts, model), nil
+		return buildNativeOllamaLLM(opts, model)
 	case "openai", "":
 		return buildOpenAICompatLLM(opts, provider, model)
 	case "anthropic":
@@ -658,7 +658,7 @@ func normalizeProvider(provider string) string {
 	return p
 }
 
-func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
+func buildNativeOllamaLLM(opts *RunOptions, model string) (llms.Model, error) {
 	baseURL := opts.BaseURL
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
@@ -667,7 +667,11 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 	if numCtx <= 0 {
 		numCtx = 32768
 	}
-	return ollama.New(baseURL, model, numCtx)
+	think, err := ollama.ParseThink(opts.OllamaThink)
+	if err != nil {
+		return nil, err
+	}
+	return ollama.New(baseURL, model, numCtx, ollama.WithThink(think)), nil
 }
 
 func isOpenAICompatProvider(provider string) bool {

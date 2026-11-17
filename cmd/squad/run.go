@@ -147,6 +147,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		Apply:                 apply,
 		ApplyFallback:         applyFallback,
 		NumCtx:                v.GetInt("provider.num_ctx"),
+		OllamaThink:           v.GetString("provider.ollama_think"),
 		MaxIterations:         maxIter,
 		MaxIterationsExplicit: cmd.Flags().Changed("max-iterations"),
 		MaxCost:               maxCost,
@@ -241,6 +242,9 @@ func bindRunFlags(cmd *cobra.Command, v *viper.Viper) error {
 		return err
 	}
 	if err := bind("provider.num_ctx", "num-ctx"); err != nil {
+		return err
+	}
+	if err := bind("provider.ollama_think", "ollama-think"); err != nil {
 		return err
 	}
 	for _, pair := range [][2]string{
@@ -354,6 +358,7 @@ actionable-output requirement. Example:
 	cmd.Flags().Bool("apply", false, "Apply unified diff from the response to the working directory")
 	cmd.Flags().Bool("apply-fallback", false, "Fallback to patch(1) if git apply fails (may create .rej/.orig)")
 	cmd.Flags().Int("num-ctx", 32768, "Context window size for Ollama models")
+	cmd.Flags().String("ollama-think", "false", "Ollama thinking: false, true, low, medium, high, or auto (model default)")
 	cmd.Flags().String("mode", "", "Agent mode override (e.g. readonly)")
 	cmd.Flags().Int("max-iterations", 100, "Maximum tool-calling iterations (range: 10-1000)")
 	cmd.Flags().Float64("max-cost", 5, "Maximum cost budget in USD (0 = unlimited)")

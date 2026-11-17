@@ -1664,6 +1664,20 @@ func TestInitRunContext_Normal(t *testing.T) {
 	}
 }
 
+// TestInitRunContext_EditsOptional checks that --require-actionable=false
+// turns off the edit-pressure guards and that the default leaves them on.
+func TestInitRunContext_EditsOptional(t *testing.T) {
+	t.Parallel()
+	off := initRunContext(context.Background(), &RunOptions{RequireActionable: false}, &agent.Bundle{})
+	if !tools.EditsOptional(off) {
+		t.Error("require-actionable=false must mark edits optional")
+	}
+	on := initRunContext(context.Background(), &RunOptions{RequireActionable: true}, &agent.Bundle{})
+	if tools.EditsOptional(on) || !tools.EditsExpected(on) {
+		t.Error("require-actionable=true must keep edits expected")
+	}
+}
+
 func TestInitRunContext_Interactive(t *testing.T) {
 	t.Parallel()
 	ctx := initRunContext(context.Background(), &RunOptions{Interactive: true}, &agent.Bundle{})

@@ -86,6 +86,9 @@ type RunOptions struct {
 	ApplyFallback bool
 	// NumCtx is the context window size for Ollama models.
 	NumCtx int
+	// OllamaThink sets Ollama's think option: false (the default when
+	// empty), true, low, medium, high, or auto to use the model's default.
+	OllamaThink string
 	// MaxIterations caps the number of model iterations (0 = unlimited).
 	MaxIterations int
 	// MaxIterationsExplicit reports whether MaxIterations came from an
@@ -304,6 +307,14 @@ func invokeAndHandle(ctx context.Context, cmd *cobra.Command, opts *RunOptions, 
 func initRunContext(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) context.Context {
 	ctx = tools.InitEdits(ctx)
 	ctx = tools.InitEditDeadline(ctx)
+	if !opts.RequireActionable {
+		// Runs past applyProviderConstraints, so remote-only agents land
+		// here too. The edit deadline, phase nudges, and read blocking exist
+		// to push an editing agent to edit; they would stall a run that only
+		// probes or reports.
+		ctx = tools.InitEditsOptional(ctx)
+		logging.InfoContext(ctx, "edits not required: edit deadline, phase nudges, and read blocking are off")
+	}
 	if bundle.CommentsOnly {
 		ctx = tools.InitCommentsOnlyMode(ctx)
 		logging.InfoContext(ctx, "comments-only mode: Edit/MultiEdit will reject non-comment changes")

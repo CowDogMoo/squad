@@ -92,6 +92,7 @@ the corresponding CLI flag.
 | `provider.api_type` | string | `""` | API variant: `openai` or `azure` |
 | `provider.openai_compat_max_tokens` | bool | `false` | Enforce `max_tokens` in requests for OpenAI-compatible endpoints that require it |
 | `provider.num_ctx` | int | `32768` | Context window size for Ollama models |
+| `provider.ollama_think` | string | `false` | Ollama thinking: `false`, `true`, `low`, `medium`, `high`, or `auto` (the model's default) |
 
 ### model
 
@@ -224,7 +225,7 @@ by the corresponding `squad run` flags.
 | `run.bundle_out` | string | `""` | Write agent bundle to a file |
 | `run.print_bundle` | bool | `false` | Print agent bundle to stdout |
 | `run.dry_run` | bool | `false` | Build bundle without calling the model |
-| `run.require_actionable` | bool | `true` | Require actionable output (diff/files/no changes) |
+| `run.require_actionable` | bool | `true` | Require actionable output (diff/files/no changes). When false, the edit deadline, phase nudges, and read blocking are also off |
 | `run.apply` | bool | `false` | Apply unified diff from response to the working directory |
 | `run.apply_fallback` | bool | `false` | Fallback to `patch(1)` if `git apply` fails (may create `.rej`/`.orig` files) |
 | `run.mode` | string | `""` | Agent mode override (e.g., `readonly`) |
@@ -251,6 +252,7 @@ uppercased, prefixed with `SQUAD_`.
 | `SQUAD_PROVIDER_API_TYPE` | `provider.api_type` | API type (`openai` or `azure`) |
 | `SQUAD_PROVIDER_OPENAI_COMPAT_MAX_TOKENS` | `provider.openai_compat_max_tokens` | Enforce `max_tokens` for compat endpoints |
 | `SQUAD_PROVIDER_NUM_CTX` | `provider.num_ctx` | Ollama context window size |
+| `SQUAD_PROVIDER_OLLAMA_THINK` | `provider.ollama_think` | Ollama thinking mode |
 | `SQUAD_MODEL_DEFAULT` | `model.default` | Default model |
 | `SQUAD_MODEL_TEMPERATURE` | `model.temperature` | Sampling temperature |
 | `SQUAD_MODEL_MAX_TOKENS` | `model.max_tokens` | Output token budget |
@@ -548,6 +550,21 @@ stored in manifests.
 
 Use `--num-ctx` (or `SQUAD_PROVIDER_NUM_CTX`) to control the context window size.
 The default is 32768 tokens. Increase it for agents that process large files.
+Before each request, squad estimates the prompt size and, if it would not fit
+in `num_ctx` with room left for the reply, trims the conversation: older tool
+outputs are replaced with a placeholder first, then the oldest turns are
+removed. The system prompt, agent instructions, and the latest turn are always
+kept, and each trim is logged.
+
+Use `--ollama-think` (or `provider.ollama_think`) to control Ollama's `think`
+option. squad sends `think: false` by default: a thinking model such as qwen3
+otherwise spends minutes, and often its whole output budget, reasoning before
+each tool call. Set `true` (or `low`/`medium`/`high` for models that take a
+level) to let it think; squad then raises `num_predict` to at least 8192 so
+the reasoning cannot use the whole reply. `auto` omits the option and uses the
+model's default. If a turn comes back with no text and no tool call, squad
+retries once with thinking off and a nudge, then fails with an error that
+names the cause.
 
 ```bash
 # Local Ollama
@@ -562,6 +579,13 @@ squad run --agent go-review \
   --base-url http://localhost:11434/v1 \
   --model qwen2.5-coder:7b-instruct \
   --num-ctx 65536
+
+# Thinking model with thinking on
+squad run --agent go-review \
+  --provider ollama \
+  --model qwen3:32b \
+  --num-ctx 65536 \
+  --ollama-think true
 
 # Remote Ollama (Kubernetes ingress)
 squad run --agent go-review \

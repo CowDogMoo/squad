@@ -141,6 +141,7 @@ func newRunOptions(entry routine.Entry, cfg *config.Config, workingDir string) *
 		Temperature:     cfg.Model.Temperature,
 		MaxTokens:       cfg.Model.MaxTokens,
 		NumCtx:          cfg.Provider.NumCtx,
+		OllamaThink:     cfg.Provider.OllamaThink,
 		Vars:            r.Vars,
 		ConfigAvailable: true,
 		Config:          cfg,

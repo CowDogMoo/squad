@@ -520,11 +520,12 @@ func getGraceState(ctx context.Context) *graceState {
 // Either enforcer can independently trigger blocking.
 // However, if an Edit just failed during the grace period, reads are
 // temporarily unblocked so the agent can re-read and retry its edit.
-// Reads are never blocked in readonly mode: the agent cannot edit, so nothing
-// would unblock it, whether the enforcers are its own or inherited from a
-// parent's context.
+// Reads are never blocked when edits are not expected (readonly mode, or a
+// run whose edits are optional): nothing obliges the agent to edit, so
+// nothing would unblock it, whether the enforcers are its own or inherited
+// from a parent's context.
 func shouldBlockReadTools(ctx context.Context) bool {
-	if IsReadOnlyMode(ctx) {
+	if !EditsExpected(ctx) {
 		return false
 	}
 	// Grace-period edit failure overrides all blocking — the agent
@@ -624,7 +625,7 @@ func injectBudgetWarnings(ctx context.Context, m *metrics.Metrics, warned []bool
 		warned[idx] = true
 		pctInt := int(threshold * 100)
 		remaining := m.RemainingBudget()
-		msg := budgetWarningMessage(pctInt, remaining, IsReadOnlyMode(ctx))
+		msg := budgetWarningMessage(pctInt, remaining, !EditsExpected(ctx))
 		logging.InfoContext(ctx, "injecting budget warning at %d%% (remaining=$%.4f)", pctInt, remaining)
 		messages = append(messages, llms.MessageContent{
 			Role:  llms.ChatMessageTypeHuman,
@@ -635,10 +636,11 @@ func injectBudgetWarnings(ctx context.Context, m *metrics.Metrics, warned []bool
 }
 
 // budgetWarningMessage returns the warning text for a given budget percentage.
-// A readonly agent cannot edit, so its 25% message carries no edit pressure.
-func budgetWarningMessage(pctInt int, remaining float64, readOnly bool) string {
+// An agent that is not expected to edit gets a 25% message with no edit
+// pressure.
+func budgetWarningMessage(pctInt int, remaining float64, noEdits bool) string {
 	if pctInt == 25 {
-		if readOnly {
+		if noEdits {
 			return fmt.Sprintf(ReadOnlyProgressCheckPrompt, remaining)
 		}
 		return fmt.Sprintf(ProgressCheckPrompt, remaining)
@@ -651,10 +653,12 @@ func budgetWarningMessage(pctInt int, remaining float64, readOnly bool) string {
 }
 
 // initToolLoopEnforcers creates and attaches edit/phase enforcers to the context.
-// Both measure progress as edits, so they are skipped in readonly mode: the
-// agent cannot edit by design, and nudging or blocking its reads would stall it.
+// Both measure progress as edits, so they are skipped when edits are not
+// expected: in readonly mode the agent cannot edit, and when edits are
+// optional (a probing agent, --require-actionable=false) it need not. Nudging
+// or blocking its reads would stall it either way.
 func initToolLoopEnforcers(ctx context.Context, editDeadline int) (context.Context, *EditEnforcer, *PhaseEnforcer) {
-	if IsReadOnlyMode(ctx) {
+	if !EditsExpected(ctx) {
 		return ctx, nil, nil
 	}
 	editEnforcer := NewEditEnforcer(editDeadline)
@@ -1552,11 +1556,11 @@ func checkReadCache(ctx context.Context, resolvedPath, displayPath string, data 
 	}
 	streak := rc.IncrementStreak()
 	logReadCacheHit(ctx, displayPath, entry)
-	readOnly := IsReadOnlyMode(ctx)
+	noEdits := !EditsExpected(ctx)
 
 	// Circuit breaker: after too many consecutive cache hits, hard block.
 	if streak >= cacheHitStreakThreshold {
-		if readOnly {
+		if noEdits {
 			return fmt.Sprintf(
 				"[READ LOOP DETECTED — %d consecutive re-reads of cached files. "+
 					"File '%s' unchanged since iteration %d (%d lines); its content was already provided. "+
@@ -1577,7 +1581,7 @@ func checkReadCache(ctx context.Context, resolvedPath, displayPath string, data 
 		summaryHint = " Content summary: " + entry.Summary + "."
 	}
 	next := "Write edits from your notes"
-	if readOnly {
+	if noEdits {
 		next = "Work from your notes"
 	}
 	return fmt.Sprintf(
@@ -2171,7 +2175,7 @@ func compactMessages(ctx context.Context, messages []llms.MessageContent, m *met
 	compactEnd := len(messages) - protectedTail
 
 	middleMessages := messages[protectedHead:compactEnd]
-	summary := CompactionSummary(middleMessages, GetReadCache(ctx), IsReadOnlyMode(ctx))
+	summary := CompactionSummary(middleMessages, GetReadCache(ctx), !EditsExpected(ctx))
 
 	editedFiles := CollectEditedFiles(messages[:compactEnd])
 	recentFiles := ExtractRecentFiles(messages[compactEnd:])
