@@ -1,9 +1,11 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,8 +15,7 @@ import (
 	"testing"
 
 	"github.com/cowdogmoo/squad/agent"
-	"github.com/cowdogmoo/squad/executor"
-	"github.com/cowdogmoo/squad/metrics"
+	"github.com/cowdogmoo/squad/logging"
 )
 
 // probeMessage is the part of an Ollama chat message the fake model reads.
@@ -97,30 +98,21 @@ func (f *fakeOllamaAgent) received() []probeRequest {
 	return append([]probeRequest(nil), f.requests...)
 }
 
-// runOllamaAgent runs the real tool loop with the real Ollama client against
-// model, the way squad run does for a leaf agent.
-func runOllamaAgent(t *testing.T, model *fakeOllamaAgent, dir string, numCtx, maxIter int, bundle *agent.Bundle) string {
+// runOllamaAgent runs an agent against model through InvokeModel, the path
+// every agent run takes: the real tool loop and Ollama client, the full tool
+// set with the Task tool, and the max tokens the runner itself settles on.
+func runOllamaAgent(ctx context.Context, t *testing.T, model *fakeOllamaAgent, dir string, numCtx, maxIter int, bundle *agent.Bundle) string {
 	t.Helper()
 	srv := httptest.NewServer(model)
 	defer srv.Close()
-	opts := &RunOptions{Provider: "ollama", BaseURL: srv.URL, NumCtx: numCtx, MaxIterations: maxIter}
+	opts := &RunOptions{
+		Provider: "ollama", Model: "qwen3", BaseURL: srv.URL, NumCtx: numCtx,
+		MaxIterations: maxIter, MaxIterationsExplicit: true,
+	}
 	bundle.WorkDir = dir
-	response, err := callLangChainLLM(
-		context.Background(),
-		opts,
-		"ollama",
-		"qwen3",
-		bundle.System,
-		bundle,
-		0.2,
-		1024,
-		opts.MaxIterations,
-		nil,
-		&executor.LocalExecutor{WorkingDir: dir},
-		metrics.New("ollama", "qwen3"),
-	)
+	response, _, err := InvokeModel(ctx, opts, bundle)
 	if err != nil {
-		t.Fatalf("callLangChainLLM() error = %v", err)
+		t.Fatalf("InvokeModel() error = %v", err)
 	}
 	return response
 }
@@ -232,7 +224,7 @@ func TestOllamaCompactedReadIsServedAgain(t *testing.T) {
 				}
 			}
 
-			response := runOllamaAgent(t, model, dir, tt.numCtx, maxFillers+10,
+			response := runOllamaAgent(context.Background(), t, model, dir, tt.numCtx, maxFillers+10,
 				&agent.Bundle{System: "You fix Go code.", User: "Fix the bug in a.go."})
 
 			if !asked {
@@ -298,7 +290,7 @@ func TestOllamaConversationStaysInsideWindow(t *testing.T) {
 		return fmt.Sprintf("page-%02d.json", reads), ""
 	}
 
-	response := runOllamaAgent(t, model, dir, numCtx, turns+5, &agent.Bundle{System: system, User: task})
+	response := runOllamaAgent(context.Background(), t, model, dir, numCtx, turns+5, &agent.Bundle{System: system, User: task})
 	if response != "mapped" {
 		t.Fatalf("response = %q, want mapped", response)
 	}
@@ -337,5 +329,89 @@ func TestOllamaConversationStaysInsideWindow(t *testing.T) {
 	}
 	if !compacted {
 		t.Fatal("no request was compacted, so the test did not reach the window")
+	}
+}
+
+// TestOllamaDefaultWindowKeepsReadsThatFit is the regression test for the
+// reply taking half of the default window. The runner never asks for fewer
+// than 16384 reply tokens, and squad set all of them aside, so at
+// num_ctx=32768 an agent with a 27 KB prompt had no room left: every file it
+// read reached the model cut down to about 2 KB, and every request warned
+// that the window was too small. With that prompt and three 20 KB reads, the
+// newest read must arrive whole at the default window and all three at
+// 65536, with nothing shortened and no warning.
+func TestOllamaDefaultWindowKeepsReadsThatFit(t *testing.T) {
+	t.Parallel()
+	const (
+		reads     = 3
+		readBytes = 20_000
+	)
+	tests := []struct {
+		name      string
+		numCtx    int
+		wantWhole int
+	}{
+		{"default window", 32768, 1},
+		{"larger window", 65536, reads},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			for i := 1; i <= reads; i++ {
+				writeProbeFile(t, dir, fmt.Sprintf("file-%d.go", i), probeLines(readBytes))
+			}
+			system := "You review Go code.\n" + strings.Repeat("Check every exported function against the review checklist. ", 450)
+			if len(system) < 26_000 || len(system) > 28_000 {
+				t.Fatalf("the system prompt is %d bytes, want about 27 KB", len(system))
+			}
+
+			done := 0
+			model := &fakeOllamaAgent{bytesPerToken: 4}
+			model.script = func([]probeMessage) (string, string) {
+				if done == reads {
+					return "", "reviewed"
+				}
+				done++
+				return fmt.Sprintf("file-%d.go", done), ""
+			}
+			var logs bytes.Buffer
+			ctx := logging.WithLogger(context.Background(), &logging.CustomLogger{LogLevel: slog.LevelInfo, ConsoleWriter: &logs})
+
+			response := runOllamaAgent(ctx, t, model, dir, tt.numCtx, reads+5, &agent.Bundle{System: system, User: "Review the three files."})
+			if response != "reviewed" {
+				t.Fatalf("response = %q, want reviewed", response)
+			}
+
+			requests := model.received()
+			if len(requests) != reads+1 {
+				t.Fatalf("requests = %d, want %d", len(requests), reads+1)
+			}
+			whole := 0
+			for i, req := range requests[1:] {
+				if got := req.Messages[0]; got.Role != "system" || got.Content != system {
+					t.Fatalf("request %d does not start with the whole system prompt", i+2)
+				}
+				if got := lastToolOutput(req.Messages); len(got) < readBytes {
+					t.Fatalf("request %d carries the newest read as %d bytes, want all %d", i+2, len(got), readBytes)
+				}
+				whole = 0
+				for _, m := range req.Messages {
+					switch {
+					case m.Role != "tool":
+					case len(m.Content) >= readBytes:
+						whole++
+					case !strings.HasPrefix(m.Content, "[tool output compacted"):
+						t.Fatalf("request %d carries a read that is neither whole nor replaced: %.120q", i+2, m.Content)
+					}
+				}
+			}
+			if whole < tt.wantWhole {
+				t.Fatalf("the last request carries %d whole reads, want at least %d", whole, tt.wantWhole)
+			}
+			if strings.Contains(logs.String(), "raise the model's context window") {
+				t.Fatalf("squad warned that the window is too small:\n%s", logs.String())
+			}
+		})
 	}
 }

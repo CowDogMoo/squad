@@ -27,7 +27,7 @@ const (
 	calibrationMinTokens = 1024
 
 	// headroomDivisor sets the share of num_ctx (one tenth) that
-	// ContextBudget leaves unused on top of the reply reserve, to absorb
+	// ContextBudget leaves unused on top of the reply budget, to absorb
 	// estimate error.
 	headroomDivisor = 10
 
@@ -38,17 +38,50 @@ const (
 	// messageOverheadTokens covers the chat template's per-message framing.
 	messageOverheadTokens = 4
 
-	// defaultReplyReserve is the room left for the reply when the request
-	// sets no num_predict.
-	defaultReplyReserve = 4096
+	// replyShareDivisor sets the share of num_ctx (one eighth) that
+	// replyBudget gives the reply of a client with thinking off. At the
+	// default window of 32768 tokens that is 4096, enough for a long tool
+	// call such as a whole-file write, and with the headroom it leaves more
+	// than three quarters of the window to the prompt.
+	replyShareDivisor = 8
+
+	// thinkingReplyShareDivisor sets that share (one quarter) for a client
+	// with thinking on. Reasoning tokens count against num_predict, so the
+	// reply gets twice the room: as much again for the reasoning as for the
+	// answer or tool call that has to follow it. A smaller share lets a
+	// model such as qwen3 spend the whole reply reasoning and stop with
+	// done_reason=length before it answers.
+	thinkingReplyShareDivisor = 4
 )
+
+// replyBudget returns how many tokens the model's reply may take. It is the
+// single rule for the reply: buildChatRequest sends it as num_predict, and
+// ContextBudget sets the same amount aside, so the prompt squad keeps and the
+// reply Ollama may write always fit num_ctx together. The budget is a fixed
+// share of num_ctx, which keeps most of the window for the prompt however
+// large the caller's cap is, and it never exceeds maxTokens when the caller
+// set one. A client with no num_ctx has no window to share out and passes
+// maxTokens through.
+func (o *LLM) replyBudget(maxTokens int) int {
+	if o.numCtx <= 0 {
+		return maxTokens
+	}
+	budget := o.numCtx / replyShareDivisor
+	if o.think {
+		budget = o.numCtx / thinkingReplyShareDivisor
+	}
+	if maxTokens > 0 {
+		budget = min(budget, maxTokens)
+	}
+	return budget
+}
 
 // ContextBudget returns how many prompt tokens the messages of a request made
 // with options may hold, and a function that estimates how many tokens
 // messages hold. Ollama cuts a prompt that outgrows num_ctx from the front,
 // which loses the system prompt and agent instructions, so the agent loop
 // compacts its conversation to this budget before each request. The budget
-// is num_ctx less the reply reserve, the tool definitions, and a tenth of the
+// is num_ctx less the reply budget, the tool definitions, and a tenth of the
 // window as headroom for estimate error. Both results use the client's
 // current bytes-per-token ratio, which calibrate keeps in step with the
 // prompt_eval_count Ollama reports. A client with no num_ctx has no window to
@@ -72,7 +105,7 @@ func (o *LLM) ContextBudget(options ...llms.CallOption) (int, func([]llms.Messag
 		return math.MaxInt, estimate
 	}
 	req := o.buildChatRequest(nil, opts)
-	budget := o.numCtx - replyReserve(req, o.numCtx) - o.numCtx/headroomDivisor - tokensFor(jsonBytes(req.Tools), bytesPerToken)
+	budget := o.numCtx - o.replyBudget(opts.MaxTokens) - o.numCtx/headroomDivisor - tokensFor(jsonBytes(req.Tools), bytesPerToken)
 	return budget, estimate
 }
 
@@ -114,16 +147,6 @@ func (o *LLM) calibrate(ctx context.Context, req chatRequest, promptTokens int) 
 		logging.InfoContext(ctx, "ollama: %d prompt bytes were %d tokens; estimating %.2f bytes per token from now on, down from %.2f",
 			sent, promptTokens, observed, previous)
 	}
-}
-
-// replyReserve returns the tokens to leave free for the model's reply: the
-// request's num_predict, or defaultReplyReserve, capped at half of num_ctx.
-func replyReserve(req chatRequest, numCtx int) int {
-	reserve := defaultReplyReserve
-	if np, ok := req.Options["num_predict"].(int); ok && np > 0 {
-		reserve = np
-	}
-	return min(reserve, numCtx/2)
 }
 
 // estimateTokens estimates the prompt tokens msgs will occupy.

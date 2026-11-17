@@ -118,35 +118,52 @@ func TestThinkSentExplicitly(t *testing.T) {
 	}
 }
 
-// TestThinkingRaisesNumPredict checks that thinking cannot use squad's whole
-// 1024-token leaf budget, which is how qwen3 ended turns with no answer.
-func TestThinkingRaisesNumPredict(t *testing.T) {
+// TestReplyBudgetSentAsNumPredict pins the reply budget squad asks Ollama
+// for: an eighth of num_ctx, a quarter with thinking on so the reasoning
+// cannot use the whole reply, and never more than the caller's max tokens.
+// 16384 is the least the runner ever passes.
+func TestReplyBudgetSentAsNumPredict(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name   string
-		think  bool
-		numCtx int
-		want   int
+		name      string
+		think     bool
+		numCtx    int
+		maxTokens int
+		want      any
 	}{
-		{"thinking off keeps the budget", false, 65536, 1024},
-		{"thinking on raises the floor", true, 65536, thinkingMinPredict},
-		{"floor capped at half of num_ctx", true, 8192, 4096},
+		{"an eighth of the default window", false, 32768, 16384, float64(4096)},
+		{"a quarter with thinking on", true, 32768, 16384, float64(8192)},
+		{"an eighth of a larger window", false, 65536, 16384, float64(8192)},
+		{"a quarter of a larger window with thinking on", true, 65536, 16384, float64(16384)},
+		{"never more than the caller's max tokens", false, 65536, 1024, float64(1024)},
+		{"never more than the caller's max tokens with thinking on", true, 65536, 1024, float64(1024)},
+		{"the share when the caller sets no max tokens", false, 32768, 0, float64(4096)},
+		{"the caller's max tokens when there is no window", false, 0, 1024, float64(1024)},
+		{"nothing when there is neither", false, 0, 0, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			llm := New("http://x", "qwen3", tt.numCtx, WithThink(tt.think))
-			req := llm.buildChatRequest(nil, llms.CallOptions{MaxTokens: 1024})
-			if got := req.Options["num_predict"]; got != tt.want {
-				t.Fatalf("num_predict = %v, want %d", got, tt.want)
+			f, srv := newFakeOllama(t, fakeReply{body: toolOnlyReply})
+			var opts []llms.CallOption
+			if tt.maxTokens > 0 {
+				opts = append(opts, llms.WithMaxTokens(tt.maxTokens))
+			}
+			llm := New(srv.URL, "qwen3", tt.numCtx, WithThink(tt.think))
+			if _, err := llm.GenerateContent(context.Background(), userMsg("weather?"), opts...); err != nil {
+				t.Fatalf("GenerateContent() error = %v", err)
+			}
+			reqs, _ := f.requests()
+			if got := reqs[0].Options["num_predict"]; got != tt.want {
+				t.Fatalf("num_predict = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
 // TestThinkingRaisesRequestTimeout checks that a client with thinking on
-// waits longer for each reply, by at least the factor it raises the reply cap,
-// and that a client with thinking off keeps the five-minute limit.
+// waits longer for each reply, by at least the factor its reply budget is
+// larger, and that a client with thinking off keeps the five-minute limit.
 func TestThinkingRaisesRequestTimeout(t *testing.T) {
 	t.Parallel()
 	off := New("http://x", "qwen3", 65536)
@@ -154,14 +171,13 @@ func TestThinkingRaisesRequestTimeout(t *testing.T) {
 	if got := off.httpClient.Timeout; got != 5*time.Minute {
 		t.Fatalf("thinking-off timeout = %s, want 5m0s", got)
 	}
-	const maxTokens = 1024
-	raised := on.numPredict(maxTokens) / off.numPredict(maxTokens)
-	if raised < 2 {
-		t.Fatalf("thinking raised the reply cap %d-fold; the test expects a raise", raised)
+	larger := on.replyBudget(0) / off.replyBudget(0)
+	if larger < 2 {
+		t.Fatalf("the thinking reply budget is %d times the plain one; the test expects it to be larger", larger)
 	}
-	if want := time.Duration(raised) * off.httpClient.Timeout; on.httpClient.Timeout < want {
-		t.Fatalf("thinking-on timeout = %s, want at least %s for a reply cap %d times higher",
-			on.httpClient.Timeout, want, raised)
+	if want := time.Duration(larger) * off.httpClient.Timeout; on.httpClient.Timeout < want {
+		t.Fatalf("thinking-on timeout = %s, want at least %s for a reply budget %d times larger",
+			on.httpClient.Timeout, want, larger)
 	}
 }
 
@@ -227,7 +243,7 @@ func TestEmptyTurnTwiceFails(t *testing.T) {
 	if !errors.Is(err, ErrEmptyTurn) {
 		t.Fatalf("error = %v, want ErrEmptyTurn", err)
 	}
-	for _, want := range []string{"qwen3", "done_reason=length", "num_predict=8192", "--max-tokens"} {
+	for _, want := range []string{"qwen3", "done_reason=length", "num_predict=1024", "--max-tokens", "--num-ctx"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q must mention %q", err, want)
 		}

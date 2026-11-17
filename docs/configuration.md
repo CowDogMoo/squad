@@ -550,10 +550,18 @@ stored in manifests.
 
 Use `--num-ctx` (or `SQUAD_PROVIDER_NUM_CTX`) to control the context window size.
 The default is 32768 tokens. Increase it for agents that process large files.
+
+The window is shared between the prompt and the reply. squad gives the reply
+an eighth of `num_ctx` (4096 tokens at the default), or a quarter with
+`--ollama-think`, and never more than `--max-tokens`. It sends that amount to
+Ollama as `num_predict` and sets the same amount aside when it sizes the
+prompt, so the two always fit the window together. Raise `--num-ctx` to give
+the reply more room.
+
 Ollama cuts a prompt that does not fit `num_ctx` from the front, which loses
 the system prompt and agent instructions. So before each request, squad
-estimates the prompt size and, if it would not fit in `num_ctx` with room left
-for the reply and a tenth of the window as headroom, compacts the
+estimates the prompt size and, if it would not fit in `num_ctx` with the
+reply's share and a tenth of the window as headroom left free, compacts the
 conversation in two steps, stopping as soon as it fits:
 
 1. Older tool outputs are replaced with
@@ -583,12 +591,12 @@ Use `--ollama-think` (or `provider.ollama_think: true`) to set Ollama's
 `think` option. It takes `true` or `false`. squad sends `think: false` by
 default: a thinking model such as qwen3 otherwise spends minutes, and often
 its whole output budget, reasoning before each tool call. With it on, squad
-raises `num_predict` to at least 8192 so the reasoning cannot use the whole
-reply, and waits up to 40 minutes for each reply instead of 5, since a longer
-reply takes longer to generate. A model that cannot think rejects
-`think: true`, and the run fails with Ollama's error. If a turn comes back
-with no text and no tool call, squad retries once with thinking off and a
-nudge, then fails with an error that names the cause.
+gives the reply a quarter of `num_ctx` instead of an eighth, so the reasoning
+cannot use the whole reply, and waits up to 40 minutes for each reply instead
+of 5, since a longer reply takes longer to generate. A model that cannot
+think rejects `think: true`, and the run fails with Ollama's error. If a turn
+comes back with no text and no tool call, squad retries once with thinking
+off and a nudge, then fails with an error that names the cause.
 
 ```bash
 # Local Ollama

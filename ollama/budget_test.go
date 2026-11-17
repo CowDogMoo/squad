@@ -70,8 +70,11 @@ func TestGenerateContentSendsWholeConversation(t *testing.T) {
 }
 
 // TestContextBudget pins the prompt budget the agent loop compacts to:
-// num_ctx less the reply reserve, a tenth of the window as headroom, and the
-// tool definitions.
+// num_ctx less the reply budget, a tenth of the window as headroom, and the
+// tool definitions. The reply budget set aside is the num_predict the same
+// request sends, so the prompt and the reply always fit the window together.
+// 16384 is the least the runner ever passes as max tokens: reserving all of
+// it took half of the default window.
 func TestContextBudget(t *testing.T) {
 	t.Parallel()
 	noTools := tokensFor(jsonBytes([]ollamaTool(nil)), defaultBytesPerToken)
@@ -79,6 +82,7 @@ func TestContextBudget(t *testing.T) {
 	if weatherTools <= noTools {
 		t.Fatalf("tool definitions must cost tokens: %d with, %d without", weatherTools, noTools)
 	}
+	runnerCap := llms.WithMaxTokens(16384)
 	tests := []struct {
 		name   string
 		numCtx int
@@ -86,10 +90,11 @@ func TestContextBudget(t *testing.T) {
 		opts   []llms.CallOption
 		want   int
 	}{
-		{"reply cap reserved", 65536, false, []llms.CallOption{llms.WithMaxTokens(1024)}, 65536 - 1024 - 6553 - noTools},
-		{"no reply cap reserves the default", 65536, false, nil, 65536 - 4096 - 6553 - noTools},
-		{"thinking reserves its raised reply cap", 65536, true, []llms.CallOption{llms.WithMaxTokens(1024)}, 65536 - 8192 - 6553 - noTools},
-		{"reserve stops at half the window", 8192, false, []llms.CallOption{llms.WithMaxTokens(16384)}, 8192 - 4096 - 819 - noTools},
+		{"the reply gets an eighth of the default window", 32768, false, []llms.CallOption{runnerCap}, 32768 - 4096 - 3276 - noTools},
+		{"a quarter with thinking on", 32768, true, []llms.CallOption{runnerCap}, 32768 - 8192 - 3276 - noTools},
+		{"an eighth of a larger window", 65536, false, []llms.CallOption{runnerCap}, 65536 - 8192 - 6553 - noTools},
+		{"never more than the caller's max tokens", 65536, false, []llms.CallOption{llms.WithMaxTokens(1024)}, 65536 - 1024 - 6553 - noTools},
+		{"the share when the caller sets no max tokens", 65536, false, nil, 65536 - 8192 - 6553 - noTools},
 		{"tool definitions are counted", 65536, false, weatherOpts(), 65536 - 1024 - 6553 - weatherTools},
 		{"tools left out of a final call are not", 65536, false, append(weatherOpts(), llms.WithToolChoice("none")), 65536 - 1024 - 6553 - noTools},
 		{"no num_ctx means no window to keep to", 0, false, weatherOpts(), math.MaxInt},
@@ -97,9 +102,23 @@ func TestContextBudget(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, _ := New("http://x", "qwen3", tt.numCtx, WithThink(tt.think)).ContextBudget(tt.opts...)
+			llm := New("http://x", "qwen3", tt.numCtx, WithThink(tt.think))
+			got, _ := llm.ContextBudget(tt.opts...)
 			if got != tt.want {
 				t.Fatalf("budget = %d, want %d", got, tt.want)
+			}
+			if tt.numCtx == 0 {
+				return
+			}
+			opts := llms.CallOptions{}
+			for _, opt := range tt.opts {
+				opt(&opts)
+			}
+			req := llm.buildChatRequest(nil, opts)
+			sent, _ := req.Options["num_predict"].(int)
+			tools := tokensFor(jsonBytes(req.Tools), defaultBytesPerToken)
+			if left := tt.numCtx - got - tools - tt.numCtx/headroomDivisor; left != sent {
+				t.Fatalf("the budget leaves %d tokens for the reply, but the request asks for num_predict=%d", left, sent)
 			}
 		})
 	}

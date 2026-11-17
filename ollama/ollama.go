@@ -26,11 +26,10 @@ const (
 	requestTimeout = 5 * time.Minute
 
 	// thinkingRequestTimeout is that bound for a client with thinking on.
-	// Tool-calling requests are not streamed, so the whole reply must arrive
-	// inside it, and numPredict raises the reply cap of every such client's
-	// request from squad's default of 1024 tokens to thinkingMinPredict.
-	// The timeout is eight times longer to match, which leaves the token
-	// rate a model has to sustain where it was.
+	// Tool-calling requests are not streamed, so the whole reply, reasoning
+	// included, must arrive inside it. A thinking model can reason for
+	// minutes before it answers, and its reply budget is twice as large (see
+	// replyBudget), so it gets a much longer wait.
 	thinkingRequestTimeout = 40 * time.Minute
 )
 
@@ -42,12 +41,6 @@ var ErrEmptyTurn = errors.New("ollama model returned an empty turn")
 // Callers that classify errors by code see a failure that is not transient,
 // whatever counters its message quotes.
 const errCodeEmptyTurn llms.ErrorCode = "empty_turn"
-
-// thinkingMinPredict is the num_predict floor while thinking is on. Thinking
-// tokens count against num_predict, so squad's small leaf budget (1024 by
-// default) lets a thinking model such as qwen3 spend the whole reply on
-// reasoning and stop with done_reason=length before it answers or calls a tool.
-const thinkingMinPredict = 8192
 
 // emptyTurnNudge is appended to the retry request after an empty turn.
 const emptyTurnNudge = "Your previous reply was empty: it had no text and no tool call. " +
@@ -130,23 +123,10 @@ func (o *LLM) buildChatRequest(chatMsgs []ollamaMessage, opts llms.CallOptions) 
 	if opts.Temperature != 0 {
 		reqBody.Options["temperature"] = opts.Temperature
 	}
-	if opts.MaxTokens > 0 {
-		reqBody.Options["num_predict"] = o.numPredict(opts.MaxTokens)
+	if budget := o.replyBudget(opts.MaxTokens); budget > 0 {
+		reqBody.Options["num_predict"] = budget
 	}
 	return reqBody
-}
-
-// numPredict returns the output-token cap for a request, raised to
-// thinkingMinPredict while thinking is on so reasoning cannot use it all.
-func (o *LLM) numPredict(maxTokens int) int {
-	if !o.think || maxTokens >= thinkingMinPredict {
-		return maxTokens
-	}
-	floor := thinkingMinPredict
-	if o.numCtx > 0 && floor > o.numCtx/2 {
-		floor = o.numCtx / 2
-	}
-	return max(maxTokens, floor)
 }
 
 // readFullResponse reads a non-streaming Ollama response.
@@ -310,7 +290,7 @@ func describeTurn(resp chatResponse) string {
 func emptyTurnError(model string, numPredict any, first, second chatResponse) error {
 	hint := ""
 	if first.DoneReason == "length" || second.DoneReason == "length" {
-		hint = fmt.Sprintf("; the reply hit num_predict=%v before it produced an answer, so raise --max-tokens", numPredict)
+		hint = fmt.Sprintf("; the reply hit num_predict=%v before it produced an answer; that budget is the lower of --max-tokens and an eighth of --num-ctx (a quarter with thinking on), so raise whichever is lower", numPredict)
 	}
 	msg := fmt.Sprintf("%s gave no text and no tool calls, first (%s) and again after a retry with thinking off and a nudge (%s)%s",
 		model, describeTurn(first), describeTurn(second), hint)
