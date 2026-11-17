@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cowdogmoo/squad/logging"
@@ -24,6 +25,11 @@ var httpClient = &http.Client{Timeout: 5 * time.Minute}
 // ErrEmptyTurn reports that the model returned neither text nor tool calls,
 // even after squad retried with thinking off and a nudge to continue.
 var ErrEmptyTurn = errors.New("ollama model returned an empty turn")
+
+// errCodeEmptyTurn is the code of the typed error that carries ErrEmptyTurn.
+// Callers that classify errors by code see a failure that is not transient,
+// whatever counters its message quotes.
+const errCodeEmptyTurn llms.ErrorCode = "empty_turn"
 
 // thinkingMinPredict is the num_predict floor while thinking is on. Thinking
 // tokens count against num_predict, so squad's small leaf budget (1024 by
@@ -41,9 +47,14 @@ type LLM struct {
 	serverURL string
 	model     string
 	numCtx    int
-	// think is sent as the request's think field: false, true, a level
-	// string ("low", "medium", "high"), or nil to omit it.
-	think any
+	// think is sent as the request's think field.
+	think bool
+
+	// mu guards bytesPerToken, the client's current bytes-per-token
+	// estimate. It starts at defaultBytesPerToken and calibrate only ever
+	// lowers it.
+	mu            sync.Mutex
+	bytesPerToken float64
 }
 
 // Verify interface compliance.
@@ -52,9 +63,8 @@ var _ llms.Model = (*LLM)(nil)
 // Option configures an LLM.
 type Option func(*LLM)
 
-// WithThink sets the value sent as Ollama's think field. Build it with
-// [ParseThink]; nil omits the field and leaves thinking to the model default.
-func WithThink(think any) Option {
+// WithThink sets the value sent as Ollama's think field.
+func WithThink(think bool) Option {
 	return func(o *LLM) { o.think = think }
 }
 
@@ -65,46 +75,15 @@ func New(serverURL, model string, numCtx int, opts ...Option) *LLM {
 	serverURL = strings.TrimSuffix(serverURL, "/v1")
 	serverURL = strings.TrimSuffix(serverURL, "/")
 	o := &LLM{
-		serverURL: serverURL,
-		model:     model,
-		numCtx:    numCtx,
-		think:     false,
+		serverURL:     serverURL,
+		model:         model,
+		numCtx:        numCtx,
+		bytesPerToken: defaultBytesPerToken,
 	}
 	for _, opt := range opts {
 		opt(o)
 	}
 	return o
-}
-
-// ParseThink converts a provider.ollama_think setting into the value sent as
-// Ollama's think field:
-//
-//   - "", "false", "off", "no": false, squad's default for agent loops
-//   - "true", "on", "yes": true
-//   - "low", "medium", "high": that thinking level, for models such as gpt-oss
-//   - "auto": nil, which omits the field so the model's default applies
-func ParseThink(s string) (any, error) {
-	switch v := strings.ToLower(strings.TrimSpace(s)); v {
-	case "", "false", "off", "no":
-		return false, nil
-	case "true", "on", "yes":
-		return true, nil
-	case "low", "medium", "high":
-		return v, nil
-	case "auto":
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("invalid ollama think setting %q: want false, true, low, medium, high, or auto", s)
-	}
-}
-
-// thinkingOn reports whether a think value can make the model think. An
-// omitted value counts, because thinking models default to thinking.
-func thinkingOn(think any) bool {
-	if b, ok := think.(bool); ok {
-		return b
-	}
-	return true
 }
 
 // Call implements the simple string-based call interface.
@@ -141,7 +120,7 @@ func (o *LLM) buildChatRequest(chatMsgs []ollamaMessage, opts llms.CallOptions) 
 // numPredict returns the output-token cap for a request, raised to
 // thinkingMinPredict while thinking is on so reasoning cannot use it all.
 func (o *LLM) numPredict(maxTokens int) int {
-	if !thinkingOn(o.think) || maxTokens >= thinkingMinPredict {
+	if !o.think || maxTokens >= thinkingMinPredict {
 		return maxTokens
 	}
 	floor := thinkingMinPredict
@@ -207,21 +186,9 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	return nil, emptyTurnError(o.model, reqBody.Options["num_predict"], first, second)
 }
 
-// chat sends one request. If the model rejects the think option because it
-// cannot think, the request is resent once without it.
-func (o *LLM) chat(ctx context.Context, reqBody chatRequest, streamFn func(ctx context.Context, chunk []byte) error) (chatResponse, error) {
-	resp, err := o.doChat(ctx, reqBody, streamFn)
-	if err != nil && reqBody.Think != nil && thinkingOn(reqBody.Think) &&
-		strings.Contains(err.Error(), "does not support thinking") {
-		logging.WarnContext(ctx, "ollama: %s does not support thinking; resending without the think option", o.model)
-		reqBody.Think = nil
-		return o.doChat(ctx, reqBody, streamFn)
-	}
-	return resp, err
-}
-
-// doChat performs one POST to /api/chat and decodes the reply.
-func (o *LLM) doChat(ctx context.Context, reqBody chatRequest, streamFn func(ctx context.Context, chunk []byte) error) (resp chatResponse, retErr error) {
+// chat performs one POST to /api/chat, decodes the reply, and feeds the
+// prompt token count Ollama reports back into the client's token estimate.
+func (o *LLM) chat(ctx context.Context, reqBody chatRequest, streamFn func(ctx context.Context, chunk []byte) error) (resp chatResponse, retErr error) {
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return chatResponse{}, fmt.Errorf("failed to marshal ollama request: %w", err)
@@ -249,9 +216,15 @@ func (o *LLM) doChat(ctx context.Context, reqBody chatRequest, streamFn func(ctx
 	}
 
 	if reqBody.Stream {
-		return o.readStream(ctx, httpResp.Body, streamFn)
+		resp, err = o.readStream(ctx, httpResp.Body, streamFn)
+	} else {
+		resp, err = readFullResponse(httpResp.Body)
 	}
-	return readFullResponse(httpResp.Body)
+	if err != nil {
+		return chatResponse{}, err
+	}
+	o.calibrate(ctx, reqBody, resp.PromptEvalCount)
+	return resp, nil
 }
 
 // readStream processes NDJSON streaming responses from Ollama, calling
@@ -313,14 +286,17 @@ func describeTurn(resp chatResponse) string {
 	return fmt.Sprintf("thinking=%d bytes, done_reason=%s, eval_count=%d", thinking, reason, resp.EvalCount)
 }
 
-// emptyTurnError explains why both attempts came back empty.
+// emptyTurnError explains why both attempts came back empty. The error is
+// typed so that callers classifying errors by code never read the counters
+// in its message as an HTTP status and retry the call.
 func emptyTurnError(model string, numPredict any, first, second chatResponse) error {
 	hint := ""
 	if first.DoneReason == "length" || second.DoneReason == "length" {
 		hint = fmt.Sprintf("; the reply hit num_predict=%v before it produced an answer, so raise --max-tokens", numPredict)
 	}
-	return fmt.Errorf("%w: %s gave no text and no tool calls, first (%s) and again after a retry with thinking off and a nudge (%s)%s",
-		ErrEmptyTurn, model, describeTurn(first), describeTurn(second), hint)
+	msg := fmt.Sprintf("%s gave no text and no tool calls, first (%s) and again after a retry with thinking off and a nudge (%s)%s",
+		model, describeTurn(first), describeTurn(second), hint)
+	return llms.NewError(errCodeEmptyTurn, "ollama", msg).WithCause(ErrEmptyTurn)
 }
 
 type chatRequest struct {
@@ -328,9 +304,8 @@ type chatRequest struct {
 	Messages []ollamaMessage `json:"messages"`
 	Tools    []ollamaTool    `json:"tools,omitempty"`
 	Stream   bool            `json:"stream"`
-	// Think is false, true, or a level string; nil omits it. A false value
-	// is still sent, because omitting it lets thinking models think.
-	Think   any            `json:"think,omitempty"`
+	// Think is always sent: omitting it lets thinking models think.
+	Think   bool           `json:"think"`
 	Options map[string]any `json:"options,omitempty"`
 }
 

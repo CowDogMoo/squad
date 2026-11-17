@@ -140,9 +140,9 @@ type ProviderConfig struct {
 	Token string `mapstructure:"token" yaml:"token"`
 	// NumCtx is the context window size for Ollama models.
 	NumCtx int `mapstructure:"num_ctx" yaml:"num_ctx"`
-	// OllamaThink sets Ollama's think option: false, true, low, medium,
-	// high, or auto to use the model's default.
-	OllamaThink string `mapstructure:"ollama_think" yaml:"ollama_think"`
+	// OllamaThink is sent as Ollama's think option. When false, the default,
+	// a thinking model answers without reasoning first.
+	OllamaThink bool `mapstructure:"ollama_think" yaml:"ollama_think"`
 }
 
 // ModelConfig holds model defaults.
@@ -252,7 +252,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("provider.api_type", "")
 	v.SetDefault("provider.openai_compat_max_tokens", false)
 	v.SetDefault("provider.num_ctx", 32768)
-	v.SetDefault("provider.ollama_think", "false")
+	v.SetDefault("provider.ollama_think", false)
 	v.SetDefault("model.default", "")
 	v.SetDefault("model.temperature", 0.2)
 	v.SetDefault("model.max_tokens", 1024)

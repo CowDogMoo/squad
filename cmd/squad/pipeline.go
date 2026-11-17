@@ -243,7 +243,7 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 	temp := flagOrViperFloat(cmd, "temperature", v, "model.temperature")
 	maxTokens := flagOrViperInt(cmd, "max-tokens", v, "model.max_tokens")
 	numCtx := flagOrViperInt(cmd, "num-ctx", v, "provider.num_ctx")
-	ollamaThink := flagOrViper(cmd, "ollama-think", v, "provider.ollama_think")
+	ollamaThink := flagOrViperBool(cmd, "ollama-think", v, "provider.ollama_think")
 	maxIter := clampInt(flagOrViperInt(cmd, "max-iterations", v, "run.max_iterations"), 10, 1000)
 	maxCost := flagOrViperFloat(cmd, "max-cost", v, "run.max_cost")
 	if maxCost < 0 {

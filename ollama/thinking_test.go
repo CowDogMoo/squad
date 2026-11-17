@@ -82,34 +82,6 @@ func userMsg(text string) []llms.MessageContent {
 	return []llms.MessageContent{{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(text)}}}
 }
 
-func TestParseThink(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		in      string
-		want    any
-		wantErr bool
-	}{
-		{"", false, false},
-		{"false", false, false},
-		{"OFF", false, false},
-		{"true", true, false},
-		{" on ", true, false},
-		{"high", "high", false},
-		{"Low", "low", false},
-		{"auto", nil, false},
-		{"sometimes", nil, true},
-	}
-	for _, tt := range tests {
-		got, err := ParseThink(tt.in)
-		if (err != nil) != tt.wantErr {
-			t.Fatalf("ParseThink(%q) error = %v, wantErr %v", tt.in, err, tt.wantErr)
-		}
-		if got != tt.want {
-			t.Fatalf("ParseThink(%q) = %#v, want %#v", tt.in, got, tt.want)
-		}
-	}
-}
-
 // TestThinkSentExplicitly pins the think field squad sends. Omitting it lets a
 // thinking model such as qwen3 think by default, so the default is an
 // explicit false.
@@ -118,12 +90,11 @@ func TestThinkSentExplicitly(t *testing.T) {
 	tests := []struct {
 		name string
 		opts []Option
-		want string // substring of the raw request; "" means no think field
+		want bool
 	}{
-		{"default sends false", nil, `"think":false`},
-		{"true", []Option{WithThink(true)}, `"think":true`},
-		{"level", []Option{WithThink("high")}, `"think":"high"`},
-		{"auto omits", []Option{WithThink(nil)}, ""},
+		{"default sends false", nil, false},
+		{"off", []Option{WithThink(false)}, false},
+		{"on", []Option{WithThink(true)}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -134,14 +105,13 @@ func TestThinkSentExplicitly(t *testing.T) {
 				t.Fatalf("GenerateContent() error = %v", err)
 			}
 			_, raw := f.requests()
-			if tt.want == "" {
-				if strings.Contains(raw[0], `"think"`) {
-					t.Fatalf("request must omit think, got %s", raw[0])
-				}
-				return
+			var sent map[string]any
+			if err := json.Unmarshal([]byte(raw[0]), &sent); err != nil {
+				t.Fatalf("request is not JSON: %v", err)
 			}
-			if !strings.Contains(raw[0], tt.want) {
-				t.Fatalf("request must contain %s, got %s", tt.want, raw[0])
+			got, present := sent["think"]
+			if !present || got != tt.want {
+				t.Fatalf("request think = %v (present=%v), want an explicit %v", got, present, tt.want)
 			}
 		})
 	}
@@ -153,13 +123,12 @@ func TestThinkingRaisesNumPredict(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name   string
-		think  any
+		think  bool
 		numCtx int
 		want   int
 	}{
 		{"thinking off keeps the budget", false, 65536, 1024},
 		{"thinking on raises the floor", true, 65536, thinkingMinPredict},
-		{"auto counts as thinking", nil, 65536, thinkingMinPredict},
 		{"floor capped at half of num_ctx", true, 8192, 4096},
 	}
 	for _, tt := range tests {
@@ -304,24 +273,23 @@ func TestStreamKeepsThinkingAndToolCalls(t *testing.T) {
 	}
 }
 
-// TestThinkRejectedByModelIsResent covers think=true on a model that cannot
-// think: Ollama answers 400, and squad resends without the option.
-func TestThinkRejectedByModelIsResent(t *testing.T) {
+// TestThinkRejectedByModelFails covers think=true on a model that cannot
+// think: Ollama's 400 reaches the caller as is, naming the cause, and squad
+// does not send the request again.
+func TestThinkRejectedByModelFails(t *testing.T) {
 	t.Parallel()
 	f, srv := newFakeOllama(t,
 		fakeReply{status: http.StatusBadRequest, body: `{"error":"\"llama3\" does not support thinking"}`},
-		fakeReply{body: `{"model":"llama3","message":{"role":"assistant","content":"hi"},"done":true}`},
 	)
-	resp, err := New(srv.URL, "llama3", 8192, WithThink(true)).GenerateContent(context.Background(), userMsg("hi"))
-	if err != nil {
-		t.Fatalf("GenerateContent() error = %v", err)
+	_, err := New(srv.URL, "llama3", 8192, WithThink(true)).GenerateContent(context.Background(), userMsg("hi"))
+	if err == nil {
+		t.Fatal("GenerateContent() must fail when the model rejects think")
 	}
-	if resp.Choices[0].Content != "hi" {
-		t.Fatalf("content = %q", resp.Choices[0].Content)
+	if !strings.Contains(err.Error(), "does not support thinking") {
+		t.Fatalf("error %q must carry Ollama's explanation", err)
 	}
-	_, raw := f.requests()
-	if len(raw) != 2 || strings.Contains(raw[1], `"think"`) {
-		t.Fatalf("second request must omit think, got %v", raw)
+	if reqs, _ := f.requests(); len(reqs) != 1 {
+		t.Fatalf("requests = %d, want 1 (no resend)", len(reqs))
 	}
 }
 

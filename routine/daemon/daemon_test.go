@@ -2,10 +2,15 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -221,6 +226,157 @@ func TestBuildFireFnInvocationReachesRunnerWithMissingAgent(t *testing.T) {
 	_, err := fire(ctx, entry)
 	if err == nil {
 		t.Error("expected error when agent doesn't exist")
+	}
+}
+
+// fireTestAgent is the agent the fire tests run. The name is unlikely to
+// match an agent in any cached repository on the machine running the tests.
+const fireTestAgent = "squad-daemon-fire-test"
+
+// writeFireTestAgent creates a minimal edit-capable agent and returns the
+// directory to list under agents.local_paths.
+func writeFireTestAgent(t *testing.T) string {
+	t.Helper()
+	agentsDir := t.TempDir()
+	agentDir := filepath.Join(agentsDir, fireTestAgent)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	files := map[string]string{
+		"agent.yaml": "name: " + fireTestAgent + "\nversion: 0.0.0\nentrypoint: system.md\nwrapper: wrapper.md\n",
+		"system.md":  "System prompt.",
+		"wrapper.md": "Wrapper prompt.",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(agentDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", name, err)
+		}
+	}
+	return agentsDir
+}
+
+// fakeOllama answers the first probes requests with a read-only Bash call
+// and every later one with a final answer. It records each request body.
+type fakeOllama struct {
+	mu     sync.Mutex
+	bodies []string
+}
+
+func newFakeOllama(t *testing.T, probes int) (*fakeOllama, *httptest.Server) {
+	t.Helper()
+	f := &fakeOllama{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		n := len(f.bodies)
+		f.bodies = append(f.bodies, string(body))
+		f.mu.Unlock()
+		if n < probes {
+			_, _ = fmt.Fprintf(w, `{"model":"mistral","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"Bash","arguments":{"command":"ls nomatch%d"}}}]},"done":true}`, n)
+			return
+		}
+		_, _ = io.WriteString(w, `{"model":"mistral","message":{"role":"assistant","content":"done"},"done":true}`)
+	}))
+	t.Cleanup(srv.Close)
+	return f, srv
+}
+
+func (f *fakeOllama) requests() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.bodies...)
+}
+
+// fireOllamaRoutine fires one routine that runs fireTestAgent against the
+// Ollama server at baseURL, the way the daemon does.
+func fireOllamaRoutine(t *testing.T, cfg *config.Config, baseURL string) {
+	t.Helper()
+	entry := routine.Entry{
+		Ref: routine.Ref{Scope: routine.ScopeGlobal, ID: "x"},
+		Routine: &routine.Routine{
+			ID:            "x",
+			Agent:         fireTestAgent,
+			Schedule:      "@daily",
+			Prompt:        "map the target",
+			WorkingDir:    t.TempDir(),
+			Provider:      "ollama",
+			Model:         "mistral",
+			BaseURL:       baseURL,
+			MaxIterations: 30,
+			Enabled:       true,
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if _, err := BuildFireFn(cfg)(ctx, entry); err != nil {
+		t.Fatalf("fire: %v", err)
+	}
+}
+
+// TestFireKeepsEditGuards checks that a routine fire still pushes an
+// edit-capable agent to edit. The daemon never sets RequireActionable, and
+// leaving it unset must not switch off the phase nudges and read blocking.
+func TestFireKeepsEditGuards(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cfg := config.Defaults()
+	cfg.Agents.LocalPaths = []string{writeFireTestAgent(t)}
+	fake, srv := newFakeOllama(t, 12)
+
+	fireOllamaRoutine(t, cfg, srv.URL)
+
+	sent := strings.Join(fake.requests(), "\n")
+	for _, marker := range []string{"[PROGRESS CHECK]", "READ BLOCKED"} {
+		if !strings.Contains(sent, marker) {
+			t.Errorf("a routine fire must keep the edit guards, but the agent never saw %q", marker)
+		}
+	}
+}
+
+// TestFireReadsOllamaThinkFromYAML is the regression test for an unquoted
+// YAML boolean in provider.ollama_think failing every Ollama routine fire:
+// the daemon reads the setting from the decoded config struct, and the value
+// must reach Ollama's think option.
+func TestFireReadsOllamaThinkFromYAML(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		want     bool
+	}{
+		{"unquoted true", "provider:\n  ollama_think: true\n", true},
+		{"unquoted false", "provider:\n  ollama_think: false\n", false},
+		{"quoted true", "provider:\n  ollama_think: \"true\"\n", true},
+		{"unset", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			yaml := tt.provider + "agents:\n  local_paths:\n    - " + writeFireTestAgent(t) + "\n"
+			if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			cfg, _, err := config.LoadFromPath(path)
+			if err != nil {
+				t.Fatalf("LoadFromPath: %v", err)
+			}
+			fake, srv := newFakeOllama(t, 0)
+
+			fireOllamaRoutine(t, cfg, srv.URL)
+
+			reqs := fake.requests()
+			if len(reqs) != 1 {
+				t.Fatalf("requests = %d, want 1", len(reqs))
+			}
+			var sent struct {
+				Think *bool `json:"think"`
+			}
+			if err := json.Unmarshal([]byte(reqs[0]), &sent); err != nil {
+				t.Fatalf("request is not JSON: %v", err)
+			}
+			if sent.Think == nil || *sent.Think != tt.want {
+				t.Fatalf("request think = %v, want %v", sent.Think, tt.want)
+			}
+		})
 	}
 }
 

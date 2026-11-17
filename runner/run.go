@@ -80,15 +80,21 @@ type RunOptions struct {
 	DryRun bool
 	// RequireActionable reports whether the run must produce file edits.
 	RequireActionable bool
+	// EditsOptional reports that the caller explicitly said the run need not
+	// produce edits (--require-actionable=false). It turns off the edit
+	// deadline, phase nudges, and read blocking. It is never inferred from
+	// RequireActionable being unset, so callers that set neither, such as
+	// the routine daemon, keep those guards.
+	EditsOptional bool
 	// Apply reports whether to apply a unified diff from the response.
 	Apply bool
 	// ApplyFallback reports whether to attempt diff parsing as a fallback.
 	ApplyFallback bool
 	// NumCtx is the context window size for Ollama models.
 	NumCtx int
-	// OllamaThink sets Ollama's think option: false (the default when
-	// empty), true, low, medium, high, or auto to use the model's default.
-	OllamaThink string
+	// OllamaThink is sent as Ollama's think option. It is off by default,
+	// which stops a thinking model from reasoning before every reply.
+	OllamaThink bool
 	// MaxIterations caps the number of model iterations (0 = unlimited).
 	MaxIterations int
 	// MaxIterationsExplicit reports whether MaxIterations came from an
@@ -307,11 +313,11 @@ func invokeAndHandle(ctx context.Context, cmd *cobra.Command, opts *RunOptions, 
 func initRunContext(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) context.Context {
 	ctx = tools.InitEdits(ctx)
 	ctx = tools.InitEditDeadline(ctx)
-	if !opts.RequireActionable {
-		// Runs past applyProviderConstraints, so remote-only agents land
-		// here too. The edit deadline, phase nudges, and read blocking exist
-		// to push an editing agent to edit; they would stall a run that only
-		// probes or reports.
+	if opts.EditsOptional || bundle.RemoteOnly {
+		// The edit deadline, phase nudges, and read blocking exist to push
+		// an editing agent to edit; they would stall a run that only probes
+		// or reports. Both conditions are explicit choices: the caller's, or
+		// the manifest's for an agent with no local filesystem.
 		ctx = tools.InitEditsOptional(ctx)
 		logging.InfoContext(ctx, "edits not required: edit deadline, phase nudges, and read blocking are off")
 	}

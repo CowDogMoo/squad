@@ -381,15 +381,12 @@ func TestBuildNativeOllamaLLM(t *testing.T) {
 	}{
 		{"defaults", &RunOptions{}},
 		{"custom", &RunOptions{BaseURL: "http://custom:11434", NumCtx: 65536}},
-		{"thinking on", &RunOptions{OllamaThink: "high"}},
+		{"thinking on", &RunOptions{OllamaThink: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			llm, err := buildNativeOllamaLLM(tt.opts, "llama3")
-			if err != nil {
-				t.Fatalf("buildNativeOllamaLLM() error = %v", err)
-			}
+			llm := buildNativeOllamaLLM(tt.opts, "llama3")
 			if llm == nil {
 				t.Fatal("buildNativeOllamaLLM returned nil")
 			}
@@ -397,13 +394,6 @@ func TestBuildNativeOllamaLLM(t *testing.T) {
 				t.Fatalf("type = %s, want *ollama.LLM", got)
 			}
 		})
-	}
-}
-
-func TestBuildNativeOllamaLLMRejectsBadThink(t *testing.T) {
-	t.Parallel()
-	if _, err := buildNativeOllamaLLM(&RunOptions{OllamaThink: "sometimes"}, "llama3"); err == nil {
-		t.Fatal("expected an error for an invalid ollama think setting")
 	}
 }
 
