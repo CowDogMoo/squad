@@ -292,6 +292,7 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 		OllamaTimeout:         ollamaTimeout,
 		MaxIterations:         maxIter,
 		MaxIterationsExplicit: cmd.Flags().Changed("max-iterations"),
+		MaxTokensExplicit:     cmd.Flags().Changed("max-tokens"),
 		MaxCost:               maxCost,
 		EditsOptional:         editsOptional,
 		ConfigAvailable:       cfg != nil,

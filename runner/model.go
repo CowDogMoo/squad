@@ -427,8 +427,14 @@ const DefaultMaxTokensLeaf = 4096
 // Task tool's prompt argument can be thousands of tokens.  The floor is
 // enforced even when a config default is present, because the config default
 // of 1024 is too small for orchestrators and would silently truncate the
-// Task prompt argument to empty.
-func inferMaxTokens(maxTokens int, hasTaskTool bool) int {
+// Task prompt argument to empty.  A positive value from an explicit
+// --max-tokens flag is used as given: a caller that caps replies on purpose
+// (to stop a local model spending minutes on a reply too long to finish)
+// must not have the cap silently raised.
+func inferMaxTokens(maxTokens int, hasTaskTool, explicit bool) int {
+	if explicit && maxTokens > 0 {
+		return maxTokens
+	}
 	if hasTaskTool && maxTokens < DefaultMaxTokensWithTask {
 		return DefaultMaxTokensWithTask
 	}
@@ -452,7 +458,10 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		}()
 	}
 
-	maxTokens = inferMaxTokens(maxTokens, taskCfg != nil)
+	if opts.MaxTokensExplicit && taskCfg != nil && maxTokens > 0 && maxTokens < DefaultMaxTokensWithTask {
+		logging.WarnContext(ctx, "max_tokens=%d from --max-tokens is below the %d an agent with the Task tool usually gets; a long Task prompt may be cut off", maxTokens, DefaultMaxTokensWithTask)
+	}
+	maxTokens = inferMaxTokens(maxTokens, taskCfg != nil, opts.MaxTokensExplicit)
 	logging.DebugContext(ctx, "max_tokens=%d (hasTaskTool=%v)", maxTokens, taskCfg != nil)
 	if modelRequiresTemperatureOne(model) {
 		temperature = 1.0

@@ -107,6 +107,11 @@ type RunOptions struct {
 	// when false the runner derives the effective cap from the agent's base
 	// budget and the per-model iteration factor (see resolveIterationBudget).
 	MaxIterationsExplicit bool
+	// MaxTokensExplicit reports whether MaxTokens came from an explicit
+	// --max-tokens flag. When true a positive value is used verbatim, even
+	// below the floor an agent with the Task tool otherwise gets (see
+	// inferMaxTokens); when false that floor applies.
+	MaxTokensExplicit bool
 	// MaxCost is the total cost budget in USD (0 = unlimited).
 	MaxCost float64
 	// MaxRetries overrides the per-call LLM retry count for transient
