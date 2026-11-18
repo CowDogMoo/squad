@@ -96,7 +96,7 @@ func TestContextBudget(t *testing.T) {
 		{"never more than the caller's max tokens", 65536, false, []llms.CallOption{llms.WithMaxTokens(1024)}, 65536 - 1024 - 6553 - noTools},
 		{"the share when the caller sets no max tokens", 65536, false, nil, 65536 - 8192 - 6553 - noTools},
 		{"tool definitions are counted", 65536, false, weatherOpts(), 65536 - 1024 - 6553 - weatherTools},
-		{"tools left out of a final call are not", 65536, false, append(weatherOpts(), llms.WithToolChoice("none")), 65536 - 1024 - 6553 - noTools},
+		{"a final call keeps them, so its budget matches the loop's", 65536, false, append(weatherOpts(), llms.WithToolChoice("none")), 65536 - 1024 - 6553 - weatherTools},
 		{"no num_ctx means no window to keep to", 0, false, weatherOpts(), math.MaxInt},
 	}
 	for _, tt := range tests {

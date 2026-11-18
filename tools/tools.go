@@ -352,6 +352,14 @@ type RunWithToolsConfig struct {
 	// MaxRetries is the number of additional attempts after a failed LLM
 	// call for transient errors. Zero falls back to DefaultMaxRetries.
 	MaxRetries int
+	// TextNudges is how many times a reply with text but no tool call is
+	// answered with [textNudgeMessage] instead of ending the loop. A text
+	// reply right after a nudge still ends it, so an agent that is done says
+	// so once more and stops. Zero keeps the default: any reply without a
+	// tool call is the final answer. Weaker local models often announce a
+	// next step ("Let me check the signing key") without calling a tool,
+	// which would otherwise end the run with most of its iterations unused.
+	TextNudges int
 	// SplitToolResults, when true, emits one llms.MessageContent per tool
 	// result instead of batching all parts into a single message. Required
 	// for OpenAI chat completions, whose API rejects a single role:"tool"
@@ -703,11 +711,36 @@ func trackPostExecution(ctx context.Context, messages []llms.MessageContent, mer
 	return postExecutionResult{newFilesRead: newFilesRead, stuck: loopDetector.Stuck()}
 }
 
+// textNudgeMessage answers a reply that has text but no tool call when
+// [RunWithToolsConfig.TextNudges] allows it.
+const textNudgeMessage = "[CONTINUE OR FINISH] Your last reply had no tool call, so nothing ran. " +
+	"If the task is not finished, make your next tool call now. " +
+	"If it is finished, reply with your complete final answer and no tool call."
+
+// textNudger tracks the text-only nudges one tool loop has sent.
+type textNudger struct {
+	used    int
+	pending bool // the last request ended with a nudge the model has not acted on
+}
+
+// allow reports whether a text-only reply should be nudged rather than
+// ending the loop, and records the nudge when it is. It never nudges an
+// empty reply, a reply to a nudge, past the limit, or on the last iteration.
+func (n *textNudger) allow(limit int, content string, iterationsLeft bool) bool {
+	if n.pending || n.used >= limit || !iterationsLeft || strings.TrimSpace(content) == "" {
+		return false
+	}
+	n.used++
+	n.pending = true
+	return true
+}
+
 func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter int, cfg RunWithToolsConfig, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
 	m := cfg.Metrics
 	var lastContent string
 	var repeat RepeatTracker
 	var loopDetector LoopDetector
+	var nudge textNudger
 	ctx, editEnforcer, phaseEnforcer := initToolLoopEnforcers(ctx, cfg.EditDeadline)
 	budgetWarned := make([]bool, len(budgetWarningThresholds))
 	var grace graceState
@@ -733,9 +766,18 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 			lastContent = mergedContent
 		}
 		if len(mergedToolCalls) == 0 {
+			if nudge.allow(cfg.TextNudges, mergedContent, i+1 < maxIter) {
+				logging.InfoContext(ctx, "model replied without a tool call in %s; asking it to continue or finish (nudge %d of %d)", iterDuration.Round(time.Millisecond), nudge.used, cfg.TextNudges)
+				messages = append(messages,
+					llms.MessageContent{Role: llms.ChatMessageTypeAI, Parts: []llms.ContentPart{llms.TextPart(mergedContent)}},
+					llms.MessageContent{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(textNudgeMessage)}},
+				)
+				continue
+			}
 			logging.InfoContext(ctx, "model returned final response in %s (no tool calls)", iterDuration.Round(time.Millisecond))
 			return mergedContent, messages, nil, true
 		}
+		nudge.pending = false
 		if mergedContent != "" {
 			logging.InfoContext(ctx, "model: %s", TruncateString(strings.ReplaceAll(mergedContent, "\n", " "), 200))
 		}

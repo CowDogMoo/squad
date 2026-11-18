@@ -112,6 +112,10 @@ type RunOptions struct {
 	// MaxRetries overrides the per-call LLM retry count for transient
 	// errors. Zero or negative falls back to tools.DefaultMaxRetries.
 	MaxRetries int
+	// TextNudges is how many times a reply with text but no tool call is
+	// answered with a nudge to continue instead of ending the run (see
+	// tools.RunWithToolsConfig.TextNudges). Zero disables nudging.
+	TextNudges int
 	// Mode is the run mode passed to prompt templates (e.g., "edit").
 	Mode string
 	// Vars holds template variables passed to prompt templates.

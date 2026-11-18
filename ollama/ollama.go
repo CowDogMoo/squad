@@ -50,6 +50,13 @@ const errCodeEmptyTurn llms.ErrorCode = "empty_turn"
 const emptyTurnNudge = "Your previous reply was empty: it had no text and no tool call. " +
 	"Continue the task now: call a tool, or give your final answer."
 
+// cutOffNudge is appended to the retry request after a reply the reply
+// budget cut off before any tool call was complete. %s names the limit.
+const cutOffNudge = "Your previous reply was cut off at %s, so any tool call in it was lost and nothing ran. " +
+	"If you were calling a tool, make a shorter call: build long content (a script, a wordlist, a list of payloads) " +
+	"in a file over several calls, or generate it with a short command, instead of writing it out in one reply. " +
+	"If you were writing your final answer, write it again more briefly."
+
 // LLM implements llms.Model using Ollama's native /api/chat endpoint,
 // which supports both tool calling and the num_ctx parameter.
 type LLM struct {
@@ -121,11 +128,16 @@ func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOptio
 }
 
 // buildChatRequest constructs the Ollama /api/chat request body from call options.
+//
+// The tool definitions are sent even when opts.ToolChoice is "none". Ollama
+// has no tool_choice, and chat templates such as qwen3's render the tools at
+// the very start of the prompt, so leaving them out of an agent's final
+// tool-less request changes the first tokens of a long conversation: the
+// server's prompt cache misses and the whole conversation is processed again,
+// which takes many minutes on a slow host. GenerateContent drops any tool
+// calls a "none" request still produces.
 func (o *LLM) buildChatRequest(chatMsgs []ollamaMessage, opts llms.CallOptions) chatRequest {
-	var tools []ollamaTool
-	if opts.ToolChoice != "none" {
-		tools = convertTools(opts.Tools)
-	}
+	tools := convertTools(opts.Tools)
 	stream := opts.StreamingFunc != nil && len(tools) == 0
 	reqBody := chatRequest{
 		Model:    o.model,
@@ -164,7 +176,8 @@ func readFullResponse(body io.Reader) (chatResponse, error) {
 // loop's job, with the budget [LLM.ContextBudget] reports. A turn with no
 // text and no tool calls is retried once with thinking off and a nudge; a
 // second empty turn fails with [ErrEmptyTurn] instead of ending the agent
-// loop silently.
+// loop silently. A reply the budget cut off before any tool call (see
+// isCutOffTurn) is retried the same way, with a nudge to keep the call short.
 func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error) {
 	opts := llms.CallOptions{}
 	for _, opt := range options {
@@ -177,20 +190,39 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	}
 
 	reqBody := o.buildChatRequest(chatMsgs, opts)
+	if opts.ToolChoice == "none" && len(reqBody.Tools) > 0 {
+		resp, answered, err := o.chatWithoutToolCalls(ctx, reqBody, opts.StreamingFunc)
+		if err != nil {
+			return nil, err
+		}
+		if answered {
+			return resp, nil
+		}
+		logging.WarnContext(ctx, "ollama: %s answered a request for no tool calls with no text; asking again without tool definitions", o.model)
+		reqBody.Tools = nil
+		reqBody.Stream = opts.StreamingFunc != nil
+	}
 
 	first, err := o.chat(ctx, reqBody, opts.StreamingFunc)
 	if err != nil {
 		return nil, err
 	}
-	if !isEmptyTurn(first) {
+	cutOff := isCutOffTurn(first)
+	if !isEmptyTurn(first) && !cutOff {
 		return convertResponse(first), nil
 	}
 
-	logging.WarnContext(ctx, "ollama: %s returned an empty turn (%s); retrying once with thinking off and a nudge", o.model, describeTurn(first))
+	nudge := emptyTurnNudge
+	if cutOff {
+		logging.WarnContext(ctx, "ollama: %s's reply was cut off at the reply budget with no tool call (%s); retrying once with thinking off and a nudge to keep the call short", o.model, describeTurn(first))
+		nudge = o.cutOffNudge(opts.MaxTokens)
+	} else {
+		logging.WarnContext(ctx, "ollama: %s returned an empty turn (%s); retrying once with thinking off and a nudge", o.model, describeTurn(first))
+	}
 	retry := reqBody
 	retry.Think = false
 	retry.Options = maps.Clone(reqBody.Options)
-	retry.Messages = append(slices.Clone(chatMsgs), ollamaMessage{Role: "user", Content: emptyTurnNudge})
+	retry.Messages = append(slices.Clone(chatMsgs), ollamaMessage{Role: "user", Content: nudge})
 	second, err := o.chat(ctx, retry, opts.StreamingFunc)
 	if err != nil {
 		return nil, fmt.Errorf("ollama: retry after an empty turn failed: %w", err)
@@ -199,6 +231,31 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 		return convertResponse(second), nil
 	}
 	return nil, o.emptyTurnError(opts.MaxTokens, first, second)
+}
+
+// chatWithoutToolCalls sends a tool_choice "none" request with its tool
+// definitions kept (see buildChatRequest) and drops any tool calls from the
+// reply. answered is false when no text is left, so the caller can ask again
+// without the definitions. The reply is not streamed because tools are
+// present; streamFn, when set, receives the whole text once.
+func (o *LLM) chatWithoutToolCalls(ctx context.Context, reqBody chatRequest, streamFn func(ctx context.Context, chunk []byte) error) (*llms.ContentResponse, bool, error) {
+	resp, err := o.chat(ctx, reqBody, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	if resp.Message == nil || strings.TrimSpace(resp.Message.Content) == "" {
+		return nil, false, nil
+	}
+	if n := len(resp.Message.ToolCalls); n > 0 {
+		logging.InfoContext(ctx, "ollama: dropping %d tool call(s) from a reply that was asked for none", n)
+		resp.Message.ToolCalls = nil
+	}
+	if streamFn != nil {
+		if err := streamFn(ctx, []byte(resp.Message.Content)); err != nil {
+			return nil, false, fmt.Errorf("streaming callback failed: %w", err)
+		}
+	}
+	return convertResponse(resp), true, nil
 }
 
 // chat performs one POST to /api/chat, decodes the reply, and feeds the
@@ -286,6 +343,27 @@ func (o *LLM) readStream(ctx context.Context, body io.Reader, streamFn func(ctx 
 func isEmptyTurn(resp chatResponse) bool {
 	return resp.Message == nil ||
 		(strings.TrimSpace(resp.Message.Content) == "" && len(resp.Message.ToolCalls) == 0)
+}
+
+// isCutOffTurn reports whether the reply budget ended a reply before it made
+// any tool call, with no thinking to blame. A model writing a long tool call
+// (an inline wordlist, say) that runs out of budget mid-call loses the call:
+// Ollama returns only the text before it, or nothing, and the agent loop
+// would take that as the final answer. A reply that spent its budget
+// thinking is an empty turn instead, retried with thinking off.
+func isCutOffTurn(resp chatResponse) bool {
+	return resp.Message != nil && resp.DoneReason == "length" &&
+		len(resp.Message.ToolCalls) == 0 && strings.TrimSpace(resp.Message.Thinking) == ""
+}
+
+// cutOffNudge builds the retry nudge for a cut-off reply, naming the reply
+// budget a request made with maxTokens had.
+func (o *LLM) cutOffNudge(maxTokens int) string {
+	limit := "the reply length limit"
+	if budget := o.replyBudget(maxTokens); budget > 0 {
+		limit = fmt.Sprintf("the %d-token reply limit", budget)
+	}
+	return fmt.Sprintf(cutOffNudge, limit)
 }
 
 // describeTurn summarizes an empty turn for logs and errors.

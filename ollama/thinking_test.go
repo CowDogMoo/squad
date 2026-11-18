@@ -437,3 +437,69 @@ func TestToolResultCarriesToolName(t *testing.T) {
 		t.Fatalf("tool_name = %q, want get_weather", out[0].ToolName)
 	}
 }
+
+const (
+	// cutOffCallReply is a reply the budget ended mid tool call: Ollama
+	// returns neither the call nor any text, and there is no thinking.
+	cutOffCallReply = `{"model":"qwen3","message":{"role":"assistant","content":""},"done":true,"done_reason":"length","prompt_eval_count":48000,"eval_count":8192}`
+	// cutOffTextReply is the same with the text written before the call.
+	cutOffTextReply  = `{"model":"qwen3","message":{"role":"assistant","content":"Let me crack the signing key."},"done":true,"done_reason":"length","prompt_eval_count":48000,"eval_count":8192}`
+	stoppedTextReply = `{"model":"qwen3","message":{"role":"assistant","content":"All done."},"done":true,"done_reason":"stop","prompt_eval_count":40,"eval_count":4}`
+)
+
+// TestCutOffReplyIsRetriedWithAShortCallNudge is the regression test for a
+// VAmPI map run that ended after 11 of 50 iterations: qwen3 spent its whole
+// reply budget writing a tool call, the call was lost, and the text before
+// it (or nothing) was taken as the final answer.
+func TestCutOffReplyIsRetriedWithAShortCallNudge(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct{ name, first string }{
+		{"nothing left of the reply", cutOffCallReply},
+		{"only the text before the call left", cutOffTextReply},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f, srv := newFakeOllama(t, fakeReply{body: tt.first}, fakeReply{body: toolOnlyReply})
+			llm := New(srv.URL, "qwen3", 65536)
+			resp, err := llm.GenerateContent(context.Background(), userMsg("weather?"), weatherOpts()...)
+			if err != nil {
+				t.Fatalf("GenerateContent() error = %v", err)
+			}
+			if len(resp.Choices[0].ToolCalls) != 1 {
+				t.Fatalf("the retry's tool call must be returned, got %+v", resp.Choices[0])
+			}
+			reqs, _ := f.requests()
+			if len(reqs) != 2 {
+				t.Fatalf("requests = %d, want 2 (original + one retry)", len(reqs))
+			}
+			last := reqs[1].Messages[len(reqs[1].Messages)-1]
+			want := llm.cutOffNudge(1024)
+			if last.Role != "user" || last.Content != want {
+				t.Fatalf("retry must end with the cut-off nudge, got %+v", last)
+			}
+			if !strings.Contains(want, "1024-token reply limit") {
+				t.Fatalf("nudge must name the reply budget, got %q", want)
+			}
+			if reqs[1].Think || len(reqs[1].Tools) != 1 {
+				t.Fatalf("retry must have thinking off and keep the tools, got think=%v tools=%d", reqs[1].Think, len(reqs[1].Tools))
+			}
+		})
+	}
+}
+
+// TestFinishedTextReplyIsNotRetried checks that a text reply the model ended
+// itself is returned as is.
+func TestFinishedTextReplyIsNotRetried(t *testing.T) {
+	t.Parallel()
+	f, srv := newFakeOllama(t, fakeReply{body: stoppedTextReply})
+	resp, err := New(srv.URL, "qwen3", 65536).GenerateContent(context.Background(), userMsg("weather?"), weatherOpts()...)
+	if err != nil {
+		t.Fatalf("GenerateContent() error = %v", err)
+	}
+	if resp.Choices[0].Content != "All done." {
+		t.Fatalf("content = %q, want the reply", resp.Choices[0].Content)
+	}
+	if reqs, _ := f.requests(); len(reqs) != 1 {
+		t.Fatalf("requests = %d, want 1", len(reqs))
+	}
+}

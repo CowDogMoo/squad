@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tmc/langchaingo/llms"
@@ -428,15 +429,111 @@ func TestBuildChatRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("tool_choice none disables tools", func(t *testing.T) {
+	t.Run("tool_choice none keeps the tool definitions", func(t *testing.T) {
 		t.Parallel()
 		opts := llms.CallOptions{
-			ToolChoice: "none",
-			Tools:      []llms.Tool{{Function: &llms.FunctionDefinition{Name: "Echo"}}},
+			ToolChoice:    "none",
+			Tools:         []llms.Tool{{Function: &llms.FunctionDefinition{Name: "Echo"}}},
+			StreamingFunc: func(context.Context, []byte) error { return nil },
 		}
 		req := llm.buildChatRequest(nil, opts)
-		if len(req.Tools) != 0 {
-			t.Fatalf("expected no tools with ToolChoice=none, got %d", len(req.Tools))
+		if len(req.Tools) != 1 {
+			t.Fatalf("tools = %d, want 1: dropping them changes the prompt prefix and misses the server's cache", len(req.Tools))
+		}
+		if req.Stream {
+			t.Fatal("a request carrying tools must not stream")
+		}
+	})
+}
+
+// noToolCallServer answers each /api/chat request with the next canned body
+// and records the requests it was sent.
+func noToolCallServer(t *testing.T, bodies ...string) (*httptest.Server, *[]chatRequest) {
+	t.Helper()
+	var (
+		mu   sync.Mutex
+		reqs []chatRequest
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		reqs = append(reqs, req)
+		n := len(reqs)
+		mu.Unlock()
+		if n > len(bodies) {
+			http.Error(w, "no canned reply left", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(bodies[n-1]))
+	}))
+	t.Cleanup(server.Close)
+	return server, &reqs
+}
+
+func noToolCallOpts(streamFn func(context.Context, []byte) error) []llms.CallOption {
+	opts := []llms.CallOption{
+		llms.WithTools([]llms.Tool{{Function: &llms.FunctionDefinition{Name: "Echo", Description: "desc"}}}),
+		llms.WithToolChoice("none"),
+	}
+	if streamFn != nil {
+		opts = append(opts, llms.WithStreamingFunc(streamFn))
+	}
+	return opts
+}
+
+// TestGenerateContentToolChoiceNone covers an agent's final tool-less
+// request: it goes out with the tool definitions so the server's prompt
+// cache still matches, tool calls in the reply are dropped, and only a reply
+// with no text is asked again without the definitions.
+func TestGenerateContentToolChoiceNone(t *testing.T) {
+	t.Parallel()
+	messages := []llms.MessageContent{{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart("wrap up")}}}
+	const (
+		textAndCall = `{"message":{"role":"assistant","content":"final report","tool_calls":[{"function":{"name":"Echo","arguments":{}}}]},"done":true,"prompt_eval_count":2,"eval_count":3}`
+		callOnly    = `{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"Echo","arguments":{}}}]},"done":true,"prompt_eval_count":2,"eval_count":3}`
+		textOnly    = `{"message":{"role":"assistant","content":"asked again"},"done":true,"prompt_eval_count":2,"eval_count":3}`
+	)
+
+	t.Run("text is kept and tool calls are dropped in one request", func(t *testing.T) {
+		t.Parallel()
+		server, reqs := noToolCallServer(t, textAndCall)
+		var streamed []string
+		streamFn := func(_ context.Context, chunk []byte) error {
+			streamed = append(streamed, string(chunk))
+			return nil
+		}
+		resp, err := New(server.URL, "qwen3", 4096).GenerateContent(context.Background(), messages, noToolCallOpts(streamFn)...)
+		if err != nil {
+			t.Fatalf("GenerateContent() error = %v", err)
+		}
+		if got := resp.Choices[0]; got.Content != "final report" || len(got.ToolCalls) != 0 {
+			t.Fatalf("choice = %q with %d tool calls, want the text and none", got.Content, len(got.ToolCalls))
+		}
+		if len(*reqs) != 1 || len((*reqs)[0].Tools) != 1 || (*reqs)[0].Stream {
+			t.Fatalf("want one unstreamed request carrying the tools, got %+v", *reqs)
+		}
+		if len(streamed) != 1 || streamed[0] != "final report" {
+			t.Fatalf("streamed = %q, want the whole text once", streamed)
+		}
+	})
+
+	t.Run("a reply with only tool calls is asked again without tools", func(t *testing.T) {
+		t.Parallel()
+		server, reqs := noToolCallServer(t, callOnly, textOnly)
+		resp, err := New(server.URL, "qwen3", 4096).GenerateContent(context.Background(), messages, noToolCallOpts(nil)...)
+		if err != nil {
+			t.Fatalf("GenerateContent() error = %v", err)
+		}
+		if got := resp.Choices[0]; got.Content != "asked again" || len(got.ToolCalls) != 0 {
+			t.Fatalf("choice = %q with %d tool calls, want the second reply's text", got.Content, len(got.ToolCalls))
+		}
+		if len(*reqs) != 2 || len((*reqs)[0].Tools) != 1 || len((*reqs)[1].Tools) != 0 {
+			t.Fatalf("want a request with tools then one without, got %+v", *reqs)
 		}
 	})
 }
