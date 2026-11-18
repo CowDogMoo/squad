@@ -57,6 +57,16 @@ const cutOffNudge = "Your previous reply was cut off at %s, so any tool call in 
 	"in a file over several calls, or generate it with a short command, instead of writing it out in one reply. " +
 	"If you were writing your final answer, write it again more briefly."
 
+// cutOffAgainNote stands in for the reply when the retry after a cut-off is
+// cut off too. %s names the limit.
+const cutOffAgainNote = "[My reply was cut off at %s twice, before any tool call was complete, so nothing ran. " +
+	"I need to make a much shorter tool call, or give my final answer.]"
+
+// toolsOffNote answers each tool call in a reply to a tool_choice "none"
+// request, so the follow-up keeps the tool definitions (and the server's
+// prompt cache) and the model sees why nothing ran.
+const toolsOffNote = "Not run: tools are off now. Reply with your final answer as text, without calling a tool."
+
 // LLM implements llms.Model using Ollama's native /api/chat endpoint,
 // which supports both tool calling and the num_ctx parameter.
 type LLM struct {
@@ -177,7 +187,9 @@ func readFullResponse(body io.Reader) (chatResponse, error) {
 // text and no tool calls is retried once with thinking off and a nudge; a
 // second empty turn fails with [ErrEmptyTurn] instead of ending the agent
 // loop silently. A reply the budget cut off before any tool call (see
-// isCutOffTurn) is retried the same way, with a nudge to keep the call short.
+// isCutOffTurn) is retried the same way, with a nudge to keep the call short;
+// if the retry is cut off too, the agent loop gets a note saying so rather
+// than an error, since the model, not the server, keeps failing.
 func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error) {
 	opts := llms.CallOptions{}
 	for _, opt := range options {
@@ -230,18 +242,44 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	if !isEmptyTurn(second) {
 		return convertResponse(second), nil
 	}
+	if cutOff && isCutOffTurn(second) {
+		// The model keeps writing a call too long to finish. That is how it
+		// behaves, not a broken server, so the agent loop gets a reply saying
+		// so and decides (a text nudge, or a clean end) instead of the run
+		// failing with whatever it had recorded unreported.
+		logging.WarnContext(ctx, "ollama: %s's reply was cut off again after the retry (%s); passing a note to the agent loop instead of failing", o.model, describeTurn(second))
+		resp := convertResponse(second)
+		resp.Choices[0].Content = fmt.Sprintf(cutOffAgainNote, o.replyLimit(opts.MaxTokens))
+		return resp, nil
+	}
 	return nil, o.emptyTurnError(opts.MaxTokens, first, second)
 }
 
 // chatWithoutToolCalls sends a tool_choice "none" request with its tool
 // definitions kept (see buildChatRequest) and drops any tool calls from the
-// reply. answered is false when no text is left, so the caller can ask again
+// reply. A reply of tool calls alone is answered with a tool result for each
+// saying tools are off, and asked again with the definitions still kept.
+// answered is false when no text is left, so the caller can ask again
 // without the definitions. The reply is not streamed because tools are
 // present; streamFn, when set, receives the whole text once.
 func (o *LLM) chatWithoutToolCalls(ctx context.Context, reqBody chatRequest, streamFn func(ctx context.Context, chunk []byte) error) (*llms.ContentResponse, bool, error) {
 	resp, err := o.chat(ctx, reqBody, nil)
 	if err != nil {
 		return nil, false, err
+	}
+	if resp.Message != nil && strings.TrimSpace(resp.Message.Content) == "" && len(resp.Message.ToolCalls) > 0 {
+		// Asked for no tool calls, qwen3 often makes them anyway. Answering
+		// them keeps the conversation's prefix, and the server's cache, where
+		// asking again without the tool definitions would reprocess it all.
+		logging.InfoContext(ctx, "ollama: %s answered a request for no tool calls with %d tool call(s) only; answering them and asking again", o.model, len(resp.Message.ToolCalls))
+		follow := reqBody
+		follow.Messages = append(slices.Clone(reqBody.Messages), ollamaMessage{Role: "assistant", ToolCalls: resp.Message.ToolCalls})
+		for _, call := range resp.Message.ToolCalls {
+			follow.Messages = append(follow.Messages, ollamaMessage{Role: "tool", ToolName: call.Function.Name, Content: toolsOffNote})
+		}
+		if resp, err = o.chat(ctx, follow, nil); err != nil {
+			return nil, false, err
+		}
 	}
 	if resp.Message == nil || strings.TrimSpace(resp.Message.Content) == "" {
 		return nil, false, nil
@@ -359,11 +397,15 @@ func isCutOffTurn(resp chatResponse) bool {
 // cutOffNudge builds the retry nudge for a cut-off reply, naming the reply
 // budget a request made with maxTokens had.
 func (o *LLM) cutOffNudge(maxTokens int) string {
-	limit := "the reply length limit"
+	return fmt.Sprintf(cutOffNudge, o.replyLimit(maxTokens))
+}
+
+// replyLimit names the reply budget a request made with maxTokens had.
+func (o *LLM) replyLimit(maxTokens int) string {
 	if budget := o.replyBudget(maxTokens); budget > 0 {
-		limit = fmt.Sprintf("the %d-token reply limit", budget)
+		return fmt.Sprintf("the %d-token reply limit", budget)
 	}
-	return fmt.Sprintf(cutOffNudge, limit)
+	return "the reply length limit"
 }
 
 // describeTurn summarizes an empty turn for logs and errors.

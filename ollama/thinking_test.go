@@ -503,3 +503,46 @@ func TestFinishedTextReplyIsNotRetried(t *testing.T) {
 		t.Fatalf("requests = %d, want 1", len(reqs))
 	}
 }
+
+// TestCutOffTwiceIsPassedToTheLoop is the regression test for a Juice Shop
+// map run that failed after 3 iterations: qwen3 twice spent its whole reply
+// budget on a tool call, and the empty-turn error ended the run with nothing
+// reported. A second cut-off reaches the agent loop as a note instead.
+func TestCutOffTwiceIsPassedToTheLoop(t *testing.T) {
+	t.Parallel()
+	f, srv := newFakeOllama(t, fakeReply{body: cutOffCallReply}, fakeReply{body: cutOffCallReply})
+	llm := New(srv.URL, "qwen3", 65536)
+	resp, err := llm.GenerateContent(context.Background(), userMsg("weather?"), weatherOpts()...)
+	if err != nil {
+		t.Fatalf("a second cut-off must not fail the call, got %v", err)
+	}
+	got := resp.Choices[0]
+	if len(got.ToolCalls) != 0 || !strings.Contains(got.Content, "cut off at the 1024-token reply limit twice") {
+		t.Fatalf("want the cut-off note and no tool calls, got %+v", got)
+	}
+	if reqs, _ := f.requests(); len(reqs) != 2 {
+		t.Fatalf("requests = %d, want 2 (original + one retry)", len(reqs))
+	}
+}
+
+// TestEmptyTurnAfterACutOffStillFails checks the note is only for a reply cut
+// off again: a retry that comes back empty for another reason is an error.
+func TestEmptyTurnAfterACutOffStillFails(t *testing.T) {
+	t.Parallel()
+	_, srv := newFakeOllama(t, fakeReply{body: cutOffCallReply}, fakeReply{body: thinkingOnlyReply})
+	_, err := New(srv.URL, "qwen3", 65536).GenerateContent(context.Background(), userMsg("weather?"), weatherOpts()...)
+	if !errors.Is(err, ErrEmptyTurn) {
+		t.Fatalf("error = %v, want ErrEmptyTurn", err)
+	}
+}
+
+// TestReplyLimitWithoutABudget checks the wording when no reply budget is set.
+func TestReplyLimitWithoutABudget(t *testing.T) {
+	t.Parallel()
+	if got := New("http://x", "qwen3", 0).replyLimit(0); got != "the reply length limit" {
+		t.Fatalf("replyLimit = %q", got)
+	}
+	if got := New("http://x", "qwen3", 65536).replyLimit(1024); got != "the 1024-token reply limit" {
+		t.Fatalf("replyLimit = %q", got)
+	}
+}
