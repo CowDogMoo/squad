@@ -126,22 +126,17 @@ func TestStreamReaderWithoutObserver(t *testing.T) {
 	}
 }
 
-func TestStreamReaderKeepsTailAndRaw(t *testing.T) {
+func TestStreamReaderKeepsOnlyNonEventLinesRaw(t *testing.T) {
 	t.Parallel()
 	sr := &streamReader{}
-	long := strings.Repeat("x", stdoutTailBytes)
-	input := "plain text line\n" + long + "\n{\"type\":\"result\",\"is_error\":true,\"result\":\"boom\"}"
+	input := "plain text line\n" +
+		`{"type":"assistant","message":{"id":"m","content":[{"type":"text","text":"assistant prose"}]}}` + "\n" +
+		`{"type":"result","is_error":true,"result":"boom"}`
 	if err := sr.read(strings.NewReader(input)); err != nil {
 		t.Fatal(err)
 	}
-	if sr.tail.Len() > stdoutTailBytes {
-		t.Errorf("tail = %d bytes, want <= %d", sr.tail.Len(), stdoutTailBytes)
-	}
-	if !strings.HasSuffix(sr.tail.String(), `"result":"boom"}`) {
-		t.Errorf("tail lost the last line: %q", sr.tail.String()[sr.tail.Len()-40:])
-	}
-	if !strings.HasPrefix(sr.raw.String(), "plain text line\n") {
-		t.Errorf("raw = %q", sr.raw.String()[:20])
+	if sr.raw.String() != "plain text line\n" {
+		t.Errorf("raw = %q, want only the non-event line", sr.raw.String())
 	}
 	if !sr.resultSeen || sr.resErr == nil || !strings.Contains(sr.resErr.Error(), "boom") {
 		t.Errorf("error result not surfaced: seen=%v err=%v", sr.resultSeen, sr.resErr)
@@ -244,6 +239,67 @@ func TestRunStreamErrorResult(t *testing.T) {
 	}
 	if res.Turns != 1 || res.InputTokens != 3 {
 		t.Errorf("result = %+v, want usage kept on error", res)
+	}
+}
+
+// TestRunStreamFailureOmitsStreamContent checks a failed run's error carries
+// the CLI's stderr, its non-event stdout lines and its error result, but none
+// of the stream's assistant text, tool input or tool output.
+func TestRunStreamFailureOmitsStreamContent(t *testing.T) {
+	events := `{"type":"system","subtype":"init","session_id":"s"}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Reading TEXT-fixture"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cat INPUT-fixture"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"cat: OUTPUT-fixture: denied"}]}}
+plain diagnostic line
+`
+	tests := []struct {
+		name    string
+		stdout  string
+		wantErr string
+		want    []string
+	}{
+		{
+			name:    "no result event",
+			stdout:  events,
+			wantErr: "claude CLI failed: exit status 1",
+			want:    []string{"stderr: auth expired", "stdout: plain diagnostic line"},
+		},
+		{
+			name:    "error result",
+			stdout:  events + `{"type":"result","is_error":true,"num_turns":1,"result":"Credit balance is too low","usage":{"input_tokens":3}}` + "\n",
+			wantErr: "claude run failed: Credit balance is too low",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			out := filepath.Join(dir, "stdout.jsonl")
+			if err := os.WriteFile(out, []byte(tt.stdout), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			script := "#!/bin/sh\ncat > /dev/null\ncat \"" + out + "\"\necho 'auth expired' >&2\nexit 1\n"
+			if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			obs := &recordingObserver{}
+			_, err := Run(context.Background(), Request{Provider: "claude-code", UserPrompt: "x", WorkDir: dir, Observer: obs})
+			if err == nil || !strings.HasPrefix(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want prefix %q", err, tt.wantErr)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("err = %q, want it to contain %q", err, want)
+				}
+			}
+			for _, leak := range []string{"TEXT-fixture", "INPUT-fixture", "OUTPUT-fixture"} {
+				if strings.Contains(err.Error(), leak) {
+					t.Errorf("err = %q, leaks %q", err, leak)
+				}
+			}
+			if len(obs.assistant) != 1 || len(obs.results) != 1 {
+				t.Errorf("observer saw %d assistant and %d result events, want 1 and 1", len(obs.assistant), len(obs.results))
+			}
+		})
 	}
 }
 

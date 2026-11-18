@@ -1369,12 +1369,10 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 
 	toolName := toolCall.FunctionCall.Name
 	args := toolCall.FunctionCall.Arguments
-	argsSummary := toolArgsSummary(toolName, args)
 	ctx, rec := activity.StartTool(ctx, activity.ToolCall{
-		CallID:  toolCall.ID,
-		Name:    toolName,
-		Args:    args,
-		Summary: argsSummary,
+		CallID: toolCall.ID,
+		Name:   toolName,
+		Args:   args,
 	})
 
 	handler, ok := handlers[toolName]
@@ -1392,6 +1390,7 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 		return toolResponse
 	}
 
+	argsSummary := toolArgsSummary(toolName, args)
 	logging.InfoContext(ctx, "  → %s %s", toolName, argsSummary)
 	logging.DebugContext(ctx, "tool %s full args: %s", toolName, TruncateString(args, 500))
 	toolStart := time.Now()
@@ -1458,13 +1457,6 @@ var simpleArgKeys = map[string]string{
 	"Edit":      "path",
 	"MultiEdit": "path",
 	"Glob":      "pattern",
-}
-
-// ToolArgsSummary returns a short, human-readable summary of a tool call's
-// JSON arguments (the command for Bash, the path for Read, the pattern for
-// Grep), or "" when the tool has no summary or the arguments do not parse.
-func ToolArgsSummary(toolName, argsJSON string) string {
-	return toolArgsSummary(toolName, argsJSON)
 }
 
 func toolArgsSummary(toolName, argsJSON string) string {

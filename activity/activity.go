@@ -4,11 +4,10 @@
 // span tree have one shape whether squad runs the tool loop itself (API
 // providers) or reads it back from an agentic CLI (claude-code).
 //
-// events.jsonl is a local file and keeps full assistant text and tool
-// arguments. Spans may leave the machine, so by default they carry only
-// names, timing, sizes, token counts and errors; assistant text and argument
-// summaries are added only behind the telemetry opt-ins
-// (SQUAD_OTEL_EXPORT_TEXT, SQUAD_OTEL_EXPORT_COMMANDS).
+// events.jsonl is a local file and keeps full assistant text, tool
+// arguments and tool errors. Spans may leave the machine, so they carry only
+// names, timing, sizes, token counts and error status, never assistant text,
+// tool arguments or tool output.
 package activity
 
 import (
@@ -141,7 +140,7 @@ func (t *Turn) Context() context.Context { return t.ctx }
 func (t *Turn) Index() int { return t.index }
 
 // Record writes the turn's iteration and response events and sets the turn
-// span's token, finish-reason, size and (opt-in) text attributes.
+// span's token, finish-reason and size attributes.
 func (t *Turn) Record(res TurnResult) {
 	t.recordAt(res, time.Now())
 }
@@ -201,6 +200,7 @@ func (t *Turn) recordAt(res TurnResult, at time.Time) {
 		attribute.Int64("gen_ai.usage.cache_read.input_tokens", res.Usage.CacheReadTokens),
 		attribute.Int64("gen_ai.usage.cache_creation.input_tokens", res.Usage.CacheWriteTokens),
 		attribute.Int("squad.turn.tool_calls", res.ToolCalls),
+		attribute.Int("squad.turn.text_bytes", len(res.Text)),
 		attribute.Int("squad.turn.thinking_bytes", len(res.Thinking)),
 	}
 	if res.ThinkingTokens > 0 {
@@ -209,7 +209,6 @@ func (t *Turn) recordAt(res TurnResult, at time.Time) {
 	if res.FinishReason != "" {
 		attrs = append(attrs, attribute.StringSlice("gen_ai.response.finish_reasons", []string{res.FinishReason}))
 	}
-	attrs = append(attrs, telemetry.TextAttributes(res.Text)...)
 	t.span.SetAttributes(attrs...)
 }
 
@@ -260,9 +259,6 @@ type ToolCall struct {
 	// Args is the raw argument JSON. It is written to events.jsonl in
 	// full; spans only see its size.
 	Args string
-	// Summary is a short description of the arguments (a command, path or
-	// pattern) exported on the span only behind SQUAD_OTEL_EXPORT_COMMANDS.
-	Summary string
 	// Start is when the call began; zero means now.
 	Start time.Time
 	// ParentToolUseID, when set, names the tool call (a subagent dispatch)
@@ -281,14 +277,13 @@ func StartTool(ctx context.Context, call ToolCall) (context.Context, *Tool) {
 	if call.Iteration == 0 {
 		call.Iteration = TurnIndex(ctx)
 	}
-	attrs := []attribute.KeyValue{
-		attribute.String("squad.tool.name", call.Name),
-		attribute.String("squad.tool.call_id", call.CallID),
-	}
-	attrs = append(attrs, telemetry.ToolArgsAttributes(len(call.Args), call.Summary)...)
 	ctx, span := telemetry.Tracer().Start(ctx, "tool."+call.Name,
 		trace.WithTimestamp(start),
-		trace.WithAttributes(attrs...),
+		trace.WithAttributes(
+			attribute.String("squad.tool.name", call.Name),
+			attribute.String("squad.tool.call_id", call.CallID),
+			attribute.Int("squad.tool.args_bytes", len(call.Args)),
+		),
 	)
 	payload := map[string]any{
 		"call_id": call.CallID,
@@ -350,6 +345,10 @@ type Result struct {
 	Extra map[string]any
 }
 
+// toolErrorStatus is the span status description for a call that failed
+// with only ErrText.
+const toolErrorStatus = "tool returned an error"
+
 // Finish writes the tool_result event and closes the span with the output
 // size and error status.
 func (t *Tool) Finish(res Result) {
@@ -387,11 +386,12 @@ func (t *Tool) Finish(res Result) {
 		attribute.Int("squad.tool.output_bytes", res.OutputBytes),
 		attribute.Bool("squad.tool.denied", false),
 	)
-	if isError {
-		if res.Err != nil {
-			t.span.RecordError(res.Err)
-		}
+	switch {
+	case res.Err != nil:
+		t.span.RecordError(res.Err)
 		t.span.SetStatus(codes.Error, truncate(errText, 200))
+	case isError:
+		t.span.SetStatus(codes.Error, toolErrorStatus)
 	}
 	endSpan(t.span, end)
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/session"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -241,25 +242,80 @@ func TestClaudeActivityDenialsAndSubagents(t *testing.T) {
 	}
 }
 
-func TestClaudeArgsSummary(t *testing.T) {
-	tests := []struct {
-		name, tool, input, want string
-	}{
-		{"bash command", "Bash", `{"command":"ls -la"}`, "ls -la"},
-		{"claude file_path", "Read", `{"file_path":"/tmp/a.go"}`, "/tmp/a.go"},
-		{"url", "WebFetch", `{"url":"https://example.test","prompt":"x"}`, "https://example.test"},
-		{"nothing useful", "TodoWrite", `{"todos":[]}`, ""},
-		{"bad json", "Foo", `not json`, ""},
+func TestDeniedDecisions(t *testing.T) {
+	if denied("accept") || denied("") || !denied("reject") || !denied("deny") {
+		t.Error("denied() misclassifies decisions")
+	}
+}
+
+// TestFailedClaudeRunKeepsContentOffSpans runs a fake claude whose tool call
+// fails and whose run then fails, and checks that the assistant text, tool
+// input and tool output reach events.jsonl but no span.
+func TestFailedClaudeRunKeepsContentOffSpans(t *testing.T) {
+	stream := `{"type":"system","subtype":"init","session_id":"cc-fail","model":"claude-haiku-5-5"}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Reading TEXT-fixture"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cat INPUT-fixture"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"cat: OUTPUT-fixture: denied"}]}}
+`
+	tests := []struct{ name, stdout string }{
+		{"no result event", stream},
+		{"error result", stream + `{"type":"result","is_error":true,"num_turns":1,"result":"Credit balance is too low"}` + "\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := claudeArgsSummary(tt.tool, json.RawMessage(tt.input)); got != tt.want {
-				t.Errorf("claudeArgsSummary = %q, want %q", got, tt.want)
+			ctx, rec, l := recordClaude(t)
+			binDir := t.TempDir()
+			out := filepath.Join(binDir, "stdout.jsonl")
+			if err := os.WriteFile(out, []byte(tt.stdout), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			script := "#!/bin/sh\ncat > /dev/null\ncat \"" + out + "\"\necho 'auth expired' >&2\nexit 1\n"
+			if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			_, _, err := InvokeModel(ctx, &RunOptions{Provider: "claude-code"}, &agent.Bundle{System: "sys", User: "go", WorkDir: t.TempDir()})
+			if err == nil {
+				t.Fatal("InvokeModel succeeded, want the CLI failure")
+			}
+
+			leaks := []string{"TEXT-fixture", "INPUT-fixture", "OUTPUT-fixture"}
+			names := map[string]sdktrace.ReadOnlySpan{}
+			for _, s := range rec.Ended() {
+				names[s.Name()] = s
+				var exported []string
+				for _, kv := range s.Attributes() {
+					exported = append(exported, kv.Value.Emit())
+				}
+				exported = append(exported, s.Status().Description)
+				for _, ev := range s.Events() {
+					exported = append(exported, ev.Name)
+					for _, kv := range ev.Attributes {
+						exported = append(exported, kv.Value.Emit())
+					}
+				}
+				for _, leak := range leaks {
+					if text := strings.Join(exported, "\n"); strings.Contains(text, leak) {
+						t.Errorf("span %s exports %q:\n%s", s.Name(), leak, text)
+					}
+				}
+			}
+			for _, name := range []string{"agent.invoke", "tool.Bash"} {
+				if s, ok := names[name]; !ok || s.Status().Code != codes.Error {
+					t.Errorf("%s span missing or not marked failed", name)
+				}
+			}
+
+			b, err := os.ReadFile(filepath.Join(l.Dir(), "events.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range leaks {
+				if !strings.Contains(string(b), want) {
+					t.Errorf("events.jsonl is missing %q", want)
+				}
 			}
 		})
-	}
-	if denied("accept") || denied("") || !denied("reject") || !denied("deny") {
-		t.Error("denied() misclassifies decisions")
 	}
 }
 

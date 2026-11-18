@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cowdogmoo/squad/logging"
 )
 
 // Observer receives the activity decoded from a claude stream-json session.
@@ -280,10 +281,6 @@ func toolResultText(raw json.RawMessage) string {
 	return strings.Join(parts, "\n")
 }
 
-// stdoutTailBytes is how much trailing stdout runClaudeStream keeps for
-// error messages.
-const stdoutTailBytes = 4096
-
 // runClaudeStream runs claude single-shot with stream-json output, feeding
 // obs as events arrive, and returns the terminal result exactly as the
 // `--output-format json` envelope would have produced it.
@@ -305,20 +302,23 @@ func runClaudeStream(ctx context.Context, spec Spec, path string, req Request) (
 	sr := &streamReader{obs: req.Observer}
 	readErr := sr.read(stdout)
 	waitErr := cmd.Wait()
+	if sr.resultSeen {
+		if waitErr != nil && sr.resErr == nil {
+			logging.Warn("%s exited uncleanly after its result: %v", spec.Binary, waitErr)
+		}
+		return sr.res, sr.resErr
+	}
 	if waitErr != nil {
 		return Result{}, fmt.Errorf("%s CLI failed: %w%s", spec.Binary, waitErr,
-			outputTail(stderr.Bytes(), sr.tail.Bytes()))
+			outputTail(stderr.Bytes(), sr.raw.Bytes()))
 	}
 	if readErr != nil {
 		return Result{}, fmt.Errorf("%s CLI failed: read stdout: %w", spec.Binary, readErr)
 	}
-	if !sr.resultSeen {
-		// No result event: a CLI that ignored stream-json and printed the
-		// plain JSON envelope, or text. parseOutput handles both exactly as
-		// the json output format always has.
-		return parseOutput(spec.Provider, sr.raw.Bytes())
-	}
-	return sr.res, sr.resErr
+	// No result event: a CLI that ignored stream-json and printed the
+	// plain JSON envelope, or text. parseOutput handles both exactly as the
+	// json output format always has.
+	return parseOutput(spec.Provider, sr.raw.Bytes())
 }
 
 // streamReader consumes a single-shot stream-json stdout.
@@ -330,8 +330,6 @@ type streamReader struct {
 	// raw collects lines that are not stream-json events, parsed as the
 	// output when no result event arrives.
 	raw bytes.Buffer
-	// tail keeps the last stdoutTailBytes of stdout for error messages.
-	tail bytes.Buffer
 }
 
 func (sr *streamReader) read(r io.Reader) error {
@@ -339,7 +337,6 @@ func (sr *streamReader) read(r io.Reader) error {
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
-			sr.keepTail(line)
 			sr.handle(bytes.TrimSpace(line))
 		}
 		if err != nil {
@@ -348,13 +345,6 @@ func (sr *streamReader) read(r io.Reader) error {
 			}
 			return err
 		}
-	}
-}
-
-func (sr *streamReader) keepTail(line []byte) {
-	sr.tail.Write(line)
-	if over := sr.tail.Len() - stdoutTailBytes; over > 0 {
-		sr.tail.Next(over)
 	}
 }
 

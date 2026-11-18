@@ -524,10 +524,9 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 	logger := session.FromContext(ctx)
 	for _, call := range calls {
 		callCtx, rec := activity.StartTool(ctx, activity.ToolCall{
-			CallID:  call.CallID,
-			Name:    call.Name,
-			Args:    call.Arguments,
-			Summary: tools.ToolArgsSummary(call.Name, call.Arguments),
+			CallID: call.CallID,
+			Name:   call.Name,
+			Args:   call.Arguments,
 		})
 		output := runResponsesTool(callCtx, rec, call, handlers, logger)
 		outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{

@@ -14,13 +14,6 @@ import (
 // to "1". Otherwise command attributes carry only the executable name.
 const ExportCommandsEnv = "SQUAD_OTEL_EXPORT_COMMANDS"
 
-// ExportTextEnv opts in to exporting assistant text on turn spans when set to
-// "1". Otherwise turn spans carry only the text's size.
-const ExportTextEnv = "SQUAD_OTEL_EXPORT_TEXT"
-
-// maxExportedTextBytes caps the opt-in assistant text.
-const maxExportedTextBytes = 1000
-
 // maxExportedCommandBytes caps the opt-in command text.
 const maxExportedCommandBytes = 1000
 
@@ -34,32 +27,6 @@ const ComplexCommand = "complex"
 // exportFullCommands reports whether ExportCommandsEnv is set to "1".
 func exportFullCommands() bool {
 	return os.Getenv(ExportCommandsEnv) == "1"
-}
-
-// ToolArgsAttributes returns the span attributes describing a tool call's
-// arguments. By default that is only squad.tool.args_bytes, the size of the
-// raw arguments. With SQUAD_OTEL_EXPORT_COMMANDS=1 and a non-empty summary
-// (the tool's one-line description of its arguments, such as a path or a
-// pattern), it adds squad.tool.args holding the summary after RedactCommand,
-// truncated to 1000 bytes.
-func ToolArgsAttributes(argsBytes int, summary string) []attribute.KeyValue {
-	attrs := []attribute.KeyValue{attribute.Int("squad.tool.args_bytes", argsBytes)}
-	if exportFullCommands() && summary != "" {
-		attrs = append(attrs, attribute.String("squad.tool.args", truncate(RedactCommand(summary), maxExportedCommandBytes)))
-	}
-	return attrs
-}
-
-// TextAttributes returns the span attributes describing a model turn's
-// assistant text. By default that is only squad.turn.text_bytes. With
-// SQUAD_OTEL_EXPORT_TEXT=1 and non-empty text, it adds squad.turn.text
-// holding the text after RedactCommand, truncated to 1000 bytes.
-func TextAttributes(text string) []attribute.KeyValue {
-	attrs := []attribute.KeyValue{attribute.Int("squad.turn.text_bytes", len(text))}
-	if os.Getenv(ExportTextEnv) == "1" && text != "" {
-		attrs = append(attrs, attribute.String("squad.turn.text", truncate(RedactCommand(text), maxExportedTextBytes)))
-	}
-	return attrs
 }
 
 // CommandAttributes returns the span attributes describing a shell command:

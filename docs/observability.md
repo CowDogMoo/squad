@@ -262,8 +262,10 @@ Errors are recorded on the relevant span so you can filter to failed spans in Ja
 
 ### Span attributes
 
-By default spans carry names, timing, sizes, token counts and errors, but no
-assistant text and no tool arguments:
+Spans carry names, timing, sizes, token counts and errors, but no assistant
+text and no tool output, and by default no tool arguments (the one opt-in is
+described under shell command attributes below). `events.jsonl` keeps all of
+them in full locally:
 
 | Span | Attributes |
 |---|---|
@@ -273,6 +275,13 @@ assistant text and no tool arguments:
 | `chat <model>` | `gen_ai.operation.name=chat`, `gen_ai.provider.name`, `gen_ai.system`, `gen_ai.request.model`, `squad.turn.index`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, `gen_ai.response.finish_reasons`, `squad.turn.tool_calls`, `squad.turn.text_bytes`, `squad.turn.thinking_bytes`, `squad.turn.thinking_tokens` |
 | `tool.<Name>` | `squad.tool.name`, `squad.tool.call_id`, `squad.tool.args_bytes`, `squad.tool.output_bytes`, `squad.tool.denied`, `squad.tool.denied_reason`, error status; Bash also `squad.tool.command` (see below) |
 
+A tool call that failed has an error status. When the error is only the
+tool's own output, as with `claude-code` tool results, the status reads
+`tool returned an error` and the output itself is only in `events.jsonl`. A
+failed `claude-code` run puts the CLI's error result on `agent.invoke`, or,
+when there is none, its stderr and any stdout lines that are not stream-json
+events. The stream's turns and tool calls never reach the error.
+
 `gen_ai.provider.name` and `gen_ai.system` both hold squad's provider name
 (`ollama`, `claude-code`, ...). `gen_ai.system` is kept for backends that still
 read the older attribute.
@@ -281,19 +290,6 @@ On `claude-code` turns the token counts are the ones the CLI streams with each
 message, which it reports at the start of the message. `output_tokens` can
 therefore be lower than the turn's final count; the run totals on
 `agent.invoke` are exact.
-
-### Exporting arguments and assistant text
-
-Two environment variables add content to spans. Both apply squad's
-best-effort redaction (described below) and truncate the value to 1000 bytes:
-
-| Variable | Adds |
-|---|---|
-| `SQUAD_OTEL_EXPORT_COMMANDS=1` | Full Bash commands in `squad.tool.command` and `squad.executor.command`, and `squad.tool.args` on every tool span: a one-line summary of the call's arguments (the command, file path, pattern or URL) |
-| `SQUAD_OTEL_EXPORT_TEXT=1` | `squad.turn.text` on turn spans: the assistant's text for the turn |
-
-Any other value leaves the default on. Neither variable changes
-`events.jsonl`, which always keeps full text and arguments locally.
 
 ### Shell command attributes
 

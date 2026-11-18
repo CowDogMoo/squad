@@ -2,7 +2,7 @@ package runner
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -10,7 +10,6 @@ import (
 	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/agenticcli"
 	"github.com/cowdogmoo/squad/session"
-	"github.com/cowdogmoo/squad/tools"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -202,7 +201,7 @@ func (a *claudeActivity) close(at time.Time) {
 	}
 	a.flushAll()
 	for id, ct := range a.tools {
-		ct.tool.Finish(activity.Result{ErrText: "no tool result before the run ended", End: at})
+		ct.tool.Finish(activity.Result{Err: errors.New("no tool result before the run ended"), End: at})
 		delete(a.tools, id)
 	}
 	for _, th := range a.threads {
@@ -301,13 +300,11 @@ func (a *claudeActivity) record(th *claudeThread) {
 
 func (a *claudeActivity) startPending(th *claudeThread) {
 	for _, p := range th.pending {
-		args := string(p.use.Input)
 		ctx, tool := activity.StartTool(th.turn.Context(), activity.ToolCall{
 			Iteration:       th.index,
 			CallID:          p.use.ID,
 			Name:            p.use.Name,
-			Args:            args,
-			Summary:         claudeArgsSummary(p.use.Name, p.use.Input),
+			Args:            string(p.use.Input),
 			Start:           p.at,
 			ParentToolUseID: th.parentID,
 		})
@@ -338,26 +335,4 @@ func denied(decision string) bool {
 		return false
 	}
 	return true
-}
-
-// claudeArgSummaryKeys are the claude-code argument names that describe a
-// call in one line, tried in order when squad's own summary has nothing.
-var claudeArgSummaryKeys = []string{"command", "file_path", "path", "pattern", "url", "query", "description"}
-
-// claudeArgsSummary is squad's tool-argument summary extended to Claude
-// Code's argument names (file_path for Read/Write/Edit, url for WebFetch).
-func claudeArgsSummary(name string, input json.RawMessage) string {
-	if s := tools.ToolArgsSummary(name, string(input)); s != "" {
-		return s
-	}
-	var args map[string]any
-	if err := json.Unmarshal(input, &args); err != nil {
-		return ""
-	}
-	for _, k := range claudeArgSummaryKeys {
-		if v, ok := args[k].(string); ok && v != "" {
-			return tools.TruncateString(v, 200)
-		}
-	}
-	return ""
 }

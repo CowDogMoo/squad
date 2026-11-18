@@ -89,7 +89,6 @@ const secretArg = "pass" + "w0rd-fixture"
 
 func TestTurnParentsToolsAndWritesEvents(t *testing.T) {
 	t.Setenv(telemetry.ExportCommandsEnv, "")
-	t.Setenv(telemetry.ExportTextEnv, "")
 	ctx, rec, l := setup(t)
 	r := Recorder{Provider: "ollama", Model: "qwen"}
 	ctx = WithRecorder(ctx, r)
@@ -110,7 +109,7 @@ func TestTurnParentsToolsAndWritesEvents(t *testing.T) {
 		ToolCalls:    2,
 	})
 	args := `{"command":"curl -u admin:` + secretArg + ` http://lab.test"}`
-	_, ok := StartTool(turn.Context(), ToolCall{CallID: "c1", Name: "Bash", Args: args, Summary: "curl -u admin:" + secretArg + " http://lab.test"})
+	_, ok := StartTool(turn.Context(), ToolCall{CallID: "c1", Name: "Bash", Args: args})
 	ok.Finish(Result{OutputBytes: 12})
 	_, bad := StartTool(turn.Context(), ToolCall{CallID: "c2", Name: "Write", Args: `{"path":"x"}`})
 	bad.Deny(DeniedReadOnly, "error: Write is not permitted in readonly mode")
@@ -128,8 +127,8 @@ func TestTurnParentsToolsAndWritesEvents(t *testing.T) {
 	if got := ta["gen_ai.response.finish_reasons"].AsStringSlice(); len(got) != 1 || got[0] != "stop" {
 		t.Errorf("finish reasons = %v", got)
 	}
-	if _, has := ta["squad.turn.text"]; has {
-		t.Error("assistant text exported without the opt-in")
+	if ta["squad.turn.text_bytes"].AsInt64() != int64(len(text)) {
+		t.Errorf("squad.turn.text_bytes = %d, want %d", ta["squad.turn.text_bytes"].AsInt64(), len(text))
 	}
 
 	var tools []sdktrace.ReadOnlySpan
@@ -190,23 +189,59 @@ func TestTurnParentsToolsAndWritesEvents(t *testing.T) {
 	}
 }
 
-func TestOptInExportsRedactedContent(t *testing.T) {
+// spanText returns every string a span would export: attribute values,
+// status description, and event names and attributes.
+func spanText(s sdktrace.ReadOnlySpan) string {
+	var sb strings.Builder
+	for _, kv := range s.Attributes() {
+		sb.WriteString(kv.Value.Emit() + "\n")
+	}
+	sb.WriteString(s.Status().Description + "\n")
+	for _, ev := range s.Events() {
+		sb.WriteString(ev.Name + "\n")
+		for _, kv := range ev.Attributes {
+			sb.WriteString(kv.Value.Emit() + "\n")
+		}
+	}
+	return sb.String()
+}
+
+// TestFailingToolKeepsContentOffSpans checks that, even with the commands
+// opt-in on, a failing tool's input and output and the turn's assistant text
+// reach events.jsonl but no span.
+func TestFailingToolKeepsContentOffSpans(t *testing.T) {
 	t.Setenv(telemetry.ExportCommandsEnv, "1")
-	t.Setenv(telemetry.ExportTextEnv, "1")
-	ctx, rec, _ := setup(t)
+	ctx, rec, l := setup(t)
+	text := "Reading the notes in TEXT-" + secretArg
+	input := `{"file_path":"/srv/INPUT-` + secretArg + `"}`
+	output := "Error: file /srv/OUTPUT-" + secretArg + " is unreadable"
 	turn := Recorder{Provider: "claude-code", Model: "haiku"}.StartTurn(ctx, 1, time.Time{})
-	turn.Record(TurnResult{Text: "trying password=" + secretArg})
-	_, tool := StartTool(turn.Context(), ToolCall{CallID: "c", Name: "Bash", Args: "{}", Summary: "mysql --password=" + secretArg})
-	tool.Finish(Result{})
+	turn.Record(TurnResult{Text: text, ToolCalls: 1})
+	_, tool := StartTool(turn.Context(), ToolCall{CallID: "c", Name: "Read", Args: input})
+	tool.Finish(Result{OutputBytes: len(output), ErrText: output})
 	turn.End()
 
-	ta := attrs(spanNamed(t, rec, "chat haiku"))
-	if txt := ta["squad.turn.text"].AsString(); txt == "" || strings.Contains(txt, secretArg) {
-		t.Errorf("squad.turn.text = %q, want present and redacted", txt)
+	for _, s := range rec.Ended() {
+		got := spanText(s)
+		for _, leak := range []string{"TEXT-", "INPUT-", "OUTPUT-", secretArg} {
+			if strings.Contains(got, leak) {
+				t.Errorf("span %s exports %q:\n%s", s.Name(), leak, got)
+			}
+		}
 	}
-	ba := attrs(spanNamed(t, rec, "tool.Bash"))
-	if a := ba["squad.tool.args"].AsString(); a == "" || strings.Contains(a, secretArg) {
-		t.Errorf("squad.tool.args = %q, want present and redacted", a)
+	read := spanNamed(t, rec, "tool.Read")
+	if read.Status().Code != codes.Error || read.Status().Description != toolErrorStatus {
+		t.Errorf("tool span status = %+v, want an error with the fixed description", read.Status())
+	}
+
+	b, err := os.ReadFile(filepath.Join(l.Dir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"TEXT-", "INPUT-", "OUTPUT-"} {
+		if !strings.Contains(string(b), want+secretArg) {
+			t.Errorf("events.jsonl is missing the %s content", want)
+		}
 	}
 }
 

@@ -597,8 +597,7 @@ All config keys are available as `SQUAD_*` env vars (replace `.` with `_`, upper
 
 | Variable                     | Description                                                                                                   |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `SQUAD_OTEL_EXPORT_COMMANDS` | Set to `1` to export full shell commands and tool-argument summaries on spans, with best-effort redaction (default: executable name and argument size only) |
-| `SQUAD_OTEL_EXPORT_TEXT`     | Set to `1` to export each model turn's assistant text on spans, with best-effort redaction (default: text size only) |
+| `SQUAD_OTEL_EXPORT_COMMANDS` | Set to `1` to export full shell commands on spans, with best-effort redaction (default: executable name only) |
 
 ### OpenAI-Compatible Endpoints
 
