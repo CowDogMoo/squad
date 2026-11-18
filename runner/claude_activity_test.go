@@ -23,6 +23,7 @@ import (
 )
 
 type claudeEvent struct {
+	Ts      time.Time      `json:"ts"`
 	Type    string         `json:"type"`
 	TraceID string         `json:"trace_id"`
 	SpanID  string         `json:"span_id"`
@@ -110,16 +111,21 @@ func TestClaudeActivityRecordsTurnsAndTools(t *testing.T) {
 		t.Errorf("claude_session_id = %q", got)
 	}
 	evs := claudeEvents(t, l)
-	want := "iteration,response,tool_call,tool_call,tool_result,tool_result,iteration,response"
+	want := "tool_call,tool_call,tool_result,tool_result,iteration,response,iteration,response"
 	if got := eventTypes(evs); got != want {
 		t.Fatalf("events = %s, want %s", got, want)
 	}
-	resp := evs[1].Payload
+	for i, start := range map[int]time.Time{4: ts(0), 5: ts(0), 6: ts(5), 7: ts(5)} {
+		if !evs[i].Ts.Equal(start) {
+			t.Errorf("%s event ts = %v, want the turn's start %v", evs[i].Type, evs[i].Ts, start)
+		}
+	}
+	resp := evs[5].Payload
 	if resp["text"] != "I'll look." || resp["thinking_tokens"].(float64) != 44 || resp["cache_read_tokens"].(float64) != 100 || resp["tool_calls"].(float64) != 2 {
 		t.Errorf("first response = %v", resp)
 	}
-	if evs[5].Payload["is_error"] != true || evs[5].Payload["error"] != "tool returned an error" {
-		t.Errorf("error tool_result = %v", evs[5].Payload)
+	if evs[3].Payload["is_error"] != true || evs[3].Payload["error"] != "tool returned an error" {
+		t.Errorf("error tool_result = %v", evs[3].Payload)
 	}
 	if evs[7].Payload["finish_reason"] != "end_turn" || evs[7].Payload["text"] != "Done." {
 		t.Errorf("final response = %v", evs[7].Payload)
@@ -368,7 +374,7 @@ func TestInvokeAgenticCLIRecordsStream(t *testing.T) {
 		t.Errorf("response = %q, iterations = %d, output = %d", resp, m.Iterations(), m.OutputTokens())
 	}
 	evs := claudeEvents(t, l)
-	want := "iteration,response,tool_call,tool_call,tool_result,tool_result,iteration,response,tool_call,tool_denied,iteration,response"
+	want := "tool_call,tool_call,tool_result,tool_result,iteration,response,tool_call,tool_denied,iteration,response,iteration,response"
 	if got := eventTypes(evs); got != want {
 		t.Errorf("events = %s\nwant     %s", got, want)
 	}
@@ -377,36 +383,52 @@ func TestInvokeAgenticCLIRecordsStream(t *testing.T) {
 	}
 }
 
-// TestClaudeActivityFlushesAfterQuietPeriod checks a tool call reaches
-// events.jsonl while the tool is still running, not only once its result
-// arrives.
-func TestClaudeActivityFlushesAfterQuietPeriod(t *testing.T) {
-	prev := claudeFlushDelay
-	claudeFlushDelay = 10 * time.Millisecond
-	t.Cleanup(func() { claudeFlushDelay = prev })
-	ctx, _, l := recordClaude(t)
+// TestClaudeTurnCountsSlowToolUseBlocks checks a message whose second
+// tool_use block arrives more than 750 ms after the first records both calls,
+// and the stop reason and usage from its last block, on the turn's events and
+// span.
+func TestClaudeTurnCountsSlowToolUseBlocks(t *testing.T) {
+	ctx, rec, l := recordClaude(t)
 	a := newClaudeActivity(ctx, "haiku")
-	a.Assistant(agenticcli.AssistantMessage{ID: "m1", Time: time.Now(), Text: []string{"Running the scan."}, ToolUses: []agenticcli.ToolUse{
-		{ID: "t1", Name: "Bash", Input: json.RawMessage(`{"command":"sleep 600"}`)},
+	a.Assistant(agenticcli.AssistantMessage{ID: "m1", Time: time.Now(), Text: []string{"Running two checks."}, ToolUses: []agenticcli.ToolUse{
+		{ID: "t1", Name: "Bash", Input: json.RawMessage(`{"command":"cat notes.txt"}`)},
 	}})
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if got := eventTypes(claudeEvents(t, l)); got == "iteration,response,tool_call" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("events = %q, want the tool call recorded before its result", eventTypes(claudeEvents(t, l)))
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	// A late block of the same message still starts its tool call.
-	a.Assistant(agenticcli.AssistantMessage{ID: "m1", Time: time.Now(), ToolUses: []agenticcli.ToolUse{
-		{ID: "t2", Name: "Read", Input: json.RawMessage(`{"file_path":"x"}`)},
-	}})
+	time.Sleep(800 * time.Millisecond)
+	a.Assistant(agenticcli.AssistantMessage{ID: "m1", Time: time.Now(), StopReason: "tool_use",
+		Usage: agenticcli.MessageUsage{InputTokens: 3, OutputTokens: 40}, ToolUses: []agenticcli.ToolUse{
+			{ID: "t2", Name: "Read", Input: json.RawMessage(`{"file_path":"x"}`)},
+		}})
 	a.ToolResults([]agenticcli.ToolResult{{ToolUseID: "t1", Time: time.Now()}, {ToolUseID: "t2", Time: time.Now()}})
+	a.Assistant(agenticcli.AssistantMessage{ID: "m2", Time: time.Now(), Text: []string{"Done."}, StopReason: "end_turn"})
 	a.close(time.Now())
-	if got := eventTypes(claudeEvents(t, l)); got != "iteration,response,tool_call,tool_call,tool_result,tool_result" {
-		t.Errorf("events = %s", got)
+
+	evs := claudeEvents(t, l)
+	if got := eventTypes(evs); got != "tool_call,tool_call,tool_result,tool_result,iteration,response,iteration,response" {
+		t.Fatalf("events = %s", got)
+	}
+	if n := evs[4].Payload["tool_calls"].(float64); n != 2 {
+		t.Errorf("iteration tool_calls = %v, want 2", n)
+	}
+	if !evs[4].Ts.Equal(a.started.UTC()) {
+		t.Errorf("iteration ts = %v, want the turn's start %v", evs[4].Ts, a.started.UTC())
+	}
+	resp := evs[5].Payload
+	if resp["tool_calls"].(float64) != 2 || resp["finish_reason"] != "tool_use" || resp["output_tokens"].(float64) != 40 {
+		t.Errorf("response = %v, want 2 tool calls with the last block's stop reason and usage", resp)
+	}
+	var first sdktrace.ReadOnlySpan
+	for _, s := range rec.Ended() {
+		if s.Name() == "chat haiku" && (first == nil || s.StartTime().Before(first.StartTime())) {
+			first = s
+		}
+	}
+	if first == nil {
+		t.Fatal("no turn span")
+	}
+	for _, kv := range first.Attributes() {
+		if kv.Key == "squad.turn.tool_calls" && kv.Value.AsInt64() != 2 {
+			t.Errorf("squad.turn.tool_calls = %d, want 2", kv.Value.AsInt64())
+		}
 	}
 }
 
@@ -453,9 +475,6 @@ func TestClaudeRunWithoutResultEndsOpenCallsAtExit(t *testing.T) {
 // message arrives before its dispatching message was flushed still nests
 // under the Task span and starts with the Task call.
 func TestClaudeSubagentBeforeFlushNestsUnderTask(t *testing.T) {
-	prev := claudeFlushDelay
-	claudeFlushDelay = time.Hour
-	t.Cleanup(func() { claudeFlushDelay = prev })
 	ctx, rec, l := recordClaude(t)
 	a := newClaudeActivity(ctx, "sonnet")
 	a.started = ts(0)

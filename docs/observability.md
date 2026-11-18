@@ -6,8 +6,8 @@ Start here when something goes wrong:
 
 | Symptom | First step |
 |---|---|
-| Run failed or behaved unexpectedly | `squad watch --once <id>`, or read `events.jsonl` in the session directory (`squad sessions open <id>`) |
-| Need to see what the agent is doing in real time | `squad watch` in a second terminal, or `squad run --agent go-review --stream` |
+| Run failed or behaved unexpectedly | Read `events.jsonl` in the session directory (`squad sessions open <id>`) |
+| Need to see what the agent is doing in real time | `squad ui`, or `squad run --agent go-review --stream` |
 | Logs too noisy | `squad run --log-level warn ...` |
 | Need full debug output | `squad run --log-level debug ...` or `-v` |
 | Need traces in Jaeger or Grafana Tempo | `squad run --otel-endpoint localhost:4318 ...` |
@@ -62,6 +62,10 @@ from the CLI's stream-json output.
 | `tool_denied` | When a tool call is refused before it runs | `call_id`, `name`, `reason` (`readonly`, `sign_off`, `skill_allowed_tools`, or `permission` for a refusal the claude CLI reported), `message` (what the model was told), `iteration` |
 | `error` | When a model call or the agentic CLI fails | `phase` (`generate`, `final`, `cli`), `iteration`, `error` |
 
+On `claude-code` runs a turn's `iteration` and `response` events are written
+when the turn ends, after its tool events, so they hold its final tool-call
+count, stop reason and usage. They are stamped with the turn's start time, so
+sorting by `ts` puts each turn before its tool calls.
 Events from a claude-code subagent (a `Task` call inside the CLI) also carry
 `parent_tool_use_id`, the id of the tool call that started the subagent.
 Events from a child agent started by squad's `Task` tool share the parent's
@@ -83,39 +87,6 @@ Events written outside any span, such as `run_end`, carry only the run's trace
 id. squad assigns the ids even when no trace exporter is configured.
 
 When a tool result exceeds 8 KiB on the OpenAI Responses path it is written to `results/<id>.txt` and the result sent to the model becomes a placeholder. The model can re-fetch it via the `get_tool_result` tool.
-
-### squad watch
-
-`squad watch` prints a session's events as one line each and keeps following
-the session until the run ends:
-
-```bash
-squad watch                   # latest session for this repository
-squad watch 20261118T160355Z-ca6214b3
-squad watch --once <id>       # print what is recorded so far and exit
-squad watch ~/.local/state/squad/sessions/<id>   # a session directory
-```
-
-```text
-session 20261118T162403Z-9bf04fdd · agent=probe provider=claude-code model=haiku
-trace_id 952638b4393c6dd0e2aacfd9c83fe1db
-claude_session_id 57acaab9-8a20-4f36-84e1-5d68e779deba
-09:24:03  run_start     started · agent=probe model=haiku
-09:24:06  iteration     iter 1 · 2 tool calls
-09:24:06  response      response (iter 1) · +2 in / +4 out · I'll check the contents of `notes.txt` and whether the local endpoint on port 9 responds.
-09:24:06  tool_call     Bash  {"command":"cat notes.txt","description":"Print contents of notes.txt"}
-09:24:06  tool_call     Bash  {"command":"curl -s -m 2 -H \"Authorization: Bearer <token>\" http://…
-09:24:06  tool_result   result · Bash · 10 B · 1092ms
-09:24:06  tool_result   result · Bash · 11 B · 789ms
-09:24:08  iteration     iter 2 · 1 tool calls
-09:24:08  response      response (iter 2) · +2 in / +4 out · I'll list `/definitely-missing-dir` to confirm that a nonexistent path produces an error.
-09:24:08  tool_call     Bash  {"command":"ls /definitely-missing-dir","description":"List a nonexistent direc…
-09:24:08  tool_result   result · Bash · 66 B · 34ms · error: Exit code 1 ls: /definitely-missing-dir: No such file or di…
-09:24:09  iteration     iter 3 · 0 tool calls
-09:24:09  response      response (iter 3) · +2 in / +8 out · `notes.txt` contains "alpha" and "beta", the probe to 127.0.0.1:9 returned nothing so the fallback …
-09:24:09  run_end       ended · completed
-status=completed · 3 turns · 3 tool calls (1 failed, 0 denied) · 0 errors
-```
 
 ### meta.json
 

@@ -274,20 +274,26 @@ func (l *Logger) Append(eventType string, payload any) error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.appendLocked(eventType, "", "", payload)
+	return l.appendLocked(time.Time{}, eventType, "", "", payload)
 }
 
 // AppendContext records an event like Append, stamping it with the trace and
 // span ids of the span active on ctx. Without a valid span on ctx it falls
 // back to the session's root trace id. Safe to call on a nil Logger.
 func (l *Logger) AppendContext(ctx context.Context, eventType string, payload any) error {
+	return l.AppendContextAt(ctx, time.Time{}, eventType, payload)
+}
+
+// AppendContextAt is AppendContext for an event stamped with ts instead of
+// the current time; a zero ts means now.
+func (l *Logger) AppendContextAt(ctx context.Context, ts time.Time, eventType string, payload any) error {
 	if l == nil {
 		return nil
 	}
 	traceID, spanID := spanIDs(ctx)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.appendLocked(eventType, traceID, spanID, payload)
+	return l.appendLocked(ts, eventType, traceID, spanID, payload)
 }
 
 // spanIDs returns the hex trace and span ids of the span on ctx, or empty
@@ -303,7 +309,7 @@ func spanIDs(ctx context.Context) (traceID, spanID string) {
 	return sc.TraceID().String(), sc.SpanID().String()
 }
 
-func (l *Logger) appendLocked(eventType, traceID, spanID string, payload any) error {
+func (l *Logger) appendLocked(ts time.Time, eventType, traceID, spanID string, payload any) error {
 	if l.events == nil {
 		return nil
 	}
@@ -318,7 +324,10 @@ func (l *Logger) appendLocked(eventType, traceID, spanID string, payload any) er
 	if traceID == "" {
 		traceID = l.meta.TraceID
 	}
-	ev := Event{Ts: time.Now().UTC(), Type: eventType, TraceID: traceID, SpanID: spanID, Payload: raw}
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	ev := Event{Ts: ts.UTC(), Type: eventType, TraceID: traceID, SpanID: spanID, Payload: raw}
 	line, err := json.Marshal(ev)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
@@ -494,7 +503,7 @@ func (l *Logger) Finish(status string, errMsg string) {
 	if errMsg != "" {
 		payload["error"] = errMsg
 	}
-	if err := l.appendLocked(EventRunEnd, "", "", payload); err != nil {
+	if err := l.appendLocked(time.Time{}, EventRunEnd, "", "", payload); err != nil {
 		logging.Warn("append run_end event: %v", err)
 	}
 	l.meta.Status = status

@@ -15,19 +15,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// claudeFlushDelay is how long a message may go without another block before
-// its tool calls are recorded. A message's blocks arrive in one burst and the
-// CLI runs its tools only after the message ends, so a short quiet period
-// means the message is complete; without it a slow tool call would not show
-// up in events.jsonl until its result arrived. Var so tests can change it.
-var claudeFlushDelay = 750 * time.Millisecond
-
 // claudeActivity turns a claude-code stream into the same activity record
 // (turn and tool spans, iteration/response/tool_call/tool_result events) the
-// native tool loop writes. A turn is one model message; its tool calls are
-// recorded once the message is complete, which the stream signals by moving
-// on to anything other than more blocks of that message, or by a quiet
-// period of claudeFlushDelay.
+// native tool loop writes. A turn is one model message; its tool calls start
+// once the message is complete, which the stream signals by moving on to
+// anything other than more blocks of that message. The turn's iteration and
+// response events are written when it closes, at the next message of its
+// thread or the end of the run, so they hold its final tool-call count, stop
+// reason and usage; RecordAt stamps them with the turn's start time.
 //
 // Subagent messages (parent_tool_use_id set) form their own sequence of
 // turns nested under the span of the tool call that started the subagent.
@@ -45,10 +40,6 @@ type claudeActivity struct {
 	// message has not arrived yet.
 	thinking int64
 	started  time.Time
-	// flushTimer records pending tool calls after a quiet period; closed
-	// stops it from firing once the run is over.
-	flushTimer *time.Timer
-	closed     bool
 }
 
 type claudeThread struct {
@@ -57,14 +48,19 @@ type claudeThread struct {
 	turn     *activity.Turn
 	msgID    string
 	start    time.Time
-	last     time.Time
-	text     []string
-	thinking []string
-	tokens   int64
-	usage    agenticcli.MessageUsage
-	stop     string
-	pending  []pendingToolUse
-	recorded bool
+	// msgEnd is when the message's last block arrived; last also covers the
+	// tool results that followed it.
+	msgEnd    time.Time
+	last      time.Time
+	text      []string
+	thinking  []string
+	tokens    int64
+	usage     agenticcli.MessageUsage
+	stop      string
+	pending   []pendingToolUse
+	toolCalls int
+	// complete is set once the stream has moved past the message's blocks.
+	complete bool
 }
 
 type pendingToolUse struct {
@@ -109,7 +105,7 @@ func (a *claudeActivity) SessionStarted(sessionID, model string) {
 func (a *claudeActivity) ThinkingTokens(estimated int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if th := a.threads[""]; th != nil && th.turn != nil && !th.recorded {
+	if th := a.threads[""]; th != nil && th.turn != nil && !th.complete {
 		th.tokens = max(th.tokens, estimated)
 		return
 	}
@@ -135,15 +131,14 @@ func (a *claudeActivity) Assistant(msg agenticcli.AssistantMessage) {
 	for _, use := range msg.ToolUses {
 		th.pending = append(th.pending, pendingToolUse{use: use, at: msg.Time})
 	}
-	if len(msg.ToolUses) > 0 {
-		a.armFlush()
-	}
+	th.toolCalls += len(msg.ToolUses)
 	if msg.Usage != (agenticcli.MessageUsage{}) {
 		th.usage = msg.Usage
 	}
 	if msg.StopReason != "" {
 		th.stop = msg.StopReason
 	}
+	th.msgEnd = msg.Time
 	th.last = msg.Time
 }
 
@@ -200,10 +195,6 @@ func (a *claudeActivity) Finished(at time.Time) {
 func (a *claudeActivity) close(at time.Time) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.closed = true
-	if a.flushTimer != nil {
-		a.flushTimer.Stop()
-	}
 	a.flushAll()
 	for id, ct := range a.tools {
 		ct.tool.Finish(activity.Result{Err: errors.New("no tool result before the run ended"), End: at})
@@ -212,21 +203,6 @@ func (a *claudeActivity) close(at time.Time) {
 	for _, th := range a.threads {
 		a.closeTurn(th, at)
 	}
-}
-
-// armFlush (re)starts the quiet-period timer that records pending tool
-// calls. Called with a.mu held.
-func (a *claudeActivity) armFlush() {
-	if a.flushTimer != nil {
-		a.flushTimer.Stop()
-	}
-	a.flushTimer = time.AfterFunc(claudeFlushDelay, func() {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		if !a.closed {
-			a.flushAll()
-		}
-	})
 }
 
 func (a *claudeActivity) thread(parentID string) *claudeThread {
@@ -263,43 +239,39 @@ func (a *claudeActivity) openTurn(th *claudeThread, msg agenticcli.AssistantMess
 	th.msgID = msg.ID
 	th.start = start
 	th.text, th.thinking, th.pending = nil, nil, nil
-	th.usage, th.stop, th.recorded = agenticcli.MessageUsage{}, "", false
-	th.tokens = 0
+	th.usage, th.stop, th.complete = agenticcli.MessageUsage{}, "", false
+	th.tokens, th.toolCalls = 0, 0
 	if th.parentID == "" {
 		th.tokens, a.thinking = a.thinking, 0
 	}
 }
 
-// flushAll records every thread's completed message and starts its tool
-// calls. Called whenever the stream moves past assistant blocks.
+// flushAll marks every thread's current message complete and starts its
+// pending tool calls. Called whenever the stream moves past assistant blocks.
 func (a *claudeActivity) flushAll() {
 	for _, th := range a.threads {
 		a.flush(th)
 	}
 }
 
-// flush records the thread's turn the first time it runs, then starts any
-// tool calls still pending. A tool_use block that arrives after the turn was
-// recorded still gets its call started, though the turn's tool_calls count
-// does not include it.
+// flush marks the thread's message complete and starts any tool calls still
+// pending. A tool_use block that arrives later still gets its call started
+// and counted.
 func (a *claudeActivity) flush(th *claudeThread) {
 	if th.turn == nil {
 		return
 	}
-	if !th.recorded {
-		a.record(th)
-	}
+	th.complete = true
 	a.startPending(th)
 }
 
 func (a *claudeActivity) record(th *claudeThread) {
-	th.recorded = true
 	th.turn.RecordAt(activity.TurnResult{
 		Text:           strings.Join(th.text, "\n"),
 		Thinking:       strings.Join(th.thinking, "\n"),
 		ThinkingTokens: th.tokens,
 		FinishReason:   th.stop,
-		ToolCalls:      len(th.pending),
+		ToolCalls:      th.toolCalls,
 		Usage: activity.Usage{
 			InputTokens:      th.usage.InputTokens,
 			CacheReadTokens:  th.usage.CacheReadInputTokens,
@@ -307,7 +279,7 @@ func (a *claudeActivity) record(th *claudeThread) {
 			OutputTokens:     th.usage.OutputTokens,
 		},
 		ParentToolUseID: th.parentID,
-	}, th.last)
+	}, th.msgEnd)
 }
 
 func (a *claudeActivity) startPending(th *claudeThread) {
@@ -331,6 +303,7 @@ func (a *claudeActivity) closeTurn(th *claudeThread, at time.Time) {
 		return
 	}
 	a.flush(th)
+	a.record(th)
 	end := th.last
 	if end.IsZero() || end.Before(th.start) {
 		end = at

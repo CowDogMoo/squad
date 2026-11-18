@@ -24,7 +24,7 @@ import (
 
 // Size caps for event payloads. events.jsonl stays local and is meant to
 // hold full content; the caps only keep one runaway value from producing a
-// line too long for readers such as `squad watch`.
+// line too long for readers such as `squad ui`.
 const (
 	maxEventTextBytes     = 64 * 1024
 	maxEventThinkingBytes = 16 * 1024
@@ -162,18 +162,21 @@ func (t *Turn) Index() int { return t.index }
 // Record writes the turn's iteration and response events and sets the turn
 // span's token, finish-reason and size attributes.
 func (t *Turn) Record(res TurnResult) {
-	t.recordAt(res, time.Now())
+	t.recordAt(res, time.Now(), time.Time{})
 }
 
-// RecordAt is Record for a turn whose model call finished at a known time.
+// RecordAt is Record for a turn recorded after its tool calls, as an agentic
+// CLI's turns are: at is when the model call finished, and the iteration and
+// response events are stamped with the turn's start time so they sort before
+// the turn's tool calls.
 func (t *Turn) RecordAt(res TurnResult, at time.Time) {
 	if at.IsZero() {
 		at = time.Now()
 	}
-	t.recordAt(res, at)
+	t.recordAt(res, at, t.start)
 }
 
-func (t *Turn) recordAt(res TurnResult, at time.Time) {
+func (t *Turn) recordAt(res TurnResult, at, ts time.Time) {
 	iteration := map[string]any{
 		"index":      t.index,
 		"tool_calls": res.ToolCalls,
@@ -181,7 +184,7 @@ func (t *Turn) recordAt(res TurnResult, at time.Time) {
 	if res.ParentToolUseID != "" {
 		iteration["parent_tool_use_id"] = res.ParentToolUseID
 	}
-	Append(t.ctx, session.EventIteration, iteration)
+	appendAt(t.ctx, ts, session.EventIteration, iteration)
 	payload := map[string]any{
 		"iteration":     t.index,
 		"input_tokens":  res.Usage.InputTokens,
@@ -211,7 +214,7 @@ func (t *Turn) recordAt(res TurnResult, at time.Time) {
 	if res.Usage.CacheWriteTokens > 0 {
 		payload["cache_write_tokens"] = res.Usage.CacheWriteTokens
 	}
-	Append(t.ctx, session.EventResponse, payload)
+	appendAt(t.ctx, ts, session.EventResponse, payload)
 
 	attrs := []attribute.KeyValue{
 		attribute.Int64("gen_ai.usage.input_tokens", res.Usage.InputTokens),
@@ -441,6 +444,10 @@ func endSpan(span trace.Span, at time.Time) {
 // agent ctx belongs to (see WithChildAgent). It is a no-op without a session
 // logger.
 func Append(ctx context.Context, eventType string, payload map[string]any) {
+	appendAt(ctx, time.Time{}, eventType, payload)
+}
+
+func appendAt(ctx context.Context, ts time.Time, eventType string, payload map[string]any) {
 	l := session.FromContext(ctx)
 	if l == nil {
 		return
@@ -451,7 +458,7 @@ func Append(ctx context.Context, eventType string, payload map[string]any) {
 			payload["parent_tool_use_id"] = c.callID
 		}
 	}
-	if err := l.AppendContext(ctx, eventType, payload); err != nil {
+	if err := l.AppendContextAt(ctx, ts, eventType, payload); err != nil {
 		logging.Warn("session: append %s failed: %v", eventType, err)
 	}
 }

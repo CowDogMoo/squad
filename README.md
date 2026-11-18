@@ -170,7 +170,6 @@ squad run --agent go-review --resume 20260429T150220Z-a1b2c3d4
 | `grade`      | Grade an agent run output against a rubric                               |
 | `browser`    | Manage named browser profiles for agents that drive Chrome               |
 | `ui`         | Interactive TUI for launching and monitoring runs                        |
-| `watch`      | Print a session's turns, tool calls and results as the agent works       |
 | `completion` | Generate shell completion scripts                                        |
 | `version`    | Print the active binary version                                          |
 
@@ -349,8 +348,8 @@ Every run writes an append-only event log to `./.squad/sessions/<id>/`:
 | `results/<id>.txt` | Full bytes of any tool result that exceeded 8 KiB    |
 
 Every provider writes the same turn and tool events, including `claude-code`,
-whose turns squad reads from the CLI's stream-json output. `squad watch`
-prints them as the agent works.
+whose turns squad reads from the CLI's stream-json output. `squad ui` shows
+them as the agent works.
 
 `--resume <id>` reopens that session and chains the next request to the prior OpenAI Responses API id, so the model picks up server-side state without re-sending the transcript. When a tool result is too large to inline, the model sees a `[result:<id> — N bytes elided …]` placeholder and can fetch the full bytes via the `get_tool_result` tool.
 
