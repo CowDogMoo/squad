@@ -121,6 +121,10 @@ type RunOptions struct {
 	// answered with a nudge to continue instead of ending the run (see
 	// tools.RunWithToolsConfig.TextNudges). Zero disables nudging.
 	TextNudges int
+	// RepeatNudges is how many times squad's repeat limits answer the model
+	// with a nudge to move on instead of ending the run (see
+	// tools.RunWithToolsConfig.RepeatNudges). Zero disables nudging.
+	RepeatNudges int
 	// Mode is the run mode passed to prompt templates (e.g., "edit").
 	Mode string
 	// Vars holds template variables passed to prompt templates.

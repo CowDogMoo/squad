@@ -4,6 +4,7 @@ package tools
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -360,6 +361,13 @@ type RunWithToolsConfig struct {
 	// next step ("Let me check the signing key") without calling a tool,
 	// which would otherwise end the run with most of its iterations unused.
 	TextNudges int
+	// RepeatNudges is how many times squad's repeat limits (the same call
+	// made too many times in a row, or the loop detector) answer the model
+	// with [repeatNudgeMessage] instead of ending the loop. Zero keeps the
+	// default: either limit ends it. A weaker model can resend one command
+	// over and over before recording what it learned; ending the loop then
+	// leaves a final turn with no tools, so nothing gets recorded.
+	RepeatNudges int
 	// SplitToolResults, when true, emits one llms.MessageContent per tool
 	// result instead of batching all parts into a single message. Required
 	// for OpenAI chat completions, whose API rejects a single role:"tool"
@@ -717,6 +725,33 @@ const textNudgeMessage = "[CONTINUE OR FINISH] Your last reply had no tool call,
 	"If the task is not finished, make your next tool call now. " +
 	"If it is finished, reply with your complete final answer and no tool call."
 
+// repeatNudgeMessage answers a call squad's repeat limits stopped when
+// [RunWithToolsConfig.RepeatNudges] allows it.
+const repeatNudgeMessage = "[STOP REPEATING] Not run: you have made this same call several times in a row " +
+	"and it gave the same result each time, so running it again will not change anything. " +
+	"Use what it already showed: record your conclusion now, then move on to the next item, " +
+	"or give your final answer."
+
+// appendToolResults answers each call with content, without running it, in
+// the message layout executeToolCalls uses.
+func appendToolResults(messages []llms.MessageContent, toolCalls []llms.ToolCall, content string, splitResults bool) []llms.MessageContent {
+	parts := make([]llms.ContentPart, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		name := ""
+		if tc.FunctionCall != nil {
+			name = tc.FunctionCall.Name
+		}
+		parts = append(parts, llms.ToolCallResponse{ToolCallID: tc.ID, Name: name, Content: content})
+	}
+	if splitResults {
+		for _, part := range parts {
+			messages = append(messages, llms.MessageContent{Role: llms.ChatMessageTypeTool, Parts: []llms.ContentPart{part}})
+		}
+		return messages
+	}
+	return append(messages, llms.MessageContent{Role: llms.ChatMessageTypeTool, Parts: parts})
+}
+
 // textNudger tracks the text-only nudges one tool loop has sent.
 type textNudger struct {
 	used    int
@@ -735,12 +770,29 @@ func (n *textNudger) allow(limit int, content string, iterationsLeft bool) bool 
 	return true
 }
 
+// countIteration adds one model iteration to m, when there is one.
+func countIteration(m *metrics.Metrics) {
+	if m != nil {
+		m.IncrementIterations()
+	}
+}
+
+// logToolTurn logs a reply that made calls tool calls: its text, if any, and
+// how long the model took.
+func logToolTurn(ctx context.Context, content string, calls int, took time.Duration) {
+	if content != "" {
+		logging.InfoContext(ctx, "model: %s", TruncateString(strings.ReplaceAll(content, "\n", " "), 200))
+	}
+	logging.InfoContext(ctx, "model making %d tool call(s) in %s", calls, took.Round(time.Millisecond))
+}
+
 func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter int, cfg RunWithToolsConfig, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
 	m := cfg.Metrics
 	var lastContent string
 	var repeat RepeatTracker
 	var loopDetector LoopDetector
 	var nudge textNudger
+	repeatNudges := 0
 	ctx, editEnforcer, phaseEnforcer := initToolLoopEnforcers(ctx, cfg.EditDeadline)
 	budgetWarned := make([]bool, len(budgetWarningThresholds))
 	var grace graceState
@@ -757,14 +809,10 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 			return lastContent, messages, err, false
 		}
 
-		if m != nil {
-			m.IncrementIterations()
-		}
+		countIteration(m)
 
 		mergedContent, mergedToolCalls := mergeChoices(ctx, response.Choices, m)
-		if mergedContent != "" {
-			lastContent = mergedContent
-		}
+		lastContent = cmp.Or(mergedContent, lastContent)
 		if len(mergedToolCalls) == 0 {
 			if nudge.allow(cfg.TextNudges, mergedContent, i+1 < maxIter) {
 				logging.InfoContext(ctx, "model replied without a tool call in %s; asking it to continue or finish (nudge %d of %d)", iterDuration.Round(time.Millisecond), nudge.used, cfg.TextNudges)
@@ -778,13 +826,18 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 			return mergedContent, messages, nil, true
 		}
 		nudge.pending = false
-		if mergedContent != "" {
-			logging.InfoContext(ctx, "model: %s", TruncateString(strings.ReplaceAll(mergedContent, "\n", " "), 200))
-		}
-		logging.InfoContext(ctx, "model making %d tool call(s) in %s", len(mergedToolCalls), iterDuration.Round(time.Millisecond))
+		logToolTurn(ctx, mergedContent, len(mergedToolCalls), iterDuration)
 
 		repeat.Update(mergedToolCalls)
 		if repeat.Exceeded() {
+			if repeatNudges < cfg.RepeatNudges {
+				repeatNudges++
+				logging.InfoContext(ctx, "model called %s %d times in a row; answering without running it and telling it to move on (repeat nudge %d of %d)", repeat.LastName, repeat.Count, repeatNudges, cfg.RepeatNudges)
+				messages = appendToolCallMessage(messages, mergedContent, mergedToolCalls, ctx)
+				messages = appendToolResults(messages, mergedToolCalls, repeatNudgeMessage, cfg.SplitToolResults)
+				repeat = RepeatTracker{}
+				continue
+			}
 			logging.InfoContext(ctx, "model called %s %d times in a row, breaking tool loop", repeat.LastName, repeat.Count)
 			break
 		}
@@ -808,6 +861,13 @@ func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageConten
 
 		postResult := trackPostExecution(ctx, messages, mergedToolCalls, editEnforcer, phaseEnforcer, &loopDetector, &grace, cacheSizeBefore)
 		if postResult.stuck {
+			if repeatNudges < cfg.RepeatNudges {
+				repeatNudges++
+				logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results; telling it to move on (repeat nudge %d of %d)", repeatNudges, cfg.RepeatNudges)
+				messages = append(messages, llms.MessageContent{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(repeatNudgeMessage)}})
+				loopDetector = LoopDetector{}
+				continue
+			}
 			logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results, stopping")
 			return lastContent, messages, ErrLoopDetected, false
 		}

@@ -500,6 +500,7 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		Confirm:            buildConfirmRuntime(opts),
 		MaxRetries:         opts.MaxRetries,
 		TextNudges:         opts.TextNudges,
+		RepeatNudges:       opts.RepeatNudges,
 		PriorMessages:      priorMessages,
 	}, callOpts...)
 	m.Finish()
