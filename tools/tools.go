@@ -1991,10 +1991,8 @@ func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (s
 		}
 
 		span := trace.SpanFromContext(ctx)
-		span.SetAttributes(
-			attribute.String("squad.executor.type", ex.Type()),
-			attribute.String("squad.tool.command", TruncateString(command, 1000)),
-		)
+		span.SetAttributes(attribute.String("squad.executor.type", ex.Type()))
+		span.SetAttributes(telemetry.CommandAttributes("squad.tool", command)...)
 
 		command = withSkillEnv(ctx, command)
 		output, err := ex.Execute(ctx, command)

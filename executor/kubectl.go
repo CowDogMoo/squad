@@ -87,8 +87,8 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 		attribute.String("squad.executor.pod", e.pod),
 		attribute.String("squad.executor.namespace", e.namespace),
 		attribute.String("squad.executor.shell", e.shell),
-		attribute.String("squad.executor.command", command),
 	}
+	spanAttrs = append(spanAttrs, telemetry.CommandAttributes("squad.executor", command)...)
 	if e.container != "" {
 		spanAttrs = append(spanAttrs, attribute.String("squad.executor.container", e.container))
 	}

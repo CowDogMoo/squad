@@ -577,16 +577,17 @@ All config keys are available as `SQUAD_*` env vars (replace `.` with `_`, upper
 
 **Squad Defaults** (override config-file values):
 
-| Variable                  | Description                                  |
-| ------------------------- | -------------------------------------------- |
-| `SQUAD_PROVIDER_DEFAULT`  | Default LLM provider                         |
-| `SQUAD_PROVIDER_TOKEN`    | API key for the default provider             |
-| `SQUAD_MODEL_DEFAULT`     | Default model identifier                     |
-| `SQUAD_RUN_MAX_COST`      | Default USD budget cap                       |
-| `SQUAD_RUN_MAX_ITERATIONS`| Default max tool-call iterations             |
-| `SQUAD_LOG_LEVEL`         | Log level                                    |
-| `SQUAD_LOG_FORMAT`        | Log format                                   |
-| `SQUAD_OTEL_ENDPOINT`     | OTLP endpoint for telemetry                  |
+| Variable                     | Description                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------ |
+| `SQUAD_PROVIDER_DEFAULT`     | Default LLM provider                                                                             |
+| `SQUAD_PROVIDER_TOKEN`       | API key for the default provider                                                                 |
+| `SQUAD_MODEL_DEFAULT`        | Default model identifier                                                                         |
+| `SQUAD_RUN_MAX_COST`         | Default USD budget cap                                                                           |
+| `SQUAD_RUN_MAX_ITERATIONS`   | Default max tool-call iterations                                                                 |
+| `SQUAD_LOG_LEVEL`            | Log level                                                                                        |
+| `SQUAD_LOG_FORMAT`           | Log format                                                                                       |
+| `SQUAD_OTEL_ENDPOINT`        | OTLP endpoint for telemetry                                                                      |
+| `SQUAD_OTEL_EXPORT_COMMANDS` | Export full shell commands on spans, with best-effort redaction (default: executable names only) |
 
 ### OpenAI-Compatible Endpoints
 

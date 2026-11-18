@@ -95,9 +95,9 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 		trace.WithAttributes(
 			attribute.String("squad.executor.instance_id", e.instanceID),
 			attribute.String("squad.executor.region", e.region),
-			attribute.String("squad.executor.command", command),
 		),
 	)
+	span.SetAttributes(telemetry.CommandAttributes("squad.executor", command)...)
 	defer span.End()
 
 	// Prepend a cd into the working directory when one is configured so
