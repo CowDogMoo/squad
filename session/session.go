@@ -21,6 +21,7 @@ import (
 
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/logging"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // SessionsRoot is the directory under workingDir where sessions are stored.
@@ -40,12 +41,16 @@ const (
 
 // Event types written to events.jsonl.
 const (
-	EventRunStart        = "run_start"
-	EventResume          = "resume"
-	EventPrompt          = "prompt"
-	EventResponse        = "response"
-	EventToolCall        = "tool_call"
-	EventToolResult      = "tool_result"
+	EventRunStart   = "run_start"
+	EventResume     = "resume"
+	EventPrompt     = "prompt"
+	EventResponse   = "response"
+	EventToolCall   = "tool_call"
+	EventToolResult = "tool_result"
+	// EventToolDenied records a tool call squad (or the CLI it drives)
+	// refused before running it: readonly mode, the sign-off gate, or an
+	// active skill's allowed-tools list.
+	EventToolDenied      = "tool_denied"
 	EventLargeResult     = "large_result"
 	EventIteration       = "iteration"
 	EventError           = "error"
@@ -75,7 +80,15 @@ type Meta struct {
 	// RoutineID identifies the routine that produced this session (qualified
 	// form: "global:nightly" / "repo:audit"). Empty for non-routine runs.
 	RoutineID string `json:"routine_id,omitempty"`
-	Status    string `json:"status"`
+	// TraceID and SpanID identify the run's root span, so a session can be
+	// joined to its exported trace. Empty for sessions written before they
+	// existed.
+	TraceID string `json:"trace_id,omitempty"`
+	SpanID  string `json:"span_id,omitempty"`
+	// ClaudeSessionID is the claude-code CLI's own session id, for joining
+	// a session to the CLI's transcript. Empty for every other provider.
+	ClaudeSessionID string `json:"claude_session_id,omitempty"`
+	Status          string `json:"status"`
 	// InputTokens is every prompt token the run sent. CacheReadTokens and
 	// CacheWriteTokens say how many of those went through the prompt cache.
 	InputTokens      int64   `json:"input_tokens"`
@@ -96,10 +109,15 @@ type TokenTotals struct {
 	Output     int64
 }
 
-// Event is one append-only record written to events.jsonl.
+// Event is one append-only record written to events.jsonl. TraceID and
+// SpanID name the span that was active when the event was written (see
+// AppendContext); events written without one carry the session's root
+// trace id only.
 type Event struct {
 	Ts      time.Time       `json:"ts"`
 	Type    string          `json:"type"`
+	TraceID string          `json:"trace_id,omitempty"`
+	SpanID  string          `json:"span_id,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
@@ -248,17 +266,44 @@ func (l *Logger) LastResponseID() string {
 }
 
 // Append records an event to events.jsonl. payload may be nil. Safe to
-// call on a nil Logger (no-op).
+// call on a nil Logger (no-op). The event carries the session's root trace
+// id; use AppendContext to also record the active span.
 func (l *Logger) Append(eventType string, payload any) error {
 	if l == nil {
 		return nil
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.appendLocked(eventType, payload)
+	return l.appendLocked(eventType, "", "", payload)
 }
 
-func (l *Logger) appendLocked(eventType string, payload any) error {
+// AppendContext records an event like Append, stamping it with the trace and
+// span ids of the span active on ctx. Without a valid span on ctx it falls
+// back to the session's root trace id. Safe to call on a nil Logger.
+func (l *Logger) AppendContext(ctx context.Context, eventType string, payload any) error {
+	if l == nil {
+		return nil
+	}
+	traceID, spanID := spanIDs(ctx)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.appendLocked(eventType, traceID, spanID, payload)
+}
+
+// spanIDs returns the hex trace and span ids of the span on ctx, or empty
+// strings when there is none.
+func spanIDs(ctx context.Context) (traceID, spanID string) {
+	if ctx == nil {
+		return "", ""
+	}
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		return "", ""
+	}
+	return sc.TraceID().String(), sc.SpanID().String()
+}
+
+func (l *Logger) appendLocked(eventType, traceID, spanID string, payload any) error {
 	if l.events == nil {
 		return nil
 	}
@@ -270,7 +315,10 @@ func (l *Logger) appendLocked(eventType string, payload any) error {
 		}
 		raw = b
 	}
-	ev := Event{Ts: time.Now().UTC(), Type: eventType, Payload: raw}
+	if traceID == "" {
+		traceID = l.meta.TraceID
+	}
+	ev := Event{Ts: time.Now().UTC(), Type: eventType, TraceID: traceID, SpanID: spanID, Payload: raw}
 	line, err := json.Marshal(ev)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
@@ -279,6 +327,58 @@ func (l *Logger) appendLocked(eventType string, payload any) error {
 		return fmt.Errorf("write event: %w", err)
 	}
 	return nil
+}
+
+// SetTrace records the run's root span in meta.json from the span active on
+// ctx. A resumed session keeps the trace it was created under. Safe on a nil
+// Logger; a ctx without a valid span is ignored.
+func (l *Logger) SetTrace(ctx context.Context) {
+	if l == nil {
+		return
+	}
+	traceID, spanID := spanIDs(ctx)
+	if traceID == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.meta.TraceID != "" {
+		return
+	}
+	l.meta.TraceID = traceID
+	l.meta.SpanID = spanID
+	l.meta.Updated = time.Now().UTC()
+	if err := l.writeMeta(); err != nil {
+		logging.Warn("write meta: %v", err)
+	}
+}
+
+// TraceID returns the run's root trace id recorded in meta.json, or "".
+func (l *Logger) TraceID() string {
+	if l == nil {
+		return ""
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.meta.TraceID
+}
+
+// SetClaudeSessionID records the claude-code CLI's session id in meta.json.
+// Safe on a nil Logger; an empty id is ignored.
+func (l *Logger) SetClaudeSessionID(id string) {
+	if l == nil || id == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.meta.ClaudeSessionID == id {
+		return
+	}
+	l.meta.ClaudeSessionID = id
+	l.meta.Updated = time.Now().UTC()
+	if err := l.writeMeta(); err != nil {
+		logging.Warn("write meta: %v", err)
+	}
 }
 
 // SetLastResponseID records the most recent OpenAI response id and persists
@@ -394,7 +494,7 @@ func (l *Logger) Finish(status string, errMsg string) {
 	if errMsg != "" {
 		payload["error"] = errMsg
 	}
-	if err := l.appendLocked(EventRunEnd, payload); err != nil {
+	if err := l.appendLocked(EventRunEnd, "", "", payload); err != nil {
 		logging.Warn("append run_end event: %v", err)
 	}
 	l.meta.Status = status

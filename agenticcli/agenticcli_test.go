@@ -47,7 +47,7 @@ func TestBuildArgs(t *testing.T) {
 			name: "claude minimal",
 			req:  Request{Provider: "claude-code", UserPrompt: "do the thing"},
 			wantArgs: []string{
-				"--print", "--output-format", "json", "--dangerously-skip-permissions",
+				"--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
 				"--setting-sources", "",
 				"--settings", claudeAttributionOff,
 			},
@@ -60,7 +60,7 @@ func TestBuildArgs(t *testing.T) {
 				SystemPrompt: "be brief", UserPrompt: "task", ReadOnly: true,
 			},
 			wantArgs: []string{
-				"--print", "--output-format", "json", "--dangerously-skip-permissions",
+				"--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
 				"--setting-sources", "",
 				"--settings", claudeAttributionOff,
 				"--append-system-prompt", "be brief",

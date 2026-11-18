@@ -2,7 +2,9 @@
 //
 // When an OTLP endpoint is configured (via --otel-endpoint flag or the
 // OTEL_EXPORTER_OTLP_ENDPOINT env var), traces are exported over OTLP/HTTP.
-// When no endpoint is set, a no-op tracer is used and there is zero overhead.
+// When no endpoint is set, spans still get trace and span ids, so session
+// events can name the span they belong to, but they are neither recorded nor
+// exported.
 package telemetry
 
 import (
@@ -20,7 +22,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const tracerName = "squad"
@@ -32,14 +33,18 @@ func Tracer() trace.Tracer {
 
 // Init initializes the OpenTelemetry tracer provider with an OTLP HTTP exporter.
 // If endpoint is empty, it falls back to the OTEL_EXPORTER_OTLP_ENDPOINT env var
-// (handled by the SDK). If neither is set, a no-op provider is installed.
+// (handled by the SDK). If neither is set, a provider that samples nothing is
+// installed: spans get ids for local correlation and are otherwise dropped.
 //
 // The returned shutdown function flushes pending spans and must be called
 // before the process exits.
 func Init(ctx context.Context, serviceName, endpoint string) (shutdown func(context.Context) error, err error) {
 	if endpoint == "" && !hasOTLPEnv() {
-		otel.SetTracerProvider(noop.NewTracerProvider())
-		return func(context.Context) error { return nil }, nil
+		// NeverSample still assigns trace and span ids but records nothing,
+		// so the cost stays close to a no-op provider's.
+		tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.NeverSample()))
+		otel.SetTracerProvider(tp)
+		return tp.Shutdown, nil
 	}
 
 	// Route OTEL SDK internal errors through the logging package instead of

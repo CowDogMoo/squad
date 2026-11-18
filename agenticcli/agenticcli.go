@@ -81,6 +81,9 @@ type Request struct {
 	// ReadOnly maps squad's readonly mode onto the CLI's native
 	// restriction flags. Run rejects it for CLIs that cannot enforce it.
 	ReadOnly bool
+	// Observer, when set, receives the run's turns and tool calls as the
+	// CLI streams them. Only claude-code streams; other CLIs ignore it.
+	Observer Observer
 }
 
 // Result is the parsed outcome of a print-mode run.
@@ -104,9 +107,11 @@ type Result struct {
 	Turns              int
 }
 
-// Run executes the CLI for req and parses its JSON output. The subprocess
-// inherits the parent environment so the CLI's own credential store keeps
-// working.
+// Run executes the CLI for req and parses its JSON output. claude-code runs
+// with stream-json output so req.Observer sees each turn and tool call as it
+// happens; its final result is read from the stream's terminal result event.
+// The subprocess inherits the parent environment so the CLI's own credential
+// store keeps working.
 func Run(ctx context.Context, req Request) (Result, error) {
 	spec, ok := Lookup(req.Provider)
 	if !ok {
@@ -120,6 +125,10 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("provider %q requires the %q CLI on PATH (install: %s): %w",
 			spec.Provider, spec.Binary, spec.Install, err)
+	}
+
+	if spec.Provider == "claude-code" {
+		return runClaudeStream(ctx, spec, path, req)
 	}
 
 	args, stdin := buildArgs(req)
@@ -144,7 +153,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 func buildArgs(req Request) (args []string, stdin string) {
 	switch req.Provider {
 	case "claude-code":
-		args = []string{"--print", "--output-format", "json", "--dangerously-skip-permissions"}
+		args = []string{"--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"}
 		args = append(args, claudeCommonArgs(req)...)
 		return args, req.UserPrompt
 	case "antigravity":

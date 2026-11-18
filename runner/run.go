@@ -21,8 +21,11 @@ import (
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/source"
+	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/cowdogmoo/squad/tools"
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // RunOptions holds the resolved configuration for a single run invocation.
@@ -230,12 +233,23 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	}
 
 	ctx := initRunContext(cmd.Context(), opts, bundle)
+	// squad.run is the run's root span: the session records its trace id so
+	// events.jsonl and meta.json can be joined to the exported trace.
+	ctx, runSpan := telemetry.Tracer().Start(ctx, "squad.run",
+		trace.WithAttributes(
+			attribute.String("squad.agent", opts.Agent),
+			attribute.String("gen_ai.provider.name", normalizeProvider(opts.Provider)),
+			attribute.String("gen_ai.request.model", opts.Model),
+		),
+	)
+	defer runSpan.End()
 
-	logger, err := openSession(opts, bundle, prompt)
+	logger, err := openSession(ctx, opts, bundle, prompt)
 	if err != nil {
 		logging.Warn("failed to open session log: %v", err)
 	}
 	if logger != nil {
+		runSpan.SetAttributes(attribute.String("squad.session.id", logger.SessionID()))
 		opts.LastSessionID = logger.SessionID()
 		if opts.RoutineID != "" {
 			logger.SetRoutineID(opts.RoutineID)
@@ -811,7 +825,9 @@ func writeResponse(cmd *cobra.Command, response string, opts *RunOptions) error 
 
 // openSession creates or resumes a session log under workingDir/.squad/sessions.
 // Returns nil (with no error) when session logging is disabled.
-func openSession(opts *RunOptions, bundle *agent.Bundle, prompt string) (*session.Logger, error) {
+// The session records the span on ctx as the run's root (see
+// session.Logger.SetTrace).
+func openSession(ctx context.Context, opts *RunOptions, bundle *agent.Bundle, prompt string) (*session.Logger, error) {
 	if opts.NoSession {
 		return nil, nil
 	}
@@ -830,7 +846,8 @@ func openSession(opts *RunOptions, bundle *agent.Bundle, prompt string) (*sessio
 		// Pull the prior response id so the Responses API call chains
 		// server-side state from where the previous run left off.
 		opts.ResumeResponseID = l.LastResponseID()
-		_ = l.Append(session.EventResume, map[string]any{
+		l.SetTrace(ctx)
+		_ = l.AppendContext(ctx, session.EventResume, map[string]any{
 			"agent":            opts.Agent,
 			"prompt":           prompt,
 			"prev_response_id": opts.ResumeResponseID,
@@ -841,7 +858,8 @@ func openSession(opts *RunOptions, bundle *agent.Bundle, prompt string) (*sessio
 	if err != nil {
 		return nil, err
 	}
-	_ = l.Append(session.EventRunStart, map[string]any{
+	l.SetTrace(ctx)
+	_ = l.AppendContext(ctx, session.EventRunStart, map[string]any{
 		"agent":        opts.Agent,
 		"provider":     opts.Provider,
 		"model":        opts.Model,

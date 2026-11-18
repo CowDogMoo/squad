@@ -6,8 +6,8 @@ Start here when something goes wrong:
 
 | Symptom | First step |
 |---|---|
-| Run failed or behaved unexpectedly | `cat .squad/sessions/<id>/events.jsonl` |
-| Need to see what the model is doing in real time | `squad run --agent go-review --stream` |
+| Run failed or behaved unexpectedly | `squad watch --once <id>`, or read `events.jsonl` in the session directory (`squad sessions open <id>`) |
+| Need to see what the agent is doing in real time | `squad watch` in a second terminal, or `squad run --agent go-review --stream` |
 | Logs too noisy | `squad run --log-level warn ...` |
 | Need full debug output | `squad run --log-level debug ...` or `-v` |
 | Need traces in Jaeger or Grafana Tempo | `squad run --otel-endpoint localhost:4318 ...` |
@@ -33,20 +33,85 @@ The session ID embeds a timestamp so `ls -t .squad/sessions/` gives you the most
 
 ### events.jsonl
 
-Each line is a JSON object with a timestamp, an event type, and a payload:
+Each line is a JSON object with a timestamp, an event type, the trace and span
+ids of the span that was active when it was written, and a payload:
 
 ```jsonl
-{"ts":"2026-05-07T14:30:22Z","type":"run_start","payload":{"agent":"go-review","model":"gpt-4o","provider":"openai"}}
-{"ts":"2026-05-07T14:30:23Z","type":"prompt","payload":{"content":"Review the authentication changes in this PR..."}}
-{"ts":"2026-05-07T14:30:25Z","type":"tool_call","payload":{"name":"Read","input":{"path":"auth/middleware.go"}}}
-{"ts":"2026-05-07T14:30:25Z","type":"tool_result","payload":{"tool_call_id":"tc_01","content":"package auth\n..."}}
-{"ts":"2026-05-07T14:30:48Z","type":"iteration","payload":{"iteration":1}}
-{"ts":"2026-05-07T14:31:10Z","type":"run_end","payload":{"status":"completed"}}
+{"ts":"2026-11-18T16:03:55Z","type":"run_start","trace_id":"6f48ef07fae64f7ad4f7a483a10f534c","span_id":"c1d375427ca8ed38","payload":{"agent":"probe","mode":"readonly","model":"qwen3.8:27b","provider":"ollama","system_bytes":25603}}
+{"ts":"2026-11-18T16:05:44Z","type":"iteration","trace_id":"6f48ef07fae64f7ad4f7a483a10f534c","span_id":"bee6730caaa1660b","payload":{"index":1,"tool_calls":2}}
+{"ts":"2026-11-18T16:05:44Z","type":"response","trace_id":"6f48ef07fae64f7ad4f7a483a10f534c","span_id":"bee6730caaa1660b","payload":{"iteration":1,"text":"I'll run the first two commands together since they're independent.","finish_reason":"stop","input_tokens":7669,"output_tokens":73,"tool_calls":2,"duration_ms":109055}}
+{"ts":"2026-11-18T16:05:44Z","type":"tool_call","trace_id":"6f48ef07fae64f7ad4f7a483a10f534c","span_id":"f4d0a7a7fd85e9f5","payload":{"call_id":"call_38amfbhv","iteration":1,"name":"Bash","args":"{\"command\":\"cat notes.txt\"}"}}
+{"ts":"2026-11-18T16:05:44Z","type":"tool_result","trace_id":"6f48ef07fae64f7ad4f7a483a10f534c","span_id":"f4d0a7a7fd85e9f5","payload":{"call_id":"call_38amfbhv","iteration":1,"name":"Bash","bytes":174,"duration_ms":32,"is_error":false}}
+{"ts":"2026-11-18T16:06:49Z","type":"tool_denied","trace_id":"6f48ef07fae64f7ad4f7a483a10f534c","span_id":"88a891aa00e442ac","payload":{"call_id":"call_t8tjrnom","iteration":2,"name":"Write","reason":"readonly","message":"error: Write is not permitted in readonly mode (this run is analysis-only and must not modify files)"}}
+{"ts":"2026-11-18T16:07:30Z","type":"run_end","trace_id":"6f48ef07fae64f7ad4f7a483a10f534c","payload":{"status":"completed"}}
 ```
 
-Event types: `run_start`, `resume`, `prompt`, `response`, `tool_call`, `tool_result`, `large_result`, `iteration`, `error`, `run_end`.
+Event types: `run_start`, `resume`, `prompt`, `iteration`, `response`, `tool_call`, `tool_result`, `tool_denied`, `large_result`, `error`, `skill_loaded`, `confirm_resolved`, `sign_off_resolved`, `permission_decision`, `run_end`.
 
-When a tool result exceeds 8 KiB it is written to `results/<id>.txt` and the inline event payload becomes a placeholder. The model can re-fetch it via the `get_tool_result` tool. This keeps `events.jsonl` readable even after runs that read large files.
+The per-turn and per-tool events have the same shape on every provider path:
+squad's own tool loop (`anthropic`, `openai`, `openai-compat`, `gemini`,
+`ollama`), the OpenAI Responses API path, and `claude-code`, which squad reads
+from the CLI's stream-json output.
+
+| Event | Written | Payload |
+|---|---|---|
+| `iteration` | Once per model turn | `index` (1-based), `tool_calls` (calls the turn requested) |
+| `response` | Once per model turn | `iteration`, `text` (the assistant's text), `thinking` and `thinking_bytes` (reasoning text, when the provider returns it), `thinking_tokens` (claude-code's reasoning estimate), `finish_reason`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `tool_calls`, `duration_ms` |
+| `tool_call` | When a tool call starts | `call_id`, `name`, `args` (the raw argument JSON), `iteration` |
+| `tool_result` | When a tool call finishes | `call_id`, `name`, `bytes` (output size), `duration_ms`, `is_error`, `error`, `iteration` |
+| `tool_denied` | When a tool call is refused before it runs | `call_id`, `name`, `reason` (`readonly`, `sign_off`, `skill_allowed_tools`, or `permission` for a refusal the claude CLI reported), `message` (what the model was told), `iteration` |
+| `error` | When a model call or the agentic CLI fails | `phase` (`generate`, `final`, `cli`), `iteration`, `error` |
+
+Events from a claude-code subagent (a `Task` call inside the CLI) also carry
+`parent_tool_use_id`, the id of the tool call that started the subagent.
+Responses API events keep their own extra fields (`label`, `id`, `status`,
+`sent_bytes`). The `antigravity` provider prints only a final JSON envelope, so
+its sessions hold `run_start`, `run_end` and, on failure, `error`.
+
+`events.jsonl` stays on your machine and is written with mode `0600`. It keeps
+full assistant text and full tool arguments (each value is capped at 64 KiB,
+and reasoning text at 16 KiB), so treat it like the run's transcript.
+
+`trace_id` and `span_id` join each event to its span in an exported trace (see
+[OpenTelemetry tracing](#opentelemetry-tracing)): the `iteration` and
+`response` events carry the turn span, and tool events carry the tool span.
+Events written outside any span, such as `run_end`, carry only the run's trace
+id. squad assigns the ids even when no trace exporter is configured.
+
+When a tool result exceeds 8 KiB on the OpenAI Responses path it is written to `results/<id>.txt` and the result sent to the model becomes a placeholder. The model can re-fetch it via the `get_tool_result` tool.
+
+### squad watch
+
+`squad watch` prints a session's events as one line each and keeps following
+the session until the run ends:
+
+```bash
+squad watch                   # latest session for this repository
+squad watch 20261118T160355Z-ca6214b3
+squad watch --once <id>       # print what is recorded so far and exit
+squad watch ~/.local/state/squad/sessions/<id>   # a session directory
+```
+
+```text
+session 20261118T162403Z-9bf04fdd · agent=probe provider=claude-code model=haiku
+trace_id 952638b4393c6dd0e2aacfd9c83fe1db
+claude_session_id 57acaab9-8a20-4f36-84e1-5d68e779deba
+09:24:03  run_start     started · agent=probe model=haiku
+09:24:06  iteration     iter 1 · 2 tool calls
+09:24:06  response      response (iter 1) · +2 in / +4 out · I'll check the contents of `notes.txt` and whether the local endpoint on port 9 responds.
+09:24:06  tool_call     Bash  {"command":"cat notes.txt","description":"Print contents of notes.txt"}
+09:24:06  tool_call     Bash  {"command":"curl -s -m 2 -H \"Authorization: Bearer <token>\" http://…
+09:24:06  tool_result   result · Bash · 10 B · 1092ms
+09:24:06  tool_result   result · Bash · 11 B · 789ms
+09:24:08  iteration     iter 2 · 1 tool calls
+09:24:08  response      response (iter 2) · +2 in / +4 out · I'll list `/definitely-missing-dir` to confirm that a nonexistent path produces an error.
+09:24:08  tool_call     Bash  {"command":"ls /definitely-missing-dir","description":"List a nonexistent direc…
+09:24:08  tool_result   result · Bash · 66 B · 34ms · error: Exit code 1 ls: /definitely-missing-dir: No such file or di…
+09:24:09  iteration     iter 3 · 0 tool calls
+09:24:09  response      response (iter 3) · +2 in / +8 out · `notes.txt` contains "alpha" and "beta", the probe to 127.0.0.1:9 returned nothing so the fallback …
+09:24:09  run_end       ended · completed
+status=completed · 3 turns · 3 tool calls (1 failed, 0 denied) · 0 errors
+```
 
 ### meta.json
 
@@ -63,6 +128,8 @@ When a tool result exceeds 8 KiB it is written to `results/<id>.txt` and the inl
   "working_dir": "/home/user/myproject",
   "prompt": "Review the authentication changes in this PR...",
   "last_response_id": "resp_abc123",
+  "trace_id": "6f48ef07fae64f7ad4f7a483a10f534c",
+  "span_id": "c1d375427ca8ed38",
   "status": "completed",
   "input_tokens": 12480,
   "output_tokens": 3210,
@@ -70,6 +137,10 @@ When a tool result exceeds 8 KiB it is written to `results/<id>.txt` and the inl
   "iterations": 8
 }
 ```
+
+`trace_id` and `span_id` name the run's root `squad.run` span. A
+`claude-code` run also records `claude_session_id`, the CLI's own session id,
+which names the CLI's transcript under `~/.claude/projects/`.
 
 Terminal statuses are `completed`, `error`, and `budget_exceeded`. A status of `running` means the session is active or was interrupted.
 
@@ -138,7 +209,9 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4318
 squad run --agent go-review
 ```
 
-When no endpoint is configured, a no-op tracer runs with zero overhead.
+When no endpoint is configured, nothing is exported. squad still assigns trace
+and span ids, without recording spans, so `events.jsonl` and `meta.json` can
+name them.
 
 ### Config file
 
@@ -149,33 +222,78 @@ otel:
 
 ### What gets traced
 
-Spans are created for each layer of execution. A typical run produces a tree like this:
+A run is one trace. On squad's own tool loop a run looks like this:
 
 ```
-agent.run (go-review)
-├── model.invoke
-├── tool.call (Read)
-├── model.invoke
-├── tool.call (Bash)
-│   └── executor.local
-├── model.invoke
-└── tool.call (mcp/filesystem/read)
-    └── mcp.call (filesystem)
+squad.run (squad.agent, squad.session.id)
+└── agent.invoke
+    └── llm.call (run token totals and cost)
+        └── tool.loop
+            ├── chat qwen3.8:27b (turn 1)
+            │   ├── llm.generate
+            │   ├── tool.Bash
+            │   └── tool.Write (squad.tool.denied=true)
+            ├── chat qwen3.8:27b (turn 2)
+            │   └── llm.generate
+            └── ...
 ```
 
-Pipeline runs add a layer above this:
+Each model turn is a `chat <model>` span that parents the model call and the
+tool calls that turn requested. A `claude-code` run has the same turns and tool
+spans directly under `agent.invoke`, built from the CLI's stream-json output.
+Their start and end times come from the CLI's event timestamps. A subagent the
+CLI starts with its `Task` tool gets its own turns, nested under that `Task`
+tool span. The OpenAI Responses API path has tool spans under
+`responses.tool_loop` but no turn spans.
+
+Pipeline runs add a layer above `agent.invoke`:
 
 ```
 pipeline.run (security-audit)
-├── stage.run (scan)
-│   └── agent.run (go-security-audit)
+├── pipeline.agent (scan)
+│   └── agent.invoke
 │       └── ...
-└── stage.run (fix)
-    └── agent.run (go-refactor)
+└── pipeline.agent (fix)
+    └── agent.invoke
         └── ...
 ```
 
 Errors are recorded on the relevant span so you can filter to failed spans in Jaeger or Tempo.
+
+### Span attributes
+
+By default spans carry names, timing, sizes, token counts and errors, but no
+assistant text and no tool arguments:
+
+| Span | Attributes |
+|---|---|
+| `squad.run` | `squad.agent`, `squad.session.id`, `gen_ai.provider.name`, `gen_ai.request.model` |
+| `agent.invoke` | `gen_ai.provider.name`, `gen_ai.system`, `gen_ai.request.model`, `squad.agent`. For `claude-code` and `antigravity` also the run's `gen_ai.usage.*` totals, and for `claude-code` `squad.claude.session_id` |
+| `llm.call` | Request parameters and the run's `gen_ai.usage.*` totals (API providers) |
+| `chat <model>` | `gen_ai.operation.name=chat`, `gen_ai.provider.name`, `gen_ai.system`, `gen_ai.request.model`, `squad.turn.index`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, `gen_ai.response.finish_reasons`, `squad.turn.tool_calls`, `squad.turn.text_bytes`, `squad.turn.thinking_bytes`, `squad.turn.thinking_tokens` |
+| `tool.<Name>` | `squad.tool.name`, `squad.tool.call_id`, `squad.tool.args_bytes`, `squad.tool.output_bytes`, `squad.tool.denied`, `squad.tool.denied_reason`, error status; Bash also `squad.tool.command` (see below) |
+
+`gen_ai.provider.name` and `gen_ai.system` both hold squad's provider name
+(`ollama`, `claude-code`, ...). `gen_ai.system` is kept for backends that still
+read the older attribute.
+
+On `claude-code` turns the token counts are the ones the CLI streams with each
+message, which it reports at the start of the message. `output_tokens` can
+therefore be lower than the turn's final count; the run totals on
+`agent.invoke` are exact.
+
+### Exporting arguments and assistant text
+
+Two environment variables add content to spans. Both apply squad's
+best-effort redaction (described below) and truncate the value to 1000 bytes:
+
+| Variable | Adds |
+|---|---|
+| `SQUAD_OTEL_EXPORT_COMMANDS=1` | Full Bash commands in `squad.tool.command` and `squad.executor.command`, and `squad.tool.args` on every tool span: a one-line summary of the call's arguments (the command, file path, pattern or URL) |
+| `SQUAD_OTEL_EXPORT_TEXT=1` | `squad.turn.text` on turn spans: the assistant's text for the turn |
+
+Any other value leaves the default on. Neither variable changes
+`events.jsonl`, which always keeps full text and arguments locally.
 
 ### Shell command attributes
 

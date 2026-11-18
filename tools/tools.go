@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
@@ -375,6 +376,10 @@ type RunWithToolsConfig struct {
 	// tool"). Anthropic requires the single-message form, so leave this
 	// false for the anthropic provider.
 	SplitToolResults bool
+	// Provider and Model name the backend for the turn spans and session
+	// events the loop records.
+	Provider string
+	Model    string
 	// PriorMessages is a prior run's turns (excluding the system message),
 	// replayed on --resume and spliced before the new user prompt. Nil for a
 	// fresh run; unused by the OpenAI Responses path.
@@ -394,6 +399,7 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 	)
 	defer span.End()
 
+	ctx = activity.WithRecorder(ctx, activity.Recorder{Provider: cfg.Provider, Model: cfg.Model})
 	ctx = InitReadCache(ctx)
 	ctx = InitIterationCounter(ctx)
 	ctx = InitTokenCalibration(ctx)
@@ -786,108 +792,208 @@ func logToolTurn(ctx context.Context, content string, calls int, took time.Durat
 	logging.InfoContext(ctx, "model making %d tool call(s) in %s", calls, took.Round(time.Millisecond))
 }
 
+// loopState is the per-run state the tool loop carries across iterations.
+type loopState struct {
+	llm           llms.Model
+	handlers      map[string]Handler
+	maxIter       int
+	cfg           RunWithToolsConfig
+	callOpts      []llms.CallOption
+	lastContent   string
+	repeat        RepeatTracker
+	loopDetector  LoopDetector
+	nudge         textNudger
+	repeatNudges  int // repeat nudges sent, shared by both repeat limits
+	editEnforcer  *EditEnforcer
+	phaseEnforcer *PhaseEnforcer
+	budgetWarned  []bool
+	grace         *graceState
+}
+
+// stepKind says how one tool-loop iteration ended.
+type stepKind int
+
+const (
+	stepNext  stepKind = iota // run the next iteration
+	stepDone                  // the model gave its final answer
+	stepStop                  // stop the loop with stepResult.err
+	stepBreak                 // leave the loop as if the iteration cap was hit
+)
+
+// stepResult is one iteration's outcome.
+type stepResult struct {
+	kind    stepKind
+	content string
+	err     error
+}
+
 func toolLoop(ctx context.Context, llm llms.Model, messages []llms.MessageContent, handlers map[string]Handler, maxIter int, cfg RunWithToolsConfig, callOpts []llms.CallOption) (string, []llms.MessageContent, error, bool) {
-	m := cfg.Metrics
-	var lastContent string
-	var repeat RepeatTracker
-	var loopDetector LoopDetector
-	var nudge textNudger
-	repeatNudges := 0
-	ctx, editEnforcer, phaseEnforcer := initToolLoopEnforcers(ctx, cfg.EditDeadline)
-	budgetWarned := make([]bool, len(budgetWarningThresholds))
-	var grace graceState
-	ctx = setGraceState(ctx, &grace)
-	for i := 0; i < maxIter; i++ {
-		SetIteration(ctx, i)
-		logIterationStart(ctx, i, maxIter, m)
-		iterOpts := resolveIterOpts(callOpts, cfg.ForceFirstToolCall, i)
-		messages = fitContextWindow(ctx, llm, messages, iterOpts)
-		iterStart := time.Now()
-		response, err := retryGenerateContent(ctx, llm, messages, iterOpts, cfg.MaxRetries)
-		iterDuration := time.Since(iterStart)
-		if err := validateResponse(ctx, response, err, iterDuration); err != nil {
-			return lastContent, messages, err, false
-		}
-
-		countIteration(m)
-
-		mergedContent, mergedToolCalls := mergeChoices(ctx, response.Choices, m)
-		lastContent = cmp.Or(mergedContent, lastContent)
-		if len(mergedToolCalls) == 0 {
-			if nudge.allow(cfg.TextNudges, mergedContent, i+1 < maxIter) {
-				logging.InfoContext(ctx, "model replied without a tool call in %s; asking it to continue or finish (nudge %d of %d)", iterDuration.Round(time.Millisecond), nudge.used, cfg.TextNudges)
-				messages = append(messages,
-					llms.MessageContent{Role: llms.ChatMessageTypeAI, Parts: []llms.ContentPart{llms.TextPart(mergedContent)}},
-					llms.MessageContent{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(textNudgeMessage)}},
-				)
-				continue
-			}
-			logging.InfoContext(ctx, "model returned final response in %s (no tool calls)", iterDuration.Round(time.Millisecond))
-			return mergedContent, messages, nil, true
-		}
-		nudge.pending = false
-		logToolTurn(ctx, mergedContent, len(mergedToolCalls), iterDuration)
-
-		repeat.Update(mergedToolCalls)
-		if repeat.Exceeded() {
-			if repeatNudges < cfg.RepeatNudges {
-				repeatNudges++
-				logging.InfoContext(ctx, "model called %s %d times in a row; answering without running it and telling it to move on (repeat nudge %d of %d)", repeat.LastName, repeat.Count, repeatNudges, cfg.RepeatNudges)
-				messages = appendToolCallMessage(messages, mergedContent, mergedToolCalls, ctx)
-				messages = appendToolResults(messages, mergedToolCalls, repeatNudgeMessage, cfg.SplitToolResults)
-				repeat = RepeatTracker{}
-				continue
-			}
-			logging.InfoContext(ctx, "model called %s %d times in a row, breaking tool loop", repeat.LastName, repeat.Count)
-			break
-		}
-
-		// Edit deadline: instead of stopping immediately, enter a grace period
-		// with reads blocked so the model can still make edits.
-		if checkEditDeadline(ctx, editEnforcer, mergedToolCalls) {
-			stop, updated := grace.handleEditDeadline(ctx, messages)
-			messages = updated
-			if stop {
-				return lastContent, messages, ErrEditDeadlineReached, false
-			}
-		}
-
-		messages = appendToolCallMessage(messages, mergedContent, mergedToolCalls, ctx)
-
-		// Snapshot cache size before execution to detect new file reads.
-		cacheSizeBefore := readCacheSize(ctx)
-
-		messages = executeToolCalls(ctx, messages, mergedToolCalls, handlers, cfg.SplitToolResults)
-
-		postResult := trackPostExecution(ctx, messages, mergedToolCalls, editEnforcer, phaseEnforcer, &loopDetector, &grace, cacheSizeBefore)
-		if postResult.stuck {
-			if repeatNudges < cfg.RepeatNudges {
-				repeatNudges++
-				logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results; telling it to move on (repeat nudge %d of %d)", repeatNudges, cfg.RepeatNudges)
-				messages = append(messages, llms.MessageContent{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(repeatNudgeMessage)}})
-				loopDetector = LoopDetector{}
-				continue
-			}
-			logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results, stopping")
-			return lastContent, messages, ErrLoopDetected, false
-		}
-
-		if m != nil && m.BudgetExceeded() {
-			logging.InfoContext(ctx, "budget exceeded ($%.4f >= $%.4f max), stopping tool loop", m.TotalCostWithChildren(), m.MaxCost)
-			return lastContent, messages, metrics.ErrBudgetExceeded, false
-		}
-
-		toolNames := extractToolNames(mergedToolCalls)
-		// Skip phase nudge when the agent read new files — that's
-		// discovery progress, not a read loop.
-		if !postResult.newFilesRead {
-			messages = injectPhaseNudge(ctx, phaseEnforcer, toolNames, messages, i)
-		}
-		messages = injectBudgetWarnings(ctx, m, budgetWarned, messages)
-		messages = rollingCompact(ctx, messages, i)
-		messages = compactMessages(ctx, messages, m)
+	st := &loopState{
+		llm:          llm,
+		handlers:     handlers,
+		maxIter:      maxIter,
+		cfg:          cfg,
+		callOpts:     callOpts,
+		budgetWarned: make([]bool, len(budgetWarningThresholds)),
+		grace:        &graceState{},
 	}
-	return lastContent, messages, ErrIterationLimitReached, false
+	ctx, st.editEnforcer, st.phaseEnforcer = initToolLoopEnforcers(ctx, cfg.EditDeadline)
+	ctx = setGraceState(ctx, st.grace)
+	rec := activity.RecorderFrom(ctx)
+	for i := 0; i < maxIter; i++ {
+		turn := rec.StartTurn(ctx, i+1, time.Time{})
+		var res stepResult
+		messages, res = st.iterate(turn, messages, i)
+		turn.End()
+		switch res.kind {
+		case stepDone:
+			return res.content, messages, nil, true
+		case stepStop:
+			return st.lastContent, messages, res.err, false
+		case stepBreak:
+			return st.lastContent, messages, ErrIterationLimitReached, false
+		}
+	}
+	return st.lastContent, messages, ErrIterationLimitReached, false
+}
+
+// iterate runs iteration i as turn: one model call, then the tool calls it
+// requested.
+func (st *loopState) iterate(turn *activity.Turn, messages []llms.MessageContent, i int) ([]llms.MessageContent, stepResult) {
+	ctx := turn.Context()
+	m := st.cfg.Metrics
+	SetIteration(ctx, i)
+	logIterationStart(ctx, i, st.maxIter, m)
+	iterOpts := resolveIterOpts(st.callOpts, st.cfg.ForceFirstToolCall, i)
+	messages = fitContextWindow(ctx, st.llm, messages, iterOpts)
+	iterStart := time.Now()
+	response, err := retryGenerateContent(ctx, st.llm, messages, iterOpts, st.cfg.MaxRetries)
+	iterDuration := time.Since(iterStart)
+	if err := validateResponse(ctx, response, err, iterDuration); err != nil {
+		turn.Fail("generate", err)
+		return messages, stepResult{kind: stepStop, err: err}
+	}
+
+	countIteration(m)
+
+	mergedContent, mergedToolCalls := mergeChoices(ctx, response.Choices, m)
+	turn.Record(turnResult(response.Choices, mergedContent, len(mergedToolCalls)))
+	st.lastContent = cmp.Or(mergedContent, st.lastContent)
+	if len(mergedToolCalls) == 0 {
+		if st.nudge.allow(st.cfg.TextNudges, mergedContent, i+1 < st.maxIter) {
+			logging.InfoContext(ctx, "model replied without a tool call in %s; asking it to continue or finish (nudge %d of %d)", iterDuration.Round(time.Millisecond), st.nudge.used, st.cfg.TextNudges)
+			messages = append(messages,
+				llms.MessageContent{Role: llms.ChatMessageTypeAI, Parts: []llms.ContentPart{llms.TextPart(mergedContent)}},
+				llms.MessageContent{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(textNudgeMessage)}},
+			)
+			return messages, stepResult{kind: stepNext}
+		}
+		logging.InfoContext(ctx, "model returned final response in %s (no tool calls)", iterDuration.Round(time.Millisecond))
+		return messages, stepResult{kind: stepDone, content: mergedContent}
+	}
+	st.nudge.pending = false
+	logToolTurn(ctx, mergedContent, len(mergedToolCalls), iterDuration)
+	return st.runTools(ctx, messages, mergedContent, mergedToolCalls, i)
+}
+
+// runTools executes one iteration's tool calls and applies the loop's
+// post-execution checks, nudges and compaction.
+func (st *loopState) runTools(ctx context.Context, messages []llms.MessageContent, mergedContent string, mergedToolCalls []llms.ToolCall, i int) ([]llms.MessageContent, stepResult) {
+	m := st.cfg.Metrics
+	st.repeat.Update(mergedToolCalls)
+	if st.repeat.Exceeded() {
+		if st.repeatNudges < st.cfg.RepeatNudges {
+			st.repeatNudges++
+			logging.InfoContext(ctx, "model called %s %d times in a row; answering without running it and telling it to move on (repeat nudge %d of %d)", st.repeat.LastName, st.repeat.Count, st.repeatNudges, st.cfg.RepeatNudges)
+			messages = appendToolCallMessage(messages, mergedContent, mergedToolCalls, ctx)
+			messages = appendToolResults(messages, mergedToolCalls, repeatNudgeMessage, st.cfg.SplitToolResults)
+			st.repeat = RepeatTracker{}
+			return messages, stepResult{kind: stepNext}
+		}
+		logging.InfoContext(ctx, "model called %s %d times in a row, breaking tool loop", st.repeat.LastName, st.repeat.Count)
+		return messages, stepResult{kind: stepBreak}
+	}
+
+	// Edit deadline: instead of stopping immediately, enter a grace period
+	// with reads blocked so the model can still make edits.
+	if checkEditDeadline(ctx, st.editEnforcer, mergedToolCalls) {
+		stop, updated := st.grace.handleEditDeadline(ctx, messages)
+		messages = updated
+		if stop {
+			return messages, stepResult{kind: stepStop, err: ErrEditDeadlineReached}
+		}
+	}
+
+	messages = appendToolCallMessage(messages, mergedContent, mergedToolCalls, ctx)
+
+	// Snapshot cache size before execution to detect new file reads.
+	cacheSizeBefore := readCacheSize(ctx)
+
+	messages = executeToolCalls(ctx, messages, mergedToolCalls, st.handlers, st.cfg.SplitToolResults)
+
+	postResult := trackPostExecution(ctx, messages, mergedToolCalls, st.editEnforcer, st.phaseEnforcer, &st.loopDetector, st.grace, cacheSizeBefore)
+	if postResult.stuck {
+		if st.repeatNudges < st.cfg.RepeatNudges {
+			st.repeatNudges++
+			logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results; telling it to move on (repeat nudge %d of %d)", st.repeatNudges, st.cfg.RepeatNudges)
+			messages = append(messages, llms.MessageContent{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(repeatNudgeMessage)}})
+			st.loopDetector = LoopDetector{}
+			return messages, stepResult{kind: stepNext}
+		}
+		logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results, stopping")
+		return messages, stepResult{kind: stepStop, err: ErrLoopDetected}
+	}
+
+	if m != nil && m.BudgetExceeded() {
+		logging.InfoContext(ctx, "budget exceeded ($%.4f >= $%.4f max), stopping tool loop", m.TotalCostWithChildren(), m.MaxCost)
+		return messages, stepResult{kind: stepStop, err: metrics.ErrBudgetExceeded}
+	}
+
+	toolNames := extractToolNames(mergedToolCalls)
+	// Skip phase nudge when the agent read new files — that's
+	// discovery progress, not a read loop.
+	if !postResult.newFilesRead {
+		messages = injectPhaseNudge(ctx, st.phaseEnforcer, toolNames, messages, i)
+	}
+	messages = injectBudgetWarnings(ctx, m, st.budgetWarned, messages)
+	messages = rollingCompact(ctx, messages, i)
+	messages = compactMessages(ctx, messages, m)
+	return messages, stepResult{kind: stepNext}
+}
+
+// turnResult summarises one model response for the activity record: the
+// merged text, any reasoning text, the stop reason, and the response's token
+// usage (read from the first choice, as recordResponseUsage does).
+func turnResult(choices []*llms.ContentChoice, text string, toolCalls int) activity.TurnResult {
+	res := activity.TurnResult{Text: text, ToolCalls: toolCalls}
+	var thinking []string
+	for _, ch := range choices {
+		if ch == nil {
+			continue
+		}
+		if ch.ReasoningContent != "" {
+			thinking = append(thinking, ch.ReasoningContent)
+		}
+		if ch.StopReason != "" {
+			res.FinishReason = ch.StopReason
+		}
+	}
+	res.Thinking = strings.Join(thinking, "\n")
+	if len(choices) > 0 && choices[0] != nil {
+		u := usageFromGenerationInfo(choices[0].GenerationInfo)
+		res.Usage = activity.Usage{
+			InputTokens:      u.InputTokens,
+			CacheReadTokens:  u.CacheReadTokens,
+			CacheWriteTokens: u.TotalCacheWriteTokens(),
+			OutputTokens:     u.OutputTokens,
+		}
+		if res.FinishReason == "" {
+			if r, ok := choices[0].GenerationInfo["finish_reason"].(string); ok {
+				res.FinishReason = r
+			}
+		}
+	}
+	return res
 }
 
 // isEmptyResponse reports whether the model returned no usable content.
@@ -1061,8 +1167,12 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 	copy(finalOpts, callOpts)
 	finalOpts = append(finalOpts, llms.WithToolChoice("none"))
 
+	turn := activity.RecorderFrom(ctx).StartTurn(ctx, GetIteration(ctx)+2, time.Time{})
+	defer turn.End()
+	ctx = turn.Context()
 	messages = fitContextWindow(ctx, llm, messages, finalOpts)
 	response, err := retryGenerateContent(ctx, llm, messages, finalOpts, maxRetries)
+	recordFinalTurn(turn, response, err)
 	if err == nil && response != nil && len(response.Choices) > 0 {
 		if m != nil {
 			m.IncrementIterations()
@@ -1096,6 +1206,18 @@ func finishToolLoop(ctx context.Context, llm llms.Model, messages []llms.Message
 		return "", metrics.ErrBudgetExceeded
 	}
 	return "", fmt.Errorf("tool loop ended after %d iterations with no usable response", maxIter)
+}
+
+// recordFinalTurn records the tool_choice=none final call as a turn.
+func recordFinalTurn(turn *activity.Turn, response *llms.ContentResponse, err error) {
+	if err != nil {
+		turn.Fail("final", err)
+		return
+	}
+	if response == nil || len(response.Choices) == 0 {
+		return
+	}
+	turn.Record(turnResult(response.Choices, response.Choices[0].Content, 0))
 }
 
 // resolveIterOpts returns the call options for iteration i, inserting
@@ -1245,56 +1367,37 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 		return toolResponse
 	}
 
-	handler, ok := handlers[toolCall.FunctionCall.Name]
-	if !ok {
-		toolResponse.Content = fmt.Sprintf("unknown tool: %s", toolCall.FunctionCall.Name)
-		logging.DebugContext(ctx, "unknown tool requested: %s", toolCall.FunctionCall.Name)
-		return toolResponse
-	}
-
 	toolName := toolCall.FunctionCall.Name
+	args := toolCall.FunctionCall.Arguments
+	argsSummary := toolArgsSummary(toolName, args)
+	ctx, rec := activity.StartTool(ctx, activity.ToolCall{
+		CallID:  toolCall.ID,
+		Name:    toolName,
+		Args:    args,
+		Summary: argsSummary,
+	})
 
-	// Honor the active skill's allowed-tools restriction. When a skill on the
-	// stack lists a non-empty allowed-tools field, only those tools (plus the
-	// Skill loader itself) may run; everything else is denied without
-	// invoking the handler.
-	if rt := GetSkillRuntime(ctx); rt != nil && !rt.AllowsTool(toolName) {
-		toolResponse.Name = toolName
-		toolResponse.Content = fmt.Sprintf("error: tool %q is not permitted by the active skill's allowed-tools", toolName)
-		logging.InfoContext(ctx, "  ✗ %s denied by allowed-tools", toolName)
+	handler, ok := handlers[toolName]
+	if !ok {
+		toolResponse.Content = fmt.Sprintf("unknown tool: %s", toolName)
+		logging.DebugContext(ctx, "unknown tool requested: %s", toolName)
+		rec.Finish(activity.Result{OutputBytes: len(toolResponse.Content), ErrText: toolResponse.Content})
 		return toolResponse
 	}
-
-	if IsReadOnlyMode(ctx) && IsMutatingTool(toolName) {
-		toolResponse.Name = toolName
-		toolResponse.Content = fmt.Sprintf("error: %s is not permitted in readonly mode (this run is analysis-only and must not modify files)", toolName)
-		logging.InfoContext(ctx, "  ✗ %s denied by readonly mode", toolName)
-		return toolResponse
-	}
-
-	if denial := SignOffDenial(ctx, toolName); denial != "" {
-		toolResponse.Name = toolName
-		toolResponse.Content = denial
-		logging.InfoContext(ctx, "  ✗ %s denied pending plan sign-off", toolName)
-		return toolResponse
-	}
-	ctx, span := telemetry.Tracer().Start(ctx, "tool."+toolName,
-		trace.WithAttributes(
-			attribute.String("squad.tool.name", toolName),
-		),
-	)
-	defer span.End()
 
 	toolResponse.Name = toolName
-	argsSummary := toolArgsSummary(toolName, toolCall.FunctionCall.Arguments)
+	if reason, message := ToolDenial(ctx, toolName); reason != "" {
+		toolResponse.Content = message
+		rec.Deny(reason, message)
+		return toolResponse
+	}
+
 	logging.InfoContext(ctx, "  → %s %s", toolName, argsSummary)
-	logging.DebugContext(ctx, "tool %s full args: %s", toolName, TruncateString(toolCall.FunctionCall.Arguments, 500))
+	logging.DebugContext(ctx, "tool %s full args: %s", toolName, TruncateString(args, 500))
 	toolStart := time.Now()
-	output, err := handler.Call(ctx, []byte(toolCall.FunctionCall.Arguments))
+	output, err := handler.Call(ctx, []byte(args))
 	toolDuration := time.Since(toolStart)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
 		// Include both output (e.g., command stdout/stderr) and error message
 		if output != "" {
 			toolResponse.Content = fmt.Sprintf("%s\n\nerror: %v", output, err)
@@ -1306,8 +1409,32 @@ func executeToolCall(ctx context.Context, toolCall llms.ToolCall, handlers map[s
 		toolResponse.Content = output
 		logging.InfoContext(ctx, "  ✓ %s done in %s (%d bytes)", toolName, toolDuration.Round(time.Millisecond), len(output))
 	}
-	span.SetAttributes(attribute.Int("squad.tool.output_bytes", len(toolResponse.Content)))
+	rec.Finish(activity.Result{OutputBytes: len(toolResponse.Content), Err: err})
 	return toolResponse
+}
+
+// ToolDenial reports whether toolName must be refused before it runs, and
+// why: the active skill's allowed-tools list, readonly mode, or the pending
+// sign-off gate. reason is one of the activity.Denied* values, or "" when the
+// call may run; message is the error text returned to the model.
+func ToolDenial(ctx context.Context, toolName string) (reason, message string) {
+	// Honor the active skill's allowed-tools restriction. When a skill on the
+	// stack lists a non-empty allowed-tools field, only those tools (plus the
+	// Skill loader itself) may run; everything else is denied without
+	// invoking the handler.
+	if rt := GetSkillRuntime(ctx); rt != nil && !rt.AllowsTool(toolName) {
+		logging.InfoContext(ctx, "  ✗ %s denied by allowed-tools", toolName)
+		return activity.DeniedSkillTools, fmt.Sprintf("error: tool %q is not permitted by the active skill's allowed-tools", toolName)
+	}
+	if IsReadOnlyMode(ctx) && IsMutatingTool(toolName) {
+		logging.InfoContext(ctx, "  ✗ %s denied by readonly mode", toolName)
+		return activity.DeniedReadOnly, fmt.Sprintf("error: %s is not permitted in readonly mode (this run is analysis-only and must not modify files)", toolName)
+	}
+	if denial := SignOffDenial(ctx, toolName); denial != "" {
+		logging.InfoContext(ctx, "  ✗ %s denied pending plan sign-off", toolName)
+		return activity.DeniedSignOff, denial
+	}
+	return "", ""
 }
 
 // toolArgsSummary extracts a short, human-readable summary from tool call arguments.
@@ -1331,6 +1458,13 @@ var simpleArgKeys = map[string]string{
 	"Edit":      "path",
 	"MultiEdit": "path",
 	"Glob":      "pattern",
+}
+
+// ToolArgsSummary returns a short, human-readable summary of a tool call's
+// JSON arguments (the command for Bash, the path for Read, the pattern for
+// Grep), or "" when the tool has no summary or the arguments do not parse.
+func ToolArgsSummary(toolName, argsJSON string) string {
+	return toolArgsSummary(toolName, argsJSON)
 }
 
 func toolArgsSummary(toolName, argsJSON string) string {

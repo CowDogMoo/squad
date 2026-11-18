@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cowdogmoo/squad/agenticcli"
 	"github.com/cowdogmoo/squad/logging"
@@ -101,7 +102,15 @@ func (g *claudeSignOffGate) canUseTool(ctx context.Context, toolName string, inp
 // permission-protocol session when a sign-off gate is armed on ctx (only
 // claude-code is routed here gate-armed) and to single-shot print mode
 // otherwise. The returned gate is non-nil only on the live path.
+//
+// For claude-code the run's turns and tool calls are recorded as session
+// events and spans as the CLI streams them.
 func runAgenticCLI(ctx context.Context, req agenticcli.Request) (agenticcli.Result, *claudeSignOffGate, error) {
+	if req.Provider == "claude-code" && req.Observer == nil {
+		obs := newClaudeActivity(ctx, req.Model)
+		defer obs.close(time.Now())
+		req.Observer = obs
+	}
 	rt := tools.GetSignOffRuntime(ctx)
 	if rt == nil {
 		res, err := agenticcli.Run(ctx, req)

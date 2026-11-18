@@ -229,6 +229,7 @@ func applyEditsOptional(ctx context.Context, opts *RunOptions, bundle *agent.Bun
 func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (string, *metrics.Metrics, error) {
 	ctx, span := telemetry.Tracer().Start(ctx, "agent.invoke",
 		trace.WithAttributes(
+			attribute.String("gen_ai.provider.name", normalizeProvider(opts.Provider)),
 			attribute.String("gen_ai.system", normalizeProvider(opts.Provider)),
 			attribute.String("gen_ai.request.model", opts.Model),
 			attribute.String("squad.agent", opts.Agent),
@@ -279,7 +280,9 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 			m.Finish()
 			return "", m, errInteractiveAgenticCLI(provider)
 		}
-		return invokeAgenticCLI(ctx, opts, provider, model, systemPrompt, bundle, m)
+		response, m, err := invokeAgenticCLI(ctx, opts, provider, model, systemPrompt, bundle, m)
+		recordInvokeOutcome(span, m, err)
+		return response, m, err
 	}
 
 	ex, err := executor.New(bundle.Environment, bundle.WorkDir)
@@ -334,6 +337,7 @@ func InvokeModel(ctx context.Context, opts *RunOptions, bundle *agent.Bundle) (s
 func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPrompt string, bundle *agent.Bundle, temperature float64, maxTokens int, taskCfg *tools.TaskConfig, ex executor.Executor, m *metrics.Metrics) (string, *metrics.Metrics, error) {
 	ctx, span := telemetry.Tracer().Start(ctx, "llm.call",
 		trace.WithAttributes(
+			attribute.String("gen_ai.provider.name", provider),
 			attribute.String("gen_ai.system", provider),
 			attribute.String("gen_ai.request.model", model),
 			attribute.Float64("gen_ai.request.temperature", temperature),
@@ -360,15 +364,31 @@ func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPro
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 	}
-	span.SetAttributes(
+	span.SetAttributes(usageAttributes(m)...)
+	return response, m, err
+}
+
+// recordInvokeOutcome puts an agentic CLI run's usage and error on its
+// agent.invoke span. API providers record theirs on llm.call instead.
+func recordInvokeOutcome(span trace.Span, m *metrics.Metrics, err error) {
+	span.SetAttributes(usageAttributes(m)...)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+}
+
+// usageAttributes returns a run's token, cost and iteration totals as span
+// attributes.
+func usageAttributes(m *metrics.Metrics) []attribute.KeyValue {
+	return []attribute.KeyValue{
 		attribute.Int64("gen_ai.usage.input_tokens", m.InputTokens()),
 		attribute.Int64("gen_ai.usage.cache_read.input_tokens", m.Usage().CacheReadTokens),
 		attribute.Int64("gen_ai.usage.cache_creation.input_tokens", m.Usage().TotalCacheWriteTokens()),
 		attribute.Int64("gen_ai.usage.output_tokens", m.OutputTokens()),
 		attribute.Float64("gen_ai.usage.cost_usd", m.Cost()),
 		attribute.Int("gen_ai.usage.iterations", m.Iterations()),
-	)
-	return response, m, err
+	}
 }
 
 // callResponsesAPI runs the prompt via the OpenAI Responses API.
@@ -488,6 +508,8 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 	priorMessages := loadResumeTranscript(ctx, opts)
 	logging.InfoContext(ctx, "model call started (provider=%s model=%s)", provider, model)
 	response, err := tools.RunWithTools(ctx, llm, systemPrompt, bundle.User, bundle.WorkDir, tools.RunWithToolsConfig{
+		Provider:           provider,
+		Model:              model,
 		MaxIterations:      maxIter,
 		EditDeadline:       bundle.EditDeadline,
 		TaskCfg:            taskCfg,

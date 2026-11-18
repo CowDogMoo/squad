@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/agenticcli"
 	"github.com/cowdogmoo/squad/logging"
@@ -75,6 +76,7 @@ func invokeAgenticCLI(ctx context.Context, opts *RunOptions, provider, model, sy
 		return "", m, errors.New("sign-off: plan rejected by the user; no changes were made")
 	}
 	if err != nil {
+		activity.Error(ctx, "cli", err)
 		return "", m, fmt.Errorf("model call failed: %w", err)
 	}
 	if before != "" && agenticWorktreeSnapshot(ctx, bundle.WorkDir) != before {

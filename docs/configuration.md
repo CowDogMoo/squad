@@ -447,7 +447,10 @@ print mode instead of calling a model API. The CLI brings its own tools,
 permissions, and authentication (typically a subscription login), so no API
 key or token is needed; squad assembles the agent's prompt bundle, hands it
 to the CLI in the working directory, and records the reported token usage and
-turn count from the CLI's JSON output.
+turn count from the CLI's JSON output. `claude-code` runs with
+`--output-format stream-json --verbose`, so squad also records each turn and
+tool call in the session's `events.jsonl` and as spans while the CLI works
+(see [Observability](observability.md#eventsjsonl)).
 
 ```bash
 # Claude Code (uses the CLI's default model when --model is omitted)
