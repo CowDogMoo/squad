@@ -60,6 +60,10 @@ type RunConfig struct {
 	// attempts = MaxRetries + 1. Zero or negative falls back to the
 	// package default in tools/retry.go.
 	MaxRetries int `mapstructure:"max_retries" yaml:"max_retries"`
+	// TextNudges is how many times a reply with text but no tool call is
+	// answered with a nudge to continue instead of ending the run. Zero
+	// (the default) disables nudging.
+	TextNudges int `mapstructure:"text_nudges" yaml:"text_nudges"`
 }
 
 // OtelConfig holds OpenTelemetry configuration.
@@ -283,6 +287,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("run.max_cost", 5.0)
 	v.SetDefault("run.isolation", "")
 	v.SetDefault("run.max_retries", 3)
+	v.SetDefault("run.text_nudges", 0)
 	v.SetDefault("agents.cache_dir", "")
 	v.SetDefault("agents.repositories", map[string]string{
 		"official": "https://github.com/cowdogmoo/squad-agents.git",

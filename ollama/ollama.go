@@ -121,11 +121,16 @@ func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOptio
 }
 
 // buildChatRequest constructs the Ollama /api/chat request body from call options.
+//
+// The tool definitions are sent even when opts.ToolChoice is "none". Ollama
+// has no tool_choice, and chat templates such as qwen3's render the tools at
+// the very start of the prompt, so leaving them out of an agent's final
+// tool-less request changes the first tokens of a long conversation: the
+// server's prompt cache misses and the whole conversation is processed again,
+// which takes many minutes on a slow host. GenerateContent drops any tool
+// calls a "none" request still produces.
 func (o *LLM) buildChatRequest(chatMsgs []ollamaMessage, opts llms.CallOptions) chatRequest {
-	var tools []ollamaTool
-	if opts.ToolChoice != "none" {
-		tools = convertTools(opts.Tools)
-	}
+	tools := convertTools(opts.Tools)
 	stream := opts.StreamingFunc != nil && len(tools) == 0
 	reqBody := chatRequest{
 		Model:    o.model,
@@ -177,6 +182,18 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	}
 
 	reqBody := o.buildChatRequest(chatMsgs, opts)
+	if opts.ToolChoice == "none" && len(reqBody.Tools) > 0 {
+		resp, answered, err := o.chatWithoutToolCalls(ctx, reqBody, opts.StreamingFunc)
+		if err != nil {
+			return nil, err
+		}
+		if answered {
+			return resp, nil
+		}
+		logging.WarnContext(ctx, "ollama: %s answered a request for no tool calls with no text; asking again without tool definitions", o.model)
+		reqBody.Tools = nil
+		reqBody.Stream = opts.StreamingFunc != nil
+	}
 
 	first, err := o.chat(ctx, reqBody, opts.StreamingFunc)
 	if err != nil {
@@ -199,6 +216,31 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 		return convertResponse(second), nil
 	}
 	return nil, o.emptyTurnError(opts.MaxTokens, first, second)
+}
+
+// chatWithoutToolCalls sends a tool_choice "none" request with its tool
+// definitions kept (see buildChatRequest) and drops any tool calls from the
+// reply. answered is false when no text is left, so the caller can ask again
+// without the definitions. The reply is not streamed because tools are
+// present; streamFn, when set, receives the whole text once.
+func (o *LLM) chatWithoutToolCalls(ctx context.Context, reqBody chatRequest, streamFn func(ctx context.Context, chunk []byte) error) (*llms.ContentResponse, bool, error) {
+	resp, err := o.chat(ctx, reqBody, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	if resp.Message == nil || strings.TrimSpace(resp.Message.Content) == "" {
+		return nil, false, nil
+	}
+	if n := len(resp.Message.ToolCalls); n > 0 {
+		logging.InfoContext(ctx, "ollama: dropping %d tool call(s) from a reply that was asked for none", n)
+		resp.Message.ToolCalls = nil
+	}
+	if streamFn != nil {
+		if err := streamFn(ctx, []byte(resp.Message.Content)); err != nil {
+			return nil, false, fmt.Errorf("streaming callback failed: %w", err)
+		}
+	}
+	return convertResponse(resp), true, nil
 }
 
 // chat performs one POST to /api/chat, decodes the reply, and feeds the

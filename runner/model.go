@@ -490,6 +490,7 @@ func callLangChainLLM(ctx context.Context, opts *RunOptions, provider, model, sy
 		Skill:              buildSkillRuntime(ctx, bundle, opts),
 		Confirm:            buildConfirmRuntime(opts),
 		MaxRetries:         opts.MaxRetries,
+		TextNudges:         opts.TextNudges,
 		PriorMessages:      priorMessages,
 	}, callOpts...)
 	m.Finish()
