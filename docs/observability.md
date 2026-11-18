@@ -182,12 +182,17 @@ Errors are recorded on the relevant span so you can filter to failed spans in Ja
 Bash tool spans carry `squad.tool.command` and `squad.tool.command_length`, and
 Docker, kubectl and SSM executor spans carry `squad.executor.command` and
 `squad.executor.command_length`. Commands often contain credentials, so by
-default the `command` attribute holds only the executable name of each command
-in the line, never its arguments. For example,
-`curl -H 'Authorization: Bearer ...' https://x | jq .token` is exported as
-`curl jq`. The `command_length` attribute is the full command's length in bytes.
+default the `command` attribute holds only the executable name: the basename
+of the command's first whitespace-separated word, when that word is a plain
+name or path made of letters, digits and `. _ + - /`. Any other first word,
+such as a `VAR=value` assignment, a quoted word, a `$(...)` substitution or a
+`#` comment, is exported as `complex`. For example,
+`/usr/bin/curl -H 'Authorization: Bearer ...' https://x | jq .token` is
+exported as `curl`. The `command_length` attribute is the full command's
+length in bytes.
 
-To export the full command text instead, set `SQUAD_OTEL_EXPORT_COMMANDS=1`.
+To export the full command text instead, set `SQUAD_OTEL_EXPORT_COMMANDS=1`
+(any other value leaves the default on).
 On that path squad applies a small, best-effort redaction before export:
 Bearer values, JWTs, `user:pass@` in URLs, and values of password, token,
 secret and api_key style keys written as `key=value` or `key: value`. It has

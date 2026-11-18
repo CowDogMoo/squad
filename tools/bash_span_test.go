@@ -41,21 +41,31 @@ func bashSpanAttrs(t *testing.T, command string) map[attribute.Key]attribute.Val
 	return attrs
 }
 
-func TestBashToolSpanExportsOnlyExecutableNames(t *testing.T) {
+func TestBashToolSpanExportsOnlyExecutableName(t *testing.T) {
 	t.Setenv(telemetry.ExportCommandsEnv, "")
 	secret := "s3cr3t-" + "fixture-value"
-	command := `curl -H 'Authorization: Bearer ` + secret + `' https://lab.test | jq -r .token && sshpass -p ` + secret + ` ssh root@10.0.0.5`
-
-	attrs := bashSpanAttrs(t, command)
-	got := attrs["squad.tool.command"].AsString()
-	if strings.Contains(got, secret) {
-		t.Fatal("squad.tool.command carries argument text")
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"pipeline", `curl -H 'Authorization: Bearer ` + secret + `' https://lab.test | jq -r .token && sshpass -p ` + secret + ` ssh root@10.0.0.5`, "curl"},
+		{"comment first", "# Let's try the creds we found\nsshpass -p 'ab;" + secret + "' ssh admin@10.0.0.5 id", telemetry.ComplexCommand},
 	}
-	if want := "curl jq sshpass"; got != want {
-		t.Errorf("squad.tool.command = %q, want %q", got, want)
-	}
-	if n := attrs["squad.tool.command_length"].AsInt64(); n != int64(len(command)) {
-		t.Errorf("squad.tool.command_length = %d, want %d", n, len(command))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attrs := bashSpanAttrs(t, tt.command)
+			got := attrs["squad.tool.command"].AsString()
+			if strings.Contains(got, secret) {
+				t.Fatal("squad.tool.command carries argument text")
+			}
+			if got != tt.want {
+				t.Errorf("squad.tool.command = %q, want %q", got, tt.want)
+			}
+			if n := attrs["squad.tool.command_length"].AsInt64(); n != int64(len(tt.command)) {
+				t.Errorf("squad.tool.command_length = %d, want %d", n, len(tt.command))
+			}
+		})
 	}
 }
 

@@ -22,7 +22,7 @@ func attrMap(kvs []attribute.KeyValue) map[string]attribute.Value {
 	return m
 }
 
-func TestCommandNames(t *testing.T) {
+func TestCommandName(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
@@ -30,79 +30,82 @@ func TestCommandNames(t *testing.T) {
 	}{
 		{"single command", "ls -la /tmp", "ls"},
 		{"path is reduced to basename", "/opt/hydra/hydra -l admin -p " + fakeSecret + " ssh://10.0.0.5", "hydra"},
-		{"pipeline and chains", "curl -s http://lab.test | jq .data && echo done; ./run.sh || true", "curl jq echo run.sh true"},
-		{"background and newline", "sleep 5 &\nwc -l out.txt", "sleep wc"},
-		{"quoted operators stay in the argument", `echo "a && b | c; d" && grep -c x file`, "echo grep"},
-		{"single quotes", `bash -c 'mysql -p` + fakeSecret + ` -e "show databases"'`, "bash"},
-		{"env assignments are skipped", "DB_PASSWORD=" + fakeSecret + ` API_KEY="` + fakeSecret + ` x" ./migrate up`, "migrate"},
-		{"assignment only", "TOKEN=" + fakeSecret, ""},
-		{"command substitution in assignment", "TOKEN=$(cat /run/secrets/" + fakeSecret + ") curl -H x http://lab.test", "curl"},
-		{"command substitution as command", "$(which nxc) smb h -p " + fakeSecret, "$(...)"},
-		{"backslash continuation", "curl -s \\\n  -H 'Authorization: Bearer " + fakeSecret + "' \\\n  http://lab.test", "curl"},
-		{"redirections", "go test ./... 2>&1 > out.log && cat < out.log", "go cat"},
-		{"subshell and group", "(cd /tmp && make) ; { echo hi; }", "cd make echo"},
-		{"variable expansion in path", "${HOME}/tools/nxc smb h -p " + fakeSecret, "nxc"},
-		{"heredoc body is skipped", "cat <<EOF > creds.txt\npassword " + fakeSecret + "\nuser admin\nEOF\nchmod 600 creds.txt", "cat chmod"},
-		{"quoted heredoc delimiter with tabs", "cat <<-'END'\n\t" + fakeSecret + " is here\n\tEND\nls", "cat ls"},
-		{"here-string", "base64 -d <<< " + fakeSecret, "base64"},
-		{"empty", "", ""},
+		{"relative path", "./run.sh --token " + fakeSecret, "run.sh"},
+		{"only the first word is used", "curl -s http://lab.test | jq .data && echo " + fakeSecret, "curl"},
+		{"leading whitespace", "\n\t  go test ./...", "go"},
+		{"redirect after the name", "curl -s lab.test &>/dev/null", "curl"},
+		{"env assignment", "DB_PASSWORD=" + fakeSecret + " ./migrate up", ComplexCommand},
+		{"assignment value with slashes", "AWS_SECRET_ACCESS_KEY=wJal/K7MDENG/" + fakeSecret + " aws s3 ls", ComplexCommand},
+		{"variable expansion in path", "${HOME}/tools/nxc smb h -p " + fakeSecret, ComplexCommand},
+		{"command substitution", "$(which nxc) smb h -p " + fakeSecret, ComplexCommand},
+		{"quoted name", "'curl' -H 'Authorization: Bearer " + fakeSecret + "'", ComplexCommand},
+		{"subshell", "(cd /tmp && echo " + fakeSecret + ")", ComplexCommand},
+		{"trailing slash", "tools/ " + fakeSecret, ComplexCommand},
+		{"empty", "", ComplexCommand},
+		{"whitespace only", " \n\t", ComplexCommand},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := CommandNames(tt.in)
+			got := CommandName(tt.in)
 			if got != tt.want {
-				t.Errorf("CommandNames() = %q, want %q", got, tt.want)
+				t.Errorf("CommandName() = %q, want %q", got, tt.want)
 			}
 			if strings.Contains(got, fakeSecret) {
-				t.Error("CommandNames() returned argument text containing a credential")
+				t.Error("CommandName() returned argument text containing a credential")
 			}
 		})
 	}
 }
 
-func TestCommandAttributesDefaultExportsNamesOnly(t *testing.T) {
+func TestCommandAttributesDefaultExportsNameOnly(t *testing.T) {
 	t.Setenv(ExportCommandsEnv, "")
-	commands := []string{
-		"curl -H 'Authorization: Bearer " + fakeSecret + "' https://api.lab.test/v1",
-		"curl -d '{\"password\":\"" + fakeSecret + "\"}' https://lab.test/login",
-		"git clone https://bob:" + fakeSecret + "@git.lab.test/repo.git",
-		"nxc smb 10.0.0.5 -u admin -p '" + fakeSecret + "'",
-		"python3 decode.py " + fakeJWT,
+	tests := []struct {
+		name string
+		cmd  string
+		want string
+	}{
+		{"bearer header", "curl -H 'Authorization: Bearer " + fakeSecret + "' https://api.lab.test/v1", "curl"},
+		{"json body", "curl -d '{\"password\":\"" + fakeSecret + "\"}' https://lab.test/login", "curl"},
+		{"url userinfo", "git clone https://bob:" + fakeSecret + "@git.lab.test/repo.git", "git"},
+		{"password flag", "nxc smb 10.0.0.5 -u admin -p '" + fakeSecret + "'", "nxc"},
+		{"jwt argument", "python3 decode.py " + fakeJWT, "python3"},
+		{"bash array", "CREDS=(admin:Winter2024! root:" + fakeSecret + "); for c in \"${CREDS[@]}\"; do sshpass -p \"${c#*:}\" ssh root@10.0.0.5 id; done", ComplexCommand},
+		{"quoted bash array", `passwords=("Winter2024!" "` + fakeSecret + `"); for p in "${passwords[@]}"; do echo "$p"; done`, ComplexCommand},
+		{"apostrophe in comment", "# Let's try the creds we found\nsshpass -p 'ab;" + fakeSecret + "' ssh admin@10.0.0.5 id", ComplexCommand},
+		{"nested quotes in substitution", `OUT="$(curl -H "Authorization:Bearer ` + fakeSecret + `" lab.test)"; echo "$OUT"`, ComplexCommand},
 	}
-	for _, cmd := range commands {
-		attrs := attrMap(CommandAttributes("squad.tool", cmd))
-		got := attrs["squad.tool.command"].AsString()
-		if strings.Contains(got, fakeSecret) || strings.Contains(got, fakeJWT) {
-			t.Errorf("default squad.tool.command carries a credential for a %d-byte command", len(cmd))
-		}
-		if want := CommandNames(cmd); got != want {
-			t.Errorf("squad.tool.command = %q, want %q", got, want)
-		}
-		if n := attrs["squad.tool.command_length"].AsInt64(); n != int64(len(cmd)) {
-			t.Errorf("squad.tool.command_length = %d, want %d", n, len(cmd))
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attrs := attrMap(CommandAttributes("squad.tool", tt.cmd))
+			got := attrs["squad.tool.command"].AsString()
+			if strings.Contains(got, fakeSecret) || strings.Contains(got, fakeJWT) {
+				t.Errorf("default squad.tool.command carries a credential for a %d-byte command", len(tt.cmd))
+			}
+			if got != tt.want {
+				t.Errorf("squad.tool.command = %q, want %q", got, tt.want)
+			}
+			if n := attrs["squad.tool.command_length"].AsInt64(); n != int64(len(tt.cmd)) {
+				t.Errorf("squad.tool.command_length = %d, want %d", n, len(tt.cmd))
+			}
+		})
 	}
 }
 
 func TestCommandAttributesOptIn(t *testing.T) {
-	for _, v := range []string{"1", "true", "YES", "on"} {
-		t.Run(v, func(t *testing.T) {
-			t.Setenv(ExportCommandsEnv, v)
-			cmd := "curl -H 'Authorization: Bearer " + fakeSecret + "' 'https://lab.test/?page=2&token=" + fakeSecret + "'"
-			attrs := attrMap(CommandAttributes("squad.executor", cmd))
-			want := "curl -H 'Authorization: Bearer [REDACTED]' 'https://lab.test/?page=2&token=[REDACTED]'"
-			if got := attrs["squad.executor.command"].AsString(); got != want {
-				t.Errorf("squad.executor.command = %q, want %q", got, want)
-			}
-			if n := attrs["squad.executor.command_length"].AsInt64(); n != int64(len(cmd)) {
-				t.Errorf("squad.executor.command_length = %d, want %d", n, len(cmd))
-			}
-		})
+	t.Setenv(ExportCommandsEnv, "1")
+	cmd := "curl -H 'Authorization: Bearer " + fakeSecret + "' 'https://lab.test/?page=2&token=" + fakeSecret + "'"
+	attrs := attrMap(CommandAttributes("squad.executor", cmd))
+	want := "curl -H 'Authorization: Bearer [REDACTED]' 'https://lab.test/?page=2&token=[REDACTED]'"
+	if got := attrs["squad.executor.command"].AsString(); got != want {
+		t.Errorf("squad.executor.command = %q, want %q", got, want)
+	}
+	if n := attrs["squad.executor.command_length"].AsInt64(); n != int64(len(cmd)) {
+		t.Errorf("squad.executor.command_length = %d, want %d", n, len(cmd))
 	}
 }
 
-func TestCommandAttributesOptInFalseValuesStayDefault(t *testing.T) {
-	for _, v := range []string{"0", "false", "no", "maybe"} {
+func TestCommandAttributesOtherValuesStayDefault(t *testing.T) {
+	for _, v := range []string{"0", "true", "yes", "on", " 1", "maybe"} {
 		t.Setenv(ExportCommandsEnv, v)
 		attrs := attrMap(CommandAttributes("squad.tool", "ls -la /secret-dir"))
 		if got := attrs["squad.tool.command"].AsString(); got != "ls" {
