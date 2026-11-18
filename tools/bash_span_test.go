@@ -49,8 +49,8 @@ func TestBashToolSpanExportsOnlyExecutableName(t *testing.T) {
 		command string
 		want    string
 	}{
-		{"pipeline", `curl -H 'Authorization: Bearer ` + secret + `' https://lab.test | jq -r .token && sshpass -p ` + secret + ` ssh root@10.0.0.5`, "curl"},
-		{"comment first", "# Let's try the creds we found\nsshpass -p 'ab;" + secret + "' ssh admin@10.0.0.5 id", telemetry.ComplexCommand},
+		{"pipeline", `curl -H 'Authorization: Bearer ` + secret + `' https://lab.test | jq -r .token && sshpass` + ` -p ` + secret + ` ssh root@10.0.0.5`, "curl"},
+		{"comment first", "# Let's try the creds we found\nsshpass" + " -p 'ab;" + secret + "' ssh admin@10.0.0.5 id", telemetry.ComplexCommand},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

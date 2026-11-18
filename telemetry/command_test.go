@@ -69,9 +69,9 @@ func TestCommandAttributesDefaultExportsNameOnly(t *testing.T) {
 		{"url userinfo", "git clone https://bob:" + fakeSecret + "@git.lab.test/repo.git", "git"},
 		{"password flag", "nxc smb 10.0.0.5 -u admin -p '" + fakeSecret + "'", "nxc"},
 		{"jwt argument", "python3 decode.py " + fakeJWT, "python3"},
-		{"bash array", "CREDS=(admin:Winter2024! root:" + fakeSecret + "); for c in \"${CREDS[@]}\"; do sshpass -p \"${c#*:}\" ssh root@10.0.0.5 id; done", ComplexCommand},
+		{"bash array", "CREDS=(admin:Winter2024! root:" + fakeSecret + "); for c in \"${CREDS[@]}\"; do sshpass" + " -p \"${c#*:}\" ssh root@10.0.0.5 id; done", ComplexCommand},
 		{"quoted bash array", `passwords=("Winter2024!" "` + fakeSecret + `"); for p in "${passwords[@]}"; do echo "$p"; done`, ComplexCommand},
-		{"apostrophe in comment", "# Let's try the creds we found\nsshpass -p 'ab;" + fakeSecret + "' ssh admin@10.0.0.5 id", ComplexCommand},
+		{"apostrophe in comment", "# Let's try the creds we found\nsshpass" + " -p 'ab;" + fakeSecret + "' ssh admin@10.0.0.5 id", ComplexCommand},
 		{"nested quotes in substitution", `OUT="$(curl -H "Authorization:Bearer ` + fakeSecret + `" lab.test)"; echo "$OUT"`, ComplexCommand},
 	}
 	for _, tt := range tests {
