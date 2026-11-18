@@ -432,6 +432,16 @@ func TestRunConfigSetErrors(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "ollama timeout without a unit",
+			args: []string{"provider.ollama_timeout", "3600"},
+			setup: func(t *testing.T) {
+				t.Helper()
+				if err := os.WriteFile(configPath, data, 0o644); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

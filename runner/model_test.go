@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
@@ -493,6 +495,27 @@ func TestBuildNativeOllamaLLM(t *testing.T) {
 				t.Fatalf("type = %s, want *ollama.LLM", got)
 			}
 		})
+	}
+}
+
+// TestBuildNativeOllamaLLMAppliesTimeout checks that RunOptions.OllamaTimeout
+// reaches the Ollama client: a reply slower than the timeout fails the call.
+func TestBuildNativeOllamaLLMAppliesTimeout(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	llm := buildNativeOllamaLLM(&RunOptions{BaseURL: srv.URL, OllamaTimeout: 50 * time.Millisecond}, "llama3")
+	msgs := []llms.MessageContent{llms.TextParts(llms.ChatMessageTypeHuman, "hi")}
+	_, err := llm.GenerateContent(context.Background(), msgs)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want a timeout", err)
 	}
 }
 

@@ -26,6 +26,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -143,6 +144,11 @@ type ProviderConfig struct {
 	// OllamaThink is sent as Ollama's think option. When false, the default,
 	// a thinking model answers without reasoning first.
 	OllamaThink bool `mapstructure:"ollama_think" yaml:"ollama_think"`
+	// OllamaTimeout bounds each Ollama request, from sending it to reading
+	// the whole reply. Zero keeps the built-in default (30 minutes, or 60
+	// with thinking on), which leaves room for a slow host to process a
+	// long cold prompt before it starts to reply.
+	OllamaTimeout time.Duration `mapstructure:"ollama_timeout" yaml:"ollama_timeout"`
 }
 
 // ModelConfig holds model defaults.
@@ -224,6 +230,10 @@ func loadConfigWithViper(setup func(*viper.Viper) error) (*Config, *viper.Viper,
 		return nil, nil, fmt.Errorf("config load failed: %w", err)
 	}
 
+	if err := Validate(v); err != nil {
+		return nil, nil, err
+	}
+
 	cfg := &Config{}
 	if err := v.Unmarshal(cfg, DecodeHooks()); err != nil {
 		return nil, nil, fmt.Errorf("config unmarshal failed: %w", err)
@@ -241,6 +251,18 @@ func loadConfigWithViper(setup func(*viper.Viper) error) (*Config, *viper.Viper,
 	return cfg, v, nil
 }
 
+// Validate reports a setting in v that squad refuses to use. A
+// provider.ollama_timeout under 1s is rejected, whether it comes from a
+// config file or the environment: a number written without a unit counts
+// as nanoseconds, and a timeout that short fails every request.
+func Validate(v *viper.Viper) error {
+	const key = "provider.ollama_timeout"
+	if d := v.GetDuration(key); d != 0 && d < time.Second {
+		return fmt.Errorf("%s %q is under 1s (a number without a unit is nanoseconds); give a duration with a unit, such as 30m", key, fmt.Sprint(v.Get(key)))
+	}
+	return nil
+}
+
 // SetDefaults registers all hardcoded default values on a Viper instance.
 func SetDefaults(v *viper.Viper) {
 	v.SetDefault("log.level", "info")
@@ -253,6 +275,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("provider.openai_compat_max_tokens", false)
 	v.SetDefault("provider.num_ctx", 32768)
 	v.SetDefault("provider.ollama_think", false)
+	v.SetDefault("provider.ollama_timeout", "0s")
 	v.SetDefault("model.default", "")
 	v.SetDefault("model.temperature", 0.2)
 	v.SetDefault("model.max_tokens", 1024)

@@ -149,6 +149,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		ApplyFallback:         applyFallback,
 		NumCtx:                v.GetInt("provider.num_ctx"),
 		OllamaThink:           v.GetBool("provider.ollama_think"),
+		OllamaTimeout:         v.GetDuration("provider.ollama_timeout"),
 		MaxIterations:         maxIter,
 		MaxIterationsExplicit: cmd.Flags().Changed("max-iterations"),
 		MaxCost:               maxCost,

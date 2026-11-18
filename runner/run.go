@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/agenticcli"
@@ -96,6 +97,9 @@ type RunOptions struct {
 	// OllamaThink is sent as Ollama's think option. It is off by default,
 	// which stops a thinking model from reasoning before every reply.
 	OllamaThink bool
+	// OllamaTimeout bounds each Ollama request. Zero keeps the ollama
+	// package's default.
+	OllamaTimeout time.Duration
 	// MaxIterations caps the number of model iterations (0 = unlimited).
 	MaxIterations int
 	// MaxIterationsExplicit reports whether MaxIterations came from an

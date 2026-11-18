@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
@@ -244,6 +245,10 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 	maxTokens := flagOrViperInt(cmd, "max-tokens", v, "model.max_tokens")
 	numCtx := flagOrViperInt(cmd, "num-ctx", v, "provider.num_ctx")
 	ollamaThink := flagOrViperBool(cmd, "ollama-think", v, "provider.ollama_think")
+	var ollamaTimeout time.Duration
+	if v != nil {
+		ollamaTimeout = v.GetDuration("provider.ollama_timeout")
+	}
 	maxIter := clampInt(flagOrViperInt(cmd, "max-iterations", v, "run.max_iterations"), 10, 1000)
 	maxCost := flagOrViperFloat(cmd, "max-cost", v, "run.max_cost")
 	if maxCost < 0 {
@@ -284,6 +289,7 @@ func buildComposedRunOpts(cmd *cobra.Command, cfg *config.Config) *runner.RunOpt
 		MaxTokens:             maxTokens,
 		NumCtx:                numCtx,
 		OllamaThink:           ollamaThink,
+		OllamaTimeout:         ollamaTimeout,
 		MaxIterations:         maxIter,
 		MaxIterationsExplicit: cmd.Flags().Changed("max-iterations"),
 		MaxCost:               maxCost,

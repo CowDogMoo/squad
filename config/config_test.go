@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -27,6 +28,100 @@ func TestDefaults(t *testing.T) {
 	}
 	if cfg.Run.MaxRetries != 3 {
 		t.Fatalf("expected run.max_retries default = 3, got %d", cfg.Run.MaxRetries)
+	}
+	if cfg.Provider.OllamaTimeout != 0 {
+		t.Fatalf("expected provider.ollama_timeout default = 0 (the ollama package default), got %s", cfg.Provider.OllamaTimeout)
+	}
+}
+
+// TestLoadFromPathOllamaTimeout checks that provider.ollama_timeout parses as
+// a duration from the config file and that SQUAD_PROVIDER_OLLAMA_TIMEOUT
+// overrides it.
+func TestLoadFromPathOllamaTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("provider:\n  ollama_timeout: 45m\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, v, err := LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadFromPath: %v", err)
+	}
+	if cfg.Provider.OllamaTimeout != 45*time.Minute {
+		t.Fatalf("ollama_timeout from file = %s, want 45m0s", cfg.Provider.OllamaTimeout)
+	}
+	if got := v.GetDuration("provider.ollama_timeout"); got != 45*time.Minute {
+		t.Fatalf("viper ollama_timeout = %s, want 45m0s", got)
+	}
+
+	t.Setenv("SQUAD_PROVIDER_OLLAMA_TIMEOUT", "2h")
+	cfg, v, err = LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadFromPath: %v", err)
+	}
+	if cfg.Provider.OllamaTimeout != 2*time.Hour {
+		t.Fatalf("ollama_timeout from env = %s, want 2h0m0s", cfg.Provider.OllamaTimeout)
+	}
+	if got := v.GetDuration("provider.ollama_timeout"); got != 2*time.Hour {
+		t.Fatalf("viper ollama_timeout from env = %s, want 2h0m0s", got)
+	}
+}
+
+// TestLoadFromPathRejectsOllamaTimeoutUnderASecond checks that a
+// provider.ollama_timeout under 1s fails the load with an error that asks
+// for a unit, from the config file or the environment. A bare 3600 meant as
+// seconds decodes as 3.6µs, which would fail every Ollama request.
+func TestLoadFromPathRejectsOllamaTimeoutUnderASecond(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		env  string
+	}{
+		{name: "bare integer in file", file: "provider:\n  ollama_timeout: 3600\n"},
+		{name: "sub-second duration in file", file: "provider:\n  ollama_timeout: 500ms\n"},
+		{name: "negative duration in file", file: "provider:\n  ollama_timeout: -5m\n"},
+		{name: "bare integer in env", file: "provider:\n  ollama_timeout: 45m\n", env: "3600"},
+		{name: "sub-second duration in env", file: "provider:\n  ollama_timeout: 45m\n", env: "500ms"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.file), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if tt.env != "" {
+				t.Setenv("SQUAD_PROVIDER_OLLAMA_TIMEOUT", tt.env)
+			}
+			_, _, err := LoadFromPath(path)
+			if err == nil {
+				t.Fatal("LoadFromPath accepted an ollama_timeout under 1s")
+			}
+			for _, want := range []string{"provider.ollama_timeout", "under 1s", "unit", "30m"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q does not mention %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestLoadFromPathAcceptsOllamaTimeoutZeroAndOneSecond checks the edges the
+// under-1s check must let through: an explicit 0, which keeps the built-in
+// default, and exactly 1s.
+func TestLoadFromPathAcceptsOllamaTimeoutZeroAndOneSecond(t *testing.T) {
+	for raw, want := range map[string]time.Duration{"0": 0, "1s": time.Second} {
+		t.Run(raw, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("provider:\n  ollama_timeout: "+raw+"\n"), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, _, err := LoadFromPath(path)
+			if err != nil {
+				t.Fatalf("LoadFromPath: %v", err)
+			}
+			if cfg.Provider.OllamaTimeout != want {
+				t.Fatalf("ollama_timeout = %s, want %s", cfg.Provider.OllamaTimeout, want)
+			}
+		})
 	}
 }
 
