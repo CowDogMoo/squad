@@ -50,6 +50,13 @@ const errCodeEmptyTurn llms.ErrorCode = "empty_turn"
 const emptyTurnNudge = "Your previous reply was empty: it had no text and no tool call. " +
 	"Continue the task now: call a tool, or give your final answer."
 
+// cutOffNudge is appended to the retry request after a reply the reply
+// budget cut off before any tool call was complete. %s names the limit.
+const cutOffNudge = "Your previous reply was cut off at %s, so any tool call in it was lost and nothing ran. " +
+	"If you were calling a tool, make a shorter call: build long content (a script, a wordlist, a list of payloads) " +
+	"in a file over several calls, or generate it with a short command, instead of writing it out in one reply. " +
+	"If you were writing your final answer, write it again more briefly."
+
 // LLM implements llms.Model using Ollama's native /api/chat endpoint,
 // which supports both tool calling and the num_ctx parameter.
 type LLM struct {
@@ -169,7 +176,8 @@ func readFullResponse(body io.Reader) (chatResponse, error) {
 // loop's job, with the budget [LLM.ContextBudget] reports. A turn with no
 // text and no tool calls is retried once with thinking off and a nudge; a
 // second empty turn fails with [ErrEmptyTurn] instead of ending the agent
-// loop silently.
+// loop silently. A reply the budget cut off before any tool call (see
+// isCutOffTurn) is retried the same way, with a nudge to keep the call short.
 func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error) {
 	opts := llms.CallOptions{}
 	for _, opt := range options {
@@ -199,15 +207,22 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	if err != nil {
 		return nil, err
 	}
-	if !isEmptyTurn(first) {
+	cutOff := isCutOffTurn(first)
+	if !isEmptyTurn(first) && !cutOff {
 		return convertResponse(first), nil
 	}
 
-	logging.WarnContext(ctx, "ollama: %s returned an empty turn (%s); retrying once with thinking off and a nudge", o.model, describeTurn(first))
+	nudge := emptyTurnNudge
+	if cutOff {
+		logging.WarnContext(ctx, "ollama: %s's reply was cut off at the reply budget with no tool call (%s); retrying once with thinking off and a nudge to keep the call short", o.model, describeTurn(first))
+		nudge = o.cutOffNudge(opts.MaxTokens)
+	} else {
+		logging.WarnContext(ctx, "ollama: %s returned an empty turn (%s); retrying once with thinking off and a nudge", o.model, describeTurn(first))
+	}
 	retry := reqBody
 	retry.Think = false
 	retry.Options = maps.Clone(reqBody.Options)
-	retry.Messages = append(slices.Clone(chatMsgs), ollamaMessage{Role: "user", Content: emptyTurnNudge})
+	retry.Messages = append(slices.Clone(chatMsgs), ollamaMessage{Role: "user", Content: nudge})
 	second, err := o.chat(ctx, retry, opts.StreamingFunc)
 	if err != nil {
 		return nil, fmt.Errorf("ollama: retry after an empty turn failed: %w", err)
@@ -328,6 +343,27 @@ func (o *LLM) readStream(ctx context.Context, body io.Reader, streamFn func(ctx 
 func isEmptyTurn(resp chatResponse) bool {
 	return resp.Message == nil ||
 		(strings.TrimSpace(resp.Message.Content) == "" && len(resp.Message.ToolCalls) == 0)
+}
+
+// isCutOffTurn reports whether the reply budget ended a reply before it made
+// any tool call, with no thinking to blame. A model writing a long tool call
+// (an inline wordlist, say) that runs out of budget mid-call loses the call:
+// Ollama returns only the text before it, or nothing, and the agent loop
+// would take that as the final answer. A reply that spent its budget
+// thinking is an empty turn instead, retried with thinking off.
+func isCutOffTurn(resp chatResponse) bool {
+	return resp.Message != nil && resp.DoneReason == "length" &&
+		len(resp.Message.ToolCalls) == 0 && strings.TrimSpace(resp.Message.Thinking) == ""
+}
+
+// cutOffNudge builds the retry nudge for a cut-off reply, naming the reply
+// budget a request made with maxTokens had.
+func (o *LLM) cutOffNudge(maxTokens int) string {
+	limit := "the reply length limit"
+	if budget := o.replyBudget(maxTokens); budget > 0 {
+		limit = fmt.Sprintf("the %d-token reply limit", budget)
+	}
+	return fmt.Sprintf(cutOffNudge, limit)
 }
 
 // describeTurn summarizes an empty turn for logs and errors.
