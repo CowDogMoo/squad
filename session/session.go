@@ -362,16 +362,6 @@ func (l *Logger) SetTrace(ctx context.Context) {
 	}
 }
 
-// TraceID returns the run's root trace id recorded in meta.json, or "".
-func (l *Logger) TraceID() string {
-	if l == nil {
-		return ""
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.meta.TraceID
-}
-
 // SetClaudeSessionID records the claude-code CLI's session id in meta.json.
 // Safe on a nil Logger; an empty id is ignored.
 func (l *Logger) SetClaudeSessionID(id string) {

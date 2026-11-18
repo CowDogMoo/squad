@@ -108,7 +108,7 @@ func TestClaudeActivityRecordsTurnsAndTools(t *testing.T) {
 	a.Finished(ts(8))
 	a.close(ts(9)) // idempotent
 
-	if got := readMetaClaudeSession(t, l); got != "cc-session" {
+	if got := readSessionMeta(t, l).ClaudeSessionID; got != "cc-session" {
 		t.Errorf("claude_session_id = %q", got)
 	}
 	t.Run("events", func(t *testing.T) { checkRecordedTurnEvents(t, claudeEvents(t, l)) })
@@ -174,7 +174,7 @@ func checkRecordedTurnSpans(t *testing.T, rec *tracetest.SpanRecorder) {
 	}
 }
 
-func readMetaClaudeSession(t *testing.T, l *session.Logger) string {
+func readSessionMeta(t *testing.T, l *session.Logger) session.Meta {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(l.Dir(), "meta.json"))
 	if err != nil {
@@ -184,7 +184,7 @@ func readMetaClaudeSession(t *testing.T, l *session.Logger) string {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatal(err)
 	}
-	return m.ClaudeSessionID
+	return m
 }
 
 func TestClaudeActivityDenialsAndSubagents(t *testing.T) {
@@ -321,7 +321,7 @@ func TestClaudeActivityTaskChildKeepsParentSession(t *testing.T) {
 	ctx, _, l := recordClaude(t)
 	newClaudeActivity(ctx, "").SessionStarted("parent-session", "haiku")
 	newClaudeActivity(tools.WithTaskDepth(ctx, 1), "").SessionStarted("child-session", "haiku")
-	if got := readMetaClaudeSession(t, l); got != "parent-session" {
+	if got := readSessionMeta(t, l).ClaudeSessionID; got != "parent-session" {
 		t.Errorf("claude_session_id = %q, want the parent's", got)
 	}
 }
@@ -464,7 +464,7 @@ func TestInvokeAgenticCLIRecordsStream(t *testing.T) {
 	if got := eventTypes(evs); got != want {
 		t.Errorf("events = %s\nwant     %s", got, want)
 	}
-	if got := readMetaClaudeSession(t, l); got != "11111111-2222-4333-8444-555555555555" {
+	if got := readSessionMeta(t, l).ClaudeSessionID; got != "11111111-2222-4333-8444-555555555555" {
 		t.Errorf("claude_session_id = %q", got)
 	}
 }

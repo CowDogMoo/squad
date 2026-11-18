@@ -62,7 +62,7 @@ func TestSummarizeAgentActivity(t *testing.T) {
 	}
 }
 
-func TestTailerCountsToolOutcomes(t *testing.T) {
+func TestTailerToolOutcomesAreNotRunErrors(t *testing.T) {
 	tl := NewTailer(t.TempDir())
 	now := time.Now()
 	for _, ev := range []session.Event{
@@ -74,7 +74,7 @@ func TestTailerCountsToolOutcomes(t *testing.T) {
 		tl.applyEvent(ev)
 	}
 	c := tl.State().Counts
-	if c.ToolErrors != 1 || c.ToolDenied != 1 || c.Errors != 1 {
+	if c.Errors != 1 {
 		t.Errorf("counts = %+v", c)
 	}
 	if tl.State().LastError != "timeout" {

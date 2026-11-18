@@ -170,12 +170,6 @@ func (t *Tailer) count(ev session.Event) {
 		if p := decodePayload(ev.Payload); p != nil {
 			t.state.LastTool = str(p, "name")
 		}
-	case session.EventToolResult:
-		if decodePayload(ev.Payload)["is_error"] == true {
-			c.ToolErrors++
-		}
-	case session.EventToolDenied:
-		c.ToolDenied++
 	case session.EventResponse:
 		c.Responses++
 	case session.EventError:

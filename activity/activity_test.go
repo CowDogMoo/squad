@@ -97,7 +97,7 @@ func TestTurnParentsToolsAndWritesEvents(t *testing.T) {
 	}
 
 	turn := RecorderFrom(ctx).StartTurn(ctx, 1, time.Time{})
-	if TurnIndex(turn.Context()) != 1 || turn.Index() != 1 {
+	if TurnIndex(turn.Context()) != 1 {
 		t.Fatalf("turn index = %d", TurnIndex(turn.Context()))
 	}
 	text := "I'll log in with the admin password " + secretArg

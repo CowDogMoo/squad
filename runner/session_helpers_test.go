@@ -187,11 +187,12 @@ func TestOpenSessionRecordsRootTrace(t *testing.T) {
 		t.Fatalf("openSession: %v", err)
 	}
 	t.Cleanup(func() { _ = l.Close() })
-	if l.TraceID() == "" {
+	traceID := readSessionMeta(t, l).TraceID
+	if traceID == "" {
 		t.Fatal("meta.json has no trace_id")
 	}
 	evs := claudeEvents(t, l)
-	if len(evs) != 1 || evs[0].Type != session.EventRunStart || evs[0].TraceID != l.TraceID() || evs[0].SpanID == "" {
+	if len(evs) != 1 || evs[0].Type != session.EventRunStart || evs[0].TraceID != traceID || evs[0].SpanID == "" {
 		t.Errorf("run_start = %+v, want the root trace and span", evs)
 	}
 }

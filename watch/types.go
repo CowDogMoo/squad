@@ -44,8 +44,6 @@ type EventLine struct {
 type Counts struct {
 	Iterations   int
 	ToolCalls    int
-	ToolErrors   int // tool_result events with is_error set
-	ToolDenied   int // tool_denied events
 	Responses    int
 	Errors       int
 	LargeResults int

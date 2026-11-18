@@ -63,9 +63,6 @@ func TestSetTraceRecordsRootOnce(t *testing.T) {
 	if m.TraceID != rootTrace || m.SpanID != rootSpan {
 		t.Errorf("meta trace = %s/%s, want the first root %s/%s", m.TraceID, m.SpanID, rootTrace, rootSpan)
 	}
-	if l.TraceID() != rootTrace {
-		t.Errorf("TraceID() = %q", l.TraceID())
-	}
 }
 
 func TestAppendContextStampsSpan(t *testing.T) {
@@ -107,9 +104,6 @@ func TestAppendContextNilLogger(t *testing.T) {
 	}
 	l.SetTrace(spanContext(t, rootTrace, rootSpan))
 	l.SetClaudeSessionID("x")
-	if l.TraceID() != "" {
-		t.Fatal("nil logger has no trace id")
-	}
 }
 
 func TestSetClaudeSessionID(t *testing.T) {

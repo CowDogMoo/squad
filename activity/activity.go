@@ -156,9 +156,6 @@ func (r Recorder) StartTurn(ctx context.Context, index int, start time.Time) *Tu
 // calls made for this turn should use it so their spans nest under the turn.
 func (t *Turn) Context() context.Context { return t.ctx }
 
-// Index returns the turn's 1-based index.
-func (t *Turn) Index() int { return t.index }
-
 // Record writes the turn's iteration and response events and sets the turn
 // span's token, finish-reason and size attributes.
 func (t *Turn) Record(res TurnResult) {
