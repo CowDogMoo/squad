@@ -93,6 +93,7 @@ the corresponding CLI flag.
 | `provider.openai_compat_max_tokens` | bool | `false` | Enforce `max_tokens` in requests for OpenAI-compatible endpoints that require it |
 | `provider.num_ctx` | int | `32768` | Context window size for Ollama models |
 | `provider.ollama_think` | bool | `false` | Let an Ollama thinking model think before it replies |
+| `provider.ollama_timeout` | duration | `0s` | Longest wait for one Ollama reply, such as `45m`; `0s` keeps the default of 30 minutes, or 60 with thinking on |
 
 ### model
 
@@ -253,6 +254,7 @@ uppercased, prefixed with `SQUAD_`.
 | `SQUAD_PROVIDER_OPENAI_COMPAT_MAX_TOKENS` | `provider.openai_compat_max_tokens` | Enforce `max_tokens` for compat endpoints |
 | `SQUAD_PROVIDER_NUM_CTX` | `provider.num_ctx` | Ollama context window size |
 | `SQUAD_PROVIDER_OLLAMA_THINK` | `provider.ollama_think` | Let an Ollama thinking model think (`true` or `false`) |
+| `SQUAD_PROVIDER_OLLAMA_TIMEOUT` | `provider.ollama_timeout` | Longest wait for one Ollama reply (a duration such as `45m`) |
 | `SQUAD_MODEL_DEFAULT` | `model.default` | Default model |
 | `SQUAD_MODEL_TEMPERATURE` | `model.temperature` | Sampling temperature |
 | `SQUAD_MODEL_MAX_TOKENS` | `model.max_tokens` | Output token budget |
@@ -596,11 +598,22 @@ Use `--ollama-think` (or `provider.ollama_think: true`) to set Ollama's
 default: a thinking model such as qwen3 otherwise spends minutes, and often
 its whole output budget, reasoning before each tool call. With it on, squad
 gives the reply a quarter of `num_ctx` instead of an eighth, so the reasoning
-cannot use the whole reply, and waits up to 40 minutes for each reply instead
-of 5, since a longer reply takes longer to generate. A model that cannot
+cannot use the whole reply, and waits up to 60 minutes for each reply instead
+of 30, since a longer reply takes longer to generate. A model that cannot
 think rejects `think: true`, and the run fails with Ollama's error. If a turn
 comes back with no text and no tool call, squad retries once with thinking
 off and a nudge, then fails with an error that names the cause.
+
+squad waits up to 30 minutes for each Ollama reply by default, measured from
+sending the request to reading the whole reply. Tool-calling requests are not
+streamed, so that wait includes the time Ollama spends reading the prompt
+before it writes anything. On a slow host that time dominates: when its prompt
+cache misses, a host that reads about 100 prompt tokens a second needs over ten
+minutes for a 70k-token prompt, and a long agent conversation grows past that.
+A request that runs out of time fails with `Client.Timeout exceeded`. Set
+`provider.ollama_timeout` (or `SQUAD_PROVIDER_OLLAMA_TIMEOUT`) to a duration
+such as `45m` or `2h` to change the wait. It applies whether thinking is on or
+off, and `0s`, the default, keeps the built-in 30 or 60 minutes.
 
 ```bash
 # Local Ollama

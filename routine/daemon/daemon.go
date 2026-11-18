@@ -142,6 +142,7 @@ func newRunOptions(entry routine.Entry, cfg *config.Config, workingDir string) *
 		MaxTokens:       cfg.Model.MaxTokens,
 		NumCtx:          cfg.Provider.NumCtx,
 		OllamaThink:     cfg.Provider.OllamaThink,
+		OllamaTimeout:   cfg.Provider.OllamaTimeout,
 		Vars:            r.Vars,
 		ConfigAvailable: true,
 		Config:          cfg,

@@ -125,7 +125,7 @@ func TestEventTypeName(t *testing.T) {
 func TestNewRunOptionsAppliesRoutineFields(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{
-		Provider: config.ProviderConfig{Default: "anthropic", NumCtx: 32768},
+		Provider: config.ProviderConfig{Default: "anthropic", NumCtx: 32768, OllamaTimeout: 45 * time.Minute},
 		Model:    config.ModelConfig{Default: "claude-sonnet-4-6", Temperature: 0.3, MaxTokens: 4000},
 	}
 	entry := routine.Entry{
@@ -162,6 +162,9 @@ func TestNewRunOptionsAppliesRoutineFields(t *testing.T) {
 	}
 	if opts.Vars["k"] != "v" {
 		t.Errorf("vars not threaded through: %v", opts.Vars)
+	}
+	if opts.OllamaTimeout != 45*time.Minute {
+		t.Errorf("ollama timeout not threaded through: %s", opts.OllamaTimeout)
 	}
 }
 

@@ -686,7 +686,9 @@ func buildNativeOllamaLLM(opts *RunOptions, model string) llms.Model {
 	if numCtx <= 0 {
 		numCtx = 32768
 	}
-	return ollama.New(baseURL, model, numCtx, ollama.WithThink(opts.OllamaThink))
+	return ollama.New(baseURL, model, numCtx,
+		ollama.WithThink(opts.OllamaThink),
+		ollama.WithTimeout(opts.OllamaTimeout))
 }
 
 func isOpenAICompatProvider(provider string) bool {

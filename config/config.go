@@ -26,6 +26,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -143,6 +144,11 @@ type ProviderConfig struct {
 	// OllamaThink is sent as Ollama's think option. When false, the default,
 	// a thinking model answers without reasoning first.
 	OllamaThink bool `mapstructure:"ollama_think" yaml:"ollama_think"`
+	// OllamaTimeout bounds each Ollama request, from sending it to reading
+	// the whole reply. Zero keeps the built-in default (30 minutes, or 60
+	// with thinking on), which leaves room for a slow host to process a
+	// long cold prompt before it starts to reply.
+	OllamaTimeout time.Duration `mapstructure:"ollama_timeout" yaml:"ollama_timeout"`
 }
 
 // ModelConfig holds model defaults.
@@ -253,6 +259,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("provider.openai_compat_max_tokens", false)
 	v.SetDefault("provider.num_ctx", 32768)
 	v.SetDefault("provider.ollama_think", false)
+	v.SetDefault("provider.ollama_timeout", "0s")
 	v.SetDefault("model.default", "")
 	v.SetDefault("model.temperature", 0.2)
 	v.SetDefault("model.max_tokens", 1024)

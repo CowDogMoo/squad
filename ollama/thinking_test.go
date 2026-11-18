@@ -163,13 +163,16 @@ func TestReplyBudgetSentAsNumPredict(t *testing.T) {
 
 // TestThinkingRaisesRequestTimeout checks that a client with thinking on
 // waits longer for each reply, by at least the factor its reply budget is
-// larger, and that a client with thinking off keeps the five-minute limit.
+// larger, and that a client with thinking off keeps the 30-minute default.
 func TestThinkingRaisesRequestTimeout(t *testing.T) {
 	t.Parallel()
 	off := New("http://x", "qwen3", 65536)
 	on := New("http://x", "qwen3", 65536, WithThink(true))
-	if got := off.httpClient.Timeout; got != 5*time.Minute {
-		t.Fatalf("thinking-off timeout = %s, want 5m0s", got)
+	if got := off.httpClient.Timeout; got != 30*time.Minute {
+		t.Fatalf("thinking-off timeout = %s, want 30m0s", got)
+	}
+	if got := on.httpClient.Timeout; got < 40*time.Minute {
+		t.Fatalf("thinking-on timeout = %s, want at least 40m0s", got)
 	}
 	larger := on.replyBudget(0) / off.replyBudget(0)
 	if larger < 2 {
@@ -178,6 +181,35 @@ func TestThinkingRaisesRequestTimeout(t *testing.T) {
 	if want := time.Duration(larger) * off.httpClient.Timeout; on.httpClient.Timeout < want {
 		t.Fatalf("thinking-on timeout = %s, want at least %s for a reply budget %d times larger",
 			on.httpClient.Timeout, want, larger)
+	}
+}
+
+// TestWithTimeoutSetsTheClientTimeout checks that a configured timeout
+// replaces the default for both thinking and non-thinking clients, and that
+// a zero or negative one keeps the default.
+func TestWithTimeoutSetsTheClientTimeout(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		think   bool
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{"thinking off, configured", false, 90 * time.Minute, 90 * time.Minute},
+		{"thinking on, configured", true, 90 * time.Minute, 90 * time.Minute},
+		{"thinking on, configured shorter than default", true, 10 * time.Minute, 10 * time.Minute},
+		{"thinking off, zero keeps default", false, 0, requestTimeout},
+		{"thinking on, zero keeps default", true, 0, thinkingRequestTimeout},
+		{"negative keeps default", false, -time.Minute, requestTimeout},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			llm := New("http://x", "qwen3", 65536, WithThink(tt.think), WithTimeout(tt.timeout))
+			if got := llm.httpClient.Timeout; got != tt.want {
+				t.Fatalf("timeout = %s, want %s", got, tt.want)
+			}
+		})
 	}
 }
 

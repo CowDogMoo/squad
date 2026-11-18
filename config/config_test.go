@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -27,6 +28,41 @@ func TestDefaults(t *testing.T) {
 	}
 	if cfg.Run.MaxRetries != 3 {
 		t.Fatalf("expected run.max_retries default = 3, got %d", cfg.Run.MaxRetries)
+	}
+	if cfg.Provider.OllamaTimeout != 0 {
+		t.Fatalf("expected provider.ollama_timeout default = 0 (the ollama package default), got %s", cfg.Provider.OllamaTimeout)
+	}
+}
+
+// TestLoadFromPathOllamaTimeout checks that provider.ollama_timeout parses as
+// a duration from the config file and that SQUAD_PROVIDER_OLLAMA_TIMEOUT
+// overrides it.
+func TestLoadFromPathOllamaTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("provider:\n  ollama_timeout: 45m\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, v, err := LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadFromPath: %v", err)
+	}
+	if cfg.Provider.OllamaTimeout != 45*time.Minute {
+		t.Fatalf("ollama_timeout from file = %s, want 45m0s", cfg.Provider.OllamaTimeout)
+	}
+	if got := v.GetDuration("provider.ollama_timeout"); got != 45*time.Minute {
+		t.Fatalf("viper ollama_timeout = %s, want 45m0s", got)
+	}
+
+	t.Setenv("SQUAD_PROVIDER_OLLAMA_TIMEOUT", "2h")
+	cfg, v, err = LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadFromPath: %v", err)
+	}
+	if cfg.Provider.OllamaTimeout != 2*time.Hour {
+		t.Fatalf("ollama_timeout from env = %s, want 2h0m0s", cfg.Provider.OllamaTimeout)
+	}
+	if got := v.GetDuration("provider.ollama_timeout"); got != 2*time.Hour {
+		t.Fatalf("viper ollama_timeout from env = %s, want 2h0m0s", got)
 	}
 }
 

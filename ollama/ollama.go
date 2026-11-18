@@ -22,15 +22,19 @@ import (
 
 const (
 	// requestTimeout bounds one request, from sending it to reading the
-	// whole reply, for a client with thinking off.
-	requestTimeout = 5 * time.Minute
+	// whole reply, for a client with thinking off. A cold prompt is
+	// processed before the first byte of the reply arrives, and a slow host
+	// can take minutes over it: at about 100 tokens a second, a 70k-token
+	// prompt alone takes over ten minutes. [WithTimeout] overrides it.
+	requestTimeout = 30 * time.Minute
 
-	// thinkingRequestTimeout is that bound for a client with thinking on.
+	// thinkingRequestTimeout is that bound for a client with thinking on,
+	// unless [WithTimeout] overrides it.
 	// Tool-calling requests are not streamed, so the whole reply, reasoning
 	// included, must arrive inside it. A thinking model can reason for
 	// minutes before it answers, and its reply budget is twice as large (see
 	// replyBudget), so it gets a much longer wait.
-	thinkingRequestTimeout = 40 * time.Minute
+	thinkingRequestTimeout = 60 * time.Minute
 )
 
 // ErrEmptyTurn reports that the model returned neither text nor tool calls,
@@ -54,8 +58,10 @@ type LLM struct {
 	numCtx    int
 	// think is sent as the request's think field.
 	think bool
-	// httpClient sends the requests. Its timeout is requestTimeout, or
-	// thinkingRequestTimeout when think is on.
+	// timeout, when positive, replaces the default request timeout.
+	timeout time.Duration
+	// httpClient sends the requests. Its timeout is timeout when set, else
+	// requestTimeout, or thinkingRequestTimeout when think is on.
 	httpClient *http.Client
 
 	// mu guards bytesPerToken, the client's current bytes-per-token
@@ -76,6 +82,13 @@ func WithThink(think bool) Option {
 	return func(o *LLM) { o.think = think }
 }
 
+// WithTimeout bounds each request, from sending it to reading the whole
+// reply, whether thinking is on or off. A zero or negative value keeps the
+// default: 30 minutes, or 60 minutes with thinking on.
+func WithTimeout(timeout time.Duration) Option {
+	return func(o *LLM) { o.timeout = timeout }
+}
+
 // New creates a new Ollama LLM client. Thinking is off unless [WithThink]
 // says otherwise: an agent loop needs a reply or a tool call every turn, and
 // a thinking model can spend minutes and its whole output budget reasoning.
@@ -91,10 +104,14 @@ func New(serverURL, model string, numCtx int, opts ...Option) *LLM {
 	for _, opt := range opts {
 		opt(o)
 	}
-	o.httpClient = &http.Client{Timeout: requestTimeout}
-	if o.think {
-		o.httpClient.Timeout = thinkingRequestTimeout
+	timeout := requestTimeout
+	switch {
+	case o.timeout > 0:
+		timeout = o.timeout
+	case o.think:
+		timeout = thinkingRequestTimeout
 	}
+	o.httpClient = &http.Client{Timeout: timeout}
 	return o
 }
 
