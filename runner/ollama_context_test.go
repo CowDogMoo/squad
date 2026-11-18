@@ -487,3 +487,45 @@ func TestOllamaEmptyTurnErrorNamesNumCtx(t *testing.T) {
 		})
 	}
 }
+
+// TestOllamaExplicitMaxTokensCapsTheReply checks the reply budget an agent
+// with the Task tool sends: an explicit --max-tokens below the Task floor is
+// the cap, where a configured value is raised to the floor and the window's
+// share applies. A caller capping a local model's replies on purpose (the
+// bug-bounty harness sends 8192) had the cap silently undone.
+func TestOllamaExplicitMaxTokensCapsTheReply(t *testing.T) {
+	t.Parallel()
+	const numCtx = 106496
+	tests := []struct {
+		name     string
+		explicit bool
+		want     int
+	}{
+		{"explicit --max-tokens is the cap", true, 8192},
+		{"a configured value gets the Task floor, so the window's share applies", false, numCtx / 8},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			model := &fakeOllamaAgent{bytesPerToken: 4, script: func([]probeMessage) (string, string) { return "", "done" }}
+			srv := httptest.NewServer(model)
+			defer srv.Close()
+			opts := &RunOptions{
+				Provider: "ollama", Model: "qwen3", BaseURL: srv.URL, NumCtx: numCtx,
+				MaxTokens: 8192, MaxTokensExplicit: tt.explicit,
+				MaxIterations: 3, MaxIterationsExplicit: true,
+			}
+			bundle := &agent.Bundle{System: "You map web applications.", User: "Map the target.", WorkDir: t.TempDir()}
+			if _, _, err := InvokeModel(context.Background(), opts, bundle); err != nil {
+				t.Fatalf("InvokeModel() error = %v", err)
+			}
+			reqs := model.received()
+			if len(reqs) == 0 {
+				t.Fatal("no request reached the model")
+			}
+			if got := reqs[0].NumPredict; got != tt.want {
+				t.Fatalf("num_predict = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}

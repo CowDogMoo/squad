@@ -157,6 +157,7 @@ func newRunOptions(cmd *cobra.Command) *runner.RunOptions {
 		OllamaTimeout:         v.GetDuration("provider.ollama_timeout"),
 		MaxIterations:         maxIter,
 		MaxIterationsExplicit: cmd.Flags().Changed("max-iterations"),
+		MaxTokensExplicit:     cmd.Flags().Changed("max-tokens"),
 		MaxCost:               maxCost,
 		MaxRetries:            maxRetries,
 		TextNudges:            textNudges,

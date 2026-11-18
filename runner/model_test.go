@@ -1050,23 +1050,28 @@ func TestInferMaxTokens(t *testing.T) {
 		name        string
 		maxTokens   int
 		hasTaskTool bool
+		explicit    bool
 		want        int
 	}{
-		{"explicit override above floor with task tool", 32768, true, 32768},
-		{"explicit override below floor with task tool", 1024, true, DefaultMaxTokensWithTask},
-		{"config default with task tool", 1024, true, DefaultMaxTokensWithTask},
-		{"explicit override without task tool", 2048, false, 2048},
-		{"no override with task tool", 0, true, DefaultMaxTokensWithTask},
-		{"no override without task tool", 0, false, DefaultMaxTokensLeaf},
-		{"negative with task tool", -1, true, DefaultMaxTokensWithTask},
-		{"negative without task tool", -1, false, DefaultMaxTokensLeaf},
+		{"config value above floor with task tool", 32768, true, false, 32768},
+		{"config value below floor with task tool", 1024, true, false, DefaultMaxTokensWithTask},
+		{"config default with task tool", 1024, true, false, DefaultMaxTokensWithTask},
+		{"config value without task tool", 2048, false, false, 2048},
+		{"no override with task tool", 0, true, false, DefaultMaxTokensWithTask},
+		{"no override without task tool", 0, false, false, DefaultMaxTokensLeaf},
+		{"negative with task tool", -1, true, false, DefaultMaxTokensWithTask},
+		{"negative without task tool", -1, false, false, DefaultMaxTokensLeaf},
+		{"explicit flag below floor with task tool", 8192, true, true, 8192},
+		{"explicit flag above floor with task tool", 32768, true, true, 32768},
+		{"explicit flag without task tool", 2048, false, true, 2048},
+		{"explicit flag left unset falls back to the floor", -1, true, true, DefaultMaxTokensWithTask},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := inferMaxTokens(tt.maxTokens, tt.hasTaskTool)
+			got := inferMaxTokens(tt.maxTokens, tt.hasTaskTool, tt.explicit)
 			if got != tt.want {
-				t.Fatalf("inferMaxTokens(%d, %v) = %d, want %d", tt.maxTokens, tt.hasTaskTool, got, tt.want)
+				t.Fatalf("inferMaxTokens(%d, %v, %v) = %d, want %d", tt.maxTokens, tt.hasTaskTool, tt.explicit, got, tt.want)
 			}
 		})
 	}
