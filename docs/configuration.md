@@ -93,7 +93,7 @@ the corresponding CLI flag.
 | `provider.openai_compat_max_tokens` | bool | `false` | Enforce `max_tokens` in requests for OpenAI-compatible endpoints that require it |
 | `provider.num_ctx` | int | `32768` | Context window size for Ollama models |
 | `provider.ollama_think` | bool | `false` | Let an Ollama thinking model think before it replies |
-| `provider.ollama_timeout` | duration | `0s` | Longest wait for one Ollama reply, such as `45m`; `0s` keeps the default of 30 minutes, or 60 with thinking on |
+| `provider.ollama_timeout` | duration | `0s` | Longest wait for one Ollama reply, such as `45m`; `0s` keeps the default of 30 minutes, or 60 with thinking on. Values under 1s are rejected |
 
 ### model
 
@@ -254,7 +254,7 @@ uppercased, prefixed with `SQUAD_`.
 | `SQUAD_PROVIDER_OPENAI_COMPAT_MAX_TOKENS` | `provider.openai_compat_max_tokens` | Enforce `max_tokens` for compat endpoints |
 | `SQUAD_PROVIDER_NUM_CTX` | `provider.num_ctx` | Ollama context window size |
 | `SQUAD_PROVIDER_OLLAMA_THINK` | `provider.ollama_think` | Let an Ollama thinking model think (`true` or `false`) |
-| `SQUAD_PROVIDER_OLLAMA_TIMEOUT` | `provider.ollama_timeout` | Longest wait for one Ollama reply (a duration such as `45m`) |
+| `SQUAD_PROVIDER_OLLAMA_TIMEOUT` | `provider.ollama_timeout` | Longest wait for one Ollama reply (a duration with a unit, such as `45m`) |
 | `SQUAD_MODEL_DEFAULT` | `model.default` | Default model |
 | `SQUAD_MODEL_TEMPERATURE` | `model.temperature` | Sampling temperature |
 | `SQUAD_MODEL_MAX_TOKENS` | `model.max_tokens` | Output token budget |
@@ -613,7 +613,9 @@ minutes for a 70k-token prompt, and a long agent conversation grows past that.
 A request that runs out of time fails with `Client.Timeout exceeded`. Set
 `provider.ollama_timeout` (or `SQUAD_PROVIDER_OLLAMA_TIMEOUT`) to a duration
 such as `45m` or `2h` to change the wait. It applies whether thinking is on or
-off, and `0s`, the default, keeps the built-in 30 or 60 minutes.
+off, and `0s`, the default, keeps the built-in 30 or 60 minutes. Write the
+unit: a number without one counts as nanoseconds, so squad refuses to load a
+value under 1s, such as `3600`, and asks for a duration like `30m` instead.
 
 ```bash
 # Local Ollama

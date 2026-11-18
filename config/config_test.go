@@ -66,6 +66,65 @@ func TestLoadFromPathOllamaTimeout(t *testing.T) {
 	}
 }
 
+// TestLoadFromPathRejectsOllamaTimeoutUnderASecond checks that a
+// provider.ollama_timeout under 1s fails the load with an error that asks
+// for a unit, from the config file or the environment. A bare 3600 meant as
+// seconds decodes as 3.6µs, which would fail every Ollama request.
+func TestLoadFromPathRejectsOllamaTimeoutUnderASecond(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		env  string
+	}{
+		{name: "bare integer in file", file: "provider:\n  ollama_timeout: 3600\n"},
+		{name: "sub-second duration in file", file: "provider:\n  ollama_timeout: 500ms\n"},
+		{name: "negative duration in file", file: "provider:\n  ollama_timeout: -5m\n"},
+		{name: "bare integer in env", file: "provider:\n  ollama_timeout: 45m\n", env: "3600"},
+		{name: "sub-second duration in env", file: "provider:\n  ollama_timeout: 45m\n", env: "500ms"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.file), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if tt.env != "" {
+				t.Setenv("SQUAD_PROVIDER_OLLAMA_TIMEOUT", tt.env)
+			}
+			_, _, err := LoadFromPath(path)
+			if err == nil {
+				t.Fatal("LoadFromPath accepted an ollama_timeout under 1s")
+			}
+			for _, want := range []string{"provider.ollama_timeout", "under 1s", "unit", "30m"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q does not mention %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestLoadFromPathAcceptsOllamaTimeoutZeroAndOneSecond checks the edges the
+// under-1s check must let through: an explicit 0, which keeps the built-in
+// default, and exactly 1s.
+func TestLoadFromPathAcceptsOllamaTimeoutZeroAndOneSecond(t *testing.T) {
+	for raw, want := range map[string]time.Duration{"0": 0, "1s": time.Second} {
+		t.Run(raw, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("provider:\n  ollama_timeout: "+raw+"\n"), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, _, err := LoadFromPath(path)
+			if err != nil {
+				t.Fatalf("LoadFromPath: %v", err)
+			}
+			if cfg.Provider.OllamaTimeout != want {
+				t.Fatalf("ollama_timeout = %s, want %s", cfg.Provider.OllamaTimeout, want)
+			}
+		})
+	}
+}
+
 func TestLoadFromPathMaxRetriesEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

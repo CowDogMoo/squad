@@ -230,6 +230,9 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse value: %w", err)
 	}
 	v.Set(args[0], value)
+	if err := config.Validate(v); err != nil {
+		return err
+	}
 
 	// Unmarshal back into typed config to preserve structure and tags
 	var newCfg config.Config

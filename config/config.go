@@ -230,6 +230,10 @@ func loadConfigWithViper(setup func(*viper.Viper) error) (*Config, *viper.Viper,
 		return nil, nil, fmt.Errorf("config load failed: %w", err)
 	}
 
+	if err := Validate(v); err != nil {
+		return nil, nil, err
+	}
+
 	cfg := &Config{}
 	if err := v.Unmarshal(cfg, DecodeHooks()); err != nil {
 		return nil, nil, fmt.Errorf("config unmarshal failed: %w", err)
@@ -245,6 +249,18 @@ func loadConfigWithViper(setup func(*viper.Viper) error) (*Config, *viper.Viper,
 	}
 
 	return cfg, v, nil
+}
+
+// Validate reports a setting in v that squad refuses to use. A
+// provider.ollama_timeout under 1s is rejected, whether it comes from a
+// config file or the environment: a number written without a unit counts
+// as nanoseconds, and a timeout that short fails every request.
+func Validate(v *viper.Viper) error {
+	const key = "provider.ollama_timeout"
+	if d := v.GetDuration(key); d != 0 && d < time.Second {
+		return fmt.Errorf("%s %q is under 1s (a number without a unit is nanoseconds); give a duration with a unit, such as 30m", key, fmt.Sprint(v.Get(key)))
+	}
+	return nil
 }
 
 // SetDefaults registers all hardcoded default values on a Viper instance.
