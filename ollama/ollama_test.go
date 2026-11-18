@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -490,14 +491,18 @@ func noToolCallOpts(streamFn func(context.Context, []byte) error) []llms.CallOpt
 // request: it goes out with the tool definitions so the server's prompt
 // cache still matches, tool calls in the reply are dropped, and only a reply
 // with no text is asked again without the definitions.
+// Replies to a tool_choice "none" request.
+const (
+	textAndCall = `{"message":{"role":"assistant","content":"final report","tool_calls":[{"function":{"name":"Echo","arguments":{}}}]},"done":true,"prompt_eval_count":2,"eval_count":3}`
+	callOnly    = `{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"Echo","arguments":{}}}]},"done":true,"prompt_eval_count":2,"eval_count":3}`
+	textOnly    = `{"message":{"role":"assistant","content":"asked again"},"done":true,"prompt_eval_count":2,"eval_count":3}`
+)
+
+var wrapUp = []llms.MessageContent{{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart("wrap up")}}}
+
 func TestGenerateContentToolChoiceNone(t *testing.T) {
 	t.Parallel()
-	messages := []llms.MessageContent{{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart("wrap up")}}}
-	const (
-		textAndCall = `{"message":{"role":"assistant","content":"final report","tool_calls":[{"function":{"name":"Echo","arguments":{}}}]},"done":true,"prompt_eval_count":2,"eval_count":3}`
-		callOnly    = `{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"Echo","arguments":{}}}]},"done":true,"prompt_eval_count":2,"eval_count":3}`
-		textOnly    = `{"message":{"role":"assistant","content":"asked again"},"done":true,"prompt_eval_count":2,"eval_count":3}`
-	)
+	messages := wrapUp
 
 	t.Run("text is kept and tool calls are dropped in one request", func(t *testing.T) {
 		t.Parallel()
@@ -522,20 +527,64 @@ func TestGenerateContentToolChoiceNone(t *testing.T) {
 		}
 	})
 
-	t.Run("a reply with only tool calls is asked again without tools", func(t *testing.T) {
-		t.Parallel()
-		server, reqs := noToolCallServer(t, callOnly, textOnly)
-		resp, err := New(server.URL, "qwen3", 4096).GenerateContent(context.Background(), messages, noToolCallOpts(nil)...)
-		if err != nil {
-			t.Fatalf("GenerateContent() error = %v", err)
+}
+
+// TestGenerateContentToolChoiceNoneAnswersToolCalls covers a reply of tool
+// calls alone to that request: the calls are answered with a tools-off result
+// and asked again with the definitions kept, so the prompt cache still
+// matches, and only a second such reply is asked again without them.
+func TestGenerateContentToolChoiceNoneAnswersToolCalls(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		replies   []string
+		wantTools []int
+	}{
+		{"tool calls alone are answered and asked again with the tools kept", []string{callOnly, textOnly}, []int{1, 1}},
+		{"tool calls again are asked once more without tools", []string{callOnly, callOnly, textOnly}, []int{1, 1, 0}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			server, reqs := noToolCallServer(t, tt.replies...)
+			resp, err := New(server.URL, "qwen3", 4096).GenerateContent(context.Background(), wrapUp, noToolCallOpts(nil)...)
+			if err != nil {
+				t.Fatalf("GenerateContent() error = %v", err)
+			}
+			if got := resp.Choices[0]; got.Content != "asked again" || len(got.ToolCalls) != 0 {
+				t.Fatalf("choice = %q with %d tool calls, want the last reply's text", got.Content, len(got.ToolCalls))
+			}
+			tools := []int{}
+			for _, req := range *reqs {
+				tools = append(tools, len(req.Tools))
+			}
+			if !slices.Equal(tools, tt.wantTools) {
+				t.Fatalf("tools per request = %v, want %v", tools, tt.wantTools)
+			}
+			checkToolsOffFollowUp(t, (*reqs)[0].Messages, (*reqs)[1].Messages)
+		})
+	}
+}
+
+// checkToolsOffFollowUp checks that follow is first unchanged, so the prompt
+// cache still matches, plus the model's tool call and a tools-off result.
+func checkToolsOffFollowUp(t *testing.T, first, follow []ollamaMessage) {
+	t.Helper()
+	if len(follow) != len(first)+2 {
+		t.Fatalf("the follow-up must be the request plus the call and its result, got %d then %d messages", len(first), len(follow))
+	}
+	for i := range first {
+		if follow[i].Role != first[i].Role || follow[i].Content != first[i].Content {
+			t.Fatalf("message %d changed in the follow-up, so the prompt cache would miss", i)
 		}
-		if got := resp.Choices[0]; got.Content != "asked again" || len(got.ToolCalls) != 0 {
-			t.Fatalf("choice = %q with %d tool calls, want the second reply's text", got.Content, len(got.ToolCalls))
-		}
-		if len(*reqs) != 2 || len((*reqs)[0].Tools) != 1 || len((*reqs)[1].Tools) != 0 {
-			t.Fatalf("want a request with tools then one without, got %+v", *reqs)
-		}
-	})
+	}
+	calls, result := follow[len(first)], follow[len(first)+1]
+	if calls.Role != "assistant" || len(calls.ToolCalls) != 1 {
+		t.Fatalf("want the model's tool call echoed, got %+v", calls)
+	}
+	if result.Role != "tool" || result.ToolName != "Echo" || result.Content != toolsOffNote {
+		t.Fatalf("want a tools-off result for the call, got %+v", result)
+	}
 }
 
 func TestReadFullResponse(t *testing.T) {
