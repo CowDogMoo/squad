@@ -266,7 +266,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 			}
 		}
 
-		outputs := executeAndBuildOutputs(ctx, calls, handlers)
+		outputs := executeAndBuildOutputs(ctx, calls, handlers, i+1)
 		params := oairesponses.ResponseNewParams{
 			Model:              rc.Model,
 			PreviousResponseID: openai.String(resp.ID),
@@ -517,14 +517,15 @@ func logAPIError(ctx context.Context, err error, label string) {
 	logging.InfoContext(ctx, "responses API %s: %v", label, err)
 }
 
-func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers map[string]tools.Handler) []oairesponses.ResponseInputItemUnionParam {
+func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers map[string]tools.Handler, iteration int) []oairesponses.ResponseInputItemUnionParam {
 	outputs := make([]oairesponses.ResponseInputItemUnionParam, 0, len(calls))
 	logger := session.FromContext(ctx)
 	for _, call := range calls {
 		callCtx, rec := activity.StartTool(ctx, activity.ToolCall{
-			CallID: call.CallID,
-			Name:   call.Name,
-			Args:   call.Arguments,
+			Iteration: iteration,
+			CallID:    call.CallID,
+			Name:      call.Name,
+			Args:      call.Arguments,
 		})
 		output := runResponsesTool(callCtx, rec, call, handlers, logger)
 		outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{

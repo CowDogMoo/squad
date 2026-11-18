@@ -288,8 +288,9 @@ type ToolCall struct {
 	ParentToolUseID string
 }
 
-// StartTool writes the tool_call event and opens the "tool.<name>" span as a
-// child of the span on ctx (normally a turn). The returned context carries
+// StartTool writes the tool_call event, stamped with the call's start, and
+// opens the "tool.<name>" span as a child of the span on ctx (normally a
+// turn). The returned context carries
 // the tool span and call id, for handlers that add attributes to the span or
 // dispatch a child agent (WithChildAgent).
 func StartTool(ctx context.Context, call ToolCall) (context.Context, *Tool) {
@@ -320,7 +321,7 @@ func StartTool(ctx context.Context, call ToolCall) (context.Context, *Tool) {
 	if call.ParentToolUseID != "" {
 		payload["parent_tool_use_id"] = call.ParentToolUseID
 	}
-	Append(ctx, session.EventToolCall, payload)
+	appendAt(ctx, start, session.EventToolCall, payload)
 	return ctx, &Tool{ctx: ctx, span: span, callID: call.CallID, name: call.Name, iteration: call.Iteration, start: start}
 }
 
@@ -347,7 +348,7 @@ func (t *Tool) DenyAt(reason, message string, at time.Time) {
 	if t.iteration > 0 {
 		payload["iteration"] = t.iteration
 	}
-	Append(t.ctx, session.EventToolDenied, payload)
+	appendAt(t.ctx, at, session.EventToolDenied, payload)
 	t.span.SetAttributes(
 		attribute.Bool("squad.tool.denied", true),
 		attribute.String("squad.tool.denied_reason", reason),
@@ -405,7 +406,7 @@ func (t *Tool) Finish(res Result) {
 	for k, v := range res.Extra {
 		payload[k] = v
 	}
-	Append(t.ctx, session.EventToolResult, payload)
+	appendAt(t.ctx, end, session.EventToolResult, payload)
 	t.span.SetAttributes(
 		attribute.Int("squad.tool.output_bytes", res.OutputBytes),
 		attribute.Bool("squad.tool.denied", false),

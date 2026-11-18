@@ -57,15 +57,19 @@ from the CLI's stream-json output.
 |---|---|---|
 | `iteration` | Once per model turn | `index` (1-based), `tool_calls` (calls the turn requested) |
 | `response` | Once per model turn | `iteration`, `text` (the assistant's text), `thinking` and `thinking_bytes` (reasoning text, when the provider returns it), `thinking_tokens` (claude-code's reasoning estimate), `finish_reason`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `tool_calls`, `duration_ms` |
-| `tool_call` | When a tool call starts | `call_id`, `name`, `args` (the raw argument JSON), `iteration` |
+| `tool_call` | When a tool call starts; on `claude-code`, once the stream moves past the message that requested it (normally when its result arrives), with `ts` still the call's start | `call_id`, `name`, `args` (the raw argument JSON), `iteration` |
 | `tool_result` | When a tool call finishes | `call_id`, `name`, `bytes` (output size), `duration_ms`, `is_error`, `error`, `iteration` |
 | `tool_denied` | When a tool call is refused before it runs | `call_id`, `name`, `reason` (`readonly`, `sign_off`, `skill_allowed_tools`, or `permission` for a refusal the claude CLI reported), `message` (what the model was told), `iteration` |
 | `error` | When a model call or the agentic CLI fails | `phase` (`generate`, `final`, `cli`), `iteration`, `error` |
 
 On `claude-code` runs a turn's `iteration` and `response` events are written
 when the turn ends, after its tool events, so they hold its final tool-call
-count, stop reason and usage. They are stamped with the turn's start time, so
-sorting by `ts` puts each turn before its tool calls.
+count, stop reason and usage. A turn ends at its thread's next message, or,
+for a subagent's last turn, when the result of the `Task` call that started
+it arrives. Every event is stamped with when its step happened: a turn with
+its start, a tool call with its start, a tool result with its end. Sorting by
+`ts` therefore puts each turn before its tool calls, and its tool results
+before the next turn.
 Events from a claude-code subagent (a `Task` call inside the CLI) also carry
 `parent_tool_use_id`, the id of the tool call that started the subagent.
 Events from a child agent started by squad's `Task` tool share the parent's

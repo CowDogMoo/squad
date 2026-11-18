@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/tools"
 	oairesponses "github.com/openai/openai-go/v3/responses"
@@ -199,5 +201,48 @@ func TestCheckRepeat_Exceeded(t *testing.T) {
 	}
 	if !exceeded {
 		t.Error("expected checkRepeat to return true after repeated identical calls")
+	}
+}
+
+// TestExecuteAndBuildOutputsTagsLoopIteration checks tool events carry the
+// Responses loop's own iteration, not a turn index inherited through ctx
+// from a parent agent that dispatched this run as a Task child.
+func TestExecuteAndBuildOutputsTagsLoopIteration(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	l, err := session.New(t.TempDir(), "", "a", "p", "m", "")
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	parentTurn := activity.Recorder{Provider: "ollama", Model: "qwen"}.StartTurn(session.WithLogger(context.Background(), l), 5, time.Time{})
+	defer parentTurn.End()
+	handlers := map[string]tools.Handler{
+		"Echo": {Call: func(context.Context, []byte) (string, error) { return "ok", nil }},
+	}
+	executeAndBuildOutputs(parentTurn.Context(), []FunctionCall{{Name: "Echo", CallID: "c1", Arguments: "{}"}}, handlers, 2)
+
+	data, err := os.ReadFile(filepath.Join(l.Dir(), "events.jsonl"))
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	seen := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var ev struct {
+			Type    string         `json:"type"`
+			Payload map[string]any `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Type != session.EventToolCall && ev.Type != session.EventToolResult {
+			continue
+		}
+		seen++
+		if ev.Payload["iteration"] != float64(2) {
+			t.Errorf("%s iteration = %v, want the loop's 2", ev.Type, ev.Payload["iteration"])
+		}
+	}
+	if seen != 2 {
+		t.Errorf("tool events = %d, want tool_call and tool_result", seen)
 	}
 }

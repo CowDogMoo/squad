@@ -142,7 +142,8 @@ func (a *claudeActivity) Assistant(msg agenticcli.AssistantMessage) {
 	th.last = msg.Time
 }
 
-// ToolResults finishes the tool calls the results belong to.
+// ToolResults finishes the tool calls the results belong to, closing the
+// last turn of any subagent such a call dispatched.
 func (a *claudeActivity) ToolResults(results []agenticcli.ToolResult) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -155,6 +156,9 @@ func (a *claudeActivity) ToolResults(results []agenticcli.ToolResult) {
 		delete(a.tools, r.ToolUseID)
 		if th := a.threads[ct.threadID]; th != nil && r.Time.After(th.last) {
 			th.last = r.Time
+		}
+		if sub := a.threads[r.ToolUseID]; sub != nil {
+			a.closeTurn(sub, r.Time)
 		}
 		if denied(r.PermissionDecision) {
 			ct.tool.DenyAt(activity.DeniedByPermission, r.Content, r.Time)
@@ -181,7 +185,11 @@ func (a *claudeActivity) ToolDenied(toolUseID, message string) {
 		return
 	}
 	delete(a.tools, toolUseID)
-	ct.tool.Deny(activity.DeniedSignOff, message)
+	at := time.Now()
+	if th := a.threads[ct.threadID]; th != nil && at.After(th.last) {
+		th.last = at
+	}
+	ct.tool.DenyAt(activity.DeniedSignOff, message, at)
 }
 
 // Finished closes every open turn at the result event.

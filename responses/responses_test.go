@@ -247,7 +247,7 @@ func TestExecuteAndBuildOutputs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			outputs := executeAndBuildOutputs(ctx, tt.calls, handlers)
+			outputs := executeAndBuildOutputs(ctx, tt.calls, handlers, 1)
 			if len(outputs) != 1 {
 				t.Fatalf("expected 1 output, got %d", len(outputs))
 			}
@@ -289,7 +289,7 @@ func TestExecuteAndBuildOutputsDeniedByAllowedTools(t *testing.T) {
 		{Name: "Bash", CallID: "call-denied", Arguments: "{}"},
 		{Name: "Read", CallID: "call-allowed", Arguments: "{}"},
 	}
-	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	outputs := executeAndBuildOutputs(ctx, calls, handlers, 1)
 	if len(outputs) != 2 {
 		t.Fatalf("expected 2 outputs, got %d", len(outputs))
 	}
@@ -330,7 +330,7 @@ func TestExecuteAndBuildOutputsDeniedByReadOnlyMode(t *testing.T) {
 		{Name: "Write", CallID: "call-denied", Arguments: "{}"},
 		{Name: "Read", CallID: "call-allowed", Arguments: "{}"},
 	}
-	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	outputs := executeAndBuildOutputs(ctx, calls, handlers, 1)
 	if len(outputs) != 2 {
 		t.Fatalf("expected 2 outputs, got %d", len(outputs))
 	}
@@ -369,7 +369,7 @@ func TestExecuteAndBuildOutputsDeniedPendingSignOff(t *testing.T) {
 		{Name: "Write", CallID: "call-denied", Arguments: "{}"},
 		{Name: "Read", CallID: "call-allowed", Arguments: "{}"},
 	}
-	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	outputs := executeAndBuildOutputs(ctx, calls, handlers, 1)
 	if len(outputs) != 2 {
 		t.Fatalf("expected 2 outputs, got %d", len(outputs))
 	}
@@ -1103,7 +1103,7 @@ func TestExecuteAndBuildOutputsWithResultAndError(t *testing.T) {
 		},
 	}
 	calls := []FunctionCall{{Name: "PartialFail", CallID: "call-pf", Arguments: "{}"}}
-	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	outputs := executeAndBuildOutputs(ctx, calls, handlers, 1)
 	if len(outputs) != 1 {
 		t.Fatalf("expected 1 output, got %d", len(outputs))
 	}

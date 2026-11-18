@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -390,6 +391,7 @@ func TestInvokeAgenticCLIRecordsStream(t *testing.T) {
 func TestClaudeTurnCountsSlowToolUseBlocks(t *testing.T) {
 	ctx, rec, l := recordClaude(t)
 	a := newClaudeActivity(ctx, "haiku")
+	a.started = time.Now().Add(-time.Second)
 	a.Assistant(agenticcli.AssistantMessage{ID: "m1", Time: time.Now(), Text: []string{"Running two checks."}, ToolUses: []agenticcli.ToolUse{
 		{ID: "t1", Name: "Bash", Input: json.RawMessage(`{"command":"cat notes.txt"}`)},
 	}})
@@ -408,6 +410,11 @@ func TestClaudeTurnCountsSlowToolUseBlocks(t *testing.T) {
 	}
 	if n := evs[4].Payload["tool_calls"].(float64); n != 2 {
 		t.Errorf("iteration tool_calls = %v, want 2", n)
+	}
+	byTime := append([]claudeEvent(nil), evs...)
+	sort.SliceStable(byTime, func(i, j int) bool { return byTime[i].Ts.Before(byTime[j].Ts) })
+	if got := eventTypes(byTime); got != "iteration,response,tool_call,tool_call,tool_result,tool_result,iteration,response" {
+		t.Errorf("events by ts = %s, want each turn before its tool calls and the results before the next turn", got)
 	}
 	if !evs[4].Ts.Equal(a.started.UTC()) {
 		t.Errorf("iteration ts = %v, want the turn's start %v", evs[4].Ts, a.started.UTC())
@@ -514,4 +521,37 @@ func TestClaudeSubagentBeforeFlushNestsUnderTask(t *testing.T) {
 	if subResp == nil || subResp["duration_ms"].(float64) != 1000 {
 		t.Errorf("subagent response = %v, want duration_ms 1000", subResp)
 	}
+}
+
+// TestClaudeSubagentLastTurnRecordedAtTaskResult checks a subagent's last
+// turn is recorded and its span ended when the Task call's result arrives,
+// not at the end of the run.
+func TestClaudeSubagentLastTurnRecordedAtTaskResult(t *testing.T) {
+	ctx, rec, l := recordClaude(t)
+	a := newClaudeActivity(ctx, "sonnet")
+	a.Assistant(agenticcli.AssistantMessage{ID: "m1", Time: ts(1), ToolUses: []agenticcli.ToolUse{
+		{ID: "task", Name: "Task", Input: json.RawMessage(`{"description":"scan"}`)},
+	}})
+	a.Assistant(agenticcli.AssistantMessage{ID: "s1", ParentToolUseID: "task", Time: ts(2), Text: []string{"subagent report"}, StopReason: "end_turn"})
+	a.ToolResults([]agenticcli.ToolResult{{ToolUseID: "task", Time: ts(4), Content: "subagent report"}})
+
+	var subResp map[string]any
+	for _, ev := range claudeEvents(t, l) {
+		if ev.Type == session.EventResponse && ev.Payload["parent_tool_use_id"] == "task" {
+			subResp = ev.Payload
+		}
+	}
+	if subResp == nil || subResp["text"] != "subagent report" {
+		t.Errorf("subagent response before the run ended = %v, want its report", subResp)
+	}
+	var subTurn sdktrace.ReadOnlySpan
+	for _, s := range rec.Ended() {
+		if s.Name() == "chat sonnet" && s.EndTime().Equal(ts(2)) {
+			subTurn = s
+		}
+	}
+	if subTurn == nil {
+		t.Error("subagent turn span not ended at its last message when the Task result arrived")
+	}
+	a.close(ts(9))
 }
