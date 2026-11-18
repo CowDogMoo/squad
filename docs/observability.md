@@ -64,12 +64,12 @@ from the CLI's stream-json output.
 
 On `claude-code` runs a turn's `iteration` and `response` events are written
 when the turn ends, after its tool events, so they hold its final tool-call
-count, stop reason and usage. A turn ends at its thread's next message, or,
-for a subagent's last turn, when the result of the `Task` call that started
-it arrives. Every event is stamped with when its step happened: a turn with
-its start, a tool call with its start, a tool result with its end. Sorting by
-`ts` therefore puts each turn before its tool calls, and its tool results
-before the next turn.
+count, stop reason and usage. A turn ends at its thread's next message; a
+subagent's last turn ends when the result of the `Task` call that started it
+arrives, and the main agent's last turn when the run ends. Every event is
+stamped with when its step happened: a turn with its start, a tool call with
+its start, a tool result with its end. Sorting by `ts` therefore puts each
+turn before its tool calls, and its tool results before the next turn.
 Events from a claude-code subagent (a `Task` call inside the CLI) also carry
 `parent_tool_use_id`, the id of the tool call that started the subagent.
 Events from a child agent started by squad's `Task` tool share the parent's

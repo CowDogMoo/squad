@@ -21,7 +21,8 @@ import (
 // once the message is complete, which the stream signals by moving on to
 // anything other than more blocks of that message. The turn's iteration and
 // response events are written when it closes, at the next message of its
-// thread or the end of the run, so they hold its final tool-call count, stop
+// thread, at the result of the Task call that dispatched a subagent thread,
+// or at the end of the run, so they hold its final tool-call count, stop
 // reason and usage; RecordAt stamps them with the turn's start time.
 //
 // Subagent messages (parent_tool_use_id set) form their own sequence of

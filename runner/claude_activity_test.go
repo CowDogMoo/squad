@@ -329,13 +329,13 @@ func TestFailedClaudeRunKeepsContentOffSpans(t *testing.T) {
 				names[s.Name()] = s
 				var exported []string
 				for _, kv := range s.Attributes() {
-					exported = append(exported, kv.Value.Emit())
+					exported = append(exported, kv.Value.String())
 				}
 				exported = append(exported, s.Status().Description)
 				for _, ev := range s.Events() {
 					exported = append(exported, ev.Name)
 					for _, kv := range ev.Attributes {
-						exported = append(exported, kv.Value.Emit())
+						exported = append(exported, kv.Value.String())
 					}
 				}
 				for _, leak := range leaks {

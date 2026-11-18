@@ -194,13 +194,13 @@ func TestTurnParentsToolsAndWritesEvents(t *testing.T) {
 func spanText(s sdktrace.ReadOnlySpan) string {
 	var sb strings.Builder
 	for _, kv := range s.Attributes() {
-		sb.WriteString(kv.Value.Emit() + "\n")
+		sb.WriteString(kv.Value.String() + "\n")
 	}
 	sb.WriteString(s.Status().Description + "\n")
 	for _, ev := range s.Events() {
 		sb.WriteString(ev.Name + "\n")
 		for _, kv := range ev.Attributes {
-			sb.WriteString(kv.Value.Emit() + "\n")
+			sb.WriteString(kv.Value.String() + "\n")
 		}
 	}
 	return sb.String()
