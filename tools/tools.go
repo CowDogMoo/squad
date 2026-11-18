@@ -1994,6 +1994,7 @@ func bashTool(ex executor.Executor) func(ctx context.Context, rawArgs []byte) (s
 		span.SetAttributes(attribute.String("squad.executor.type", ex.Type()))
 		span.SetAttributes(telemetry.CommandAttributes("squad.tool", command)...)
 
+		ctx = telemetry.WithAgentCommand(ctx, command)
 		command = withSkillEnv(ctx, command)
 		output, err := ex.Execute(ctx, command)
 		if err != nil {

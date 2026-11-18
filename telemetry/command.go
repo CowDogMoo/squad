@@ -1,9 +1,11 @@
 package telemetry
 
 import (
+	"context"
 	"os"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -41,6 +43,24 @@ func CommandAttributes(prefix, command string) []attribute.KeyValue {
 		attribute.String(prefix+".command", value),
 		attribute.Int(prefix+".command_length", len(command)),
 	}
+}
+
+type agentCommandKey struct{}
+
+// WithAgentCommand returns a copy of ctx recording command as the agent wrote
+// it. Callers that wrap the command before passing it to an executor use it
+// so the executor span describes the agent's command, not the wrapper.
+func WithAgentCommand(ctx context.Context, command string) context.Context {
+	return context.WithValue(ctx, agentCommandKey{}, command)
+}
+
+// AgentCommand returns the command recorded on ctx by WithAgentCommand, or
+// command when none was recorded.
+func AgentCommand(ctx context.Context, command string) string {
+	if c, ok := ctx.Value(agentCommandKey{}).(string); ok {
+		return c
+	}
+	return command
 }
 
 // commandPathRe matches a first word made only of name and path characters;
@@ -85,10 +105,14 @@ func RedactCommand(s string) string {
 	return s
 }
 
-// truncate cuts s to maxLen bytes, appending "..." when it does.
+// truncate cuts s to at most maxLen bytes on a rune boundary, appending "..."
+// when it does.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
+	}
+	for maxLen > 0 && !utf8.RuneStart(s[maxLen]) {
+		maxLen--
 	}
 	return s[:maxLen] + "..."
 }

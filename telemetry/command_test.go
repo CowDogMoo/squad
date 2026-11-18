@@ -1,8 +1,10 @@
 package telemetry
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -123,6 +125,30 @@ func TestCommandAttributesOptInTruncates(t *testing.T) {
 	}
 	if len(got) != maxExportedCommandBytes+len("...") || !strings.HasPrefix(got, "echo password=[REDACTED] xxx") {
 		t.Errorf("opt-in squad.tool.command = %d bytes starting %q", len(got), got[:30])
+	}
+}
+
+func TestCommandAttributesOptInTruncatesOnRuneBoundary(t *testing.T) {
+	t.Setenv(ExportCommandsEnv, "1")
+	head := strings.Repeat("x", maxExportedCommandBytes-1)
+	cmd := head + "— ✓ done"
+	got := attrMap(CommandAttributes("squad.tool", cmd))["squad.tool.command"].AsString()
+	if !utf8.ValidString(got) {
+		t.Fatalf("opt-in squad.tool.command is not valid UTF-8: ends %q", got[len(got)-8:])
+	}
+	if got != head+"..." {
+		t.Errorf("opt-in squad.tool.command = %d bytes ending %q, want %d bytes ending %q", len(got), got[len(got)-8:], len(head)+3, "xxxxx...")
+	}
+}
+
+func TestAgentCommand(t *testing.T) {
+	wrapped := "export SQUAD_SKILL_DIR='/skills/alpha'; curl -s lab.test"
+	if got := AgentCommand(context.Background(), wrapped); got != wrapped {
+		t.Errorf("AgentCommand() without a recorded command = %q, want %q", got, wrapped)
+	}
+	ctx := WithAgentCommand(context.Background(), "curl -s lab.test")
+	if got := AgentCommand(ctx, wrapped); got != "curl -s lab.test" {
+		t.Errorf("AgentCommand() = %q, want %q", got, "curl -s lab.test")
 	}
 }
 

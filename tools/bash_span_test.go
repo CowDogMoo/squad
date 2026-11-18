@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -78,5 +80,49 @@ func TestBashToolSpanOptInExportsRedactedCommand(t *testing.T) {
 	want := `curl -H 'Authorization: Bearer [REDACTED]' 'https://lab.test/?api_key=[REDACTED]'`
 	if got != want {
 		t.Errorf("squad.tool.command = %q, want %q", got, want)
+	}
+}
+
+// agentCommandExecutor records, for the command it receives, the agent
+// command that executor spans would describe.
+type agentCommandExecutor struct {
+	mockExecutor
+	got chan [2]string
+}
+
+func (e *agentCommandExecutor) Execute(ctx context.Context, command string) ([]byte, error) {
+	e.got <- [2]string{command, telemetry.AgentCommand(ctx, command)}
+	return nil, nil
+}
+
+func TestBashToolsPassAgentCommandToExecutor(t *testing.T) {
+	agentCmd := "curl -s https://lab.test/api | jq .data"
+	tools := map[string]func(executor.Executor) func(context.Context, []byte) (string, error){
+		"Bash":           bashTool,
+		"BashBackground": bashBackgroundTool,
+	}
+	for name, tool := range tools {
+		t.Run(name, func(t *testing.T) {
+			ctx := InitBgCommandRegistry(pushedSkillCtx(t.TempDir()))
+			ex := &agentCommandExecutor{got: make(chan [2]string, 1)}
+			args, err := json.Marshal(map[string]string{"command": agentCmd})
+			if err != nil {
+				t.Fatalf("marshal args: %v", err)
+			}
+			if _, err := tool(ex)(ctx, args); err != nil {
+				t.Fatalf("%s error = %v", name, err)
+			}
+			select {
+			case got := <-ex.got:
+				if !strings.HasPrefix(got[0], "export SQUAD_SKILL_DIR=") || !strings.HasSuffix(got[0], "; "+agentCmd) {
+					t.Errorf("executor received %q, want the skill-env-wrapped command", got[0])
+				}
+				if got[1] != agentCmd {
+					t.Errorf("AgentCommand() on the executor ctx = %q, want %q", got[1], agentCmd)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("executor was not called")
+			}
+		})
 	}
 }
