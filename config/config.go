@@ -64,6 +64,10 @@ type RunConfig struct {
 	// answered with a nudge to continue instead of ending the run. Zero
 	// (the default) disables nudging.
 	TextNudges int `mapstructure:"text_nudges" yaml:"text_nudges"`
+	// RepeatNudges is how many times squad's repeat limits answer the model
+	// with a nudge to move on instead of ending the run. Zero (the default)
+	// disables nudging.
+	RepeatNudges int `mapstructure:"repeat_nudges" yaml:"repeat_nudges"`
 }
 
 // OtelConfig holds OpenTelemetry configuration.
@@ -288,6 +292,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("run.isolation", "")
 	v.SetDefault("run.max_retries", 3)
 	v.SetDefault("run.text_nudges", 0)
+	v.SetDefault("run.repeat_nudges", 0)
 	v.SetDefault("agents.cache_dir", "")
 	v.SetDefault("agents.repositories", map[string]string{
 		"official": "https://github.com/cowdogmoo/squad-agents.git",
