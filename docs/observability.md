@@ -117,10 +117,12 @@ When a tool result exceeds 8 KiB on the OpenAI Responses path it is written to `
 }
 ```
 
-`trace_id` and `span_id` name the run's root `squad.run` span. A
-`claude-code` run also records `claude_session_id`, the CLI's own session id,
-which names the CLI's transcript under `~/.claude/projects/`. A `claude-code`
-agent started by a `Task` call does not record its session id there.
+`trace_id` and `span_id` name the root `squad.run` span of the run that
+created the session. A resumed run keeps them here, and its own events carry
+its own trace id. A `claude-code` run also records `claude_session_id`, the
+CLI's own session id, which names the CLI's transcript under
+`~/.claude/projects/`. A `claude-code` agent started by a `Task` call does not
+record its session id there.
 
 Terminal statuses are `completed`, `error`, and `budget_exceeded`. A status of `running` means the session is active or was interrupted.
 
@@ -253,7 +255,7 @@ them in full locally:
 | `agent.invoke` | `gen_ai.provider.name`, `gen_ai.system`, `gen_ai.request.model`, `squad.agent`. For `claude-code` and `antigravity` also the run's `gen_ai.usage.*` totals, and for `claude-code` `squad.claude.session_id` |
 | `llm.call` | Request parameters and the run's `gen_ai.usage.*` totals (API providers) |
 | `chat <model>` | `gen_ai.operation.name=chat`, `gen_ai.provider.name`, `gen_ai.system`, `gen_ai.request.model`, `squad.turn.index`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, `gen_ai.response.finish_reasons`, `squad.turn.tool_calls`, `squad.turn.text_bytes`, `squad.turn.thinking_bytes`, `squad.turn.thinking_tokens` |
-| `tool.<Name>` | `squad.tool.name`, `squad.tool.call_id`, `squad.tool.args_bytes`, `squad.tool.output_bytes`, `squad.tool.denied`, `squad.tool.denied_reason`, error status; Bash also `squad.tool.command` (see below) |
+| `tool.<Name>` | `squad.tool.name`, `squad.tool.call_id`, `squad.tool.args_bytes`, `squad.tool.output_bytes`, `squad.tool.denied`, `squad.tool.denied_reason`, error status; squad's own Bash tool (API providers) also `squad.tool.command` (see below) |
 
 A tool call that failed has an error status. When the error is only the
 tool's own output, as with `claude-code` tool results, the status reads
@@ -274,10 +276,11 @@ therefore be lower than the turn's final count; the run totals on
 
 ### Shell command attributes
 
-Bash tool spans carry `squad.tool.command` and `squad.tool.command_length`, and
-Docker, kubectl and SSM executor spans carry `squad.executor.command` and
-`squad.executor.command_length`. Commands often contain credentials, so by
-default the `command` attribute holds only the executable name: the basename
+Spans from squad's own Bash tool (API providers) carry `squad.tool.command`
+and `squad.tool.command_length`, and Docker, kubectl and SSM executor spans
+carry `squad.executor.command` and `squad.executor.command_length`.
+`claude-code` `tool.Bash` spans never carry command text, because the CLI runs
+Bash itself. Commands often contain credentials, so by default the `command` attribute holds only the executable name: the basename
 of the command's first whitespace-separated word, when that word is a plain
 name or path made of letters, digits and `. _ + - /`. Any other first word,
 such as a `VAR=value` assignment, a quoted word, a `$(...)` substitution or a

@@ -111,7 +111,7 @@ type TokenTotals struct {
 
 // Event is one append-only record written to events.jsonl. TraceID and
 // SpanID name the span that was active when the event was written (see
-// AppendContext); events written without one carry the session's root
+// AppendContext); events written without one carry the current run's root
 // trace id only.
 type Event struct {
 	Ts      time.Time       `json:"ts"`
@@ -129,6 +129,7 @@ type Logger struct {
 	events    *os.File
 	mu        sync.Mutex
 	meta      Meta
+	traceID   string
 }
 
 // New creates a fresh session under XDG_STATE_HOME/squad/sessions/<id>/ and
@@ -266,8 +267,8 @@ func (l *Logger) LastResponseID() string {
 }
 
 // Append records an event to events.jsonl. payload may be nil. Safe to
-// call on a nil Logger (no-op). The event carries the session's root trace
-// id; use AppendContext to also record the active span.
+// call on a nil Logger (no-op). The event carries the current run's root
+// trace id; use AppendContext to also record the active span.
 func (l *Logger) Append(eventType string, payload any) error {
 	if l == nil {
 		return nil
@@ -279,7 +280,7 @@ func (l *Logger) Append(eventType string, payload any) error {
 
 // AppendContext records an event like Append, stamping it with the trace and
 // span ids of the span active on ctx. Without a valid span on ctx it falls
-// back to the session's root trace id. Safe to call on a nil Logger.
+// back to the current run's root trace id. Safe to call on a nil Logger.
 func (l *Logger) AppendContext(ctx context.Context, eventType string, payload any) error {
 	return l.AppendContextAt(ctx, time.Time{}, eventType, payload)
 }
@@ -322,7 +323,7 @@ func (l *Logger) appendLocked(ts time.Time, eventType, traceID, spanID string, p
 		raw = b
 	}
 	if traceID == "" {
-		traceID = l.meta.TraceID
+		traceID = l.traceID
 	}
 	if ts.IsZero() {
 		ts = time.Now()
@@ -338,9 +339,10 @@ func (l *Logger) appendLocked(ts time.Time, eventType, traceID, spanID string, p
 	return nil
 }
 
-// SetTrace records the run's root span in meta.json from the span active on
-// ctx. A resumed session keeps the trace it was created under. Safe on a nil
-// Logger; a ctx without a valid span is ignored.
+// SetTrace takes the span active on ctx as the current run's root: events
+// written without a span carry its trace id, and meta.json records it. A
+// resumed session's meta.json keeps the trace it was created under. Safe on
+// a nil Logger; a ctx without a valid span is ignored.
 func (l *Logger) SetTrace(ctx context.Context) {
 	if l == nil {
 		return
@@ -351,6 +353,7 @@ func (l *Logger) SetTrace(ctx context.Context) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.traceID = traceID
 	if l.meta.TraceID != "" {
 		return
 	}

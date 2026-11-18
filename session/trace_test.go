@@ -126,8 +126,14 @@ func TestOpenKeepsTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	reopened.SetTrace(spanContext(t, "ffffffffffffffffffffffffffffffff", childSpan))
+	const resumedTrace = "ffffffffffffffffffffffffffffffff"
+	reopened.SetTrace(spanContext(t, resumedTrace, childSpan))
+	reopened.Finish(StatusCompleted, "")
 	if got := readMeta(t, reopened); got.TraceID != rootTrace {
 		t.Errorf("resumed trace_id = %q, want the original %q", got.TraceID, rootTrace)
+	}
+	evs := readTraceEvents(t, reopened)
+	if len(evs) == 0 || evs[len(evs)-1].Type != EventRunEnd || evs[len(evs)-1].TraceID != resumedTrace {
+		t.Errorf("resumed run_end = %+v, want the resumed run's trace %s", evs, resumedTrace)
 	}
 }
