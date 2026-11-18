@@ -4,10 +4,17 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace/noop"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
@@ -430,5 +437,65 @@ func TestKubeExecutor_EnvironmentDescriptionContainerField(t *testing.T) {
 	}
 	if !strings.Contains(desc, "testns") {
 		t.Errorf("EnvironmentDescription = %q, want 'testns'", desc)
+	}
+}
+
+// TestKubeExecutor_TransportErrorOmitsCommand drives the real SPDY executor
+// against an unreachable API server. client-go flattens the transport error
+// into text that embeds the exec URL, whose query string carries the
+// URL-encoded command; none of it may reach the span or the returned error.
+func TestKubeExecutor_TransportErrorOmitsCommand(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(noop.NewTracerProvider())
+		_ = tp.Shutdown(context.Background())
+	})
+
+	srv := httptest.NewServer(http.NotFoundHandler())
+	srv.Close()
+	restCfg := &rest.Config{Host: srv.URL}
+	client, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		t.Fatalf("NewForConfig: %v", err)
+	}
+	cfg := &Config{Type: "kubectl", Options: map[string]string{"pod": "probe-pod", "namespace": "probe-ns"}}
+	ex := newKubeExecutor(client, restCfg, cfg, remotecommand.NewSPDYExecutor)
+
+	secret := "s3cr3t-" + "fixture-value"
+	_, err = ex.Execute(context.Background(), `curl -H 'Authorization: Bearer `+secret+`' https://lab.test`)
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("returned error carries command text: %q", err)
+	}
+	if !strings.Contains(err.Error(), "command failed") {
+		t.Errorf("error = %q, want 'command failed'", err)
+	}
+
+	var found bool
+	for _, s := range rec.Ended() {
+		if s.Name() != "executor.kubectl" {
+			continue
+		}
+		found = true
+		if s.Status().Code != codes.Error {
+			t.Errorf("span status = %v, want Error", s.Status().Code)
+		}
+		if strings.Contains(s.Status().Description, secret) {
+			t.Errorf("span status carries command text: %q", s.Status().Description)
+		}
+		for _, ev := range s.Events() {
+			for _, kv := range ev.Attributes {
+				if strings.Contains(kv.Value.String(), secret) {
+					t.Errorf("span event %s attribute %s carries command text", ev.Name, kv.Key)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no executor.kubectl span recorded")
 	}
 }

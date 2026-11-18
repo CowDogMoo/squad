@@ -3,8 +3,10 @@ package executor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/cowdogmoo/squad/telemetry"
 	"go.opentelemetry.io/otel/attribute"
@@ -87,8 +89,8 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 		attribute.String("squad.executor.pod", e.pod),
 		attribute.String("squad.executor.namespace", e.namespace),
 		attribute.String("squad.executor.shell", e.shell),
-		attribute.String("squad.executor.command", command),
 	}
+	spanAttrs = append(spanAttrs, telemetry.CommandAttributes("squad.executor", telemetry.AgentCommand(ctx, command))...)
 	if e.container != "" {
 		spanAttrs = append(spanAttrs, attribute.String("squad.executor.container", e.container))
 	}
@@ -114,8 +116,10 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 		SubResource("exec").
 		VersionedParams(execOpts, e.codec)
 
-	spdy, err := e.newSPDY(e.config, "POST", req.URL())
+	execURL := req.URL()
+	spdy, err := e.newSPDY(e.config, "POST", execURL)
 	if err != nil {
+		err = omitExecQuery(err, execURL.RawQuery)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("failed to create SPDY executor: %w", err)
@@ -133,12 +137,25 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 	}
 
 	if err != nil {
+		err = omitExecQuery(err, execURL.RawQuery)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return combined, fmt.Errorf("command failed: %w", err)
 	}
 
 	return combined, nil
+}
+
+// omitExecQuery removes the exec URL's query string, which carries the
+// URL-encoded command, from err. client-go flattens transport failures into
+// text that embeds the full exec URL, so without this the command would reach
+// span status, exception events and the error returned to the tool.
+func omitExecQuery(err error, rawQuery string) error {
+	msg := err.Error()
+	if rawQuery == "" || !strings.Contains(msg, rawQuery) {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(msg, rawQuery, "[command omitted]"))
 }
 
 // Close is a no-op (pod lifecycle is managed externally).

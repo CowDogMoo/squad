@@ -10,6 +10,7 @@ import (
 	"github.com/cowdogmoo/squad/csync"
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
+	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -150,6 +151,7 @@ func bashBackgroundTool(ex executor.Executor) func(ctx context.Context, rawArgs 
 			return "", fmt.Errorf("background commands not available")
 		}
 
+		ctx = telemetry.WithAgentCommand(ctx, command)
 		command = withSkillEnv(ctx, command)
 		id := registry.Spawn(ctx, ex, command)
 		logging.InfoContext(ctx, "  → BashBackground %s → %s", TruncateString(command, 120), id)

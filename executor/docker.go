@@ -166,9 +166,9 @@ func (e *DockerExecutor) Execute(ctx context.Context, command string) ([]byte, e
 		trace.WithAttributes(
 			attribute.String("squad.executor.container_id", shortID),
 			attribute.String("squad.executor.shell", e.shell),
-			attribute.String("squad.executor.command", command),
 		),
 	)
+	span.SetAttributes(telemetry.CommandAttributes("squad.executor", telemetry.AgentCommand(ctx, command))...)
 	defer span.End()
 
 	execResp, err := e.client.ExecCreate(ctx, containerID, dockerclient.ExecCreateOptions{

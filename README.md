@@ -588,6 +588,12 @@ All config keys are available as `SQUAD_*` env vars (replace `.` with `_`, upper
 | `SQUAD_LOG_FORMAT`        | Log format                                   |
 | `SQUAD_OTEL_ENDPOINT`     | OTLP endpoint for telemetry                  |
 
+**Environment-only settings** (no config-file key):
+
+| Variable                     | Description                                                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `SQUAD_OTEL_EXPORT_COMMANDS` | Set to `1` to export full shell commands on spans, with best-effort redaction (default: executable name only) |
+
 ### OpenAI-Compatible Endpoints
 
 ```yaml
