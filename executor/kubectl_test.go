@@ -489,7 +489,7 @@ func TestKubeExecutor_TransportErrorOmitsCommand(t *testing.T) {
 		}
 		for _, ev := range s.Events() {
 			for _, kv := range ev.Attributes {
-				if strings.Contains(kv.Value.Emit(), secret) {
+				if strings.Contains(kv.Value.String(), secret) {
 					t.Errorf("span event %s attribute %s carries command text", ev.Name, kv.Key)
 				}
 			}
