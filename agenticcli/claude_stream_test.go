@@ -131,6 +131,7 @@ func TestStreamReaderKeepsOnlyNonEventLinesRaw(t *testing.T) {
 	sr := &streamReader{}
 	input := "plain text line\n" +
 		`{"type":"assistant","message":{"id":"m","content":[{"type":"text","text":"assistant prose"}]}}` + "\n" +
+		`{"type":"user","message":{"content":[{"type":"tool_result","content":"partial outp` + "\n" +
 		`{"type":"result","is_error":true,"result":"boom"}`
 	if err := sr.read(strings.NewReader(input)); err != nil {
 		t.Fatal(err)
@@ -140,6 +141,15 @@ func TestStreamReaderKeepsOnlyNonEventLinesRaw(t *testing.T) {
 	}
 	if !sr.resultSeen || sr.resErr == nil || !strings.Contains(sr.resErr.Error(), "boom") {
 		t.Errorf("error result not surfaced: seen=%v err=%v", sr.resultSeen, sr.resErr)
+	}
+
+	bad := &streamReader{}
+	if err := bad.read(strings.NewReader(`{"type":"result","num_turns":"three","result":"final prose"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if bad.raw.Len() != 0 || !bad.resultSeen || bad.resErr == nil ||
+		!strings.HasPrefix(bad.resErr.Error(), "undecodable result event") || strings.Contains(bad.resErr.Error(), "final prose") {
+		t.Errorf("undecodable result: raw=%q seen=%v err=%v", bad.raw.String(), bad.resultSeen, bad.resErr)
 	}
 }
 
@@ -267,6 +277,12 @@ plain diagnostic line
 			name:    "error result",
 			stdout:  events + `{"type":"result","is_error":true,"num_turns":1,"result":"Credit balance is too low","usage":{"input_tokens":3}}` + "\n",
 			wantErr: "claude run failed: Credit balance is too low",
+		},
+		{
+			name:    "killed mid-event",
+			stdout:  events + `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"more OUTPUT-fixture bytes`,
+			wantErr: "claude CLI failed: exit status 1",
+			want:    []string{"stderr: auth expired", "stdout: plain diagnostic line"},
 		},
 	}
 	for _, tt := range tests {

@@ -51,6 +51,17 @@ type recorderKey struct{}
 
 type turnKey struct{}
 
+type callKey struct{}
+
+type childKey struct{}
+
+// child names the Task child agent a context belongs to and the tool call
+// that dispatched it.
+type child struct {
+	agent  string
+	callID string
+}
+
 // WithRecorder attaches r to ctx so nested loops record turns under the
 // right provider and model.
 func WithRecorder(ctx context.Context, r Recorder) context.Context {
@@ -68,6 +79,15 @@ func RecorderFrom(ctx context.Context) Recorder {
 func TurnIndex(ctx context.Context) int {
 	i, _ := ctx.Value(turnKey{}).(int)
 	return i
+}
+
+// WithChildAgent returns the context for child agent agent, dispatched by the
+// tool call whose context (from StartTool) is ctx. Events recorded under it
+// carry the agent's name as agent and, unless they name their own, the
+// call's id as parent_tool_use_id.
+func WithChildAgent(ctx context.Context, agent string) context.Context {
+	callID, _ := ctx.Value(callKey{}).(string)
+	return context.WithValue(ctx, childKey{}, child{agent: agent, callID: callID})
 }
 
 // Usage is one turn's token counts. InputTokens is fresh prompt input; the
@@ -154,7 +174,6 @@ func (t *Turn) RecordAt(res TurnResult, at time.Time) {
 }
 
 func (t *Turn) recordAt(res TurnResult, at time.Time) {
-	logger := session.FromContext(t.ctx)
 	iteration := map[string]any{
 		"index":      t.index,
 		"tool_calls": res.ToolCalls,
@@ -162,7 +181,7 @@ func (t *Turn) recordAt(res TurnResult, at time.Time) {
 	if res.ParentToolUseID != "" {
 		iteration["parent_tool_use_id"] = res.ParentToolUseID
 	}
-	appendEvent(t.ctx, logger, session.EventIteration, iteration)
+	Append(t.ctx, session.EventIteration, iteration)
 	payload := map[string]any{
 		"iteration":     t.index,
 		"input_tokens":  res.Usage.InputTokens,
@@ -192,7 +211,7 @@ func (t *Turn) recordAt(res TurnResult, at time.Time) {
 	if res.Usage.CacheWriteTokens > 0 {
 		payload["cache_write_tokens"] = res.Usage.CacheWriteTokens
 	}
-	appendEvent(t.ctx, logger, session.EventResponse, payload)
+	Append(t.ctx, session.EventResponse, payload)
 
 	attrs := []attribute.KeyValue{
 		attribute.Int64("gen_ai.usage.input_tokens", res.Usage.InputTokens),
@@ -218,7 +237,7 @@ func (t *Turn) Fail(phase string, err error) {
 	if err == nil {
 		return
 	}
-	appendEvent(t.ctx, session.FromContext(t.ctx), session.EventError, map[string]any{
+	Append(t.ctx, session.EventError, map[string]any{
 		"phase":     phase,
 		"iteration": t.index,
 		"error":     truncate(err.Error(), maxEventErrorBytes),
@@ -268,7 +287,8 @@ type ToolCall struct {
 
 // StartTool writes the tool_call event and opens the "tool.<name>" span as a
 // child of the span on ctx (normally a turn). The returned context carries
-// the tool span, for handlers that add attributes to it.
+// the tool span and call id, for handlers that add attributes to the span or
+// dispatch a child agent (WithChildAgent).
 func StartTool(ctx context.Context, call ToolCall) (context.Context, *Tool) {
 	start := call.Start
 	if start.IsZero() {
@@ -285,6 +305,7 @@ func StartTool(ctx context.Context, call ToolCall) (context.Context, *Tool) {
 			attribute.Int("squad.tool.args_bytes", len(call.Args)),
 		),
 	)
+	ctx = context.WithValue(ctx, callKey{}, call.CallID)
 	payload := map[string]any{
 		"call_id": call.CallID,
 		"name":    call.Name,
@@ -296,7 +317,7 @@ func StartTool(ctx context.Context, call ToolCall) (context.Context, *Tool) {
 	if call.ParentToolUseID != "" {
 		payload["parent_tool_use_id"] = call.ParentToolUseID
 	}
-	appendEvent(ctx, session.FromContext(ctx), session.EventToolCall, payload)
+	Append(ctx, session.EventToolCall, payload)
 	return ctx, &Tool{ctx: ctx, span: span, callID: call.CallID, name: call.Name, iteration: call.Iteration, start: start}
 }
 
@@ -323,7 +344,7 @@ func (t *Tool) DenyAt(reason, message string, at time.Time) {
 	if t.iteration > 0 {
 		payload["iteration"] = t.iteration
 	}
-	appendEvent(t.ctx, session.FromContext(t.ctx), session.EventToolDenied, payload)
+	Append(t.ctx, session.EventToolDenied, payload)
 	t.span.SetAttributes(
 		attribute.Bool("squad.tool.denied", true),
 		attribute.String("squad.tool.denied_reason", reason),
@@ -381,7 +402,7 @@ func (t *Tool) Finish(res Result) {
 	for k, v := range res.Extra {
 		payload[k] = v
 	}
-	appendEvent(t.ctx, session.FromContext(t.ctx), session.EventToolResult, payload)
+	Append(t.ctx, session.EventToolResult, payload)
 	t.span.SetAttributes(
 		attribute.Int("squad.tool.output_bytes", res.OutputBytes),
 		attribute.Bool("squad.tool.denied", false),
@@ -402,7 +423,7 @@ func Error(ctx context.Context, phase string, err error) {
 	if err == nil {
 		return
 	}
-	appendEvent(ctx, session.FromContext(ctx), session.EventError, map[string]any{
+	Append(ctx, session.EventError, map[string]any{
 		"phase": phase,
 		"error": truncate(err.Error(), maxEventErrorBytes),
 	})
@@ -416,9 +437,19 @@ func endSpan(span trace.Span, at time.Time) {
 	span.End(trace.WithTimestamp(at))
 }
 
-func appendEvent(ctx context.Context, l *session.Logger, eventType string, payload any) {
+// Append writes one event to the session log on ctx, tagged with the child
+// agent ctx belongs to (see WithChildAgent). It is a no-op without a session
+// logger.
+func Append(ctx context.Context, eventType string, payload map[string]any) {
+	l := session.FromContext(ctx)
 	if l == nil {
 		return
+	}
+	if c, ok := ctx.Value(childKey{}).(child); ok {
+		payload["agent"] = c.agent
+		if _, own := payload["parent_tool_use_id"]; !own && c.callID != "" {
+			payload["parent_tool_use_id"] = c.callID
+		}
 	}
 	if err := l.AppendContext(ctx, eventType, payload); err != nil {
 		logging.Warn("session: append %s failed: %v", eventType, err)

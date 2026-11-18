@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/csync"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
@@ -82,7 +83,7 @@ func (r *BackgroundTaskRegistry) SpawnTask(ctx context.Context, cfg TaskConfig, 
 		}
 
 		depth := TaskDepth(ctx)
-		childCtx := WithTaskDepth(ctx, depth+1)
+		childCtx := activity.WithChildAgent(WithTaskDepth(ctx, depth+1), args.Agent)
 
 		// Create a linked span for the background task (not a child span,
 		// because the goroutine outlives the parent).
@@ -267,7 +268,7 @@ func taskTool(cfg TaskConfig) func(ctx context.Context, rawArgs []byte) (string,
 		}
 
 		// Blocking task: wait for completion
-		childCtx := WithTaskDepth(ctx, depth+1)
+		childCtx := activity.WithChildAgent(WithTaskDepth(ctx, depth+1), args.Agent)
 		logging.InfoContext(ctx, "Task tool: spawning child agent=%s depth=%d", args.Agent, depth+1)
 
 		response, childMetrics, err := cfg.CallModel(childCtx, cfg.AgentsDir, args.Agent, args.Prompt, workDir, args.Mode)

@@ -48,35 +48,10 @@ func TestFormatLargeResultPlaceholder(t *testing.T) {
 	}
 }
 
-func TestLogEventNilLoggerNoop(t *testing.T) {
-	// Must not panic and must not error on nil logger.
-	logEvent(nil, session.EventToolCall, map[string]any{"name": "Read"})
-}
-
-func TestLogEventWritesToSession(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	wd := t.TempDir()
-	l, err := session.New(wd, "", "a", "p", "m", "")
-	if err != nil {
-		t.Fatalf("session.New: %v", err)
-	}
-	t.Cleanup(func() { _ = l.Close() })
-
-	logEvent(l, session.EventToolCall, map[string]any{"name": "Read"})
-
-	data, err := os.ReadFile(filepath.Join(l.Dir(), "events.jsonl"))
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	if !strings.Contains(string(data), `"type":"tool_call"`) {
-		t.Fatalf("expected tool_call event in events.jsonl: %s", data)
-	}
-}
-
 func TestRecordResponseNilSafe(t *testing.T) {
 	// nil logger and nil resp should both no-op.
-	recordResponse(nil, nil, "label")
-	recordResponse(nil, &oairesponses.Response{ID: "x"}, "label")
+	recordResponse(context.Background(), nil, "label")
+	recordResponse(context.Background(), &oairesponses.Response{ID: "x"}, "label")
 
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
@@ -85,7 +60,7 @@ func TestRecordResponseNilSafe(t *testing.T) {
 		t.Fatalf("session.New: %v", err)
 	}
 	t.Cleanup(func() { _ = l.Close() })
-	recordResponse(l, nil, "label")
+	recordResponse(session.WithLogger(context.Background(), l), nil, "label")
 }
 
 func TestRecordResponseSetsLastIDAndAppends(t *testing.T) {
@@ -98,7 +73,7 @@ func TestRecordResponseSetsLastIDAndAppends(t *testing.T) {
 	t.Cleanup(func() { _ = l.Close() })
 
 	resp := &oairesponses.Response{ID: "resp_xyz"}
-	recordResponse(l, resp, "initial")
+	recordResponse(session.WithLogger(context.Background(), l), resp, "initial")
 
 	if got := l.LastResponseID(); got != "resp_xyz" {
 		t.Fatalf("LastResponseID = %q, want resp_xyz", got)

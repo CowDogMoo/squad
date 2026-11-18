@@ -10,6 +10,7 @@ import (
 	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/agenticcli"
 	"github.com/cowdogmoo/squad/session"
+	"github.com/cowdogmoo/squad/tools"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -75,6 +76,7 @@ type claudeTool struct {
 	tool     *activity.Tool
 	ctx      context.Context
 	threadID string
+	start    time.Time
 }
 
 func newClaudeActivity(ctx context.Context, model string) *claudeActivity {
@@ -88,14 +90,17 @@ func newClaudeActivity(ctx context.Context, model string) *claudeActivity {
 }
 
 // SessionStarted records the CLI's session id and, when squad passed no
-// --model, the model the CLI resolved.
+// --model, the model the CLI resolved. A Task child's session id stays off
+// the parent run's meta.json.
 func (a *claudeActivity) SessionStarted(sessionID, model string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.rec.Model == "" {
 		a.rec.Model = model
 	}
-	session.FromContext(a.ctx).SetClaudeSessionID(sessionID)
+	if tools.TaskDepth(a.ctx) == 0 {
+		session.FromContext(a.ctx).SetClaudeSessionID(sessionID)
+	}
 	trace.SpanFromContext(a.ctx).SetAttributes(attribute.String("squad.claude.session_id", sessionID))
 }
 
@@ -227,22 +232,26 @@ func (a *claudeActivity) armFlush() {
 func (a *claudeActivity) thread(parentID string) *claudeThread {
 	th := a.threads[parentID]
 	if th == nil {
-		th = &claudeThread{parentID: parentID, last: a.started}
+		th = &claudeThread{parentID: parentID}
+		if parentID == "" {
+			th.last = a.started
+		}
 		a.threads[parentID] = th
 	}
 	return th
 }
 
 // openTurn starts the thread's next turn. The model began generating it when
-// the thread's previous activity ended, so that is the turn's start time.
+// the thread's previous activity ended, so that is the turn's start time; a
+// subagent's first turn starts with the tool call that dispatched it.
 func (a *claudeActivity) openTurn(th *claudeThread, msg agenticcli.AssistantMessage) {
-	parent := a.ctx
-	if th.parentID != "" {
-		if ct := a.tools[th.parentID]; ct != nil {
-			parent = ct.ctx
+	parent, start := a.ctx, th.last
+	if ct := a.tools[th.parentID]; th.parentID != "" && ct != nil {
+		parent = ct.ctx
+		if start.IsZero() {
+			start = ct.start
 		}
 	}
-	start := th.last
 	if start.IsZero() || start.After(msg.Time) {
 		start = msg.Time
 	}
@@ -308,7 +317,7 @@ func (a *claudeActivity) startPending(th *claudeThread) {
 			Start:           p.at,
 			ParentToolUseID: th.parentID,
 		})
-		a.tools[p.use.ID] = &claudeTool{tool: tool, ctx: ctx, threadID: th.parentID}
+		a.tools[p.use.ID] = &claudeTool{tool: tool, ctx: ctx, threadID: th.parentID, start: p.at}
 	}
 	th.pending = nil
 }

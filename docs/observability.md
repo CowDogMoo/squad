@@ -64,6 +64,10 @@ from the CLI's stream-json output.
 
 Events from a claude-code subagent (a `Task` call inside the CLI) also carry
 `parent_tool_use_id`, the id of the tool call that started the subagent.
+Events from a child agent started by squad's `Task` tool share the parent's
+`events.jsonl` and carry `agent`, the child agent's name, and
+`parent_tool_use_id`, the id of the `Task` call (unless they already name a
+claude-code subagent's call).
 Responses API events keep their own extra fields (`label`, `id`, `status`,
 `sent_bytes`). The `antigravity` provider prints only a final JSON envelope, so
 its sessions hold `run_start`, `run_end` and, on failure, `error`.
@@ -140,7 +144,8 @@ status=completed · 3 turns · 3 tool calls (1 failed, 0 denied) · 0 errors
 
 `trace_id` and `span_id` name the run's root `squad.run` span. A
 `claude-code` run also records `claude_session_id`, the CLI's own session id,
-which names the CLI's transcript under `~/.claude/projects/`.
+which names the CLI's transcript under `~/.claude/projects/`. A `claude-code`
+agent started by a `Task` call does not record its session id there.
 
 Terminal statuses are `completed`, `error`, and `budget_exceeded`. A status of `running` means the session is active or was interrupted.
 
@@ -279,8 +284,9 @@ A tool call that failed has an error status. When the error is only the
 tool's own output, as with `claude-code` tool results, the status reads
 `tool returned an error` and the output itself is only in `events.jsonl`. A
 failed `claude-code` run puts the CLI's error result on `agent.invoke`, or,
-when there is none, its stderr and any stdout lines that are not stream-json
-events. The stream's turns and tool calls never reach the error.
+when there is none, its stderr and any stdout lines that are not JSON. No
+stream-json event reaches the error, not even one cut off because the CLI was
+killed while writing it.
 
 `gen_ai.provider.name` and `gen_ai.system` both hold squad's provider name
 (`ollama`, `claude-code`, ...). `gen_ai.system` is kept for backends that still

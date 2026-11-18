@@ -15,6 +15,7 @@ import (
 	"github.com/cowdogmoo/squad/agenticcli"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/session"
+	"github.com/cowdogmoo/squad/tools"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -170,6 +171,7 @@ func readMetaClaudeSession(t *testing.T, l *session.Logger) string {
 func TestClaudeActivityDenialsAndSubagents(t *testing.T) {
 	ctx, rec, l := recordClaude(t)
 	a := newClaudeActivity(ctx, "sonnet")
+	a.started = ts(0)
 	a.Assistant(agenticcli.AssistantMessage{ID: "m1", Time: ts(1), ToolUses: []agenticcli.ToolUse{
 		{ID: "task", Name: "Task", Input: json.RawMessage(`{"description":"scan"}`)},
 		{ID: "w1", Name: "Write", Input: json.RawMessage(`{"file_path":"a"}`)},
@@ -211,6 +213,15 @@ func TestClaudeActivityDenialsAndSubagents(t *testing.T) {
 	if subCall == nil || subCall["parent_tool_use_id"] != "task" || subCall["iteration"].(float64) != 1 {
 		t.Errorf("subagent tool_call = %v", subCall)
 	}
+	var subResp map[string]any
+	for _, ev := range byType[session.EventResponse] {
+		if ev.Payload["parent_tool_use_id"] == "task" {
+			subResp = ev.Payload
+		}
+	}
+	if subResp == nil || subResp["duration_ms"].(float64) != 2000 {
+		t.Errorf("subagent response = %v, want duration_ms 2000 (from the Task call at 1s to the message at 3s)", subResp)
+	}
 
 	spans := map[string]sdktrace.ReadOnlySpan{}
 	for _, s := range rec.Ended() {
@@ -226,6 +237,9 @@ func TestClaudeActivityDenialsAndSubagents(t *testing.T) {
 	if subTurn == nil {
 		t.Fatal("subagent turn is not nested under the Task tool span")
 	}
+	if !subTurn.StartTime().Equal(ts(1)) {
+		t.Errorf("subagent turn starts %v, want when the Task call started (%v)", subTurn.StartTime(), ts(1))
+	}
 	if spans["tool.Grep"].Parent().SpanID() != subTurn.SpanContext().SpanID() {
 		t.Error("subagent Grep is not under the subagent turn")
 	}
@@ -239,6 +253,17 @@ func TestClaudeActivityDenialsAndSubagents(t *testing.T) {
 		if !denied {
 			t.Errorf("%s not marked denied", name)
 		}
+	}
+}
+
+// TestClaudeActivityTaskChildKeepsParentSession checks a claude-code agent
+// run as a Task child does not overwrite the parent run's claude_session_id.
+func TestClaudeActivityTaskChildKeepsParentSession(t *testing.T) {
+	ctx, _, l := recordClaude(t)
+	newClaudeActivity(ctx, "").SessionStarted("parent-session", "haiku")
+	newClaudeActivity(tools.WithTaskDepth(ctx, 1), "").SessionStarted("child-session", "haiku")
+	if got := readMetaClaudeSession(t, l); got != "parent-session" {
+		t.Errorf("claude_session_id = %q, want the parent's", got)
 	}
 }
 

@@ -125,8 +125,7 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		ReasoningPrefixes: reasoningPrefixes,
 	}
 
-	logger := session.FromContext(ctx)
-	logEvent(logger, session.EventPrompt, map[string]any{
+	activity.Append(ctx, session.EventPrompt, map[string]any{
 		"role":          "user",
 		"bytes":         len(userPrompt),
 		"resumed_chain": resumeResponseID != "",
@@ -150,12 +149,12 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 	resp, err := client.Responses.New(ctx, params)
 	if err != nil {
 		logAPIError(ctx, err, "initial request")
-		logEvent(logger, session.EventError, map[string]any{"phase": "initial", "error": err.Error()})
+		activity.Append(ctx, session.EventError, map[string]any{"phase": "initial", "error": err.Error()})
 		return "", fmt.Errorf("responses API call failed: %w", err)
 	}
 	logOutputItems(ctx, resp, "initial")
 	trackResponseMetrics(resp, m)
-	recordResponse(logger, resp, "initial")
+	recordResponse(ctx, resp, "initial")
 
 	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc, maxIterations, editDeadline, m)
 	if err != nil {
@@ -231,7 +230,6 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 		// so the edit deadline applies to neither.
 		editEnforcer = tools.NewEditEnforcer(editDeadline)
 	}
-	logger := session.FromContext(ctx)
 	for i := 0; i < maxIter; i++ {
 		calls := ExtractFunctionCalls(resp)
 		if len(calls) == 0 {
@@ -243,7 +241,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 			return resp, text, nil
 		}
 
-		logEvent(logger, session.EventIteration, map[string]any{"index": i + 1, "tool_calls": len(calls)})
+		activity.Append(ctx, session.EventIteration, map[string]any{"index": i + 1, "tool_calls": len(calls)})
 		if m != nil {
 			logging.InfoContext(ctx, "responses API: iteration %d/%d with %d tool call(s) (cost=$%.4f, %s)",
 				i+1, maxIter, len(calls), m.TotalCostWithChildren(), m.ProgressTokens())
@@ -285,12 +283,12 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 		resp, err = client.Responses.New(ctx, params)
 		if err != nil {
 			logAPIError(ctx, err, fmt.Sprintf("follow-up iteration %d", i+1))
-			logEvent(logger, session.EventError, map[string]any{"phase": "follow-up", "iteration": i + 1, "error": err.Error()})
+			activity.Append(ctx, session.EventError, map[string]any{"phase": "follow-up", "iteration": i + 1, "error": err.Error()})
 			return resp, "", fmt.Errorf("responses API follow-up failed at iteration %d: %w", i+1, err)
 		}
 		logOutputItems(ctx, resp, fmt.Sprintf("follow-up-iter-%d", i+1))
 		trackResponseMetrics(resp, m)
-		recordResponse(logger, resp, fmt.Sprintf("iter-%d", i+1))
+		recordResponse(ctx, resp, fmt.Sprintf("iter-%d", i+1))
 
 		if m != nil && m.BudgetExceeded() {
 			logging.InfoContext(ctx, "responses API: budget exceeded ($%.4f >= $%.4f max), stopping", m.TotalCostWithChildren(), m.MaxCost)
@@ -582,14 +580,12 @@ func runResponsesTool(ctx context.Context, rec *activity.Tool, call FunctionCall
 	// to deliver content the model already knows is large.
 	if logger != nil && call.Name != toolGetToolResult && fullBytes > session.LargeResultThreshold {
 		if id, storeErr := logger.StoreLargeResult(output); storeErr == nil {
-			if appendErr := logger.AppendContext(ctx, session.EventLargeResult, map[string]any{
+			activity.Append(ctx, session.EventLargeResult, map[string]any{
 				"call_id":   call.CallID,
 				"name":      call.Name,
 				"result_id": id,
 				"bytes":     fullBytes,
-			}); appendErr != nil {
-				logging.Warn("session: append %s failed: %v", session.EventLargeResult, appendErr)
-			}
+			})
 			output = formatLargeResultPlaceholder(id, call.Name, fullBytes)
 		} else {
 			logging.Warn("session: failed to spill large result: %v", storeErr)
@@ -601,19 +597,10 @@ func runResponsesTool(ctx context.Context, rec *activity.Tool, call FunctionCall
 	return output
 }
 
-// logEvent is a nil-safe helper for appending to the session log.
-func logEvent(l *session.Logger, eventType string, payload any) {
-	if l == nil {
-		return
-	}
-	if err := l.Append(eventType, payload); err != nil {
-		logging.Warn("session: append %s failed: %v", eventType, err)
-	}
-}
-
 // recordResponse persists the response id and writes a session event with
 // status + token usage.
-func recordResponse(l *session.Logger, resp *oairesponses.Response, label string) {
+func recordResponse(ctx context.Context, resp *oairesponses.Response, label string) {
+	l := session.FromContext(ctx)
 	if l == nil || resp == nil {
 		return
 	}
@@ -629,7 +616,7 @@ func recordResponse(l *session.Logger, resp *oairesponses.Response, label string
 	if text := resp.OutputText(); text != "" {
 		payload["text"] = text
 	}
-	logEvent(l, session.EventResponse, payload)
+	activity.Append(ctx, session.EventResponse, payload)
 }
 
 // formatLargeResultPlaceholder is the inline summary returned to the model

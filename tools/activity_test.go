@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/session"
 	"github.com/tmc/langchaingo/llms"
 	"go.opentelemetry.io/otel"
@@ -132,6 +133,72 @@ func TestToolLoopRecordsActivity(t *testing.T) {
 	if response["text"] != "Checking the notes first." || response["thinking"] != "the notes may hold the answer" ||
 		response["finish_reason"] != "stop" || response["input_tokens"].(float64) != 100 || response["tool_calls"].(float64) != 2 {
 		t.Errorf("first response payload = %v", response)
+	}
+}
+
+// TestTaskChildEventsAreTagged runs a parent loop whose first turn dispatches
+// a blocking Task child with its own tool loop, and checks that the child's
+// events in the shared events.jsonl name the child agent and the Task call,
+// while the parent's events name neither.
+func TestTaskChildEventsAreTagged(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger, err := session.New(t.TempDir(), "", "probe", "ollama", "qwen", "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	ctx := session.WithLogger(InitReadOnlyMode(context.Background()), logger)
+	dir := t.TempDir()
+	exec := &mockExecutor{responses: map[string]string{"cat notes.txt": "alpha\n"}}
+	child := &scriptedLLM{responses: []*llms.ContentResponse{
+		toolCallResp("child-c1", "Bash", `{"command":"cat notes.txt"}`),
+		{Choices: []*llms.ContentChoice{{Content: "child done", StopReason: "stop"}}},
+	}}
+	taskCfg := &TaskConfig{
+		WorkingDir: dir,
+		CallModel: func(ctx context.Context, _, _, prompt, workDir, _ string) (string, *metrics.Metrics, error) {
+			out, err := RunWithTools(ctx, child, "sys", prompt, workDir, RunWithToolsConfig{
+				Provider: "ollama", Model: "qwen", MaxIterations: 3, Executor: exec,
+			})
+			return out, nil, err
+		},
+	}
+	parent := &scriptedLLM{responses: []*llms.ContentResponse{
+		toolCallResp("task-1", "Task", `{"agent":"scout","prompt":"read the notes"}`),
+		{Choices: []*llms.ContentChoice{{Content: "parent done", StopReason: "stop"}}},
+	}}
+	out, err := RunWithTools(ctx, parent, "sys", "go", dir, RunWithToolsConfig{
+		Provider: "ollama", Model: "qwen", MaxIterations: 3, Executor: exec, TaskCfg: taskCfg,
+	})
+	if err != nil || out != "parent done" {
+		t.Fatalf("RunWithTools = %q, %v", out, err)
+	}
+
+	b, err := os.ReadFile(filepath.Join(logger.Dir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var ev struct {
+			Type    string         `json:"type"`
+			Payload map[string]any `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatal(err)
+		}
+		agent, _ := ev.Payload["agent"].(string)
+		parentCall, _ := ev.Payload["parent_tool_use_id"].(string)
+		got = append(got, ev.Type+"["+agent+"/"+parentCall+"]")
+	}
+	want := []string{
+		"iteration[/]", "response[/]", "tool_call[/]",
+		"iteration[scout/task-1]", "response[scout/task-1]", "tool_call[scout/task-1]", "tool_result[scout/task-1]",
+		"iteration[scout/task-1]", "response[scout/task-1]",
+		"tool_result[/]", "iteration[/]", "response[/]",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("events =\n%s\nwant\n%s", strings.Join(got, " "), strings.Join(want, " "))
 	}
 }
 

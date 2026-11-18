@@ -328,7 +328,7 @@ type streamReader struct {
 	res        Result
 	resErr     error
 	// raw collects lines that are not stream-json events, parsed as the
-	// output when no result event arrives.
+	// output when no result event arrives. Partial events are dropped.
 	raw bytes.Buffer
 }
 
@@ -353,20 +353,22 @@ func (sr *streamReader) handle(line []byte) {
 		return
 	}
 	ev, err := decodeLiveEvent(line)
+	if err != nil && line[0] == '{' {
+		return
+	}
 	if err != nil || ev.Type == "" {
 		sr.raw.Write(line)
 		sr.raw.WriteByte('\n')
 		return
 	}
 	if ev.Type == "result" {
+		sr.resultSeen = true
 		var out claudeOutput
 		if err := json.Unmarshal(line, &out); err != nil {
-			sr.raw.Write(line)
-			sr.raw.WriteByte('\n')
-			return
+			sr.resErr = fmt.Errorf("undecodable result event: %w", err)
+		} else {
+			sr.res, sr.resErr = claudeResult(out)
 		}
-		sr.resultSeen = true
-		sr.res, sr.resErr = claudeResult(out)
 	}
 	observe(sr.obs, ev)
 }
