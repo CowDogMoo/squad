@@ -30,6 +30,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/session"
 	"github.com/tmc/langchaingo/llms"
@@ -291,7 +292,6 @@ func parsePositiveInt(s string) (int, bool) {
 // the path that produced the answer ("tty", "auto-confirm=yes", etc.).
 // Safe on a nil session logger.
 func logConfirmResolution(ctx context.Context, summary string, options []string, resolution, via string, resolveErr error) {
-	logger := session.FromContext(ctx)
 	payload := map[string]any{
 		"summary":    summary,
 		"options":    options,
@@ -301,8 +301,6 @@ func logConfirmResolution(ctx context.Context, summary string, options []string,
 	if resolveErr != nil {
 		payload["error"] = resolveErr.Error()
 	}
-	if err := logger.Append(session.EventConfirmResolved, payload); err != nil {
-		logging.WarnContext(ctx, "failed to log confirm_resolved event: %v", err)
-	}
+	activity.Append(ctx, session.EventConfirmResolved, payload)
 	logging.DebugContext(ctx, "Confirm resolved: via=%s resolution=%s", via, resolution)
 }

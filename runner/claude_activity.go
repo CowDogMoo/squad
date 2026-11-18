@@ -245,6 +245,9 @@ func (a *claudeActivity) thread(parentID string) *claudeThread {
 // the thread's previous activity ended, so that is the turn's start time; a
 // subagent's first turn starts with the tool call that dispatched it.
 func (a *claudeActivity) openTurn(th *claudeThread, msg agenticcli.AssistantMessage) {
+	if th.parentID != "" && a.tools[th.parentID] == nil {
+		a.flushAll()
+	}
 	parent, start := a.ctx, th.last
 	if ct := a.tools[th.parentID]; th.parentID != "" && ct != nil {
 		parent = ct.ctx

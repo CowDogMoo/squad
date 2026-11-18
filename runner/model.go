@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/config"
 	"github.com/cowdogmoo/squad/executor"
@@ -122,11 +123,10 @@ func buildSkillRuntime(ctx context.Context, bundle *agent.Bundle, _ *RunOptions)
 		Stack:   skill.NewStack(),
 	}
 	rehydrateSkillStack(rt, bundle.WorkDir, session.FromContext(ctx))
-	logger := session.FromContext(ctx)
 	rt.OnLoad = func(e skill.Entry) {
 		logging.InfoContext(ctx, "skill loaded: name=%s scope=%s dir=%s",
 			e.Name(), e.Scope.String(), e.Dir)
-		_ = logger.Append(session.EventSkillLoaded, map[string]any{
+		activity.Append(ctx, session.EventSkillLoaded, map[string]any{
 			"name":  e.Name(),
 			"scope": e.Scope.String(),
 			"dir":   e.Dir,

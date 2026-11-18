@@ -409,3 +409,90 @@ func TestClaudeActivityFlushesAfterQuietPeriod(t *testing.T) {
 		t.Errorf("events = %s", got)
 	}
 }
+
+// TestClaudeRunWithoutResultEndsOpenCallsAtExit runs a fake claude that
+// starts a tool call and then dies with no result event, and checks the
+// unfinished call ends when the run ended, not before it began.
+func TestClaudeRunWithoutResultEndsOpenCallsAtExit(t *testing.T) {
+	ctx, rec, l := recordClaude(t)
+	binDir := t.TempDir()
+	out := filepath.Join(binDir, "stdout.jsonl")
+	stream := `{"type":"system","subtype":"init","session_id":"cc-killed","model":"claude-haiku-5-5"}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 600"}}]}}
+`
+	if err := os.WriteFile(out, []byte(stream), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\ncat > /dev/null\nsleep 1\ncat \"" + out + "\"\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, _, err := InvokeModel(ctx, &RunOptions{Provider: "claude-code"}, &agent.Bundle{System: "sys", User: "go", WorkDir: t.TempDir()}); err == nil {
+		t.Fatal("InvokeModel succeeded, want the CLI failure")
+	}
+
+	var result map[string]any
+	for _, ev := range claudeEvents(t, l) {
+		if ev.Type == session.EventToolResult {
+			result = ev.Payload
+		}
+	}
+	if result == nil || result["error"] != "no tool result before the run ended" || result["duration_ms"].(float64) < 0 {
+		t.Errorf("tool_result = %v, want the unfinished call with a non-negative duration", result)
+	}
+	for _, s := range rec.Ended() {
+		if s.EndTime().Before(s.StartTime()) {
+			t.Errorf("span %s ends %v, before its start %v", s.Name(), s.EndTime(), s.StartTime())
+		}
+	}
+}
+
+// TestClaudeSubagentBeforeFlushNestsUnderTask checks a subagent whose first
+// message arrives before its dispatching message was flushed still nests
+// under the Task span and starts with the Task call.
+func TestClaudeSubagentBeforeFlushNestsUnderTask(t *testing.T) {
+	prev := claudeFlushDelay
+	claudeFlushDelay = time.Hour
+	t.Cleanup(func() { claudeFlushDelay = prev })
+	ctx, rec, l := recordClaude(t)
+	a := newClaudeActivity(ctx, "sonnet")
+	a.started = ts(0)
+	a.Assistant(agenticcli.AssistantMessage{ID: "m1", Time: ts(1), ToolUses: []agenticcli.ToolUse{
+		{ID: "task", Name: "Task", Input: json.RawMessage(`{"description":"scan"}`)},
+	}})
+	a.Assistant(agenticcli.AssistantMessage{ID: "s1", ParentToolUseID: "task", Time: ts(2), Text: []string{"sub"}})
+	a.ToolResults([]agenticcli.ToolResult{{ToolUseID: "task", Time: ts(4), Content: "done"}})
+	a.close(ts(5))
+
+	var task, subTurn sdktrace.ReadOnlySpan
+	for _, s := range rec.Ended() {
+		if s.Name() == "tool.Task" {
+			task = s
+		}
+	}
+	if task == nil {
+		t.Fatal("no tool.Task span")
+	}
+	for _, s := range rec.Ended() {
+		if s.Name() == "chat sonnet" && s.Parent().SpanID() == task.SpanContext().SpanID() {
+			subTurn = s
+		}
+	}
+	if subTurn == nil {
+		t.Fatal("subagent turn is not nested under the Task tool span")
+	}
+	if !subTurn.StartTime().Equal(ts(1)) {
+		t.Errorf("subagent turn starts %v, want when the Task call started (%v)", subTurn.StartTime(), ts(1))
+	}
+	var subResp map[string]any
+	for _, ev := range claudeEvents(t, l) {
+		if ev.Type == session.EventResponse && ev.Payload["parent_tool_use_id"] == "task" {
+			subResp = ev.Payload
+		}
+	}
+	if subResp == nil || subResp["duration_ms"].(float64) != 1000 {
+		t.Errorf("subagent response = %v, want duration_ms 1000", subResp)
+	}
+}

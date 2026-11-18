@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/agenticcli"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/session"
@@ -108,7 +109,7 @@ func (g *claudeSignOffGate) canUseTool(ctx context.Context, toolName string, inp
 func runAgenticCLI(ctx context.Context, req agenticcli.Request) (agenticcli.Result, *claudeSignOffGate, error) {
 	if req.Provider == "claude-code" && req.Observer == nil {
 		obs := newClaudeActivity(ctx, req.Model)
-		defer obs.close(time.Now())
+		defer func() { obs.close(time.Now()) }()
 		req.Observer = obs
 	}
 	rt := tools.GetSignOffRuntime(ctx)
@@ -146,13 +147,11 @@ func (g *claudeSignOffGate) logDecision(ctx context.Context, toolName string, al
 	if allowed {
 		decision = "allow"
 	}
-	if err := session.FromContext(ctx).Append(session.EventPermissionDecision, map[string]any{
+	activity.Append(ctx, session.EventPermissionDecision, map[string]any{
 		"tool":     toolName,
 		"decision": decision,
 		"reason":   reason,
-	}); err != nil {
-		logging.WarnContext(ctx, "failed to log permission_decision event: %v", err)
-	}
+	})
 	logging.DebugContext(ctx, "claude live gate: %s %s (%s)", decision, toolName, reason)
 }
 
@@ -172,7 +171,5 @@ func logClaudeSignOffResolution(ctx context.Context, plan, outcome, feedback str
 	if resolveErr != nil {
 		payload["error"] = resolveErr.Error()
 	}
-	if err := session.FromContext(ctx).Append(session.EventSignOffResolved, payload); err != nil {
-		logging.WarnContext(ctx, "failed to log sign_off_resolved event: %v", err)
-	}
+	activity.Append(ctx, session.EventSignOffResolved, payload)
 }
