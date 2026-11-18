@@ -190,8 +190,12 @@ func TestClaudeActivityDenialsAndSubagents(t *testing.T) {
 	// The subagent's own turn nests under the Task tool span.
 	a.Assistant(agenticcli.AssistantMessage{ID: "s1", ParentToolUseID: "task", Time: ts(3), Text: []string{"sub"}, ToolUses: []agenticcli.ToolUse{
 		{ID: "g1", Name: "Grep", Input: json.RawMessage(`{"pattern":"TODO"}`)},
+		{ID: "w3", Name: "Write", Input: json.RawMessage(`{"file_path":"c"}`)},
 	}})
-	a.ToolResults([]agenticcli.ToolResult{{ToolUseID: "g1", ParentToolUseID: "task", Time: ts(4), Content: "x"}})
+	a.ToolResults([]agenticcli.ToolResult{
+		{ToolUseID: "g1", ParentToolUseID: "task", Time: ts(4), Content: "x"},
+		{ToolUseID: "w3", ParentToolUseID: "task", Time: ts(4), IsError: true, Content: "Permission denied", PermissionDecision: "reject"},
+	})
 	a.close(ts(6)) // the Task call never returned
 
 	byType := map[string][]claudeEvent{}
@@ -199,8 +203,16 @@ func TestClaudeActivityDenialsAndSubagents(t *testing.T) {
 		byType[ev.Type] = append(byType[ev.Type], ev)
 	}
 	denials := byType[session.EventToolDenied]
-	if len(denials) != 2 || denials[0].Payload["reason"] != activity.DeniedSignOff || denials[1].Payload["reason"] != activity.DeniedByPermission {
+	if len(denials) != 3 || denials[0].Payload["reason"] != activity.DeniedSignOff || denials[1].Payload["reason"] != activity.DeniedByPermission {
 		t.Fatalf("denials = %+v", denials)
+	}
+	// Every event of the subagent's own tool calls names the Task call.
+	for _, ev := range append(append([]claudeEvent{}, byType[session.EventToolResult]...), denials...) {
+		id := ev.Payload["call_id"]
+		want := map[any]any{"g1": "task", "w3": "task"}[id]
+		if ev.Payload["parent_tool_use_id"] != want {
+			t.Errorf("%s %v parent_tool_use_id = %v, want %v", ev.Type, id, ev.Payload["parent_tool_use_id"], want)
+		}
 	}
 	var taskResult map[string]any
 	for _, ev := range byType[session.EventToolResult] {

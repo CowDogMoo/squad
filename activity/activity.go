@@ -270,6 +270,9 @@ type Tool struct {
 	iteration int
 	start     time.Time
 	ended     bool
+	// parentToolUseID is the call's ToolCall.ParentToolUseID, repeated on
+	// its tool_result and tool_denied events.
+	parentToolUseID string
 }
 
 // ToolCall describes a tool call when it starts.
@@ -322,7 +325,7 @@ func StartTool(ctx context.Context, call ToolCall) (context.Context, *Tool) {
 		payload["parent_tool_use_id"] = call.ParentToolUseID
 	}
 	appendAt(ctx, start, session.EventToolCall, payload)
-	return ctx, &Tool{ctx: ctx, span: span, callID: call.CallID, name: call.Name, iteration: call.Iteration, start: start}
+	return ctx, &Tool{ctx: ctx, span: span, callID: call.CallID, name: call.Name, iteration: call.Iteration, start: start, parentToolUseID: call.ParentToolUseID}
 }
 
 // Deny records that the call was refused before it ran: a tool_denied event
@@ -347,6 +350,9 @@ func (t *Tool) DenyAt(reason, message string, at time.Time) {
 	}
 	if t.iteration > 0 {
 		payload["iteration"] = t.iteration
+	}
+	if t.parentToolUseID != "" {
+		payload["parent_tool_use_id"] = t.parentToolUseID
 	}
 	appendAt(t.ctx, at, session.EventToolDenied, payload)
 	t.span.SetAttributes(
@@ -402,6 +408,9 @@ func (t *Tool) Finish(res Result) {
 	}
 	if t.iteration > 0 {
 		payload["iteration"] = t.iteration
+	}
+	if t.parentToolUseID != "" {
+		payload["parent_tool_use_id"] = t.parentToolUseID
 	}
 	for k, v := range res.Extra {
 		payload[k] = v
