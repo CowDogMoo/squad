@@ -61,6 +61,25 @@ func TestToolLoopRecordsActivity(t *testing.T) {
 		t.Fatalf("RunWithTools = %q, %v", out, err)
 	}
 
+	t.Run("spans", func(t *testing.T) { checkToolLoopSpans(t, rec) })
+	t.Run("events", func(t *testing.T) {
+		types, response := readToolLoopEvents(t, logger.Dir())
+		want := "iteration,response,tool_call,tool_result,tool_call,tool_denied,iteration,response"
+		if got := strings.Join(types, ","); got != want {
+			t.Errorf("events = %s, want %s", got, want)
+		}
+		if response["text"] != "Checking the notes first." || response["thinking"] != "the notes may hold the answer" ||
+			response["finish_reason"] != "stop" || response["input_tokens"].(float64) != 100 || response["tool_calls"].(float64) != 2 {
+			t.Errorf("first response payload = %v", response)
+		}
+	})
+}
+
+// checkToolLoopSpans checks the span tree: two turn spans under tool.loop,
+// with the first turn parenting both tool spans and one llm.generate span,
+// and the refused Write marked denied.
+func checkToolLoopSpans(t *testing.T, rec *tracetest.SpanRecorder) {
+	t.Helper()
 	var turns []sdktrace.ReadOnlySpan
 	byName := map[string]sdktrace.ReadOnlySpan{}
 	for _, s := range rec.Ended() {
@@ -82,13 +101,7 @@ func TestToolLoopRecordsActivity(t *testing.T) {
 			t.Errorf("%s is not a child of the first turn", name)
 		}
 	}
-	generates := 0
-	for _, s := range rec.Ended() {
-		if s.Name() == "llm.generate" && s.Parent().SpanID() == first.SpanContext().SpanID() {
-			generates++
-		}
-	}
-	if generates != 1 {
+	if generates := countChildren(rec, "llm.generate", first); generates != 1 {
 		t.Errorf("llm.generate spans under the first turn = %d, want 1", generates)
 	}
 	if loop := byName["tool.loop"]; first.Parent().SpanID() != loop.SpanContext().SpanID() {
@@ -99,14 +112,29 @@ func TestToolLoopRecordsActivity(t *testing.T) {
 			t.Error("Write span not marked denied")
 		}
 	}
+}
 
-	f, err := os.Open(filepath.Join(logger.Dir(), "events.jsonl"))
+// countChildren counts the ended spans called name whose parent is parent.
+func countChildren(rec *tracetest.SpanRecorder, name string, parent sdktrace.ReadOnlySpan) int {
+	n := 0
+	for _, s := range rec.Ended() {
+		if s.Name() == name && s.Parent().SpanID() == parent.SpanContext().SpanID() {
+			n++
+		}
+	}
+	return n
+}
+
+// readToolLoopEvents reads events.jsonl in dir, checking every event carries
+// trace and span ids, and returns the event types in order and the first
+// response payload.
+func readToolLoopEvents(t *testing.T, dir string) (types []string, response map[string]any) {
+	t.Helper()
+	f, err := os.Open(filepath.Join(dir, "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
-	var types []string
-	var response map[string]any
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		var ev struct {
@@ -126,14 +154,7 @@ func TestToolLoopRecordsActivity(t *testing.T) {
 		}
 		types = append(types, ev.Type)
 	}
-	want := "iteration,response,tool_call,tool_result,tool_call,tool_denied,iteration,response"
-	if got := strings.Join(types, ","); got != want {
-		t.Errorf("events = %s, want %s", got, want)
-	}
-	if response["text"] != "Checking the notes first." || response["thinking"] != "the notes may hold the answer" ||
-		response["finish_reason"] != "stop" || response["input_tokens"].(float64) != 100 || response["tool_calls"].(float64) != 2 {
-		t.Errorf("first response payload = %v", response)
-	}
+	return types, response
 }
 
 // TestTaskChildEventsAreTagged runs a parent loop whose first turn dispatches

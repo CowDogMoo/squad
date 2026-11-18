@@ -117,6 +117,19 @@ func TestTurnParentsToolsAndWritesEvents(t *testing.T) {
 	turn.End()
 
 	turnSpan := spanNamed(t, rec, "chat qwen")
+	t.Run("turn span", func(t *testing.T) { checkTurnSpan(t, turnSpan, text) })
+	t.Run("tool spans", func(t *testing.T) { checkToolSpans(t, rec, turnSpan, args) })
+	t.Run("events", func(t *testing.T) {
+		evs := events(t, l)
+		checkEventOrder(t, evs, turnSpan)
+		checkEventPayloads(t, evs, text, args)
+	})
+}
+
+// checkTurnSpan checks the provider, usage and content-size attributes of
+// the turn span.
+func checkTurnSpan(t *testing.T, turnSpan sdktrace.ReadOnlySpan, text string) {
+	t.Helper()
 	ta := attrs(turnSpan)
 	if ta["gen_ai.provider.name"].AsString() != "ollama" || ta["gen_ai.system"].AsString() != "ollama" || ta["gen_ai.operation.name"].AsString() != "chat" {
 		t.Errorf("turn provider attrs = %v", ta)
@@ -130,13 +143,34 @@ func TestTurnParentsToolsAndWritesEvents(t *testing.T) {
 	if ta["squad.turn.text_bytes"].AsInt64() != int64(len(text)) {
 		t.Errorf("squad.turn.text_bytes = %d, want %d", ta["squad.turn.text_bytes"].AsInt64(), len(text))
 	}
+}
 
-	var tools []sdktrace.ReadOnlySpan
+// spansWithPrefix returns the ended spans whose names start with prefix.
+func spansWithPrefix(rec *tracetest.SpanRecorder, prefix string) []sdktrace.ReadOnlySpan {
+	var out []sdktrace.ReadOnlySpan
 	for _, s := range rec.Ended() {
-		if strings.HasPrefix(s.Name(), "tool.") {
-			tools = append(tools, s)
+		if strings.HasPrefix(s.Name(), prefix) {
+			out = append(out, s)
 		}
 	}
+	return out
+}
+
+// checkNoAttrLeak fails if any attribute of s contains secret.
+func checkNoAttrLeak(t *testing.T, s sdktrace.ReadOnlySpan, secret string) {
+	t.Helper()
+	for _, kv := range s.Attributes() {
+		if strings.Contains(kv.Value.String(), secret) {
+			t.Errorf("%s attribute %s leaks the argument: %s", s.Name(), kv.Key, kv.Value.String())
+		}
+	}
+}
+
+// checkToolSpans checks both tool spans sit under the turn span, leak no
+// argument, and carry the expected result and denial attributes.
+func checkToolSpans(t *testing.T, rec *tracetest.SpanRecorder, turnSpan sdktrace.ReadOnlySpan, args string) {
+	t.Helper()
+	tools := spansWithPrefix(rec, "tool.")
 	if len(tools) != 2 {
 		t.Fatalf("tool spans = %d, want 2", len(tools))
 	}
@@ -144,11 +178,7 @@ func TestTurnParentsToolsAndWritesEvents(t *testing.T) {
 		if s.Parent().SpanID() != turnSpan.SpanContext().SpanID() {
 			t.Errorf("%s parent = %s, want the turn span", s.Name(), s.Parent().SpanID())
 		}
-		for _, kv := range s.Attributes() {
-			if strings.Contains(kv.Value.String(), secretArg) {
-				t.Errorf("%s attribute %s leaks the argument: %s", s.Name(), kv.Key, kv.Value.String())
-			}
-		}
+		checkNoAttrLeak(t, s, secretArg)
 	}
 	bash := attrs(spanNamed(t, rec, "tool.Bash"))
 	if bash["squad.tool.denied"].AsBool() || bash["squad.tool.output_bytes"].AsInt64() != 12 || bash["squad.tool.args_bytes"].AsInt64() != int64(len(args)) {
@@ -158,8 +188,12 @@ func TestTurnParentsToolsAndWritesEvents(t *testing.T) {
 	if !write["squad.tool.denied"].AsBool() || write["squad.tool.denied_reason"].AsString() != DeniedReadOnly {
 		t.Errorf("Write span attrs = %v", write)
 	}
+}
 
-	evs := events(t, l)
+// checkEventOrder checks the event types and order, and that every event
+// carries the turn's trace and a span id.
+func checkEventOrder(t *testing.T, evs []event, turnSpan sdktrace.ReadOnlySpan) {
+	t.Helper()
 	var types []string
 	for _, ev := range evs {
 		types = append(types, ev.Type)
@@ -174,6 +208,12 @@ func TestTurnParentsToolsAndWritesEvents(t *testing.T) {
 	if evs[0].SpanID != turnSpan.SpanContext().SpanID().String() {
 		t.Error("iteration event must carry the turn span id")
 	}
+}
+
+// checkEventPayloads checks the full content events.jsonl keeps for the
+// response, tool call, tool result and denial.
+func checkEventPayloads(t *testing.T, evs []event, text, args string) {
+	t.Helper()
 	resp := evs[1].Payload
 	if resp["text"] != text || resp["finish_reason"] != "stop" || resp["thinking"] != "consider the login form" || resp["cache_read_tokens"].(float64) != 10 {
 		t.Errorf("response payload = %v", resp)
@@ -261,6 +301,14 @@ func TestFailuresAndTimestamps(t *testing.T) {
 	nilTool.Finish(Result{})
 	nilTool.Deny("x", "y")
 
+	t.Run("spans", func(t *testing.T) { checkFailureSpans(t, rec, start) })
+	t.Run("events", func(t *testing.T) { checkFailureEvents(t, eventsByType(t, l)) })
+}
+
+// checkFailureSpans checks the failed turn and tool spans keep the given
+// start and end times and are marked failed.
+func checkFailureSpans(t *testing.T, rec *tracetest.SpanRecorder, start time.Time) {
+	t.Helper()
 	turnSpan := spanNamed(t, rec, "chat")
 	if turnSpan.Status().Code != codes.Error || !turnSpan.StartTime().Equal(start) || !turnSpan.EndTime().Equal(start.Add(5*time.Second)) {
 		t.Errorf("turn span status=%v start=%v end=%v", turnSpan.Status(), turnSpan.StartTime(), turnSpan.EndTime())
@@ -272,11 +320,22 @@ func TestFailuresAndTimestamps(t *testing.T) {
 	if read.Status().Code != codes.Error || read.EndTime().Sub(read.StartTime()) != 2*time.Second {
 		t.Errorf("tool span status=%v duration=%v", read.Status(), read.EndTime().Sub(read.StartTime()))
 	}
+}
 
+// eventsByType groups the session's events by type, in file order.
+func eventsByType(t *testing.T, l *session.Logger) map[string][]event {
+	t.Helper()
 	byType := map[string][]event{}
 	for _, ev := range events(t, l) {
 		byType[ev.Type] = append(byType[ev.Type], ev)
 	}
+	return byType
+}
+
+// checkFailureEvents checks the error, tool_result, tool_call, iteration and
+// response events of the failed turn.
+func checkFailureEvents(t *testing.T, byType map[string][]event) {
+	t.Helper()
 	if errs := byType["error"]; len(errs) != 2 || errs[0].Payload["phase"] != "generate" || errs[0].Payload["iteration"].(float64) != 3 || errs[1].Payload["phase"] != "cli" {
 		t.Errorf("error events = %+v", errs)
 	}

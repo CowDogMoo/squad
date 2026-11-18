@@ -30,25 +30,28 @@ func (o *recordingObserver) Finished(time.Time)              { o.finished++ }
 
 const printStreamFixture = "claude_print_stream.jsonl"
 
-func readPrintStream(t *testing.T) *streamReader {
+// readPrintStream reads the print-stream fixture into a stream reader and
+// returns the reader with the observer it fed.
+func readPrintStream(t *testing.T) (*streamReader, *recordingObserver) {
 	t.Helper()
 	f, err := os.Open(filepath.Join("testdata", printStreamFixture))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = f.Close() })
-	sr := &streamReader{obs: &recordingObserver{}}
+	obs := &recordingObserver{}
+	sr := &streamReader{obs: obs}
 	if err := sr.read(f); err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	return sr
+	return sr, obs
 }
 
 // TestStreamReaderResultMatchesEnvelope checks that the result read from the
 // stream's terminal event is what the json envelope used to give callers.
 func TestStreamReaderResultMatchesEnvelope(t *testing.T) {
 	t.Parallel()
-	sr := readPrintStream(t)
+	sr, _ := readPrintStream(t)
 	if !sr.resultSeen || sr.resErr != nil {
 		t.Fatalf("resultSeen=%v resErr=%v", sr.resultSeen, sr.resErr)
 	}
@@ -71,45 +74,66 @@ func TestStreamReaderResultMatchesEnvelope(t *testing.T) {
 
 func TestStreamReaderFeedsObserver(t *testing.T) {
 	t.Parallel()
-	sr := readPrintStream(t)
-	obs := sr.obs.(*recordingObserver)
+	_, obs := readPrintStream(t)
+	t.Run("session", func(t *testing.T) { checkObservedSession(t, obs) })
+	t.Run("assistant", func(t *testing.T) { checkObservedAssistant(t, obs.assistant) })
+	t.Run("tool results", func(t *testing.T) { checkObservedResults(t, obs.results) })
+}
+
+// checkObservedSession checks the session, thinking-token and finish calls
+// the fixture produced.
+func checkObservedSession(t *testing.T, obs *recordingObserver) {
+	t.Helper()
 	if obs.sessionID != "11111111-2222-4333-8444-555555555555" || obs.model != "claude-haiku-5-5" {
 		t.Errorf("session = %q model = %q", obs.sessionID, obs.model)
 	}
 	if len(obs.thinking) != 2 || obs.thinking[1] != 40 {
 		t.Errorf("thinking = %v, want [12 40]", obs.thinking)
 	}
-	if len(obs.assistant) != 5 {
-		t.Fatalf("assistant events = %d, want 5", len(obs.assistant))
+	if obs.finished != 1 {
+		t.Errorf("finished = %d, want 1", obs.finished)
 	}
-	first := obs.assistant[0]
+}
+
+// checkObservedAssistant checks the fixture's assistant messages: text,
+// usage and time on the first, the Bash tool_use on the second, and the
+// stop reason on the last.
+func checkObservedAssistant(t *testing.T, assistant []AssistantMessage) {
+	t.Helper()
+	if len(assistant) != 5 {
+		t.Fatalf("assistant events = %d, want 5", len(assistant))
+	}
+	first := assistant[0]
 	if first.ID != "msg_A" || len(first.Text) != 1 || !strings.HasPrefix(first.Text[0], "I'll read") {
 		t.Errorf("first assistant = %+v", first)
 	}
 	if first.Usage.CacheReadInputTokens != 11615 || first.Time.IsZero() {
 		t.Errorf("first usage/time = %+v %v", first.Usage, first.Time)
 	}
-	tool := obs.assistant[1].ToolUses
+	tool := assistant[1].ToolUses
 	if len(tool) != 1 || tool[0].ID != "toolu_cat" || tool[0].Name != "Bash" || !strings.Contains(string(tool[0].Input), "cat notes.txt") {
 		t.Errorf("tool use = %+v", tool)
 	}
-	if last := obs.assistant[4]; last.StopReason != "end_turn" {
+	if last := assistant[4]; last.StopReason != "end_turn" {
 		t.Errorf("last stop reason = %q", last.StopReason)
 	}
-	if len(obs.results) != 3 {
-		t.Fatalf("tool results = %d, want 3", len(obs.results))
+}
+
+// checkObservedResults checks the fixture's accepted, failed and denied tool
+// results.
+func checkObservedResults(t *testing.T, results []ToolResult) {
+	t.Helper()
+	if len(results) != 3 {
+		t.Fatalf("tool results = %d, want 3", len(results))
 	}
-	if r := obs.results[0]; r.ToolUseID != "toolu_cat" || r.IsError || r.Content != "alpha\nbeta" || r.PermissionDecision != "accept" {
+	if r := results[0]; r.ToolUseID != "toolu_cat" || r.IsError || r.Content != "alpha\nbeta" || r.PermissionDecision != "accept" {
 		t.Errorf("cat result = %+v", r)
 	}
-	if r := obs.results[1]; !r.IsError || r.Content != "Exit code 1\nls: /missing: No such file or directory" {
+	if r := results[1]; !r.IsError || r.Content != "Exit code 1\nls: /missing: No such file or directory" {
 		t.Errorf("block-list result = %+v", r)
 	}
-	if r := obs.results[2]; r.PermissionDecision != "reject" {
+	if r := results[2]; r.PermissionDecision != "reject" {
 		t.Errorf("denied result = %+v", r)
-	}
-	if obs.finished != 1 {
-		t.Errorf("finished = %d, want 1", obs.finished)
 	}
 }
 

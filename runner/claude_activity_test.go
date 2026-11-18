@@ -111,7 +111,14 @@ func TestClaudeActivityRecordsTurnsAndTools(t *testing.T) {
 	if got := readMetaClaudeSession(t, l); got != "cc-session" {
 		t.Errorf("claude_session_id = %q", got)
 	}
-	evs := claudeEvents(t, l)
+	t.Run("events", func(t *testing.T) { checkRecordedTurnEvents(t, claudeEvents(t, l)) })
+	t.Run("spans", func(t *testing.T) { checkRecordedTurnSpans(t, rec) })
+}
+
+// checkRecordedTurnEvents checks the two turns' events, their timestamps and
+// the response and error payloads.
+func checkRecordedTurnEvents(t *testing.T, evs []claudeEvent) {
+	t.Helper()
 	want := "tool_call,tool_call,tool_result,tool_result,iteration,response,iteration,response"
 	if got := eventTypes(evs); got != want {
 		t.Fatalf("events = %s, want %s", got, want)
@@ -131,7 +138,12 @@ func TestClaudeActivityRecordsTurnsAndTools(t *testing.T) {
 	if evs[7].Payload["finish_reason"] != "end_turn" || evs[7].Payload["text"] != "Done." {
 		t.Errorf("final response = %v", evs[7].Payload)
 	}
+}
 
+// checkRecordedTurnSpans checks the two turn spans' times and that both tool
+// spans sit under the first turn with the CLI's timestamps.
+func checkRecordedTurnSpans(t *testing.T, rec *tracetest.SpanRecorder) {
+	t.Helper()
 	var turns []sdktrace.ReadOnlySpan
 	tools := map[string]sdktrace.ReadOnlySpan{}
 	for _, s := range rec.Ended() {
@@ -198,10 +210,36 @@ func TestClaudeActivityDenialsAndSubagents(t *testing.T) {
 	})
 	a.close(ts(6)) // the Task call never returned
 
+	t.Run("events", func(t *testing.T) { checkSubagentEvents(t, claudeEventsByType(t, l)) })
+	t.Run("spans", func(t *testing.T) { checkSubagentSpans(t, rec) })
+}
+
+// claudeEventsByType groups the session's events by type, in file order.
+func claudeEventsByType(t *testing.T, l *session.Logger) map[string][]claudeEvent {
+	t.Helper()
 	byType := map[string][]claudeEvent{}
 	for _, ev := range claudeEvents(t, l) {
 		byType[ev.Type] = append(byType[ev.Type], ev)
 	}
+	return byType
+}
+
+// lastPayloadWhere returns the payload of the last event whose payload key
+// equals want, or nil.
+func lastPayloadWhere(evs []claudeEvent, key string, want any) map[string]any {
+	var out map[string]any
+	for _, ev := range evs {
+		if ev.Payload[key] == want {
+			out = ev.Payload
+		}
+	}
+	return out
+}
+
+// checkSubagentEvents checks the denials, the parent_tool_use_id tags, the
+// unfinished Task result, and the subagent's tool call and response.
+func checkSubagentEvents(t *testing.T, byType map[string][]claudeEvent) {
+	t.Helper()
 	denials := byType[session.EventToolDenied]
 	if len(denials) != 3 || denials[0].Payload["reason"] != activity.DeniedSignOff || denials[1].Payload["reason"] != activity.DeniedByPermission {
 		t.Fatalf("denials = %+v", denials)
@@ -214,45 +252,53 @@ func TestClaudeActivityDenialsAndSubagents(t *testing.T) {
 			t.Errorf("%s %v parent_tool_use_id = %v, want %v", ev.Type, id, ev.Payload["parent_tool_use_id"], want)
 		}
 	}
-	var taskResult map[string]any
-	for _, ev := range byType[session.EventToolResult] {
-		if ev.Payload["name"] == "Task" {
-			taskResult = ev.Payload
-		}
-	}
+	taskResult := lastPayloadWhere(byType[session.EventToolResult], "name", "Task")
 	if taskResult == nil || taskResult["error"] != "no tool result before the run ended" {
 		t.Errorf("unfinished Task result = %v", taskResult)
 	}
-	var subCall map[string]any
-	for _, ev := range byType[session.EventToolCall] {
-		if ev.Payload["name"] == "Grep" {
-			subCall = ev.Payload
-		}
-	}
+	subCall := lastPayloadWhere(byType[session.EventToolCall], "name", "Grep")
 	if subCall == nil || subCall["parent_tool_use_id"] != "task" || subCall["iteration"].(float64) != 1 {
 		t.Errorf("subagent tool_call = %v", subCall)
 	}
-	var subResp map[string]any
-	for _, ev := range byType[session.EventResponse] {
-		if ev.Payload["parent_tool_use_id"] == "task" {
-			subResp = ev.Payload
-		}
-	}
+	subResp := lastPayloadWhere(byType[session.EventResponse], "parent_tool_use_id", "task")
 	if subResp == nil || subResp["duration_ms"].(float64) != 2000 {
 		t.Errorf("subagent response = %v, want duration_ms 2000 (from the Task call at 1s to the message at 3s)", subResp)
 	}
+}
 
+// childSpanNamed returns the last ended span called name whose parent is
+// parent, or nil.
+func childSpanNamed(rec *tracetest.SpanRecorder, name string, parent sdktrace.ReadOnlySpan) sdktrace.ReadOnlySpan {
+	var out sdktrace.ReadOnlySpan
+	for _, s := range rec.Ended() {
+		if s.Name() == name && s.Parent().SpanID() == parent.SpanContext().SpanID() {
+			out = s
+		}
+	}
+	return out
+}
+
+// spanDenied reports the squad.tool.denied attribute of s.
+func spanDenied(s sdktrace.ReadOnlySpan) bool {
+	denied := false
+	for _, kv := range s.Attributes() {
+		if kv.Key == "squad.tool.denied" {
+			denied = kv.Value.AsBool()
+		}
+	}
+	return denied
+}
+
+// checkSubagentSpans checks the subagent's turn nests under the Task span
+// from the Task call's start, its Grep nests under that turn, and both
+// refused writes are marked denied.
+func checkSubagentSpans(t *testing.T, rec *tracetest.SpanRecorder) {
+	t.Helper()
 	spans := map[string]sdktrace.ReadOnlySpan{}
 	for _, s := range rec.Ended() {
 		spans[s.Name()] = s
 	}
-	task := spans["tool.Task"]
-	var subTurn sdktrace.ReadOnlySpan
-	for _, s := range rec.Ended() {
-		if s.Name() == "chat sonnet" && s.Parent().SpanID() == task.SpanContext().SpanID() {
-			subTurn = s
-		}
-	}
+	subTurn := childSpanNamed(rec, "chat sonnet", spans["tool.Task"])
 	if subTurn == nil {
 		t.Fatal("subagent turn is not nested under the Task tool span")
 	}
@@ -263,13 +309,7 @@ func TestClaudeActivityDenialsAndSubagents(t *testing.T) {
 		t.Error("subagent Grep is not under the subagent turn")
 	}
 	for _, name := range []string{"tool.Write", "tool.Edit"} {
-		denied := false
-		for _, kv := range spans[name].Attributes() {
-			if kv.Key == "squad.tool.denied" {
-				denied = kv.Value.AsBool()
-			}
-		}
-		if !denied {
+		if !spanDenied(spans[name]) {
 			t.Errorf("%s not marked denied", name)
 		}
 	}
@@ -307,16 +347,7 @@ func TestFailedClaudeRunKeepsContentOffSpans(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, rec, l := recordClaude(t)
-			binDir := t.TempDir()
-			out := filepath.Join(binDir, "stdout.jsonl")
-			if err := os.WriteFile(out, []byte(tt.stdout), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			script := "#!/bin/sh\ncat > /dev/null\ncat \"" + out + "\"\necho 'auth expired' >&2\nexit 1\n"
-			if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(script), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			installFailingClaude(t, tt.stdout)
 
 			_, _, err := InvokeModel(ctx, &RunOptions{Provider: "claude-code"}, &agent.Bundle{System: "sys", User: "go", WorkDir: t.TempDir()})
 			if err == nil {
@@ -324,42 +355,84 @@ func TestFailedClaudeRunKeepsContentOffSpans(t *testing.T) {
 			}
 
 			leaks := []string{"TEXT-fixture", "INPUT-fixture", "OUTPUT-fixture"}
-			names := map[string]sdktrace.ReadOnlySpan{}
-			for _, s := range rec.Ended() {
-				names[s.Name()] = s
-				var exported []string
-				for _, kv := range s.Attributes() {
-					exported = append(exported, kv.Value.String())
-				}
-				exported = append(exported, s.Status().Description)
-				for _, ev := range s.Events() {
-					exported = append(exported, ev.Name)
-					for _, kv := range ev.Attributes {
-						exported = append(exported, kv.Value.String())
-					}
-				}
-				for _, leak := range leaks {
-					if text := strings.Join(exported, "\n"); strings.Contains(text, leak) {
-						t.Errorf("span %s exports %q:\n%s", s.Name(), leak, text)
-					}
-				}
-			}
-			for _, name := range []string{"agent.invoke", "tool.Bash"} {
-				if s, ok := names[name]; !ok || s.Status().Code != codes.Error {
-					t.Errorf("%s span missing or not marked failed", name)
-				}
-			}
-
-			b, err := os.ReadFile(filepath.Join(l.Dir(), "events.jsonl"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, want := range leaks {
-				if !strings.Contains(string(b), want) {
-					t.Errorf("events.jsonl is missing %q", want)
-				}
-			}
+			checkSpansOmit(t, rec, leaks)
+			checkSpansFailed(t, rec, "agent.invoke", "tool.Bash")
+			checkEventsHold(t, l, leaks)
 		})
+	}
+}
+
+// installFailingClaude puts a fake claude first on PATH that prints stdout,
+// writes an error to stderr and exits 1.
+func installFailingClaude(t *testing.T, stdout string) {
+	t.Helper()
+	binDir := t.TempDir()
+	out := filepath.Join(binDir, "stdout.jsonl")
+	if err := os.WriteFile(out, []byte(stdout), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\ncat > /dev/null\ncat \"" + out + "\"\necho 'auth expired' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// exportedText returns every string a span would export: attribute values,
+// status description, and event names and attributes, one per line.
+func exportedText(s sdktrace.ReadOnlySpan) string {
+	var exported []string
+	for _, kv := range s.Attributes() {
+		exported = append(exported, kv.Value.String())
+	}
+	exported = append(exported, s.Status().Description)
+	for _, ev := range s.Events() {
+		exported = append(exported, ev.Name)
+		for _, kv := range ev.Attributes {
+			exported = append(exported, kv.Value.String())
+		}
+	}
+	return strings.Join(exported, "\n")
+}
+
+// checkSpansOmit fails if any ended span exports one of leaks.
+func checkSpansOmit(t *testing.T, rec *tracetest.SpanRecorder, leaks []string) {
+	t.Helper()
+	for _, s := range rec.Ended() {
+		text := exportedText(s)
+		for _, leak := range leaks {
+			if strings.Contains(text, leak) {
+				t.Errorf("span %s exports %q:\n%s", s.Name(), leak, text)
+			}
+		}
+	}
+}
+
+// checkSpansFailed fails unless each named span ended with an error status.
+func checkSpansFailed(t *testing.T, rec *tracetest.SpanRecorder, names ...string) {
+	t.Helper()
+	byName := map[string]sdktrace.ReadOnlySpan{}
+	for _, s := range rec.Ended() {
+		byName[s.Name()] = s
+	}
+	for _, name := range names {
+		if s, ok := byName[name]; !ok || s.Status().Code != codes.Error {
+			t.Errorf("%s span missing or not marked failed", name)
+		}
+	}
+}
+
+// checkEventsHold fails unless events.jsonl contains each of want.
+func checkEventsHold(t *testing.T, l *session.Logger, want []string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(l.Dir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range want {
+		if !strings.Contains(string(b), w) {
+			t.Errorf("events.jsonl is missing %q", w)
+		}
 	}
 }
 
@@ -416,7 +489,15 @@ func TestClaudeTurnCountsSlowToolUseBlocks(t *testing.T) {
 	a.Assistant(agenticcli.AssistantMessage{ID: "m2", Time: time.Now(), Text: []string{"Done."}, StopReason: "end_turn"})
 	a.close(time.Now())
 
-	evs := claudeEvents(t, l)
+	t.Run("events", func(t *testing.T) { checkSlowToolUseEvents(t, claudeEvents(t, l), a.started.UTC()) })
+	t.Run("turn span", func(t *testing.T) { checkFirstTurnToolCalls(t, rec, "chat haiku", 2) })
+}
+
+// checkSlowToolUseEvents checks the first turn counts both slow tool_use
+// blocks, that ordering by ts keeps each turn before its tool calls, and that
+// the response carries the last block's stop reason and usage.
+func checkSlowToolUseEvents(t *testing.T, evs []claudeEvent, started time.Time) {
+	t.Helper()
 	if got := eventTypes(evs); got != "tool_call,tool_call,tool_result,tool_result,iteration,response,iteration,response" {
 		t.Fatalf("events = %s", got)
 	}
@@ -428,16 +509,22 @@ func TestClaudeTurnCountsSlowToolUseBlocks(t *testing.T) {
 	if got := eventTypes(byTime); got != "iteration,response,tool_call,tool_call,tool_result,tool_result,iteration,response" {
 		t.Errorf("events by ts = %s, want each turn before its tool calls and the results before the next turn", got)
 	}
-	if !evs[4].Ts.Equal(a.started.UTC()) {
-		t.Errorf("iteration ts = %v, want the turn's start %v", evs[4].Ts, a.started.UTC())
+	if !evs[4].Ts.Equal(started) {
+		t.Errorf("iteration ts = %v, want the turn's start %v", evs[4].Ts, started)
 	}
 	resp := evs[5].Payload
 	if resp["tool_calls"].(float64) != 2 || resp["finish_reason"] != "tool_use" || resp["output_tokens"].(float64) != 40 {
 		t.Errorf("response = %v, want 2 tool calls with the last block's stop reason and usage", resp)
 	}
+}
+
+// checkFirstTurnToolCalls checks the earliest span called name records want
+// tool calls in squad.turn.tool_calls.
+func checkFirstTurnToolCalls(t *testing.T, rec *tracetest.SpanRecorder, name string, want int64) {
+	t.Helper()
 	var first sdktrace.ReadOnlySpan
 	for _, s := range rec.Ended() {
-		if s.Name() == "chat haiku" && (first == nil || s.StartTime().Before(first.StartTime())) {
+		if s.Name() == name && (first == nil || s.StartTime().Before(first.StartTime())) {
 			first = s
 		}
 	}
@@ -445,8 +532,8 @@ func TestClaudeTurnCountsSlowToolUseBlocks(t *testing.T) {
 		t.Fatal("no turn span")
 	}
 	for _, kv := range first.Attributes() {
-		if kv.Key == "squad.turn.tool_calls" && kv.Value.AsInt64() != 2 {
-			t.Errorf("squad.turn.tool_calls = %d, want 2", kv.Value.AsInt64())
+		if kv.Key == "squad.turn.tool_calls" && kv.Value.AsInt64() != want {
+			t.Errorf("squad.turn.tool_calls = %d, want %d", kv.Value.AsInt64(), want)
 		}
 	}
 }
