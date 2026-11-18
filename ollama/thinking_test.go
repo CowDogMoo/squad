@@ -535,3 +535,14 @@ func TestEmptyTurnAfterACutOffStillFails(t *testing.T) {
 		t.Fatalf("error = %v, want ErrEmptyTurn", err)
 	}
 }
+
+// TestReplyLimitWithoutABudget checks the wording when no reply budget is set.
+func TestReplyLimitWithoutABudget(t *testing.T) {
+	t.Parallel()
+	if got := New("http://x", "qwen3", 0).replyLimit(0); got != "the reply length limit" {
+		t.Fatalf("replyLimit = %q", got)
+	}
+	if got := New("http://x", "qwen3", 65536).replyLimit(1024); got != "the 1024-token reply limit" {
+		t.Fatalf("replyLimit = %q", got)
+	}
+}

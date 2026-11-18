@@ -818,3 +818,16 @@ func TestGenerateContentStreaming(t *testing.T) {
 		t.Fatalf("streamed chunks = %d, want 2", len(streamed))
 	}
 }
+
+// TestGenerateContentToolChoiceNoneFollowUpError checks that a failed
+// follow-up to a reply of tool calls alone is returned as the error.
+func TestGenerateContentToolChoiceNoneFollowUpError(t *testing.T) {
+	t.Parallel()
+	server, reqs := noToolCallServer(t, callOnly)
+	if _, err := New(server.URL, "qwen3", 4096).GenerateContent(context.Background(), wrapUp, noToolCallOpts(nil)...); err == nil {
+		t.Fatal("want the follow-up's error")
+	}
+	if len(*reqs) != 2 {
+		t.Fatalf("requests = %d, want the request and its follow-up", len(*reqs))
+	}
+}
