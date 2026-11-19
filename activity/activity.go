@@ -190,7 +190,7 @@ func (t *Turn) recordAt(res TurnResult, at, ts time.Time) {
 		"duration_ms":   at.Sub(t.start).Milliseconds(),
 	}
 	if res.Text != "" {
-		payload["text"] = truncate(res.Text, maxEventTextBytes)
+		payload["text"] = CapText(res.Text)
 	}
 	if res.Thinking != "" {
 		payload["thinking"] = truncate(res.Thinking, maxEventThinkingBytes)
@@ -469,6 +469,10 @@ func appendAt(ctx context.Context, ts time.Time, eventType string, payload map[s
 		logging.Warn("session: append %s failed: %v", eventType, err)
 	}
 }
+
+// CapText cuts assistant text to the size an events.jsonl value is capped at,
+// for callers that write response events without a Turn.
+func CapText(s string) string { return truncate(s, maxEventTextBytes) }
 
 // truncate cuts s to at most n bytes, backing up to a UTF-8 boundary, and
 // marks the cut.

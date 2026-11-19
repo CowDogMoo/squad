@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cowdogmoo/squad/session"
 )
@@ -59,6 +60,29 @@ func TestSummarizeAgentActivity(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSummarizeCutsModelTextOnRuneBoundaries checks that summaries of
+// free-form model text stay valid UTF-8 when the cut lands inside a
+// multi-byte character.
+func TestSummarizeCutsModelTextOnRuneBoundaries(t *testing.T) {
+	now := time.Now()
+	splitAt := func(w int) string {
+		return strings.Repeat("a", w-2) + "—" + strings.Repeat("b", 20)
+	}
+	for _, ev := range []session.Event{
+		event(now, session.EventResponse, map[string]any{"text": splitAt(100)}),
+		event(now, session.EventToolResult, map[string]any{"name": "Bash", "error": splitAt(60)}),
+		event(now, session.EventToolCall, map[string]any{"name": "Bash", "args": splitAt(80)}),
+	} {
+		got := summarize(ev)
+		if !utf8.ValidString(got) {
+			t.Errorf("summarize(%s) = %q, not valid UTF-8", ev.Type, got)
+		}
+		if !strings.HasSuffix(got, "a…") {
+			t.Errorf("summarize(%s) = %q, want the cut to drop the split rune", ev.Type, got)
+		}
 	}
 }
 

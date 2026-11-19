@@ -22,6 +22,8 @@ func TestTruncate(t *testing.T) {
 		{"negative width returns input", "hello", -3, "hello"},
 		{"width of one is ellipsis", "hello", 1, "…"},
 		{"empty input", "", 5, ""},
+		{"cut inside a multi-byte rune backs up", "ab—cd", 4, "ab…"},
+		{"cut on a rune boundary keeps the rune", "ab—cd", 6, "ab—…"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

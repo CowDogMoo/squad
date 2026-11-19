@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/session"
@@ -183,5 +184,9 @@ func truncate(s string, w int) string {
 	if w <= 1 {
 		return "…"
 	}
-	return s[:w-1] + "…"
+	n := w - 1
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
 }

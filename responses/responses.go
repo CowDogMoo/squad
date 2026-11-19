@@ -615,7 +615,7 @@ func recordResponse(ctx context.Context, resp *oairesponses.Response, label stri
 		"output_tokens": resp.Usage.OutputTokens,
 	}
 	if text := resp.OutputText(); text != "" {
-		payload["text"] = text
+		payload["text"] = activity.CapText(text)
 	}
 	activity.Append(ctx, session.EventResponse, payload)
 }

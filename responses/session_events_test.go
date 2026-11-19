@@ -14,6 +14,7 @@ import (
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/tools"
+	oairesponses "github.com/openai/openai-go/v3/responses"
 )
 
 type loggedEvent struct {
@@ -78,6 +79,37 @@ func responsePayload(id string, output []map[string]any) map[string]any {
 		"instructions":        "system",
 		"metadata":            map[string]any{},
 		"output":              output,
+	}
+}
+
+// TestRecordResponseCapsText checks that a runaway final report is cut to
+// the same 64 KiB cap the other providers' response events use.
+func TestRecordResponseCapsText(t *testing.T) {
+	ctx, l := newEventLogger(t)
+	long := strings.Repeat("x", 64*1024) + strings.Repeat("y", 1024)
+	raw, err := json.Marshal(responsePayload("resp-big", []map[string]any{
+		{"id": "msg-1", "type": "message", "role": "assistant", "status": "completed",
+			"content": []map[string]any{{"type": "output_text", "text": long}}},
+	}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var resp oairesponses.Response
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	recordResponse(ctx, &resp, "final")
+
+	evs := eventsOfType(loggedEvents(t, l), session.EventResponse)
+	if len(evs) != 1 {
+		t.Fatalf("response events = %d, want 1", len(evs))
+	}
+	text, _ := evs[0].Payload["text"].(string)
+	if !strings.HasPrefix(text, strings.Repeat("x", 64*1024)) || strings.Contains(text, "y") {
+		t.Fatalf("response text = %d bytes, want the first 64 KiB only", len(text))
+	}
+	if !strings.HasSuffix(text, "[truncated]") {
+		t.Errorf("response text should mark the cut, got suffix %q", text[len(text)-20:])
 	}
 }
 
