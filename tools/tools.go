@@ -1130,9 +1130,18 @@ func extractTokenValue(gi map[string]any, keys []string) int64 {
 	return 0
 }
 
+// toInt64 converts a GenerationInfo count to int64. Providers report counts
+// as different numeric types: the googleai client, for one, passes the genai
+// SDK's int32 counts through unchanged.
 func toInt64(v any) int64 {
 	switch t := v.(type) {
 	case int:
+		return int64(t)
+	case int8:
+		return int64(t)
+	case int16:
+		return int64(t)
+	case int32:
 		return int64(t)
 	case int64:
 		return t

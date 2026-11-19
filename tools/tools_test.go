@@ -2207,6 +2207,9 @@ func TestToInt64(t *testing.T) {
 	}{
 		{"int", int(42), 42},
 		{"int64", int64(99), 99},
+		{"int32", int32(123), 123},
+		{"int16", int16(45), 45},
+		{"int8", int8(6), 6},
 		{"float64", float64(7.9), 7},
 		{"string unsupported", "hello", 0},
 		{"nil", nil, 0},
@@ -2220,6 +2223,29 @@ func TestToInt64(t *testing.T) {
 				t.Fatalf("toInt64(%v) = %d, want %d", tt.val, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestExtractTokenUsageGoogleAIInt32 feeds usage the way the googleai client
+// reports it (int32 counts straight from the genai SDK) and checks that
+// tokens and cost are recorded rather than dropped.
+func TestExtractTokenUsageGoogleAIInt32(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("gemini", "gemini-2.5-flash")
+	gi := map[string]any{
+		"PromptTokens":     int32(1000),
+		"CompletionTokens": int32(500),
+		"TotalTokens":      int32(1500),
+	}
+	extractTokenUsage(gi, m)
+	if m.InputTokens() != 1000 {
+		t.Fatalf("InputTokens = %d, want 1000", m.InputTokens())
+	}
+	if m.OutputTokens() != 500 {
+		t.Fatalf("OutputTokens = %d, want 500", m.OutputTokens())
+	}
+	if m.Cost() <= 0 {
+		t.Fatalf("Cost = %v, want > 0", m.Cost())
 	}
 }
 
