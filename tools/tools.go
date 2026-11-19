@@ -1051,6 +1051,9 @@ func extractToolResults(messages []llms.MessageContent) map[string]string {
 //     are priced at the five-minute rate, which is the lifetime squad asks for.
 //   - OpenAI reports "PromptTokens" as the whole prompt, with the cached
 //     share ("PromptCachedTokens") already inside it.
+//   - Gemini does the same, naming the cached share "CachedTokens". Its
+//     client reads usage from the first stream chunk only and never counts
+//     thinking tokens, so Gemini output tokens and cost are under-recorded.
 //
 // A provider that reports no cache counts yields plain input and output.
 func usageFromGenerationInfo(gi map[string]any) metrics.Usage {
@@ -1058,7 +1061,7 @@ func usageFromGenerationInfo(gi map[string]any) metrics.Usage {
 		OutputTokens: extractTokenValue(gi, []string{"CompletionTokens", "completion_tokens", "OutputTokens", "output_tokens"}),
 	}
 	if prompt := extractTokenValue(gi, []string{"PromptTokens", "prompt_tokens"}); prompt > 0 {
-		cached := min(extractTokenValue(gi, []string{"PromptCachedTokens"}), prompt)
+		cached := min(extractTokenValue(gi, []string{"PromptCachedTokens", "CachedTokens"}), prompt)
 		u.InputTokens = prompt - cached
 		u.CacheReadTokens = cached
 		return u
@@ -1130,9 +1133,18 @@ func extractTokenValue(gi map[string]any, keys []string) int64 {
 	return 0
 }
 
+// toInt64 converts a GenerationInfo count to int64. Providers report counts
+// as different numeric types: the googleai client, for one, passes the genai
+// SDK's int32 counts through unchanged.
 func toInt64(v any) int64 {
 	switch t := v.(type) {
 	case int:
+		return int64(t)
+	case int8:
+		return int64(t)
+	case int16:
+		return int64(t)
+	case int32:
 		return int64(t)
 	case int64:
 		return t

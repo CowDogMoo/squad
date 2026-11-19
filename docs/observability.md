@@ -360,9 +360,9 @@ Prompt tokens that go through a provider's prompt cache are billed at their own 
 
 Cache prices come from the same LiteLLM entry as the input and output prices. When the entry has none and the provider is `anthropic` or `claude-code`, squad applies the multipliers from [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching). On any other provider, a model without cache prices has its cached tokens charged at the input price, whatever the model is called.
 
-The `claude-code`, `anthropic`, `openai`, and `openai-responses` providers report cache counts, as does an `openai-compat` endpoint that returns them. When a run used the cache, the metrics summary and the run logs name each component, and `meta.json` records `cache_read_tokens` and `cache_write_tokens` next to `input_tokens`, which stays the count of every prompt token.
+The `claude-code`, `anthropic`, `openai`, `openai-responses`, and `gemini` providers report cache counts, as does an `openai-compat` endpoint that returns them. When a run used the cache, the metrics summary and the run logs name each component, and `meta.json` records `cache_read_tokens` and `cache_write_tokens` next to `input_tokens`, which stays the count of every prompt token.
 
-The `gemini` provider is not covered yet: squad does not read the 32-bit token counts its client reports, so a Gemini model's usage is recorded as zero tokens and no cost, and does not count toward `--max-cost`.
+The `gemini` provider's token usage and cost are recorded and count toward `--max-cost`, but its output tokens are under-recorded. The Gemini client reads usage from the first chunk of a streamed response and does not count thinking tokens, so a Gemini run's recorded output and cost are lower than what it is billed, and `--max-cost` stops it later than the real spend.
 
 ### Cost hints in agent.yaml
 

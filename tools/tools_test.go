@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -2207,6 +2208,9 @@ func TestToInt64(t *testing.T) {
 	}{
 		{"int", int(42), 42},
 		{"int64", int64(99), 99},
+		{"int32", int32(123), 123},
+		{"int16", int16(45), 45},
+		{"int8", int8(6), 6},
 		{"float64", float64(7.9), 7},
 		{"string unsupported", "hello", 0},
 		{"nil", nil, 0},
@@ -2220,6 +2224,69 @@ func TestToInt64(t *testing.T) {
 				t.Fatalf("toInt64(%v) = %d, want %d", tt.val, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestExtractTokenUsageGoogleAIInt32 feeds usage the way the googleai client
+// reports it (int32 counts straight from the genai SDK) and checks that
+// tokens and cost are recorded rather than dropped.
+func TestExtractTokenUsageGoogleAIInt32(t *testing.T) {
+	t.Parallel()
+	m := metrics.New("gemini", "gemini-2.5-flash")
+	gi := map[string]any{
+		"PromptTokens":     int32(1000),
+		"CompletionTokens": int32(500),
+		"TotalTokens":      int32(1500),
+	}
+	extractTokenUsage(gi, m)
+	if m.InputTokens() != 1000 {
+		t.Fatalf("InputTokens = %d, want 1000", m.InputTokens())
+	}
+	if m.OutputTokens() != 500 {
+		t.Fatalf("OutputTokens = %d, want 500", m.OutputTokens())
+	}
+	prices := metrics.Pricing{InputPerMillion: 10, OutputPerMillion: 40}
+	if cost := prices.Cost(m.Usage()).Total(); math.Abs(cost-0.03) > 1e-12 {
+		t.Fatalf("cost = %v, want 0.03 (1000 input and 500 output tokens)", cost)
+	}
+}
+
+// TestExtractTokenUsageGoogleAICachedTokens feeds the GenerationInfo the
+// googleai client builds for a response that used cached content, where the
+// cached share ("CachedTokens") is counted inside "PromptTokens", and checks
+// that share is recorded and priced as cache reads rather than fresh input.
+func TestExtractTokenUsageGoogleAICachedTokens(t *testing.T) {
+	t.Parallel()
+	gi := map[string]any{
+		"input_tokens":         int32(1000),
+		"output_tokens":        int32(50),
+		"total_tokens":         int32(1050),
+		"PromptTokens":         int32(1000),
+		"CompletionTokens":     int32(50),
+		"TotalTokens":          int32(1050),
+		"CachedTokens":         int32(800),
+		"CacheReadInputTokens": int32(800),
+		"NonCachedInputTokens": int32(200),
+		"ThinkingTokens":       0,
+	}
+	m := metrics.New("gemini", "gemini-2.5-flash")
+	extractTokenUsage(gi, m)
+
+	want := metrics.Usage{InputTokens: 200, CacheReadTokens: 800, OutputTokens: 50}
+	if got := m.Usage(); got != want {
+		t.Fatalf("metrics usage = %+v, want %+v", got, want)
+	}
+	if m.InputTokens() != 1000 {
+		t.Fatalf("InputTokens = %d, want 1000 (every prompt token)", m.InputTokens())
+	}
+
+	prices := metrics.Pricing{InputPerMillion: 10, CacheReadPerMillion: 1, OutputPerMillion: 40}
+	cost := prices.Cost(m.Usage())
+	if math.Abs(cost.Input-0.002) > 1e-12 {
+		t.Errorf("input cost = %v, want 0.002 (200 fresh tokens at the input price)", cost.Input)
+	}
+	if math.Abs(cost.CacheRead-0.0008) > 1e-12 {
+		t.Errorf("cache read cost = %v, want 0.0008 (800 cached tokens at the cache-read price)", cost.CacheRead)
 	}
 }
 
