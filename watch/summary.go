@@ -177,9 +177,9 @@ func num(p map[string]any, key string) string {
 	}
 }
 
-// Truncate cuts s to w bytes, ending the cut with an ellipsis. It backs up to
-// a rune boundary so the cut never splits a UTF-8 character. A non-positive w
-// leaves s unchanged.
+// Truncate cuts s, when it is longer than w bytes, to at most w-1 bytes
+// followed by an ellipsis. It backs up to a rune boundary so the cut never
+// splits a UTF-8 character. A non-positive w leaves s unchanged.
 func Truncate(s string, w int) string {
 	if w <= 0 || len(s) <= w {
 		return s

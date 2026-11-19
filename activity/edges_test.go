@@ -19,7 +19,7 @@ func TestRecordAtAndEndAtDefaultToNow(t *testing.T) {
 	if len(resp) != 1 {
 		t.Fatalf("response events = %d, want 1", len(resp))
 	}
-	if d := resp[0].Payload["duration_ms"].(float64); d < 2000 {
+	if d := durationMS(resp[0].Payload); d < 2000 {
 		t.Errorf("duration_ms = %v, want measured to now (>= 2000)", d)
 	}
 	span := spanNamed(t, rec, "chat haiku")
@@ -27,6 +27,10 @@ func TestRecordAtAndEndAtDefaultToNow(t *testing.T) {
 		t.Errorf("span ended %v, want now (after %v)", span.EndTime(), before)
 	}
 }
+
+// durationMS reads a response event's duration_ms, which JSON decodes as a
+// float64.
+func durationMS(p map[string]any) float64 { return p["duration_ms"].(float64) }
 
 // TestAppendUnencodablePayload checks that an event whose payload cannot be
 // encoded is dropped without writing a broken line or panicking.
