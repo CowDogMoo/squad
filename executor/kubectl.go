@@ -146,7 +146,8 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 // omitExecQuery removes the exec URL's query string, which carries the
 // URL-encoded command, from err. client-go flattens transport failures into
 // text that embeds the full exec URL, so without this the command would reach
-// span status, exception events and the error returned to the tool.
+// the error returned to the tool and, under SQUAD_OTEL_EXPORT_COMMANDS=1,
+// span status and exception events.
 func omitExecQuery(err error, rawQuery string) error {
 	msg := err.Error()
 	if rawQuery == "" || !strings.Contains(msg, rawQuery) {
