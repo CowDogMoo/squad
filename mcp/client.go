@@ -14,7 +14,6 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -227,8 +226,7 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 
 	if c.inner == nil {
 		err := fmt.Errorf("MCP client %q is not connected", c.name)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordContentError(span, err, "mcp tool call failed")
 		return nil, err
 	}
 	req := mcptypes.CallToolRequest{}
@@ -236,8 +234,7 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 	req.Params.Arguments = args
 	result, err := c.inner.CallTool(ctx, req)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordContentError(span, err, "mcp tool call failed")
 	}
 	return result, err
 }

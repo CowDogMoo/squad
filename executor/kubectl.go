@@ -10,7 +10,6 @@ import (
 
 	"github.com/cowdogmoo/squad/telemetry"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -120,8 +119,7 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 	spdy, err := e.newSPDY(e.config, "POST", execURL)
 	if err != nil {
 		err = omitExecQuery(err, execURL.RawQuery)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordContentError(span, err, commandFailedStatus)
 		return nil, fmt.Errorf("failed to create SPDY executor: %w", err)
 	}
 
@@ -138,8 +136,7 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 
 	if err != nil {
 		err = omitExecQuery(err, execURL.RawQuery)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordContentError(span, err, commandFailedStatus)
 		return combined, fmt.Errorf("command failed: %w", err)
 	}
 

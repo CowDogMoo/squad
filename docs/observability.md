@@ -244,10 +244,10 @@ Errors are recorded on the relevant span so you can filter to failed spans in Ja
 
 ### Span attributes
 
-Spans carry names, timing, sizes, token counts and errors, but no assistant
-text and no tool output, and by default no tool arguments (the one opt-in is
-described under shell command attributes below). `events.jsonl` keeps all of
-them in full locally:
+Spans carry names, timing, sizes, token counts and error status, but no
+assistant text, and by default no tool arguments, tool output or tool error
+text (the one opt-in is described under shell command attributes below).
+`events.jsonl` keeps all of them in full locally:
 
 | Span | Attributes |
 |---|---|
@@ -257,9 +257,17 @@ them in full locally:
 | `chat <model>` | `gen_ai.operation.name=chat`, `gen_ai.provider.name`, `gen_ai.system`, `gen_ai.request.model`, `squad.turn.index`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, `gen_ai.response.finish_reasons`, `squad.turn.tool_calls`, `squad.turn.text_bytes`, `squad.turn.thinking_bytes`, `squad.turn.thinking_tokens` |
 | `tool.<Name>` | `squad.tool.name`, `squad.tool.call_id`, `squad.tool.args_bytes`, `squad.tool.output_bytes`, `squad.tool.denied`, `squad.tool.denied_reason`, error status; squad's own Bash tool (API providers) also `squad.tool.command` (see below) |
 
-A tool call that failed has an error status. When the error is only the
-tool's own output, as with `claude-code` tool results, the status reads
-`tool returned an error` and the output itself is only in `events.jsonl`. A
+A tool call that failed has an error status that reads
+`tool returned an error`. The error text itself, whether squad's own message
+(which can name the path or command the model asked for) or the tool's output
+(as with `claude-code` tool results), is only in `events.jsonl`. The same rule
+holds for the other spans on an agent's tool path: a failed `task.background`
+span reads `task failed`, `mcp.call_tool` reads `mcp tool call failed`, and a
+Docker, kubectl or SSM executor span whose backend call failed reads
+`executor command failed`. Each of these keeps the `exception` event's
+`exception.type`, with the fixed text as its message. Under
+`SQUAD_OTEL_EXPORT_COMMANDS=1` the status and the event message carry the
+error text instead, redacted as described below and truncated to 200 bytes. A
 failed `claude-code` run puts the CLI's error result on `agent.invoke`, or,
 when there is none, its stderr and any stdout lines that are not JSON. No
 stream-json event reaches the error, not even one cut off because the CLI was
@@ -297,7 +305,8 @@ secret and api_key style keys written as `key=value` or `key: value`. It has
 no tool-specific rules and will miss credentials in other forms, such as
 `-p <password>` flags, so only turn it on when the trace backend is trusted
 with the commands your agents run. The exported text is truncated to 1000
-bytes.
+bytes. The same opt-in puts the redacted error text of a failed tool call
+on its span status, as described under span attributes above.
 
 ### TLS and plaintext
 

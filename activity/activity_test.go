@@ -246,43 +246,73 @@ func spanText(s sdktrace.ReadOnlySpan) string {
 	return sb.String()
 }
 
-// TestFailingToolKeepsContentOffSpans checks that, even with the commands
-// opt-in on, a failing tool's input and output and the turn's assistant text
-// reach events.jsonl but no span.
+// TestFailingToolKeepsContentOffSpans checks that a failing tool's error,
+// whether an error naming the path it was given or the tool's own output,
+// reaches events.jsonl in full but reaches its span only under the commands
+// opt-in, redacted. The turn's assistant text and the tool's input never
+// reach a span.
 func TestFailingToolKeepsContentOffSpans(t *testing.T) {
-	t.Setenv(telemetry.ExportCommandsEnv, "1")
+	failures := []struct {
+		name string
+		res  Result
+	}{
+		{"error", Result{Err: errors.New(`path "/srv/OUTPUT-x" is outside working directory; token=` + secretArg)}},
+		{"error text", Result{ErrText: "Error: file /srv/OUTPUT-x is unreadable; token=" + secretArg}},
+	}
+	for _, f := range failures {
+		t.Run(f.name+"/default", func(t *testing.T) {
+			t.Setenv(telemetry.ExportCommandsEnv, "")
+			read := runFailingTool(t, f.res, "OUTPUT-")
+			if got := read.Status(); got.Code != codes.Error || got.Description != toolErrorStatus {
+				t.Errorf("tool span status = %+v, want an error with the fixed description", got)
+			}
+		})
+		t.Run(f.name+"/opt-in", func(t *testing.T) {
+			t.Setenv(telemetry.ExportCommandsEnv, "1")
+			read := runFailingTool(t, f.res)
+			got := read.Status()
+			if got.Code != codes.Error || !strings.Contains(got.Description, "/srv/OUTPUT-x") || !strings.Contains(got.Description, "token="+telemetry.RedactedMarker) {
+				t.Errorf("tool span status = %+v, want the redacted error text", got)
+			}
+		})
+	}
+}
+
+// runFailingTool records a turn with one Read call that ends with res and
+// returns the tool span. It fails if any span exports the turn text, the
+// tool input, the secret, or one of extraLeaks, or if events.jsonl lacks the
+// text, the input or the error.
+func runFailingTool(t *testing.T, res Result, extraLeaks ...string) sdktrace.ReadOnlySpan {
+	t.Helper()
 	ctx, rec, l := setup(t)
 	text := "Reading the notes in TEXT-" + secretArg
 	input := `{"file_path":"/srv/INPUT-` + secretArg + `"}`
-	output := "Error: file /srv/OUTPUT-" + secretArg + " is unreadable"
 	turn := Recorder{Provider: "claude-code", Model: "haiku"}.StartTurn(ctx, 1, time.Time{})
 	turn.Record(TurnResult{Text: text, ToolCalls: 1})
 	_, tool := StartTool(turn.Context(), ToolCall{CallID: "c", Name: "Read", Args: input})
-	tool.Finish(Result{OutputBytes: len(output), ErrText: output})
+	tool.Finish(res)
 	turn.End()
 
+	leaks := append([]string{"TEXT-", "INPUT-", secretArg}, extraLeaks...)
 	for _, s := range rec.Ended() {
 		got := spanText(s)
-		for _, leak := range []string{"TEXT-", "INPUT-", "OUTPUT-", secretArg} {
+		for _, leak := range leaks {
 			if strings.Contains(got, leak) {
 				t.Errorf("span %s exports %q:\n%s", s.Name(), leak, got)
 			}
 		}
-	}
-	read := spanNamed(t, rec, "tool.Read")
-	if read.Status().Code != codes.Error || read.Status().Description != toolErrorStatus {
-		t.Errorf("tool span status = %+v, want an error with the fixed description", read.Status())
 	}
 
 	b, err := os.ReadFile(filepath.Join(l.Dir(), "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"TEXT-", "INPUT-", "OUTPUT-"} {
-		if !strings.Contains(string(b), want+secretArg) {
-			t.Errorf("events.jsonl is missing the %s content", want)
+	for _, want := range []string{"TEXT-" + secretArg, "INPUT-" + secretArg, "/srv/OUTPUT-x", "token=" + secretArg} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("events.jsonl is missing %q", want)
 		}
 	}
+	return spanNamed(t, rec, "tool.Read")
 }
 
 func TestFailuresAndTimestamps(t *testing.T) {

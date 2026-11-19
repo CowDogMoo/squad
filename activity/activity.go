@@ -6,8 +6,10 @@
 //
 // events.jsonl is a local file and keeps full assistant text, tool
 // arguments and tool errors. Spans may leave the machine, so they carry only
-// names, timing, sizes, token counts and error status, never assistant text,
-// tool arguments or tool output.
+// names, timing, sizes, token counts and error status, never assistant text
+// and, by default, no tool arguments or tool output. A failed tool call's
+// span gets a fixed error status unless SQUAD_OTEL_EXPORT_COMMANDS=1 opts in
+// to its redacted, truncated error text.
 package activity
 
 import (
@@ -373,12 +375,15 @@ type Result struct {
 	Extra map[string]any
 }
 
-// toolErrorStatus is the span status description for a call that failed
-// with only ErrText.
+// toolErrorStatus is the span status description for a failed call. The
+// error text itself reaches the span only under SQUAD_OTEL_EXPORT_COMMANDS=1
+// (see telemetry.ContentErrorStatus).
 const toolErrorStatus = "tool returned an error"
 
-// Finish writes the tool_result event and closes the span with the output
-// size and error status.
+// Finish writes the tool_result event, with the full error text, and closes
+// the span with the output size and error status. The status carries the
+// error text only under SQUAD_OTEL_EXPORT_COMMANDS=1, because a tool's error
+// can name its arguments (a refused path) or hold its output.
 func (t *Tool) Finish(res Result) {
 	if t == nil || t.ended {
 		return
@@ -419,10 +424,9 @@ func (t *Tool) Finish(res Result) {
 	)
 	switch {
 	case res.Err != nil:
-		t.span.RecordError(res.Err)
-		t.span.SetStatus(codes.Error, truncate(errText, 200))
+		telemetry.RecordContentError(t.span, res.Err, toolErrorStatus)
 	case isError:
-		t.span.SetStatus(codes.Error, toolErrorStatus)
+		t.span.SetStatus(codes.Error, telemetry.ContentErrorStatus(errText, toolErrorStatus))
 	}
 	endSpan(t.span, end)
 }

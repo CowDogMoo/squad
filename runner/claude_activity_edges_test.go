@@ -1,10 +1,16 @@
 package runner
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/cowdogmoo/squad/agenticcli"
+	"github.com/cowdogmoo/squad/session"
+	"github.com/cowdogmoo/squad/telemetry"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // TestClaudeActivityRecordsThinkingText checks that the text of a thinking
@@ -50,4 +56,50 @@ func TestClaudeActivityUntimedMessageEndsAtClose(t *testing.T) {
 	if !found {
 		t.Fatal("no turn span was ended")
 	}
+}
+
+// TestClaudeToolResultErrorStatus checks that a claude-code tool_result
+// error that names a path reaches events.jsonl in full, and reaches the
+// tool.Read span status only under the commands opt-in, redacted.
+func TestClaudeToolResultErrorStatus(t *testing.T) {
+	const content = `path "/tmp/webapp-map/candidates.jsonl" is outside working directory; token=hunter2-fixture`
+	tests := []struct {
+		name, env, want string
+	}{
+		{"default", "", "tool returned an error"},
+		{"opt-in", "1", `path "/tmp/webapp-map/candidates.jsonl" is outside working directory; token=` + telemetry.RedactedMarker},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(telemetry.ExportCommandsEnv, tt.env)
+			read, l := runClaudeFailedRead(t, content)
+			if got := read.Status(); got.Code != codes.Error || got.Description != tt.want {
+				t.Errorf("tool.Read status = %+v, want error %q", got, tt.want)
+			}
+			if tt.env == "" && strings.Contains(exportedText(read), "/tmp/webapp-map") {
+				t.Errorf("tool.Read span exports the path:\n%s", exportedText(read))
+			}
+			checkEventsHold(t, l, []string{`/tmp/webapp-map/candidates.jsonl\" is outside working directory; token=hunter2-fixture`})
+		})
+	}
+}
+
+// runClaudeFailedRead feeds a claude-code Read call whose tool_result is an
+// error holding content, and returns the tool.Read span and the session.
+func runClaudeFailedRead(t *testing.T, content string) (sdktrace.ReadOnlySpan, *session.Logger) {
+	t.Helper()
+	ctx, rec, l := recordClaude(t)
+	a := newClaudeActivity(ctx, "haiku")
+	a.Assistant(agenticcli.AssistantMessage{ID: "m1", Time: ts(1), ToolUses: []agenticcli.ToolUse{
+		{ID: "r1", Name: "Read", Input: json.RawMessage(`{"file_path":"/tmp/webapp-map/candidates.jsonl"}`)},
+	}})
+	a.ToolResults([]agenticcli.ToolResult{{ToolUseID: "r1", Time: ts(2), IsError: true, Content: content}})
+	a.Finished(ts(3))
+	for _, s := range rec.Ended() {
+		if s.Name() == "tool.Read" {
+			return s, l
+		}
+	}
+	t.Fatal("no tool.Read span")
+	return nil, nil
 }
