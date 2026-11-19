@@ -27,8 +27,8 @@ func TestTruncate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := truncate(tc.s, tc.w); got != tc.want {
-				t.Errorf("truncate(%q, %d) = %q, want %q", tc.s, tc.w, got, tc.want)
+			if got := Truncate(tc.s, tc.w); got != tc.want {
+				t.Errorf("Truncate(%q, %d) = %q, want %q", tc.s, tc.w, got, tc.want)
 			}
 		})
 	}

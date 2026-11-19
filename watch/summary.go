@@ -62,7 +62,7 @@ func sumPrompt(p map[string]any) string {
 	if text == "" {
 		text = "(prompt sent)"
 	}
-	return "prompt · " + truncate(text, 80)
+	return "prompt · " + Truncate(text, 80)
 }
 
 func sumIteration(p map[string]any) string {
@@ -81,7 +81,7 @@ func sumToolCall(p map[string]any) string {
 	if args == "" {
 		return name
 	}
-	return fmt.Sprintf("%s  %s", name, truncate(oneLine(args), 80))
+	return fmt.Sprintf("%s  %s", name, Truncate(oneLine(args), 80))
 }
 
 func sumToolResult(p map[string]any) string {
@@ -93,7 +93,7 @@ func sumToolResult(p map[string]any) string {
 		out += fmt.Sprintf(" · %sms", num(p, "duration_ms"))
 	}
 	if e := str(p, "error"); e != "" {
-		out += " · error: " + truncate(oneLine(e), 60)
+		out += " · error: " + Truncate(oneLine(e), 60)
 	}
 	return out
 }
@@ -117,7 +117,7 @@ func sumResponse(p map[string]any) string {
 	}
 	line := fmt.Sprintf("%s · +%s in / +%s out", head, in, out)
 	if text := str(p, "text"); text != "" {
-		line += " · " + truncate(oneLine(text), 100)
+		line += " · " + Truncate(oneLine(text), 100)
 	}
 	return line
 }
@@ -127,13 +127,13 @@ func sumError(p map[string]any) string {
 	if msg == "" {
 		msg = str(p, "message")
 	}
-	return "error · " + truncate(msg, 80)
+	return "error · " + Truncate(msg, 80)
 }
 
 func sumRunEnd(p map[string]any) string {
 	st := str(p, "status")
 	if e := str(p, "error"); e != "" {
-		return fmt.Sprintf("ended · %s · %s", st, truncate(e, 60))
+		return fmt.Sprintf("ended · %s · %s", st, Truncate(e, 60))
 	}
 	return "ended · " + st
 }
@@ -177,7 +177,10 @@ func num(p map[string]any, key string) string {
 	}
 }
 
-func truncate(s string, w int) string {
+// Truncate cuts s to w bytes, ending the cut with an ellipsis. It backs up to
+// a rune boundary so the cut never splits a UTF-8 character. A non-positive w
+// leaves s unchanged.
+func Truncate(s string, w int) string {
 	if w <= 0 || len(s) <= w {
 		return s
 	}
