@@ -6,12 +6,15 @@
 //
 // events.jsonl is a local file and keeps full assistant text, tool
 // arguments and tool errors. Spans may leave the machine, so they carry only
-// names, timing, sizes, token counts and error status, never assistant text,
-// tool arguments or tool output.
+// names, timing, sizes, token counts and error status, never assistant text
+// or tool output and, by default, no tool arguments. A failed tool call's
+// span gets a fixed error status; SQUAD_OTEL_EXPORT_COMMANDS=1 opts in to
+// the redacted, truncated text of the call's Go error, never to its output.
 package activity
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/cowdogmoo/squad/logging"
@@ -373,12 +376,22 @@ type Result struct {
 	Extra map[string]any
 }
 
-// toolErrorStatus is the span status description for a call that failed
-// with only ErrText.
+// OutputError is a tool failure whose text is the tool's own output, such as
+// an MCP tool's error result. Finish treats it as it does Result.ErrText.
+type OutputError string
+
+// Error returns the tool's output.
+func (e OutputError) Error() string { return string(e) }
+
+// toolErrorStatus is the span status description for a failed call.
 const toolErrorStatus = "tool returned an error"
 
-// Finish writes the tool_result event and closes the span with the output
-// size and error status.
+// Finish writes the tool_result event, with the full error text, and closes
+// the span with the output size and error status. ErrText and an OutputError
+// are the tool's own output, so their text never reaches the span. Any other
+// Err can name the call's arguments (a refused path), so its text reaches
+// the span only under SQUAD_OTEL_EXPORT_COMMANDS=1 (see
+// telemetry.RecordContentError).
 func (t *Tool) Finish(res Result) {
 	if t == nil || t.ended {
 		return
@@ -417,10 +430,10 @@ func (t *Tool) Finish(res Result) {
 		attribute.Int("squad.tool.output_bytes", res.OutputBytes),
 		attribute.Bool("squad.tool.denied", false),
 	)
+	var output OutputError
 	switch {
-	case res.Err != nil:
-		t.span.RecordError(res.Err)
-		t.span.SetStatus(codes.Error, truncate(errText, 200))
+	case res.Err != nil && !errors.As(res.Err, &output):
+		telemetry.RecordContentError(t.span, res.Err, toolErrorStatus)
 	case isError:
 		t.span.SetStatus(codes.Error, toolErrorStatus)
 	}

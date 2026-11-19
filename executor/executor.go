@@ -23,3 +23,9 @@ type Executor interface {
 	// knows where its tool commands will run.
 	EnvironmentDescription() string
 }
+
+// commandFailedStatus is the span status description for a failed executor
+// call. The backend's error can quote the command, so its text reaches the
+// span only under SQUAD_OTEL_EXPORT_COMMANDS=1 (see
+// telemetry.RecordContentError).
+const commandFailedStatus = "executor command failed"

@@ -119,8 +119,7 @@ func (e *SSMExecutor) Execute(ctx context.Context, command string) ([]byte, erro
 		TimeoutSeconds: aws.Int32(e.timeout),
 	})
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordContentError(span, err, commandFailedStatus)
 		return nil, fmt.Errorf("ssm SendCommand failed: %w", err)
 	}
 

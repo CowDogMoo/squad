@@ -7,7 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cowdogmoo/squad/activity"
+	"github.com/cowdogmoo/squad/telemetry"
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestResolveCap(t *testing.T) {
@@ -379,5 +385,55 @@ func TestBuildHandlerCall(t *testing.T) {
 				t.Fatalf("output = %q, want to contain %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestErrorResultStaysOffToolSpan checks that an MCP tool's error result,
+// recorded the way the tool loop records a handler's error, is returned to
+// the caller in full but stays off every span, even with the commands opt-in
+// on: the tool span gets the fixed error status.
+func TestErrorResultStaysOffToolSpan(t *testing.T) {
+	t.Setenv(telemetry.ExportCommandsEnv, "1")
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+	const text = "lookup failed for /srv/notes.txt"
+	c := NewTestClient("test", []mcptypes.Tool{
+		{Name: "tool", InputSchema: mcptypes.ToolInputSchema{Type: "object"}},
+	}, &mockMCPClient{callResult: &mcptypes.CallToolResult{
+		IsError: true,
+		Content: []mcptypes.Content{mcptypes.TextContent{Type: "text", Text: text}},
+	}})
+	handler := BuildHandlers([]*Client{c})[0]
+
+	ctx, tool := activity.StartTool(context.Background(), activity.ToolCall{CallID: "c", Name: "lookup"})
+	_, err := handler.Call(ctx, nil)
+	if err == nil || err.Error() != text {
+		t.Fatalf("handler error = %v, want %q", err, text)
+	}
+	tool.Finish(activity.Result{Err: err})
+
+	var status sdktrace.Status
+	for _, s := range rec.Ended() {
+		if s.Name() == "tool.lookup" {
+			status = s.Status()
+		}
+		exported := s.Status().Description
+		for _, ev := range s.Events() {
+			for _, kv := range ev.Attributes {
+				exported += "\n" + kv.Value.String()
+			}
+		}
+		if strings.Contains(exported, "/srv/notes.txt") {
+			t.Errorf("span %s exports the error result:\n%s", s.Name(), exported)
+		}
+	}
+	if status.Code != codes.Error || status.Description != "tool returned an error" {
+		t.Errorf("tool span status = %+v, want the fixed error status", status)
 	}
 }

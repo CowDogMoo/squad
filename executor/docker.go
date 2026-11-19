@@ -177,15 +177,13 @@ func (e *DockerExecutor) Execute(ctx context.Context, command string) ([]byte, e
 		AttachStderr: true,
 	})
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordContentError(span, err, commandFailedStatus)
 		return nil, fmt.Errorf("docker exec create failed: %w", err)
 	}
 
 	attachResp, err := e.client.ExecAttach(ctx, execResp.ID)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordContentError(span, err, commandFailedStatus)
 		return nil, fmt.Errorf("docker exec attach failed: %w", err)
 	}
 	if attachResp.Conn != nil {
@@ -194,15 +192,13 @@ func (e *DockerExecutor) Execute(ctx context.Context, command string) ([]byte, e
 
 	var buf bytes.Buffer
 	if _, err := io.Copy(&buf, attachResp.Reader); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordContentError(span, err, commandFailedStatus)
 		return nil, fmt.Errorf("docker exec read output failed: %w", err)
 	}
 
 	inspect, err := e.client.ExecInspect(ctx, execResp.ID)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordContentError(span, err, commandFailedStatus)
 		return buf.Bytes(), fmt.Errorf("docker exec inspect failed: %w", err)
 	}
 	span.SetAttributes(attribute.Int("squad.executor.exit_code", inspect.ExitCode))

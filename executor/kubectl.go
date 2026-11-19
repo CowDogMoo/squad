@@ -10,7 +10,6 @@ import (
 
 	"github.com/cowdogmoo/squad/telemetry"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -120,8 +119,7 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 	spdy, err := e.newSPDY(e.config, "POST", execURL)
 	if err != nil {
 		err = omitExecQuery(err, execURL.RawQuery)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordContentError(span, err, commandFailedStatus)
 		return nil, fmt.Errorf("failed to create SPDY executor: %w", err)
 	}
 
@@ -138,8 +136,7 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 
 	if err != nil {
 		err = omitExecQuery(err, execURL.RawQuery)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordContentError(span, err, commandFailedStatus)
 		return combined, fmt.Errorf("command failed: %w", err)
 	}
 
@@ -149,7 +146,8 @@ func (e *KubeExecutor) Execute(ctx context.Context, command string) ([]byte, err
 // omitExecQuery removes the exec URL's query string, which carries the
 // URL-encoded command, from err. client-go flattens transport failures into
 // text that embeds the full exec URL, so without this the command would reach
-// span status, exception events and the error returned to the tool.
+// the error returned to the tool and, under SQUAD_OTEL_EXPORT_COMMANDS=1,
+// span status and exception events.
 func omitExecQuery(err error, rawQuery string) error {
 	msg := err.Error()
 	if rawQuery == "" || !strings.Contains(msg, rawQuery) {

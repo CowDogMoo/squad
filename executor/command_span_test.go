@@ -1,9 +1,11 @@
 package executor
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -11,6 +13,7 @@ import (
 	dockerclient "github.com/moby/moby/client"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace/noop"
@@ -108,5 +111,49 @@ func TestExecutorSpansDescribeAgentCommand(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// failingReader fails every read with err.
+type failingReader struct{ err error }
+
+func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
+
+// TestExecutorSpanErrorHidesBackendText checks that a backend error quoting
+// the command reaches the executor span's status only under the commands
+// opt-in, and that the returned error keeps it either way.
+func TestExecutorSpanErrorHidesBackendText(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(noop.NewTracerProvider())
+		_ = tp.Shutdown(context.Background())
+	})
+	backendErr := fmt.Errorf(`exec "cat /srv/notes.txt": stream reset`)
+	for _, tc := range []struct{ env, want string }{
+		{"", commandFailedStatus},
+		{"1", backendErr.Error()},
+	} {
+		t.Run("opt-in="+tc.env, func(t *testing.T) {
+			t.Setenv(telemetry.ExportCommandsEnv, tc.env)
+			rec.Reset()
+			client := &fakeDockerClient{
+				execAttachFn: func(context.Context, string) (dockerclient.HijackedResponse, error) {
+					return dockerclient.HijackedResponse{Reader: bufio.NewReader(failingReader{backendErr})}, nil
+				},
+			}
+			ex := &DockerExecutor{containerID: "abc123", shell: "/bin/sh", client: client}
+			if _, err := ex.Execute(context.Background(), "cat /srv/notes.txt"); err == nil || !strings.Contains(err.Error(), "/srv/notes.txt") {
+				t.Fatalf("Execute error = %v, want the backend error", err)
+			}
+			spans := rec.Ended()
+			if len(spans) != 1 {
+				t.Fatalf("recorded %d spans, want 1", len(spans))
+			}
+			if got := spans[0].Status(); got.Code != codes.Error || got.Description != tc.want {
+				t.Errorf("span status = %+v, want error %q", got, tc.want)
+			}
+		})
 	}
 }

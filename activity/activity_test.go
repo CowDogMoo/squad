@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,43 +247,77 @@ func spanText(s sdktrace.ReadOnlySpan) string {
 	return sb.String()
 }
 
-// TestFailingToolKeepsContentOffSpans checks that, even with the commands
-// opt-in on, a failing tool's input and output and the turn's assistant text
-// reach events.jsonl but no span.
+// TestFailingToolKeepsContentOffSpans checks that a failing tool's error
+// reaches events.jsonl in full. On the span, the tool's own output (ErrText
+// or an OutputError) never appears, even with the commands opt-in on, and an
+// error naming the path the tool was given appears only under the opt-in,
+// redacted. The turn's assistant text and the tool's input never reach a
+// span.
 func TestFailingToolKeepsContentOffSpans(t *testing.T) {
-	t.Setenv(telemetry.ExportCommandsEnv, "1")
+	const refused = `path "/srv/OUTPUT-x" is outside working directory; token=`
+	const output = "Error: file /srv/OUTPUT-x is unreadable; token=" + secretArg
+	tests := []struct {
+		name, env string
+		res       Result
+		want      string
+	}{
+		{"error/default", "", Result{Err: errors.New(refused + secretArg)}, toolErrorStatus},
+		{"error/opt-in", "1", Result{Err: errors.New(refused + secretArg)}, refused + telemetry.RedactedMarker},
+		{"error text/default", "", Result{ErrText: output}, toolErrorStatus},
+		{"error text/opt-in", "1", Result{ErrText: output}, toolErrorStatus},
+		{"output error/default", "", Result{Err: OutputError(output)}, toolErrorStatus},
+		{"output error/opt-in", "1", Result{Err: fmt.Errorf("call: %w", OutputError(output))}, toolErrorStatus},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(telemetry.ExportCommandsEnv, tt.env)
+			var hidden []string
+			if tt.want == toolErrorStatus {
+				hidden = []string{"OUTPUT-"}
+			}
+			read := runFailingTool(t, tt.res, hidden...)
+			if got := read.Status(); got.Code != codes.Error || got.Description != tt.want {
+				t.Errorf("tool span status = %+v, want error %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// runFailingTool records a turn with one Read call that ends with res and
+// returns the tool span. It fails if any span exports the turn text, the
+// tool input, the secret, or one of extraLeaks, or if events.jsonl lacks the
+// text, the input or the error.
+func runFailingTool(t *testing.T, res Result, extraLeaks ...string) sdktrace.ReadOnlySpan {
+	t.Helper()
 	ctx, rec, l := setup(t)
 	text := "Reading the notes in TEXT-" + secretArg
 	input := `{"file_path":"/srv/INPUT-` + secretArg + `"}`
-	output := "Error: file /srv/OUTPUT-" + secretArg + " is unreadable"
 	turn := Recorder{Provider: "claude-code", Model: "haiku"}.StartTurn(ctx, 1, time.Time{})
 	turn.Record(TurnResult{Text: text, ToolCalls: 1})
 	_, tool := StartTool(turn.Context(), ToolCall{CallID: "c", Name: "Read", Args: input})
-	tool.Finish(Result{OutputBytes: len(output), ErrText: output})
+	tool.Finish(res)
 	turn.End()
 
+	leaks := append([]string{"TEXT-", "INPUT-", secretArg}, extraLeaks...)
 	for _, s := range rec.Ended() {
 		got := spanText(s)
-		for _, leak := range []string{"TEXT-", "INPUT-", "OUTPUT-", secretArg} {
+		for _, leak := range leaks {
 			if strings.Contains(got, leak) {
 				t.Errorf("span %s exports %q:\n%s", s.Name(), leak, got)
 			}
 		}
-	}
-	read := spanNamed(t, rec, "tool.Read")
-	if read.Status().Code != codes.Error || read.Status().Description != toolErrorStatus {
-		t.Errorf("tool span status = %+v, want an error with the fixed description", read.Status())
 	}
 
 	b, err := os.ReadFile(filepath.Join(l.Dir(), "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"TEXT-", "INPUT-", "OUTPUT-"} {
-		if !strings.Contains(string(b), want+secretArg) {
-			t.Errorf("events.jsonl is missing the %s content", want)
+	for _, want := range []string{"TEXT-" + secretArg, "INPUT-" + secretArg, "/srv/OUTPUT-x", "token=" + secretArg} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("events.jsonl is missing %q", want)
 		}
 	}
+	return spanNamed(t, rec, "tool.Read")
 }
 
 func TestFailuresAndTimestamps(t *testing.T) {

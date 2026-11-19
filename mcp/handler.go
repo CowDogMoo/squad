@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cowdogmoo/squad/activity"
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
 	"github.com/tmc/langchaingo/llms"
 )
@@ -97,7 +98,7 @@ func buildHandler(c *Client, t mcptypes.Tool) ToolHandler {
 		}
 
 		if result.IsError {
-			return "", fmt.Errorf("%s", output)
+			return "", activity.OutputError(output)
 		}
 		return output, nil
 	}
