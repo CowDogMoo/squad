@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -2246,6 +2247,45 @@ func TestExtractTokenUsageGoogleAIInt32(t *testing.T) {
 	}
 	if m.Cost() <= 0 {
 		t.Fatalf("Cost = %v, want > 0", m.Cost())
+	}
+}
+
+// TestExtractTokenUsageGoogleAICachedTokens feeds the GenerationInfo the
+// googleai client builds for a response that used cached content, where the
+// cached share ("CachedTokens") is counted inside "PromptTokens", and checks
+// that share is recorded and priced as cache reads rather than fresh input.
+func TestExtractTokenUsageGoogleAICachedTokens(t *testing.T) {
+	t.Parallel()
+	gi := map[string]any{
+		"input_tokens":         int32(1000),
+		"output_tokens":        int32(50),
+		"total_tokens":         int32(1050),
+		"PromptTokens":         int32(1000),
+		"CompletionTokens":     int32(50),
+		"TotalTokens":          int32(1050),
+		"CachedTokens":         int32(800),
+		"CacheReadInputTokens": int32(800),
+		"NonCachedInputTokens": int32(200),
+		"ThinkingTokens":       0,
+	}
+	m := metrics.New("gemini", "gemini-2.5-flash")
+	extractTokenUsage(gi, m)
+
+	want := metrics.Usage{InputTokens: 200, CacheReadTokens: 800, OutputTokens: 50}
+	if got := m.Usage(); got != want {
+		t.Fatalf("metrics usage = %+v, want %+v", got, want)
+	}
+	if m.InputTokens() != 1000 {
+		t.Fatalf("InputTokens = %d, want 1000 (every prompt token)", m.InputTokens())
+	}
+
+	prices := metrics.Pricing{InputPerMillion: 10, CacheReadPerMillion: 1, OutputPerMillion: 40}
+	cost := prices.Cost(m.Usage())
+	if math.Abs(cost.Input-0.002) > 1e-12 {
+		t.Errorf("input cost = %v, want 0.002 (200 fresh tokens at the input price)", cost.Input)
+	}
+	if math.Abs(cost.CacheRead-0.0008) > 1e-12 {
+		t.Errorf("cache read cost = %v, want 0.0008 (800 cached tokens at the cache-read price)", cost.CacheRead)
 	}
 }
 
