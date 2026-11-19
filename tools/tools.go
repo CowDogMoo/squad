@@ -738,6 +738,13 @@ const repeatNudgeMessage = "[STOP REPEATING] Not run: you have made this same ca
 	"Use what it already showed: record your conclusion now, then move on to the next item, " +
 	"or give your final answer."
 
+// loopNudgeMessage answers the call that trips the loop detector. That call
+// did run, so unlike repeatNudgeMessage it says what happens next: the same
+// call is answered with repeatNudgeMessage instead of being run again.
+const loopNudgeMessage = "[STOP REPEATING] You have made this same call several times and it gave " +
+	"the same result each time. It will not be run again: use what it already showed, " +
+	"record your conclusion now, then move on to the next item, or give your final answer."
+
 // appendToolResults answers each call with content, without running it, in
 // the message layout executeToolCalls uses.
 func appendToolResults(messages []llms.MessageContent, toolCalls []llms.ToolCall, content string, splitResults bool) []llms.MessageContent {
@@ -804,6 +811,7 @@ type loopState struct {
 	loopDetector  LoopDetector
 	nudge         textNudger
 	repeatNudges  int // repeat nudges sent, shared by both repeat limits
+	blocked       blockedCall
 	editEnforcer  *EditEnforcer
 	phaseEnforcer *PhaseEnforcer
 	budgetWarned  []bool
@@ -913,6 +921,9 @@ func (st *loopState) runTools(ctx context.Context, messages []llms.MessageConten
 		logging.InfoContext(ctx, "model called %s %d times in a row, breaking tool loop", st.repeat.LastName, st.repeat.Count)
 		return messages, stepResult{kind: stepBreak}
 	}
+	if updated, result, answered := st.answerBlocked(ctx, messages, mergedContent, mergedToolCalls); answered {
+		return updated, result
+	}
 
 	// Edit deadline: instead of stopping immediately, enter a grace period
 	// with reads blocked so the model can still make edits.
@@ -936,8 +947,9 @@ func (st *loopState) runTools(ctx context.Context, messages []llms.MessageConten
 		if st.repeatNudges < st.cfg.RepeatNudges {
 			st.repeatNudges++
 			logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results; telling it to move on (repeat nudge %d of %d)", st.repeatNudges, st.cfg.RepeatNudges)
-			messages = append(messages, llms.MessageContent{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(repeatNudgeMessage)}})
+			messages = append(messages, llms.MessageContent{Role: llms.ChatMessageTypeHuman, Parts: []llms.ContentPart{llms.TextPart(loopNudgeMessage)}})
 			st.loopDetector = LoopDetector{}
+			st.blocked = blockedCall{key: callsKey(mergedToolCalls)}
 			return messages, stepResult{kind: stepNext}
 		}
 		logging.InfoContext(ctx, "loop detected: agent repeating identical tool calls with same results, stopping")
