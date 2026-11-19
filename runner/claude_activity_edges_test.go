@@ -59,25 +59,20 @@ func TestClaudeActivityUntimedMessageEndsAtClose(t *testing.T) {
 }
 
 // TestClaudeToolResultErrorStatus checks that a claude-code tool_result
-// error that names a path reaches events.jsonl in full, and reaches the
-// tool.Read span status only under the commands opt-in, redacted.
+// error that names a path reaches events.jsonl in full and never reaches the
+// tool.Read span, which gets the fixed status even with the commands opt-in
+// on.
 func TestClaudeToolResultErrorStatus(t *testing.T) {
 	const content = `path "/tmp/webapp-map/candidates.jsonl" is outside working directory; token=hunter2-fixture`
-	tests := []struct {
-		name, env, want string
-	}{
-		{"default", "", "tool returned an error"},
-		{"opt-in", "1", `path "/tmp/webapp-map/candidates.jsonl" is outside working directory; token=` + telemetry.RedactedMarker},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv(telemetry.ExportCommandsEnv, tt.env)
+	for _, env := range []string{"", "1"} {
+		t.Run("opt-in="+env, func(t *testing.T) {
+			t.Setenv(telemetry.ExportCommandsEnv, env)
 			read, l := runClaudeFailedRead(t, content)
-			if got := read.Status(); got.Code != codes.Error || got.Description != tt.want {
-				t.Errorf("tool.Read status = %+v, want error %q", got, tt.want)
+			if got := read.Status(); got.Code != codes.Error || got.Description != "tool returned an error" {
+				t.Errorf("tool.Read status = %+v, want the fixed error status", got)
 			}
-			if tt.env == "" && strings.Contains(exportedText(read), "/tmp/webapp-map") {
-				t.Errorf("tool.Read span exports the path:\n%s", exportedText(read))
+			if text := exportedText(read); strings.Contains(text, "/tmp/webapp-map") || strings.Contains(text, "hunter2") {
+				t.Errorf("tool.Read span exports the tool result:\n%s", text)
 			}
 			checkEventsHold(t, l, []string{`/tmp/webapp-map/candidates.jsonl\" is outside working directory; token=hunter2-fixture`})
 		})

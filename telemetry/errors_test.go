@@ -28,8 +28,8 @@ func TestContentErrorStatus(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv(ExportCommandsEnv, tt.env)
-			if got := ContentErrorStatus(tt.text, "fixed"); got != tt.want {
-				t.Errorf("ContentErrorStatus() = %q, want %q", got, tt.want)
+			if got := contentErrorStatus(tt.text, "fixed"); got != tt.want {
+				t.Errorf("contentErrorStatus() = %q, want %q", got, tt.want)
 			}
 		})
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,33 +247,37 @@ func spanText(s sdktrace.ReadOnlySpan) string {
 	return sb.String()
 }
 
-// TestFailingToolKeepsContentOffSpans checks that a failing tool's error,
-// whether an error naming the path it was given or the tool's own output,
-// reaches events.jsonl in full but reaches its span only under the commands
-// opt-in, redacted. The turn's assistant text and the tool's input never
-// reach a span.
+// TestFailingToolKeepsContentOffSpans checks that a failing tool's error
+// reaches events.jsonl in full. On the span, the tool's own output (ErrText
+// or an OutputError) never appears, even with the commands opt-in on, and an
+// error naming the path the tool was given appears only under the opt-in,
+// redacted. The turn's assistant text and the tool's input never reach a
+// span.
 func TestFailingToolKeepsContentOffSpans(t *testing.T) {
-	failures := []struct {
-		name string
-		res  Result
+	const refused = `path "/srv/OUTPUT-x" is outside working directory; token=`
+	const output = "Error: file /srv/OUTPUT-x is unreadable; token=" + secretArg
+	tests := []struct {
+		name, env string
+		res       Result
+		want      string
 	}{
-		{"error", Result{Err: errors.New(`path "/srv/OUTPUT-x" is outside working directory; token=` + secretArg)}},
-		{"error text", Result{ErrText: "Error: file /srv/OUTPUT-x is unreadable; token=" + secretArg}},
+		{"error/default", "", Result{Err: errors.New(refused + secretArg)}, toolErrorStatus},
+		{"error/opt-in", "1", Result{Err: errors.New(refused + secretArg)}, refused + telemetry.RedactedMarker},
+		{"error text/default", "", Result{ErrText: output}, toolErrorStatus},
+		{"error text/opt-in", "1", Result{ErrText: output}, toolErrorStatus},
+		{"output error/default", "", Result{Err: OutputError(output)}, toolErrorStatus},
+		{"output error/opt-in", "1", Result{Err: fmt.Errorf("call: %w", OutputError(output))}, toolErrorStatus},
 	}
-	for _, f := range failures {
-		t.Run(f.name+"/default", func(t *testing.T) {
-			t.Setenv(telemetry.ExportCommandsEnv, "")
-			read := runFailingTool(t, f.res, "OUTPUT-")
-			if got := read.Status(); got.Code != codes.Error || got.Description != toolErrorStatus {
-				t.Errorf("tool span status = %+v, want an error with the fixed description", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(telemetry.ExportCommandsEnv, tt.env)
+			var hidden []string
+			if tt.want == toolErrorStatus {
+				hidden = []string{"OUTPUT-"}
 			}
-		})
-		t.Run(f.name+"/opt-in", func(t *testing.T) {
-			t.Setenv(telemetry.ExportCommandsEnv, "1")
-			read := runFailingTool(t, f.res)
-			got := read.Status()
-			if got.Code != codes.Error || !strings.Contains(got.Description, "/srv/OUTPUT-x") || !strings.Contains(got.Description, "token="+telemetry.RedactedMarker) {
-				t.Errorf("tool span status = %+v, want the redacted error text", got)
+			read := runFailingTool(t, tt.res, hidden...)
+			if got := read.Status(); got.Code != codes.Error || got.Description != tt.want {
+				t.Errorf("tool span status = %+v, want error %q", got, tt.want)
 			}
 		})
 	}
