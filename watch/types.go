@@ -1,8 +1,7 @@
 // Package watch tails an active or completed squad session directory
 // (.squad/sessions/<id>/) and folds the events.jsonl + meta.json contents
-// into a single observable State. The TUI consumes State to render the
-// sidebar, focused panel, and event tail; CLI tools can consume it for
-// once-off rendering (squad watch --once <id>).
+// into a single observable State. The TUI (squad ui) consumes State to
+// render the sidebar, focused panel, and event tail.
 //
 // The tailer is stateful: it tracks the byte offset into events.jsonl and
 // the last-known mtime of meta.json so repeated Refresh() calls cost O(new

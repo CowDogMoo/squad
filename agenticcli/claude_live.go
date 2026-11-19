@@ -122,6 +122,7 @@ func RunLive(ctx context.Context, req LiveRequest) (Result, error) {
 	s := &liveSession{
 		ctx:        ctx,
 		canUseTool: req.CanUseTool,
+		obs:        req.Observer,
 		stdin:      stdin,
 		reader:     bufio.NewReaderSize(stdout, 64*1024),
 		kill:       func() { _ = cmd.Process.Kill() },
@@ -169,6 +170,7 @@ func RunLive(ctx context.Context, req LiveRequest) (Result, error) {
 type liveSession struct {
 	ctx        context.Context
 	canUseTool CanUseTool
+	obs        Observer
 	stdin      io.WriteCloser
 	reader     *bufio.Reader
 	kill       func()
@@ -233,42 +235,16 @@ func errOrEOF(err error) error {
 	return err
 }
 
-// liveEvent is the envelope common to every stream-json stdout line. Result
-// fields are decoded separately (claudeOutput) from the raw line.
-type liveEvent struct {
-	Type      string        `json:"type"`
-	Subtype   string        `json:"subtype"`
-	SessionID string        `json:"session_id"`
-	RequestID string        `json:"request_id"`
-	Model     string        `json:"model"`
-	Request   *controlEvent `json:"request"`
-	Message   *streamedMsg  `json:"message"`
-}
-
-// controlEvent is the request half of a control_request event.
-type controlEvent struct {
-	Subtype   string          `json:"subtype"`
-	ToolName  string          `json:"tool_name"`
-	Input     json.RawMessage `json:"input"`
-	ToolUseID string          `json:"tool_use_id"`
-}
-
-// streamedMsg carries the content blocks of an assistant event.
-type streamedMsg struct {
-	ID      string `json:"id"`
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"content"`
-}
-
 // handle processes one stdout line, storing the terminal result (with its
 // is_error verdict) on the session. It returns a fatal error when the
 // session must be killed (callback failure, repeated protocol errors).
 func (s *liveSession) handle(line []byte) error {
-	var ev liveEvent
-	if err := json.Unmarshal(line, &ev); err != nil {
+	ev, err := decodeLiveEvent(line)
+	if err != nil {
 		return s.protocolError(fmt.Errorf("undecodable stdout line: %w", err))
+	}
+	if ev.Type != "control_request" {
+		observe(s.obs, ev)
 	}
 	switch ev.Type {
 	case "system":
@@ -336,6 +312,13 @@ func (s *liveSession) handleControlRequest(ev liveEvent) error {
 	logging.DebugContext(s.ctx, "claude live: can_use_tool %s -> allow=%t", ev.Request.ToolName, decision.Allow)
 	if err := s.send(controlResponseEvent(ev.RequestID, ev.Request.Input, decision)); err != nil {
 		return err
+	}
+	if !decision.Allow && s.obs != nil {
+		message := decision.Message
+		if message == "" {
+			message = "denied by squad sign-off gate"
+		}
+		s.obs.ToolDenied(ev.Request.ToolUseID, message)
 	}
 	if decision.Interrupt {
 		s.interruptSeq++

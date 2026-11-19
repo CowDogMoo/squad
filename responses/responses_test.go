@@ -15,7 +15,6 @@ import (
 
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/metrics"
-	"github.com/cowdogmoo/squad/session"
 	"github.com/cowdogmoo/squad/skill"
 	"github.com/cowdogmoo/squad/tools"
 	openai "github.com/openai/openai-go/v3"
@@ -248,7 +247,7 @@ func TestExecuteAndBuildOutputs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			outputs := executeAndBuildOutputs(ctx, tt.calls, handlers)
+			outputs := executeAndBuildOutputs(ctx, tt.calls, handlers, 1)
 			if len(outputs) != 1 {
 				t.Fatalf("expected 1 output, got %d", len(outputs))
 			}
@@ -290,7 +289,7 @@ func TestExecuteAndBuildOutputsDeniedByAllowedTools(t *testing.T) {
 		{Name: "Bash", CallID: "call-denied", Arguments: "{}"},
 		{Name: "Read", CallID: "call-allowed", Arguments: "{}"},
 	}
-	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	outputs := executeAndBuildOutputs(ctx, calls, handlers, 1)
 	if len(outputs) != 2 {
 		t.Fatalf("expected 2 outputs, got %d", len(outputs))
 	}
@@ -331,7 +330,7 @@ func TestExecuteAndBuildOutputsDeniedByReadOnlyMode(t *testing.T) {
 		{Name: "Write", CallID: "call-denied", Arguments: "{}"},
 		{Name: "Read", CallID: "call-allowed", Arguments: "{}"},
 	}
-	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	outputs := executeAndBuildOutputs(ctx, calls, handlers, 1)
 	if len(outputs) != 2 {
 		t.Fatalf("expected 2 outputs, got %d", len(outputs))
 	}
@@ -370,7 +369,7 @@ func TestExecuteAndBuildOutputsDeniedPendingSignOff(t *testing.T) {
 		{Name: "Write", CallID: "call-denied", Arguments: "{}"},
 		{Name: "Read", CallID: "call-allowed", Arguments: "{}"},
 	}
-	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	outputs := executeAndBuildOutputs(ctx, calls, handlers, 1)
 	if len(outputs) != 2 {
 		t.Fatalf("expected 2 outputs, got %d", len(outputs))
 	}
@@ -1104,7 +1103,7 @@ func TestExecuteAndBuildOutputsWithResultAndError(t *testing.T) {
 		},
 	}
 	calls := []FunctionCall{{Name: "PartialFail", CallID: "call-pf", Arguments: "{}"}}
-	outputs := executeAndBuildOutputs(ctx, calls, handlers)
+	outputs := executeAndBuildOutputs(ctx, calls, handlers, 1)
 	if len(outputs) != 1 {
 		t.Fatalf("expected 1 output, got %d", len(outputs))
 	}
@@ -1317,28 +1316,6 @@ func TestRunWithToolsRegistersSkillAndConfirm(t *testing.T) {
 			t.Errorf("Confirm tool MISSING from Responses API request; tools=%+v", got.Tools)
 		}
 	})
-}
-
-func TestLogEvent_NilLogger(t *testing.T) {
-	t.Parallel()
-	// logEvent with nil logger should not panic.
-	logEvent(nil, "test_event", map[string]any{"key": "val"})
-}
-
-func TestLogEvent_WithLogger(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	dir := t.TempDir()
-	l, err := session.New(dir, "", "test-agent", "openai", "gpt-4o", "test prompt")
-	if err != nil {
-		t.Fatalf("session.New: %v", err)
-	}
-	defer func() {
-		if err := l.Close(); err != nil {
-			t.Errorf("Close: %v", err)
-		}
-	}()
-	// Should not panic or error.
-	logEvent(l, session.EventRunStart, map[string]any{"agent": "test"})
 }
 
 func TestFormatLargeResultPlaceholderContent(t *testing.T) {

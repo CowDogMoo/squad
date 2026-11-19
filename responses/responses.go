@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/executor"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/metrics"
@@ -20,7 +21,6 @@ import (
 	oairesponses "github.com/openai/openai-go/v3/responses"
 	"github.com/tmc/langchaingo/llms"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -125,8 +125,7 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 		ReasoningPrefixes: reasoningPrefixes,
 	}
 
-	logger := session.FromContext(ctx)
-	logEvent(logger, session.EventPrompt, map[string]any{
+	activity.Append(ctx, session.EventPrompt, map[string]any{
 		"role":          "user",
 		"bytes":         len(userPrompt),
 		"resumed_chain": resumeResponseID != "",
@@ -150,12 +149,12 @@ func RunWithTools(ctx context.Context, apiKey, baseURL, model, systemPrompt, use
 	resp, err := client.Responses.New(ctx, params)
 	if err != nil {
 		logAPIError(ctx, err, "initial request")
-		logEvent(logger, session.EventError, map[string]any{"phase": "initial", "error": err.Error()})
+		activity.Append(ctx, session.EventError, map[string]any{"phase": "initial", "error": err.Error()})
 		return "", fmt.Errorf("responses API call failed: %w", err)
 	}
 	logOutputItems(ctx, resp, "initial")
 	trackResponseMetrics(resp, m)
-	recordResponse(logger, resp, "initial")
+	recordResponse(ctx, resp, "initial")
 
 	resp, text, err := toolLoop(ctx, client, resp, handlers, &rc, maxIterations, editDeadline, m)
 	if err != nil {
@@ -231,7 +230,6 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 		// so the edit deadline applies to neither.
 		editEnforcer = tools.NewEditEnforcer(editDeadline)
 	}
-	logger := session.FromContext(ctx)
 	for i := 0; i < maxIter; i++ {
 		calls := ExtractFunctionCalls(resp)
 		if len(calls) == 0 {
@@ -243,7 +241,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 			return resp, text, nil
 		}
 
-		logEvent(logger, session.EventIteration, map[string]any{"index": i + 1, "tool_calls": len(calls)})
+		activity.Append(ctx, session.EventIteration, map[string]any{"index": i + 1, "tool_calls": len(calls)})
 		if m != nil {
 			logging.InfoContext(ctx, "responses API: iteration %d/%d with %d tool call(s) (cost=$%.4f, %s)",
 				i+1, maxIter, len(calls), m.TotalCostWithChildren(), m.ProgressTokens())
@@ -268,7 +266,7 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 			}
 		}
 
-		outputs := executeAndBuildOutputs(ctx, calls, handlers)
+		outputs := executeAndBuildOutputs(ctx, calls, handlers, i+1)
 		params := oairesponses.ResponseNewParams{
 			Model:              rc.Model,
 			PreviousResponseID: openai.String(resp.ID),
@@ -285,12 +283,12 @@ func toolLoop(ctx context.Context, client openai.Client, resp *oairesponses.Resp
 		resp, err = client.Responses.New(ctx, params)
 		if err != nil {
 			logAPIError(ctx, err, fmt.Sprintf("follow-up iteration %d", i+1))
-			logEvent(logger, session.EventError, map[string]any{"phase": "follow-up", "iteration": i + 1, "error": err.Error()})
+			activity.Append(ctx, session.EventError, map[string]any{"phase": "follow-up", "iteration": i + 1, "error": err.Error()})
 			return resp, "", fmt.Errorf("responses API follow-up failed at iteration %d: %w", i+1, err)
 		}
 		logOutputItems(ctx, resp, fmt.Sprintf("follow-up-iter-%d", i+1))
 		trackResponseMetrics(resp, m)
-		recordResponse(logger, resp, fmt.Sprintf("iter-%d", i+1))
+		recordResponse(ctx, resp, fmt.Sprintf("iter-%d", i+1))
 
 		if m != nil && m.BudgetExceeded() {
 			logging.InfoContext(ctx, "responses API: budget exceeded ($%.4f >= $%.4f max), stopping", m.TotalCostWithChildren(), m.MaxCost)
@@ -519,125 +517,17 @@ func logAPIError(ctx context.Context, err error, label string) {
 	logging.InfoContext(ctx, "responses API %s: %v", label, err)
 }
 
-func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers map[string]tools.Handler) []oairesponses.ResponseInputItemUnionParam {
+func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers map[string]tools.Handler, iteration int) []oairesponses.ResponseInputItemUnionParam {
 	outputs := make([]oairesponses.ResponseInputItemUnionParam, 0, len(calls))
 	logger := session.FromContext(ctx)
 	for _, call := range calls {
-		logEvent(logger, session.EventToolCall, map[string]any{
-			"call_id": call.CallID,
-			"name":    call.Name,
-			"args":    tools.TruncateString(call.Arguments, 4096),
+		callCtx, rec := activity.StartTool(ctx, activity.ToolCall{
+			Iteration: iteration,
+			CallID:    call.CallID,
+			Name:      call.Name,
+			Args:      call.Arguments,
 		})
-		handler, ok := handlers[call.Name]
-		if !ok {
-			logging.DebugContext(ctx, "responses API: unknown tool %s", call.Name)
-			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
-				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
-					CallID: openai.String(call.CallID),
-					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
-						OfString: openai.String(fmt.Sprintf("unknown tool: %s", call.Name)),
-					},
-				},
-			})
-			continue
-		}
-
-		if rt := tools.GetSkillRuntime(ctx); rt != nil && !rt.AllowsTool(call.Name) {
-			logging.InfoContext(ctx, "responses API: %s denied by allowed-tools (active skill restriction)", call.Name)
-			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
-				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
-					CallID: openai.String(call.CallID),
-					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
-						OfString: openai.String(fmt.Sprintf("error: tool %q is not permitted by the active skill's allowed-tools", call.Name)),
-					},
-				},
-			})
-			continue
-		}
-
-		if tools.IsReadOnlyMode(ctx) && tools.IsMutatingTool(call.Name) {
-			logging.InfoContext(ctx, "responses API: %s denied by readonly mode", call.Name)
-			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
-				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
-					CallID: openai.String(call.CallID),
-					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
-						OfString: openai.String(fmt.Sprintf("error: %s is not permitted in readonly mode (this run is analysis-only and must not modify files)", call.Name)),
-					},
-				},
-			})
-			continue
-		}
-
-		if denial := tools.SignOffDenial(ctx, call.Name); denial != "" {
-			logging.InfoContext(ctx, "responses API: %s denied pending plan sign-off", call.Name)
-			outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
-				OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
-					CallID: openai.String(call.CallID),
-					Output: oairesponses.ResponseInputItemFunctionCallOutputOutputUnionParam{
-						OfString: openai.String(denial),
-					},
-				},
-			})
-			continue
-		}
-
-		callCtx, toolSpan := telemetry.Tracer().Start(ctx, "tool."+call.Name,
-			trace.WithAttributes(
-				attribute.String("squad.tool.name", call.Name),
-			),
-		)
-
-		logging.InfoContext(callCtx, "responses API: calling %s args=%s", call.Name, tools.TruncateString(call.Arguments, 200))
-		toolStart := time.Now()
-		result, err := handler.Call(callCtx, []byte(call.Arguments))
-		toolDuration := time.Since(toolStart)
-
-		var output string
-		if err != nil {
-			toolSpan.RecordError(err)
-			toolSpan.SetStatus(codes.Error, err.Error())
-			// Include both result (e.g., command output) and error message
-			if result != "" {
-				output = fmt.Sprintf("%s\n\nerror: %v", result, err)
-				logging.InfoContext(callCtx, "responses API: %s failed in %s: %v (output: %d bytes)", call.Name, toolDuration.Round(time.Millisecond), err, len(result))
-			} else {
-				output = fmt.Sprintf("error: %v", err)
-				logging.InfoContext(callCtx, "responses API: %s failed in %s: %v (no output)", call.Name, toolDuration.Round(time.Millisecond), err)
-			}
-		} else {
-			output = result
-			logging.InfoContext(callCtx, "responses API: %s completed in %s (%d bytes)", call.Name, toolDuration.Round(time.Millisecond), len(result))
-		}
-		toolSpan.SetAttributes(attribute.Int("squad.tool.output_bytes", len(output)))
-		toolSpan.End()
-
-		fullBytes := len(output)
-		// get_tool_result must always pass through verbatim — its whole job is
-		// to deliver content the model already knows is large.
-		if logger != nil && call.Name != toolGetToolResult && fullBytes > session.LargeResultThreshold {
-			if id, storeErr := logger.StoreLargeResult(output); storeErr == nil {
-				logEvent(logger, session.EventLargeResult, map[string]any{
-					"call_id":   call.CallID,
-					"name":      call.Name,
-					"result_id": id,
-					"bytes":     fullBytes,
-				})
-				output = formatLargeResultPlaceholder(id, call.Name, fullBytes)
-			} else {
-				logging.Warn("session: failed to spill large result: %v", storeErr)
-			}
-		}
-
-		output = tools.TruncateToolOutputHeadTail(output, 16*1024)
-
-		logEvent(logger, session.EventToolResult, map[string]any{
-			"call_id":     call.CallID,
-			"name":        call.Name,
-			"bytes":       fullBytes,
-			"sent_bytes":  len(output),
-			"duration_ms": toolDuration.Milliseconds(),
-		})
-
+		output := runResponsesTool(callCtx, rec, call, handlers, logger)
 		outputs = append(outputs, oairesponses.ResponseInputItemUnionParam{
 			OfFunctionCallOutput: &oairesponses.ResponseInputItemFunctionCallOutputParam{
 				CallID: openai.String(call.CallID),
@@ -650,31 +540,84 @@ func executeAndBuildOutputs(ctx context.Context, calls []FunctionCall, handlers 
 	return outputs
 }
 
-// logEvent is a nil-safe helper for appending to the session log.
-func logEvent(l *session.Logger, eventType string, payload any) {
-	if l == nil {
-		return
+// runResponsesTool runs one function call and returns the text sent back to
+// the model: the tool's output, a denial, or an unknown-tool error. rec
+// records the call's outcome.
+func runResponsesTool(ctx context.Context, rec *activity.Tool, call FunctionCall, handlers map[string]tools.Handler, logger *session.Logger) string {
+	handler, ok := handlers[call.Name]
+	if !ok {
+		logging.DebugContext(ctx, "responses API: unknown tool %s", call.Name)
+		output := fmt.Sprintf("unknown tool: %s", call.Name)
+		rec.Finish(activity.Result{OutputBytes: len(output), ErrText: output})
+		return output
 	}
-	if err := l.Append(eventType, payload); err != nil {
-		logging.Warn("session: append %s failed: %v", eventType, err)
+	if reason, message := tools.ToolDenial(ctx, call.Name); reason != "" {
+		rec.Deny(reason, message)
+		return message
 	}
+
+	logging.InfoContext(ctx, "responses API: calling %s args=%s", call.Name, tools.TruncateString(call.Arguments, 200))
+	toolStart := time.Now()
+	result, err := handler.Call(ctx, []byte(call.Arguments))
+	toolDuration := time.Since(toolStart)
+
+	var output string
+	if err != nil {
+		// Include both result (e.g., command output) and error message
+		if result != "" {
+			output = fmt.Sprintf("%s\n\nerror: %v", result, err)
+			logging.InfoContext(ctx, "responses API: %s failed in %s: %v (output: %d bytes)", call.Name, toolDuration.Round(time.Millisecond), err, len(result))
+		} else {
+			output = fmt.Sprintf("error: %v", err)
+			logging.InfoContext(ctx, "responses API: %s failed in %s: %v (no output)", call.Name, toolDuration.Round(time.Millisecond), err)
+		}
+	} else {
+		output = result
+		logging.InfoContext(ctx, "responses API: %s completed in %s (%d bytes)", call.Name, toolDuration.Round(time.Millisecond), len(result))
+	}
+
+	fullBytes := len(output)
+	// get_tool_result must always pass through verbatim — its whole job is
+	// to deliver content the model already knows is large.
+	if logger != nil && call.Name != toolGetToolResult && fullBytes > session.LargeResultThreshold {
+		if id, storeErr := logger.StoreLargeResult(output); storeErr == nil {
+			activity.Append(ctx, session.EventLargeResult, map[string]any{
+				"call_id":   call.CallID,
+				"name":      call.Name,
+				"result_id": id,
+				"bytes":     fullBytes,
+			})
+			output = formatLargeResultPlaceholder(id, call.Name, fullBytes)
+		} else {
+			logging.Warn("session: failed to spill large result: %v", storeErr)
+		}
+	}
+
+	output = tools.TruncateToolOutputHeadTail(output, 16*1024)
+	rec.Finish(activity.Result{OutputBytes: fullBytes, Err: err, Extra: map[string]any{"sent_bytes": len(output)}})
+	return output
 }
 
 // recordResponse persists the response id and writes a session event with
 // status + token usage.
-func recordResponse(l *session.Logger, resp *oairesponses.Response, label string) {
+func recordResponse(ctx context.Context, resp *oairesponses.Response, label string) {
+	l := session.FromContext(ctx)
 	if l == nil || resp == nil {
 		return
 	}
 	l.SetLastResponseID(resp.ID)
-	logEvent(l, session.EventResponse, map[string]any{
+	payload := map[string]any{
 		"label":         label,
 		"id":            resp.ID,
 		"status":        string(resp.Status),
 		"output_items":  len(resp.Output),
 		"input_tokens":  resp.Usage.InputTokens,
 		"output_tokens": resp.Usage.OutputTokens,
-	})
+	}
+	if text := resp.OutputText(); text != "" {
+		payload["text"] = activity.CapText(text)
+	}
+	activity.Append(ctx, session.EventResponse, payload)
 }
 
 // formatLargeResultPlaceholder is the inline summary returned to the model

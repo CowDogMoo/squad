@@ -17,7 +17,9 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/agenticcli"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/session"
@@ -101,7 +103,15 @@ func (g *claudeSignOffGate) canUseTool(ctx context.Context, toolName string, inp
 // permission-protocol session when a sign-off gate is armed on ctx (only
 // claude-code is routed here gate-armed) and to single-shot print mode
 // otherwise. The returned gate is non-nil only on the live path.
+//
+// For claude-code the run's turns and tool calls are recorded as session
+// events and spans as the CLI streams them.
 func runAgenticCLI(ctx context.Context, req agenticcli.Request) (agenticcli.Result, *claudeSignOffGate, error) {
+	if req.Provider == "claude-code" && req.Observer == nil {
+		obs := newClaudeActivity(ctx, req.Model)
+		defer func() { obs.close(time.Now()) }()
+		req.Observer = obs
+	}
 	rt := tools.GetSignOffRuntime(ctx)
 	if rt == nil {
 		res, err := agenticcli.Run(ctx, req)
@@ -137,13 +147,11 @@ func (g *claudeSignOffGate) logDecision(ctx context.Context, toolName string, al
 	if allowed {
 		decision = "allow"
 	}
-	if err := session.FromContext(ctx).Append(session.EventPermissionDecision, map[string]any{
+	activity.Append(ctx, session.EventPermissionDecision, map[string]any{
 		"tool":     toolName,
 		"decision": decision,
 		"reason":   reason,
-	}); err != nil {
-		logging.WarnContext(ctx, "failed to log permission_decision event: %v", err)
-	}
+	})
 	logging.DebugContext(ctx, "claude live gate: %s %s (%s)", decision, toolName, reason)
 }
 
@@ -163,7 +171,5 @@ func logClaudeSignOffResolution(ctx context.Context, plan, outcome, feedback str
 	if resolveErr != nil {
 		payload["error"] = resolveErr.Error()
 	}
-	if err := session.FromContext(ctx).Append(session.EventSignOffResolved, payload); err != nil {
-		logging.WarnContext(ctx, "failed to log sign_off_resolved event: %v", err)
-	}
+	activity.Append(ctx, session.EventSignOffResolved, payload)
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/session"
 )
 
@@ -129,3 +130,48 @@ func TestConfirm_SessionEvent_AbortRecordsError(t *testing.T) {
 type nopWriter struct{}
 
 func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+// TestDecisionEventsFromTaskChildAreTagged checks that a Task child's
+// Confirm and ProposePlan decisions, written into the parent's
+// events.jsonl, name the child agent and the Task call that started it.
+func TestDecisionEventsFromTaskChildAreTagged(t *testing.T) {
+	logger := newSessionForTest(t)
+	taskCtx, _ := activity.StartTool(session.WithLogger(context.Background(), logger), activity.ToolCall{CallID: "task-1", Name: "Task"})
+	childCtx := activity.WithChildAgent(taskCtx, "scout")
+
+	confirmArgsJSON, _ := json.Marshal(confirmArgs{Summary: "Send email?"})
+	if _, err := confirmTool(&ConfirmRuntime{AutoConfirm: AutoConfirmYes})(childCtx, confirmArgsJSON); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	planArgsJSON, _ := json.Marshal(proposePlanArgs{Plan: "add tests"})
+	if _, err := proposePlanTool(ttySignOffRuntime("yes\n"))(childCtx, planArgsJSON); err != nil {
+		t.Fatalf("propose plan: %v", err)
+	}
+
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(logger.Dir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagged := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var ev struct {
+			Type    string         `json:"type"`
+			Payload map[string]any `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Type == session.EventToolCall {
+			continue
+		}
+		tagged[ev.Type] = ev.Payload["agent"] == "scout" && ev.Payload["parent_tool_use_id"] == "task-1"
+	}
+	for _, typ := range []string{session.EventConfirmResolved, session.EventSignOffResolved} {
+		if !tagged[typ] {
+			t.Errorf("%s event missing or not tagged with the child agent: %v", typ, tagged)
+		}
+	}
+}

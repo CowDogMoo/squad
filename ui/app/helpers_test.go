@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -201,6 +202,22 @@ func TestRenderEventTailTruncates(t *testing.T) {
 	}, 1, 50)
 	if !strings.Contains(rows[0], "…") {
 		t.Errorf("summary should be truncated, got %q", rows[0])
+	}
+}
+
+// TestRenderEventTailCutsOnRuneBoundary checks that a summary cut to the
+// panel width never splits a multi-byte character.
+func TestRenderEventTailCutsOnRuneBoundary(t *testing.T) {
+	summary := strings.Repeat("a", 73) + "—" + strings.Repeat("b", 40)
+	rows := renderEventTail([]watch.EventLine{{Type: "response", Summary: summary}}, 1, 101)
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	if !utf8.ValidString(rows[0]) {
+		t.Fatalf("row %q is not valid UTF-8", rows[0])
+	}
+	if !strings.Contains(rows[0], strings.Repeat("a", 73)+"…") || strings.Contains(rows[0], "b") {
+		t.Errorf("row %q, want the summary cut before the em dash", rows[0])
 	}
 }
 

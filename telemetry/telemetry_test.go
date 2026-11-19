@@ -5,11 +5,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"go.opentelemetry.io/otel/trace"
 )
 
-func TestInitNoopWhenNoEndpoint(t *testing.T) {
+func TestInitIDsOnlyWhenNoEndpoint(t *testing.T) {
 	// Unset env vars for this test.
 	for _, key := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"} {
 		t.Setenv(key, "")
@@ -22,15 +20,24 @@ func TestInitNoopWhenNoEndpoint(t *testing.T) {
 	}
 	defer func() { _ = shutdown(ctx) }()
 
-	// When no endpoint is set, spans should not be recording.
+	// When no endpoint is set, spans are not recorded but still carry ids,
+	// and a child span shares its parent's trace id.
 	tracer := Tracer()
-	_, span := tracer.Start(ctx, "test-span")
+	parentCtx, span := tracer.Start(ctx, "test-span")
 	defer span.End()
 	if span.IsRecording() {
 		t.Error("expected non-recording span when no endpoint is configured")
 	}
-	if span.SpanContext().TraceID() != (trace.TraceID{}) {
-		t.Error("expected zero TraceID from noop tracer")
+	if !span.SpanContext().IsValid() {
+		t.Error("expected valid trace and span ids when no endpoint is configured")
+	}
+	_, child := tracer.Start(parentCtx, "child-span")
+	defer child.End()
+	if child.SpanContext().TraceID() != span.SpanContext().TraceID() {
+		t.Error("expected child span to share the parent's trace id")
+	}
+	if child.SpanContext().SpanID() == span.SpanContext().SpanID() {
+		t.Error("expected child span to get its own span id")
 	}
 }
 

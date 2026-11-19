@@ -146,34 +146,7 @@ func (t *Tailer) refreshEvents() error {
 // relevant counter, and records LastTool/LastError/LastEventAt.
 func (t *Tailer) applyEvent(ev session.Event) {
 	t.state.LastEventAt = ev.Ts
-	switch ev.Type {
-	case session.EventIteration:
-		t.state.Counts.Iterations++
-	case session.EventToolCall:
-		t.state.Counts.ToolCalls++
-		if p := decodePayload(ev.Payload); p != nil {
-			t.state.LastTool = str(p, "name")
-		}
-	case session.EventResponse:
-		t.state.Counts.Responses++
-	case session.EventError:
-		t.state.Counts.Errors++
-		if p := decodePayload(ev.Payload); p != nil {
-			if msg := str(p, "error"); msg != "" {
-				t.state.LastError = msg
-			} else if msg := str(p, "message"); msg != "" {
-				t.state.LastError = msg
-			}
-		}
-	case session.EventLargeResult:
-		t.state.Counts.LargeResults++
-	case session.EventRunEnd:
-		if p := decodePayload(ev.Payload); p != nil {
-			if msg := str(p, "error"); msg != "" {
-				t.state.LastError = msg
-			}
-		}
-	}
+	t.count(ev)
 	line := EventLine{
 		Ts:      ev.Ts,
 		Type:    ev.Type,
@@ -183,6 +156,41 @@ func (t *Tailer) applyEvent(ev session.Event) {
 	if t.eventCap > 0 && len(t.state.Events) > t.eventCap {
 		drop := len(t.state.Events) - t.eventCap
 		t.state.Events = t.state.Events[drop:]
+	}
+}
+
+// count bumps the State counters and last-seen fields an event affects.
+func (t *Tailer) count(ev session.Event) {
+	c := &t.state.Counts
+	switch ev.Type {
+	case session.EventIteration:
+		c.Iterations++
+	case session.EventToolCall:
+		c.ToolCalls++
+		if p := decodePayload(ev.Payload); p != nil {
+			t.state.LastTool = str(p, "name")
+		}
+	case session.EventResponse:
+		c.Responses++
+	case session.EventError:
+		c.Errors++
+		t.noteError(ev, "error", "message")
+	case session.EventLargeResult:
+		c.LargeResults++
+	case session.EventRunEnd:
+		t.noteError(ev, "error")
+	}
+}
+
+// noteError records the first non-empty payload field among keys as the
+// session's last error.
+func (t *Tailer) noteError(ev session.Event, keys ...string) {
+	p := decodePayload(ev.Payload)
+	for _, k := range keys {
+		if msg := str(p, k); msg != "" {
+			t.state.LastError = msg
+			return
+		}
 	}
 }
 

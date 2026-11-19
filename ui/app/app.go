@@ -1041,13 +1041,9 @@ func renderEventTail(events []watch.EventLine, n, width int) []string {
 		ts := ev.Ts.Local().Format("15:04:05")
 		// Pad type to a fixed width for alignment.
 		typ := padType(ev.Type, 12)
-		summary := ev.Summary
 		// Truncate summary to fit terminal width.
 		const tsW, typW, gutterW = 8, 12, 6 // approx columns
-		maxSummary := width - tsW - typW - gutterW
-		if maxSummary > 0 && len(summary) > maxSummary {
-			summary = summary[:maxSummary-1] + "…"
-		}
+		summary := watch.Truncate(ev.Summary, width-tsW-typW-gutterW)
 		line := fmt.Sprintf("  %s  %s  %s",
 			style.Secondary.Render(ts),
 			style.Hint.Render(typ),

@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ import (
 
 func TestOpenSessionNoSessionReturnsNil(t *testing.T) {
 	opts := &RunOptions{NoSession: true, WorkingDir: t.TempDir()}
-	l, err := openSession(opts, &agent.Bundle{}, "go")
+	l, err := openSession(context.Background(), opts, &agent.Bundle{}, "go")
 	if err != nil {
 		t.Fatalf("openSession: %v", err)
 	}
@@ -32,7 +33,7 @@ func TestOpenSessionFreshWritesRunStart(t *testing.T) {
 		Provider:   "openai",
 		Model:      "gpt-5",
 	}
-	l, err := openSession(opts, &agent.Bundle{System: "sys"}, "do the thing")
+	l, err := openSession(context.Background(), opts, &agent.Bundle{System: "sys"}, "do the thing")
 	if err != nil {
 		t.Fatalf("openSession: %v", err)
 	}
@@ -65,7 +66,7 @@ func TestOpenSessionResumeRehydratesResponseID(t *testing.T) {
 	}
 
 	opts := &RunOptions{WorkingDir: wd, Agent: "agent", ResumeID: id}
-	l, err := openSession(opts, &agent.Bundle{}, "second prompt")
+	l, err := openSession(context.Background(), opts, &agent.Bundle{}, "second prompt")
 	if err != nil {
 		t.Fatalf("openSession resume: %v", err)
 	}
@@ -86,7 +87,7 @@ func TestOpenSessionResumeRehydratesResponseID(t *testing.T) {
 func TestOpenSessionResumeMissingErrors(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	opts := &RunOptions{WorkingDir: t.TempDir(), ResumeID: "nope"}
-	if _, err := openSession(opts, &agent.Bundle{}, "x"); err == nil {
+	if _, err := openSession(context.Background(), opts, &agent.Bundle{}, "x"); err == nil {
 		t.Fatalf("expected error resuming missing session")
 	}
 }
@@ -105,7 +106,7 @@ func TestOpenSessionResumeLatestResolvesExisting(t *testing.T) {
 
 	// ResumeID "latest" must resolve to the existing session for this repo.
 	opts := &RunOptions{CanonicalRepoPath: repo, Agent: "agent", ResumeID: "latest"}
-	l, err := openSession(opts, &agent.Bundle{}, "resume latest")
+	l, err := openSession(context.Background(), opts, &agent.Bundle{}, "resume latest")
 	if err != nil {
 		t.Fatalf("openSession latest: %v", err)
 	}
@@ -118,7 +119,7 @@ func TestOpenSessionResumeLatestResolvesExisting(t *testing.T) {
 func TestOpenSessionResumeLatestNoSessionsErrors(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	opts := &RunOptions{CanonicalRepoPath: t.TempDir(), ResumeID: "latest"}
-	if _, err := openSession(opts, &agent.Bundle{}, "x"); err == nil {
+	if _, err := openSession(context.Background(), opts, &agent.Bundle{}, "x"); err == nil {
 		t.Fatalf("expected error resuming latest with no sessions")
 	}
 }
@@ -136,7 +137,7 @@ func TestOpenSessionFreshFailsWhenSessionsRootBlocked(t *testing.T) {
 	}
 	t.Setenv("XDG_STATE_HOME", filepath.Join(blocked, "state"))
 	opts := &RunOptions{WorkingDir: wd, Agent: "a", Provider: "p", Model: "m"}
-	if _, err := openSession(opts, &agent.Bundle{}, "go"); err == nil {
+	if _, err := openSession(context.Background(), opts, &agent.Bundle{}, "go"); err == nil {
 		t.Fatalf("expected error when session dir cannot be created")
 	}
 }
@@ -172,5 +173,26 @@ func TestCloseSessionStatusMapping(t *testing.T) {
 				t.Fatalf("meta.json missing status %q: %s", tc.want, data)
 			}
 		})
+	}
+}
+
+// TestOpenSessionRecordsRootTrace checks the run's root span lands in
+// meta.json and on the run_start event.
+func TestOpenSessionRecordsRootTrace(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	ctx, _, _ := recordClaude(t) // ctx carries a recorded root span
+	opts := &RunOptions{WorkingDir: t.TempDir(), Agent: "agent", Provider: "ollama", Model: "qwen"}
+	l, err := openSession(ctx, opts, &agent.Bundle{}, "go")
+	if err != nil || l == nil {
+		t.Fatalf("openSession: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	traceID := readSessionMeta(t, l).TraceID
+	if traceID == "" {
+		t.Fatal("meta.json has no trace_id")
+	}
+	evs := claudeEvents(t, l)
+	if len(evs) != 1 || evs[0].Type != session.EventRunStart || evs[0].TraceID != traceID || evs[0].SpanID == "" {
+		t.Errorf("run_start = %+v, want the root trace and span", evs)
 	}
 }

@@ -413,10 +413,7 @@ func TestLiveSessionProtocolBranches(t *testing.T) {
 		t.Parallel()
 		s := &liveSession{ctx: context.Background()}
 		s.accumulate(nil)
-		s.accumulate(&streamedMsg{ID: "m1", Content: []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}{{Type: "text", Text: ""}, {Type: "tool_use"}}})
+		s.accumulate(&streamedMsg{ID: "m1", Content: []streamBlock{{Type: "text", Text: ""}, {Type: "tool_use"}}})
 		if got := s.latestAssistantText(); got != "" {
 			t.Errorf("latestAssistantText = %q, want empty", got)
 		}

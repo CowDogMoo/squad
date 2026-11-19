@@ -3,6 +3,8 @@ package watch
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/session"
@@ -28,6 +30,7 @@ var summarizers = map[string]func(map[string]any) string{
 	session.EventIteration:   sumIteration,
 	session.EventToolCall:    sumToolCall,
 	session.EventToolResult:  sumToolResult,
+	session.EventToolDenied:  sumToolDenied,
 	session.EventLargeResult: sumLargeResult,
 	session.EventResponse:    sumResponse,
 	session.EventError:       sumError,
@@ -59,11 +62,17 @@ func sumPrompt(p map[string]any) string {
 	if text == "" {
 		text = "(prompt sent)"
 	}
-	return "prompt · " + truncate(text, 80)
+	return "prompt · " + Truncate(text, 80)
 }
 
 func sumIteration(p map[string]any) string {
 	return fmt.Sprintf("iter %s · %s tool calls", num(p, "index"), num(p, "tool_calls"))
+}
+
+// oneLine collapses whitespace runs (including newlines) so multi-line text
+// fits a single tail row.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func sumToolCall(p map[string]any) string {
@@ -72,11 +81,25 @@ func sumToolCall(p map[string]any) string {
 	if args == "" {
 		return name
 	}
-	return fmt.Sprintf("%s  %s", name, truncate(args, 80))
+	return fmt.Sprintf("%s  %s", name, Truncate(oneLine(args), 80))
 }
 
 func sumToolResult(p map[string]any) string {
-	return fmt.Sprintf("result · %s", str(p, "name"))
+	out := fmt.Sprintf("result · %s", str(p, "name"))
+	if _, ok := p["bytes"]; ok {
+		out += fmt.Sprintf(" · %s B", num(p, "bytes"))
+	}
+	if _, ok := p["duration_ms"]; ok {
+		out += fmt.Sprintf(" · %sms", num(p, "duration_ms"))
+	}
+	if e := str(p, "error"); e != "" {
+		out += " · error: " + Truncate(oneLine(e), 60)
+	}
+	return out
+}
+
+func sumToolDenied(p map[string]any) string {
+	return fmt.Sprintf("denied · %s · %s", str(p, "name"), str(p, "reason"))
 }
 
 func sumLargeResult(p map[string]any) string {
@@ -86,10 +109,17 @@ func sumLargeResult(p map[string]any) string {
 func sumResponse(p map[string]any) string {
 	in := num(p, "input_tokens")
 	out := num(p, "output_tokens")
+	head := "response"
 	if label := str(p, "label"); label != "" {
-		return fmt.Sprintf("response (%s) · +%s in / +%s out", label, in, out)
+		head = fmt.Sprintf("response (%s)", label)
+	} else if _, ok := p["iteration"]; ok {
+		head = fmt.Sprintf("response (iter %s)", num(p, "iteration"))
 	}
-	return fmt.Sprintf("response · +%s in / +%s out", in, out)
+	line := fmt.Sprintf("%s · +%s in / +%s out", head, in, out)
+	if text := str(p, "text"); text != "" {
+		line += " · " + Truncate(oneLine(text), 100)
+	}
+	return line
 }
 
 func sumError(p map[string]any) string {
@@ -97,13 +127,13 @@ func sumError(p map[string]any) string {
 	if msg == "" {
 		msg = str(p, "message")
 	}
-	return "error · " + truncate(msg, 80)
+	return "error · " + Truncate(msg, 80)
 }
 
 func sumRunEnd(p map[string]any) string {
 	st := str(p, "status")
 	if e := str(p, "error"); e != "" {
-		return fmt.Sprintf("ended · %s · %s", st, truncate(e, 60))
+		return fmt.Sprintf("ended · %s · %s", st, Truncate(e, 60))
 	}
 	return "ended · " + st
 }
@@ -147,12 +177,19 @@ func num(p map[string]any, key string) string {
 	}
 }
 
-func truncate(s string, w int) string {
+// Truncate cuts s, when it is longer than w bytes, to at most w-1 bytes
+// followed by an ellipsis. It backs up to a rune boundary so the cut never
+// splits a UTF-8 character. A non-positive w leaves s unchanged.
+func Truncate(s string, w int) string {
 	if w <= 0 || len(s) <= w {
 		return s
 	}
 	if w <= 1 {
 		return "…"
 	}
-	return s[:w-1] + "…"
+	n := w - 1
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
 }

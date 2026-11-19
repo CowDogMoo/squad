@@ -343,9 +343,13 @@ Every run writes an append-only event log to `./.squad/sessions/<id>/`:
 
 | File               | Contents                                              |
 | ------------------ | ----------------------------------------------------- |
-| `meta.json`        | Run options, last response id, cost, status          |
-| `events.jsonl`     | One line per prompt, response, tool call, tool result |
+| `meta.json`        | Run options, last response id, trace id, cost, status |
+| `events.jsonl`     | One line per model turn (with the assistant's text), tool call, tool result, refused tool call and error, each with its trace and span id |
 | `results/<id>.txt` | Full bytes of any tool result that exceeded 8 KiB    |
+
+Every provider except `antigravity` writes the same turn and tool events,
+including `claude-code`, whose turns squad reads from the CLI's stream-json
+output. `squad ui` shows them as the agent works.
 
 `--resume <id>` reopens that session and chains the next request to the prior OpenAI Responses API id, so the model picks up server-side state without re-sending the transcript. When a tool result is too large to inline, the model sees a `[result:<id> — N bytes elided …]` placeholder and can fetch the full bytes via the `get_tool_result` tool.
 

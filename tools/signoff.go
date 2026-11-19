@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/cowdogmoo/squad/activity"
 	"github.com/cowdogmoo/squad/logging"
 	"github.com/cowdogmoo/squad/session"
 	"github.com/tmc/langchaingo/llms"
@@ -289,8 +290,6 @@ func logSignOffResolution(ctx context.Context, plan, result, feedback string, re
 	if resolveErr != nil {
 		payload["error"] = resolveErr.Error()
 	}
-	if err := session.FromContext(ctx).Append(session.EventSignOffResolved, payload); err != nil {
-		logging.WarnContext(ctx, "failed to log sign_off_resolved event: %v", err)
-	}
+	activity.Append(ctx, session.EventSignOffResolved, payload)
 	logging.DebugContext(ctx, "ProposePlan resolved: %s", result)
 }
