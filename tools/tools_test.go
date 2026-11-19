@@ -2245,8 +2245,9 @@ func TestExtractTokenUsageGoogleAIInt32(t *testing.T) {
 	if m.OutputTokens() != 500 {
 		t.Fatalf("OutputTokens = %d, want 500", m.OutputTokens())
 	}
-	if m.Cost() <= 0 {
-		t.Fatalf("Cost = %v, want > 0", m.Cost())
+	prices := metrics.Pricing{InputPerMillion: 10, OutputPerMillion: 40}
+	if cost := prices.Cost(m.Usage()).Total(); math.Abs(cost-0.03) > 1e-12 {
+		t.Fatalf("cost = %v, want 0.03 (1000 input and 500 output tokens)", cost)
 	}
 }
 
