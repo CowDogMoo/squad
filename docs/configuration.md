@@ -466,8 +466,8 @@ squad run --agent go-review --provider antigravity --model gemini-3.1-pro-high
 
 `claude-code` runs with `--setting-sources ""`, so the `claude` subprocess
 loads none of your `settings.json` files. Squad already assembles the whole
-prompt and bypasses the CLI's permission rules and MCP configuration, and
-inherited hooks corrupt the result: a `Stop` hook that answers `block` keeps a
+prompt, sets the tool list and MCP servers, and bypasses the CLI's permission
+rules, and inherited hooks corrupt the result: a `Stop` hook that answers `block` keeps a
 `--print` run alive after the model has produced its answer, and the CLI's
 JSON envelope returns only the *last* assistant message — so the model's
 argument with the hook replaces the run's real output. Set
@@ -506,8 +506,24 @@ with a `provider: antigravity` entry — squad never guesses that mapping.
 
 Behavior differences from API providers:
 
-- The CLI runs its own agent loop, so squad's tool surface, `--max-iterations`,
-  `--temperature`, `--max-tokens`, and `--stream` do not apply.
+- The CLI runs its own agent loop, so `--temperature`, `--max-tokens`, and
+  `--stream` do not apply to either CLI. For `antigravity`, squad's tool
+  surface, `--max-iterations`, and `--max-cost` do not apply either.
+- `claude-code` runs get the same limits as squad's own loop:
+  - Built-in tools are limited with `--tools` to the Claude Code tools that
+    match what squad would register for the agent: `Bash`, `Edit`, `Glob`,
+    `Grep`, `Read`, and `Write` for an agent with a working directory; only
+    `Read` (to load `SKILL.md` files) for a `working_dir: none` agent with
+    skills; and `Task` unless the manifest sets `disable_task`. Readonly and
+    plan mode drop `Edit` and `Write`.
+  - The built-in pure-text transform (`squad run --system ...` with no
+    `--agent`) gets no tools at all, not even MCP servers. Its input is
+    untrusted text, such as a diff, so a hostile input has no tool to call.
+  - The resolved iteration budget (manifest `max_iterations`,
+    `--max-iterations`, routine `max_iterations`, and the model's iteration
+    factor) is passed as `--max-turns`, and `--max-cost` as
+    `--max-budget-usd`. A run that hits the spend cap is recorded as a budget
+    stop, like an API-provider run that reaches `max_cost`.
 - Usage is billed through the CLI's subscription, so the cost squad reports is
   an estimate at API prices (see
   [Cost budgeting](./observability.md#cost-budgeting)). A model name with no
@@ -531,7 +547,14 @@ Behavior differences from API providers:
   and resolve every relative path against it.
 - `environment` types other than `local`, `comments_only`, and `ascii_only`
   are rejected — those guarantees live in squad's own tool gates.
-- MCP servers from the manifest are not forwarded; configure them in the CLI.
+- `claude-code` gets the manifest's `mcp_servers` and any `--mcp-server`
+  flags through a private `--mcp-config` file, with `--strict-mcp-config`, so
+  servers registered in the CLI itself are never loaded. A server that
+  cannot be expressed as CLI config (no command or url, a malformed `KEY=VALUE`
+  entry, an unknown transport) fails the run before the CLI starts, and a
+  server the CLI reports as failed when the session starts aborts the run.
+  `max_result_bytes` does not apply. `antigravity` does not forward MCP
+  servers; configure them in that CLI.
 
 Example Databricks endpoint names: `databricks-gpt-5-5-pro`,
 `databricks-claude-sonnet-4-5`, `databricks-meta-llama-3-3-70b-instruct`.

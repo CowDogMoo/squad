@@ -50,6 +50,7 @@ func TestBuildArgs(t *testing.T) {
 				"--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
 				"--setting-sources", "",
 				"--settings", claudeAttributionOff,
+				"--strict-mcp-config",
 			},
 			wantStdin: "do the thing",
 		},
@@ -65,6 +66,7 @@ func TestBuildArgs(t *testing.T) {
 				"--settings", claudeAttributionOff,
 				"--append-system-prompt", "be brief",
 				"--model", "sonnet",
+				"--strict-mcp-config",
 				"--disallowed-tools", readOnlyDisallowedTools,
 			},
 			wantStdin: "task",
@@ -387,7 +389,7 @@ func TestClaudeAttributionArgs(t *testing.T) {
 func TestClaudeCommonArgsAlwaysHideAttribution(t *testing.T) {
 	t.Setenv(SettingSourcesEnv, "inherit")
 	got := claudeCommonArgs(Request{Provider: "claude-code"})
-	want := []string{"--settings", claudeAttributionOff}
+	want := []string{"--settings", claudeAttributionOff, "--strict-mcp-config"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("claudeCommonArgs with inherit = %q, want %q", got, want)
 	}

@@ -623,3 +623,46 @@ func TestRunLifecycleCatchupWithMissedFire(t *testing.T) {
 	// but that's expected in unit tests).
 	_ = Run(ctx, config.Defaults(), Options{MaxConcurrent: 1})
 }
+
+// TestFireFailsWhenAgentReportsBlocked checks a fire whose agent ends with a
+// blocked status line returns an error, so the scheduler records it failed
+// instead of ok, and that the agent was told how to report its status.
+func TestFireFailsWhenAgentReportsBlocked(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cfg := config.Defaults()
+	cfg.Agents.LocalPaths = []string{writeFireTestAgent(t)}
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+		_, _ = io.WriteString(w, `{"model":"mistral","message":{"role":"assistant","content":"The calendar tools are missing.\nSTATUS: blocked: calendar MCP server missing"},"done":true}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	entry := routine.Entry{
+		Ref: routine.Ref{Scope: routine.ScopeGlobal, ID: "planner"},
+		Routine: &routine.Routine{
+			ID: "planner", Agent: fireTestAgent, Schedule: "@daily", Prompt: "plan the week",
+			WorkingDir: t.TempDir(), Provider: "ollama", Model: "mistral", BaseURL: srv.URL,
+			MaxIterations: 30, Enabled: true,
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	sessionID, err := BuildFireFn(cfg)(ctx, entry)
+	if err == nil || !strings.Contains(err.Error(), "the agent reported blocked: calendar MCP server missing") {
+		t.Fatalf("fire err = %v, want the blocked report", err)
+	}
+	if sessionID == "" {
+		t.Error("fire returned no session id")
+	}
+	mu.Lock()
+	sent := strings.Join(bodies, "\n")
+	mu.Unlock()
+	if !strings.Contains(sent, "STATUS: blocked") {
+		t.Error("the agent was never told to end with a status line")
+	}
+}

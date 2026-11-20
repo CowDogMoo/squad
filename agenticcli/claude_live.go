@@ -120,12 +120,13 @@ func RunLive(ctx context.Context, req LiveRequest) (Result, error) {
 	}
 
 	s := &liveSession{
-		ctx:        ctx,
-		canUseTool: req.CanUseTool,
-		obs:        req.Observer,
-		stdin:      stdin,
-		reader:     bufio.NewReaderSize(stdout, 64*1024),
-		kill:       func() { _ = cmd.Process.Kill() },
+		ctx:         ctx,
+		requiredMCP: req.RequiredMCPServers,
+		canUseTool:  req.CanUseTool,
+		obs:         req.Observer,
+		stdin:       stdin,
+		reader:      bufio.NewReaderSize(stdout, 64*1024),
+		kill:        func() { _ = cmd.Process.Kill() },
 	}
 	res, runErr := s.loop(req.UserPrompt)
 	s.closeStdin()
@@ -168,12 +169,13 @@ func RunLive(ctx context.Context, req LiveRequest) (Result, error) {
 // Writes to stdin happen only from this loop (initial message, control
 // responses), so no locking is needed.
 type liveSession struct {
-	ctx        context.Context
-	canUseTool CanUseTool
-	obs        Observer
-	stdin      io.WriteCloser
-	reader     *bufio.Reader
-	kill       func()
+	ctx         context.Context
+	requiredMCP []string
+	canUseTool  CanUseTool
+	obs         Observer
+	stdin       io.WriteCloser
+	reader      *bufio.Reader
+	kill        func()
 
 	sessionID    string
 	stdinClosed  bool
@@ -255,6 +257,9 @@ func (s *liveSession) handle(line []byte) error {
 			// env > settings > built-in default) — the only reliable
 			// source when no --model was passed.
 			logging.InfoContext(s.ctx, "claude live session started (session_id=%s model=%s)", ev.SessionID, ev.Model)
+			if err := checkMCPServers(s.requiredMCP, ev.MCPServers); err != nil {
+				return err
+			}
 		}
 	case "assistant":
 		s.protoErrs = 0

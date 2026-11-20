@@ -46,7 +46,13 @@ ids of the span that was active when it was written, and a payload:
 {"ts":"2026-11-18T16:07:30Z","type":"run_end","trace_id":"6f48ef07fae64f7ad4f7a483a10f534c","payload":{"status":"completed"}}
 ```
 
-Event types: `run_start`, `resume`, `prompt`, `iteration`, `response`, `tool_call`, `tool_result`, `tool_denied`, `large_result`, `error`, `skill_loaded`, `confirm_resolved`, `sign_off_resolved`, `permission_decision`, `run_end`.
+Event types: `run_start`, `resume`, `prompt`, `iteration`, `response`, `tool_call`, `tool_result`, `tool_denied`, `large_result`, `error`, `skill_loaded`, `confirm_resolved`, `sign_off_resolved`, `permission_decision`, `result`, `run_end`.
+
+`result` holds the run's final response as `text`, written once before
+`run_end` on every provider. When the response ends with a status line
+(`STATUS: ok`, `STATUS: skipped: ...`, `STATUS: blocked: ...`, or a JSON
+object with a `status` field), the status is recorded as `reported_status`.
+See [Routines](routines.md#run-status) for how a routine fire uses it.
 
 The per-turn and per-tool events have the same shape on every provider path:
 squad's own tool loop (`anthropic`, `openai`, `openai-compat`, `gemini`,

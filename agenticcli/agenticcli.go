@@ -10,10 +10,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/cowdogmoo/squad/logging"
@@ -84,7 +86,40 @@ type Request struct {
 	// Observer, when set, receives the run's turns and tool calls as the
 	// CLI streams them. Only claude-code streams; other CLIs ignore it.
 	Observer Observer
+
+	// The fields below bound a claude-code run; other CLIs ignore them.
+
+	// LimitTools passes Tools as the run's complete built-in tool set
+	// (--tools). An empty Tools then means no built-in tools at all, which
+	// is what a pure text transform gets. False leaves the CLI's default
+	// set in place.
+	LimitTools bool
+	// Tools names the Claude Code built-in tools the run may use when
+	// LimitTools is set.
+	Tools []string
+	// MaxTurns caps the CLI's agent turns (--max-turns); 0 means no cap.
+	MaxTurns int
+	// MaxBudgetUSD caps the run's spend in USD (--max-budget-usd); 0 means
+	// no cap.
+	MaxBudgetUSD float64
+	// MCPConfigFile is the path of an --mcp-config JSON file
+	// ({"mcpServers": {...}}) holding the run's MCP servers; empty runs with
+	// none. A file rather than inline JSON keeps server env and headers,
+	// which often carry credentials, out of the process list. Servers
+	// configured in the CLI itself are never loaded (--strict-mcp-config).
+	MCPConfigFile string
+	// RequiredMCPServers names the servers in MCPConfigFile. The run is
+	// aborted when the CLI reports any of them as failed or missing at
+	// session start, instead of letting the model run without its tools.
+	RequiredMCPServers []string
 }
+
+// ErrMaxTurns and ErrMaxBudget mark a claude-code run the CLI stopped at
+// its turn cap or spend cap.
+var (
+	ErrMaxTurns  = errors.New("claude turn cap reached")
+	ErrMaxBudget = errors.New("claude spend cap reached")
+)
 
 // Result is the parsed outcome of a print-mode run.
 //
@@ -233,8 +268,8 @@ func NormalizeAntigravityModel(model string) string {
 const SettingSourcesEnv = "SQUAD_CLAUDE_SETTING_SOURCES"
 
 // claudeSettingSourcesArgs isolates the run from the user's settings.json
-// files. Squad assembles the whole prompt, owns the tool policy, and already
-// bypasses the CLI's permission rules and MCP configuration, so inherited
+// files. Squad assembles the whole prompt, owns the tool policy and the MCP
+// servers, and already bypasses the CLI's permission rules, so inherited
 // settings only add non-determinism. Inherited hooks are worse than that: a
 // Stop hook answering "block" keeps a --print run going after the model has
 // already produced its answer, and the JSON envelope reports only the LAST
@@ -274,7 +309,8 @@ func claudeAttributionArgs() []string {
 
 // claudeCommonArgs returns the claude flags shared by the single-shot and
 // live paths: settings isolation, attribution suppression, system prompt,
-// model, and the readonly tool restriction.
+// model, the tool set, the turn and spend caps, the MCP servers, and the
+// readonly tool restriction.
 func claudeCommonArgs(req Request) []string {
 	args := append(claudeSettingSourcesArgs(), claudeAttributionArgs()...)
 	if req.SystemPrompt != "" {
@@ -282,6 +318,22 @@ func claudeCommonArgs(req Request) []string {
 	}
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
+	}
+	if req.LimitTools {
+		args = append(args, "--tools", strings.Join(req.Tools, ","))
+	}
+	if req.MaxTurns > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(req.MaxTurns))
+	}
+	if req.MaxBudgetUSD > 0 {
+		args = append(args, "--max-budget-usd", strconv.FormatFloat(req.MaxBudgetUSD, 'f', -1, 64))
+	}
+	// The run gets exactly the MCP servers squad passes: servers registered
+	// in the CLI's own config would hand the model tools its manifest never
+	// declared.
+	args = append(args, "--strict-mcp-config")
+	if req.MCPConfigFile != "" {
+		args = append(args, "--mcp-config", req.MCPConfigFile)
 	}
 	if req.ReadOnly {
 		args = append(args, "--disallowed-tools", readOnlyDisallowedTools)
@@ -291,9 +343,14 @@ func claudeCommonArgs(req Request) []string {
 
 // claudeOutput is the envelope `claude -p --output-format json` prints.
 type claudeOutput struct {
-	IsError  bool   `json:"is_error"`
-	Result   string `json:"result"`
-	NumTurns int    `json:"num_turns"`
+	IsError bool `json:"is_error"`
+	// Subtype is "success" or the reason the run stopped early, such as
+	// error_max_turns or error_max_budget_usd.
+	Subtype string `json:"subtype"`
+	// Errors carries the CLI's own diagnostics when Result is empty.
+	Errors   []string `json:"errors"`
+	Result   string   `json:"result"`
+	NumTurns int      `json:"num_turns"`
 	Usage    struct {
 		InputTokens              int64 `json:"input_tokens"`
 		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
@@ -377,9 +434,29 @@ func claudeResult(out claudeOutput) (Result, error) {
 		Turns:              out.NumTurns,
 	}
 	if out.IsError {
-		return res, fmt.Errorf("claude run failed: %s", strings.TrimSpace(out.Result))
+		return res, claudeRunError(out)
 	}
 	return res, nil
+}
+
+// claudeRunError describes a failed claude run. A run stopped by its turn or
+// spend cap carries no result text, so the CLI's subtype and errors say why;
+// those two cases wrap ErrMaxTurns and ErrMaxBudget.
+func claudeRunError(out claudeOutput) error {
+	detail := strings.TrimSpace(out.Result)
+	if detail == "" {
+		detail = strings.TrimSpace(strings.Join(out.Errors, "; "))
+	}
+	switch out.Subtype {
+	case "error_max_turns":
+		return fmt.Errorf("claude run failed: %w: %s", ErrMaxTurns, detail)
+	case "error_max_budget_usd":
+		return fmt.Errorf("claude run failed: %w: %s", ErrMaxBudget, detail)
+	}
+	if out.Subtype != "" && out.Subtype != "success" {
+		return fmt.Errorf("claude run failed (%s): %s", out.Subtype, detail)
+	}
+	return fmt.Errorf("claude run failed: %s", detail)
 }
 
 // outputTail formats the tail of stderr and stdout for error messages, so a

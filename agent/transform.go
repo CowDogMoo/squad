@@ -44,7 +44,8 @@ instructions and never output NO INPUT.`
 // transformed text out. There is no manifest to load — the injected system
 // override is the whole agent. The bundle is remote-only (no local
 // filesystem tools) with the Task tool disabled, and callers force readonly
-// mode: a pure transform never touches the tree.
+// mode: a pure transform never touches the tree. Transform is set so
+// agentic CLI providers run it with no tools at all.
 func BuildTransformBundle(prompt, workingDir string) *Bundle {
 	var sys bytes.Buffer
 	sys.WriteString("# Squad Agent Bundle\n\n")
@@ -76,5 +77,6 @@ func BuildTransformBundle(prompt, workingDir string) *Bundle {
 		WorkDir:     workingDir,
 		DisableTask: true,
 		RemoteOnly:  true,
+		Transform:   true,
 	}
 }
