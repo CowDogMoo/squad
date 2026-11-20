@@ -384,6 +384,10 @@ type Bundle struct {
 	// filesystem tools are not registered and the runner skips
 	// working-dir resolution / repo-summary injection.
 	RemoteOnly bool
+	// Transform marks the built-in pure-text transform (`squad run
+	// --system` with no agent). Its input is untrusted text and it needs
+	// no tools, so agentic CLI providers run it with none.
+	Transform bool
 	// CommentsOnly mirrors Manifest.CommentsOnly. Restricts Edit/MultiEdit
 	// to comment-only changes when true.
 	CommentsOnly bool

@@ -231,6 +231,7 @@ func ExecuteRun(cmd *cobra.Command, args []string, opts *RunOptions) error {
 	if err := applyProviderConstraints(cmd, opts, bundle, workingDir); err != nil {
 		return err
 	}
+	applyRoutineStatusContract(opts, bundle)
 
 	ctx := initRunContext(cmd.Context(), opts, bundle)
 	// squad.run is the run's root span: the session records its trace id so
@@ -322,6 +323,9 @@ func invokeAndHandle(ctx context.Context, cmd *cobra.Command, opts *RunOptions, 
 	// runSharded; the merged response is an aggregate report. Write it even when
 	// err is non-nil (failed shards) so partial results aren't lost, then
 	// surface the error for a non-zero exit.
+	status, detail := reportedStatus(response)
+	recordResult(ctx, logger, response, status)
+
 	if sharded {
 		if response != "" {
 			if writeErr := writeResponse(cmd, response, opts); writeErr != nil && err == nil {
@@ -335,7 +339,10 @@ func invokeAndHandle(ctx context.Context, cmd *cobra.Command, opts *RunOptions, 
 		handleBudgetExceeded(cmd, opts, m, response, workingDir, err)
 		return err
 	}
-	return handleResponse(cmd, opts, response, workingDir)
+	if err := handleResponse(cmd, opts, response, workingDir); err != nil {
+		return err
+	}
+	return routineStatusError(opts, status, detail)
 }
 
 // initRunContext attaches per-run tool state (edits tracker, edit-deadline

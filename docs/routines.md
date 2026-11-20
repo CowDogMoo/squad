@@ -105,6 +105,28 @@ Daemon-written status (`last_run`, `last_status`, `last_session_id`, `last_error
 - Global routines: `$XDG_STATE_HOME/squad/routines/<id>.state.json` (default `~/.local/state/...`)
 - Per-repo routines: `<repo>/.squad/routines/.state/<id>.state.json` (gitignore the `.state/` directory)
 
+## Run status
+
+Nobody reads a routine fire's output when it runs, so a fire is only `ok`
+when the agent says it did the job. Every fire's system prompt asks the agent
+to end its final response with one status line:
+
+```text
+STATUS: ok
+STATUS: skipped: <why there was nothing to do>
+STATUS: blocked: <what stopped you>
+```
+
+A fire whose last line reports `blocked` is recorded as `failed`, with the agent's reason in `last_error` and an `error` status in
+the session. `ok`, `skipped`, or no status line at all records the fire as
+`ok`. The final response is kept in the session as a `result` event (see
+[Observability](observability.md#eventsjsonl)), so `squad routine history`
+leads to what the agent actually reported.
+
+Fires of sharded agents are not status-checked: each shard builds its own
+prompt without the status request, and the merged response is an aggregate
+report, so such a fire is recorded `ok` unless a shard itself fails.
+
 ## Catch-up policy
 
 If the daemon is not running when a scheduled fire arrives — the laptop was off, asleep, or the daemon crashed — that fire is missed. On the next daemon start, every routine's catch-up policy decides what to do:

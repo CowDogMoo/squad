@@ -10,7 +10,6 @@ import (
 
 	"github.com/cowdogmoo/squad/agent"
 	"github.com/cowdogmoo/squad/executor"
-	"github.com/cowdogmoo/squad/mcp"
 	"github.com/cowdogmoo/squad/metrics"
 	"github.com/cowdogmoo/squad/skill"
 	"github.com/cowdogmoo/squad/tools"
@@ -201,16 +200,15 @@ func TestInvokeAgenticCLINoEditsNoMark(t *testing.T) {
 	}
 }
 
-// TestInvokeAgenticCLIWarnsOnIgnoredOptions pins that MCP servers, --resume,
-// and --stream are warn-and-continue for CLI providers, not errors.
+// TestInvokeAgenticCLIWarnsOnIgnoredOptions pins that --resume and --stream
+// are warn-and-continue for CLI providers, not errors.
 func TestInvokeAgenticCLIWarnsOnIgnoredOptions(t *testing.T) {
 	repo := initTestGitRepo(t)
 	installFakeAgenticCLI(t, ":")
 
 	bundle := &agent.Bundle{
-		WorkDir:    repo,
-		User:       "task",
-		MCPServers: []mcp.ServerConfig{{Name: "srv"}},
+		WorkDir: repo,
+		User:    "task",
 	}
 	opts := &RunOptions{ResumeID: "prior-session", Stream: true}
 	m := metrics.New("claude-code", "")

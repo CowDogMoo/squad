@@ -50,11 +50,14 @@ const (
 	// EventToolDenied records a tool call squad (or the CLI it drives)
 	// refused before running it: readonly mode, the sign-off gate, or an
 	// active skill's allowed-tools list.
-	EventToolDenied      = "tool_denied"
-	EventLargeResult     = "large_result"
-	EventIteration       = "iteration"
-	EventError           = "error"
-	EventRunEnd          = "run_end"
+	EventToolDenied  = "tool_denied"
+	EventLargeResult = "large_result"
+	EventIteration   = "iteration"
+	EventError       = "error"
+	EventRunEnd      = "run_end"
+	// EventResult records the run's final response and the status line it
+	// reported, if any.
+	EventResult          = "result"
 	EventSkillLoaded     = "skill_loaded"
 	EventConfirmResolved = "confirm_resolved"
 	EventSignOffResolved = "sign_off_resolved"

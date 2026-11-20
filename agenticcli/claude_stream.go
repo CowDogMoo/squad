@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -107,12 +108,58 @@ type liveEvent struct {
 	EstimatedTokens int64         `json:"estimated_tokens"`
 	Request         *controlEvent `json:"request"`
 	Message         *streamedMsg  `json:"message"`
-	ToolResultMeta  []struct {
+	// MCPServers is the init event's per-server connection status.
+	MCPServers     []mcpServerStatus `json:"mcp_servers"`
+	ToolResultMeta []struct {
 		ID                 string `json:"id"`
 		PermissionDecision struct {
 			Decision string `json:"decision"`
 		} `json:"permission_decision"`
 	} `json:"tool_result_meta"`
+}
+
+// mcpServerStatus is one entry of the init event's mcp_servers list.
+type mcpServerStatus struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+// claudeEnv is the claude child's environment: squad's own, so the CLI's
+// credential store keeps working, with MCP connections made blocking. The
+// CLI then settles every --mcp-config server before it emits the init event,
+// so the status checkMCPServers reads there is final.
+func claudeEnv() []string {
+	return append(os.Environ(), "MCP_CONNECTION_NONBLOCKING=0")
+}
+
+// checkMCPServers compares the servers the init event reports against the
+// ones squad passed. A server the CLI marks anything but connected, or does
+// not list at all, fails the run: the model would otherwise work without the
+// tools its prompt depends on and report success anyway.
+func checkMCPServers(required []string, reported []mcpServerStatus) error {
+	if len(required) == 0 {
+		return nil
+	}
+	status := make(map[string]string, len(reported))
+	for _, r := range reported {
+		status[r.Name] = r.Status
+	}
+	var bad []string
+	for _, name := range required {
+		st, ok := status[name]
+		switch {
+		case !ok:
+			bad = append(bad, name+" (not started)")
+		case st == "connected":
+		default:
+			bad = append(bad, fmt.Sprintf("%s (%s)", name, st))
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("MCP server(s) the agent needs did not start under the claude CLI: %s; aborting the run instead of running without their tools (check each server's command, url and credentials)",
+		strings.Join(bad, ", "))
 }
 
 // controlEvent is the request half of a control_request event.
@@ -288,6 +335,7 @@ func runClaudeStream(ctx context.Context, spec Spec, path string, req Request) (
 	args, stdin := buildArgs(req)
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = req.WorkDir
+	cmd.Env = claudeEnv()
 	cmd.Stdin = strings.NewReader(stdin)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -299,9 +347,16 @@ func runClaudeStream(ctx context.Context, spec Spec, path string, req Request) (
 		return Result{}, fmt.Errorf("%s CLI failed: %w", spec.Binary, err)
 	}
 
-	sr := &streamReader{obs: req.Observer}
+	sr := &streamReader{
+		obs:         req.Observer,
+		requiredMCP: req.RequiredMCPServers,
+		kill:        func() { _ = cmd.Process.Kill() },
+	}
 	readErr := sr.read(stdout)
 	waitErr := cmd.Wait()
+	if sr.initErr != nil {
+		return sr.res, sr.initErr
+	}
 	if sr.resultSeen {
 		if waitErr != nil && sr.resErr == nil {
 			logging.Warn("%s exited uncleanly after its result: %v", spec.Binary, waitErr)
@@ -323,10 +378,15 @@ func runClaudeStream(ctx context.Context, spec Spec, path string, req Request) (
 
 // streamReader consumes a single-shot stream-json stdout.
 type streamReader struct {
-	obs        Observer
-	resultSeen bool
-	res        Result
-	resErr     error
+	obs Observer
+	// requiredMCP is checked against the init event; a failure is stored
+	// in initErr and kill stops the CLI before the model spends anything.
+	requiredMCP []string
+	kill        func()
+	initErr     error
+	resultSeen  bool
+	res         Result
+	resErr      error
 	// raw collects lines that are not stream-json events, parsed as the
 	// output when no result event arrives. Partial events are dropped.
 	raw bytes.Buffer
@@ -360,6 +420,14 @@ func (sr *streamReader) handle(line []byte) {
 		sr.raw.Write(line)
 		sr.raw.WriteByte('\n')
 		return
+	}
+	if ev.Type == "system" && ev.Subtype == "init" && sr.initErr == nil {
+		if err := checkMCPServers(sr.requiredMCP, ev.MCPServers); err != nil {
+			sr.initErr = err
+			if sr.kill != nil {
+				sr.kill()
+			}
+		}
 	}
 	if ev.Type == "result" {
 		sr.resultSeen = true

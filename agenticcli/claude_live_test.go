@@ -311,6 +311,7 @@ func TestClaudeLiveArgs(t *testing.T) {
 		"--setting-sources", "",
 		"--settings", claudeAttributionOff,
 		"--append-system-prompt", "sys", "--model", "opus",
+		"--strict-mcp-config",
 		"--disallowed-tools", readOnlyDisallowedTools,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -548,5 +549,22 @@ func TestControlEventEncoders(t *testing.T) {
 	interrupt := string(interruptEvent("i1"))
 	if !strings.Contains(interrupt, `"subtype":"interrupt"`) || !strings.Contains(interrupt, `"request_id":"i1"`) {
 		t.Errorf("interrupt = %s", interrupt)
+	}
+}
+
+// TestRunLive_FailedMCPServerAborts checks a live run whose required MCP
+// server failed to start is killed at init, before any tool call is asked.
+func TestRunLive_FailedMCPServerAborts(t *testing.T) {
+	installFakeClaude(t, map[string]string{
+		"FAKE_CLAUDE_MCP_SERVERS": `[{"name":"gdrive","status":"failed"}]`,
+	})
+	req := liveReq(t.TempDir(), func(context.Context, string, json.RawMessage, string) (Decision, error) {
+		t.Error("CanUseTool called after the MCP server failed")
+		return Decision{Allow: true}, nil
+	})
+	req.RequiredMCPServers = []string{"gdrive"}
+	_, err := RunLive(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "gdrive (failed)") {
+		t.Fatalf("err = %v, want the failed MCP server named", err)
 	}
 }

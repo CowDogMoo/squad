@@ -15,6 +15,7 @@
 //	FAKE_CLAUDE_EXIT_EARLY        "1": die after the first ask without a result event
 //	FAKE_CLAUDE_WRITE_FILE        on allow, write this file (content "hi") in the cwd
 //	FAKE_CLAUDE_HANG_AFTER_RESULT "1": ignore stdin EOF and sleep after the result
+//	FAKE_CLAUDE_MCP_SERVERS       JSON list for the init event's mcp_servers
 package fakeclaude
 
 import (
@@ -73,11 +74,15 @@ func Main() {
 		fmt.Printf("this is not json (line %d)\n", i+1)
 	}
 
-	emit(map[string]any{
+	initEvent := map[string]any{
 		"type": "system", "subtype": "init",
 		"session_id": "fake-session", "model": "fake-model",
 		"permissionMode": "default", "tools": []string{"Write", "Read", "Bash"},
-	})
+	}
+	if raw := os.Getenv("FAKE_CLAUDE_MCP_SERVERS"); raw != "" {
+		initEvent["mcp_servers"] = json.RawMessage(raw)
+	}
+	emit(initEvent)
 	// Telemetry noise the parent must ignore.
 	emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "allowed"}})
 	emit(map[string]any{"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 12})
