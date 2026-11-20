@@ -7,7 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.1.1
 	charm.land/lipgloss/v2 v2.1.1
 	github.com/aws/aws-sdk-go-v2 v1.48.0
-	github.com/aws/aws-sdk-go-v2/config v1.33.18
+	github.com/aws/aws-sdk-go-v2/config v1.33.19
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.83.0
 	github.com/bmatcuk/doublestar/v4 v4.10.4
 	github.com/charmbracelet/x/ansi v0.11.9
@@ -54,7 +54,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.4 // indirect
 	github.com/ProtonMail/go-crypto v1.5.2 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.21.0 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.21.1 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.9 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.12 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.12 // indirect
