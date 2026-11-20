@@ -140,7 +140,7 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
-	github.com/sergi/go-diff v1.4.4 // indirect
+	github.com/sergi/go-diff v1.4.5 // indirect
 	github.com/skeema/knownhosts v1.3.3 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
