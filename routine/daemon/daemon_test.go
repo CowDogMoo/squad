@@ -666,3 +666,36 @@ func TestFireFailsWhenAgentReportsBlocked(t *testing.T) {
 		t.Error("the agent was never told to end with a status line")
 	}
 }
+
+// TestFireRoutineMaxIterationsIsTheTurnCap checks a routine's max_iterations
+// caps the fire verbatim: neither the agent manifest's own max_iterations nor
+// the iteration factor and its 10-iteration floor replace it.
+func TestFireRoutineMaxIterationsIsTheTurnCap(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	agentsDir := writeFireTestAgent(t)
+	manifest := "name: " + fireTestAgent + "\nversion: 0.0.0\nentrypoint: system.md\nwrapper: wrapper.md\nmax_iterations: 80\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, fireTestAgent, "agent.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.Agents.LocalPaths = []string{agentsDir}
+	fake, srv := newFakeOllama(t, 1000)
+
+	entry := routine.Entry{
+		Ref: routine.Ref{Scope: routine.ScopeGlobal, ID: "capped"},
+		Routine: &routine.Routine{
+			ID: "capped", Agent: fireTestAgent, Schedule: "@daily", Prompt: "map the target",
+			WorkingDir: t.TempDir(), Provider: "ollama", Model: "mistral", BaseURL: srv.URL,
+			MaxIterations: 3, Enabled: true,
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	_, _ = BuildFireFn(cfg)(ctx, entry)
+
+	// Three capped iterations plus the closing request(s) for a final answer;
+	// the manifest's 80 or the 10-iteration floor would mean at least 10.
+	if got := len(fake.requests()); got < 3 || got >= 10 {
+		t.Errorf("fire made %d model calls, want the routine's cap of 3 iterations to bound it", got)
+	}
+}

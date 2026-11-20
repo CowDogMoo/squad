@@ -60,14 +60,14 @@ func TestCheckMCPServers(t *testing.T) {
 	if err := checkMCPServers(nil, reported); err != nil {
 		t.Errorf("no required servers: %v", err)
 	}
-	if err := checkMCPServers([]string{"ok", "slow"}, reported); err != nil {
-		t.Errorf("connected and pending: %v", err)
+	if err := checkMCPServers([]string{"ok"}, reported); err != nil {
+		t.Errorf("connected: %v", err)
 	}
-	err := checkMCPServers([]string{"ok", "broken", "auth", "absent"}, reported)
+	err := checkMCPServers([]string{"ok", "slow", "broken", "auth", "absent"}, reported)
 	if err == nil {
 		t.Fatal("want an error")
 	}
-	for _, want := range []string{"broken (failed)", "auth (needs-auth)", "absent (not started)"} {
+	for _, want := range []string{"slow (pending)", "broken (failed)", "auth (needs-auth)", "absent (not started)"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %v, want it to name %q", err, want)
 		}
@@ -100,6 +100,33 @@ func TestRunFailedMCPServerKillsCLI(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Errorf("run took %s; the CLI was not killed at init", elapsed)
+	}
+}
+
+// TestRunSettlesMCPBeforeInit checks the claude child is started with MCP
+// connections blocking, overriding the parent's setting, so the init event
+// reports each server's final status rather than pending.
+func TestRunSettlesMCPBeforeInit(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncat > /dev/null\n" +
+		`if [ "$MCP_CONNECTION_NONBLOCKING" = 0 ]; then st=connected; else st=pending; fi` + "\n" +
+		`printf '{"type":"system","subtype":"init","session_id":"s","mcp_servers":[{"name":"gdrive","status":"%s"}]}\n' "$st"` + "\n" +
+		`printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s","num_turns":1}'` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("MCP_CONNECTION_NONBLOCKING", "1")
+
+	res, err := Run(context.Background(), Request{
+		Provider: "claude-code", UserPrompt: "task", WorkDir: t.TempDir(),
+		RequiredMCPServers: []string{"gdrive"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v (the child did not get MCP_CONNECTION_NONBLOCKING=0)", err)
+	}
+	if res.Response != "done" {
+		t.Errorf("result = %q, want %q", res.Response, "done")
 	}
 }
 

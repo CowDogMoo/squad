@@ -332,10 +332,7 @@ func invokeAndHandle(ctx context.Context, cmd *cobra.Command, opts *RunOptions, 
 				return writeErr
 			}
 		}
-		if err != nil {
-			return err
-		}
-		return routineStatusError(opts, status, detail)
+		return err
 	}
 
 	if err != nil {

@@ -105,6 +105,7 @@ func RunLive(ctx context.Context, req LiveRequest) (Result, error) {
 
 	cmd := exec.CommandContext(ctx, path, claudeLiveArgs(req.Request)...)
 	cmd.Dir = req.WorkDir
+	cmd.Env = claudeEnv()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return Result{}, fmt.Errorf("claude live: stdin pipe: %w", err)

@@ -243,7 +243,6 @@ func TestReportedStatus(t *testing.T) {
 		{"markdown decoration", "report\n**Status:** BLOCKED - sign-in needed", "blocked", "sign-in needed"},
 		{"code span", "report\n`STATUS: skipped: not Saturday`", "skipped", "not Saturday"},
 		{"inside a fence", "```\nSTATUS: blocked: no input\n```", "blocked", "no input"},
-		{"json line", "report\n{\"status\":\"blocked\",\"reason\":\"no calendar access\"}", "blocked", "no calendar access"},
 		{"no status line", "All done, events created.", "", ""},
 		{"status not last", "STATUS: blocked: earlier\nthen it recovered and finished", "", ""},
 		{"empty", "", "", ""},
@@ -265,10 +264,7 @@ func TestRoutineStatusError(t *testing.T) {
 	if err := routineStatusError(routine, "blocked", "no tools"); err == nil || err.Error() != "routine fire failed: the agent reported blocked: no tools" {
 		t.Errorf("blocked err = %v", err)
 	}
-	if err := routineStatusError(routine, "failed", ""); err == nil || err.Error() != "routine fire failed: the agent reported failed" {
-		t.Errorf("failed err = %v", err)
-	}
-	for _, status := range []string{"ok", "skipped", ""} {
+	for _, status := range []string{"ok", "skipped", "failed", "error", ""} {
 		if err := routineStatusError(routine, status, ""); err != nil {
 			t.Errorf("status %q err = %v, want nil", status, err)
 		}

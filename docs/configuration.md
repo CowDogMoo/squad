@@ -120,7 +120,7 @@ effective = clamp( base × factor[model] , 10 , 1000 )
 
 - **base** — the agent manifest's `max_iterations`, or `run.max_iterations` (default `100`) when the manifest leaves it unset.
 - **factor[model]** — resolved with this precedence: the **agent manifest's** `iteration_factor[<model>]` (then its `default` key), then the global `model.iteration_factor[<model>]` (then its `default` key), then `1.0`. Non-positive values are ignored.
-- An explicit `--max-iterations` flag overrides all of the above and is used verbatim.
+- An explicit `--max-iterations` flag, or a routine's non-zero `max_iterations`, overrides all of the above and is used verbatim.
 
 ```yaml
 model:
@@ -519,10 +519,11 @@ Behavior differences from API providers:
   - The built-in pure-text transform (`squad run --system ...` with no
     `--agent`) gets no tools at all, not even MCP servers. Its input is
     untrusted text, such as a diff, so a hostile input has no tool to call.
-  - The resolved iteration budget (manifest `max_iterations`,
-    `--max-iterations`, routine `max_iterations`, and the model's iteration
-    factor) is passed as `--max-turns`, and `--max-cost` as
-    `--max-budget-usd`. A run that hits the spend cap is recorded as a budget
+  - The resolved iteration budget is passed as `--max-turns`, and
+    `--max-cost` as `--max-budget-usd`. An explicit `--max-iterations` or a
+    routine's non-zero `max_iterations` is passed verbatim; otherwise the
+    budget is the manifest's `max_iterations` (or `run.max_iterations`)
+    scaled by the model's iteration factor. A run that hits the spend cap is recorded as a budget
     stop, like an API-provider run that reaches `max_cost`.
 - Usage is billed through the CLI's subscription, so the cost squad reports is
   an estimate at API prices (see
@@ -551,8 +552,11 @@ Behavior differences from API providers:
   flags through a private `--mcp-config` file, with `--strict-mcp-config`, so
   servers registered in the CLI itself are never loaded. A server that
   cannot be expressed as CLI config (no command or url, a malformed `KEY=VALUE`
-  entry, an unknown transport) fails the run before the CLI starts, and a
-  server the CLI reports as failed when the session starts aborts the run.
+  entry, an unknown transport) fails the run before the CLI starts. squad
+  starts the CLI with `MCP_CONNECTION_NONBLOCKING=0`, so every server has
+  finished connecting when the session starts, and a server the CLI then
+  reports as anything but connected (failed, needs-auth, still pending)
+  aborts the run.
   `max_result_bytes` does not apply. `antigravity` does not forward MCP
   servers; configure them in that CLI.
 

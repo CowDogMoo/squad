@@ -117,12 +117,15 @@ STATUS: skipped: <why there was nothing to do>
 STATUS: blocked: <what stopped you>
 ```
 
-A fire whose last line reports `blocked` (or `failed` or `error`) is recorded
-as `failed`, with the agent's reason in `last_error` and an `error` status in
+A fire whose last line reports `blocked` is recorded as `failed`, with the agent's reason in `last_error` and an `error` status in
 the session. `ok`, `skipped`, or no status line at all records the fire as
 `ok`. The final response is kept in the session as a `result` event (see
 [Observability](observability.md#eventsjsonl)), so `squad routine history`
 leads to what the agent actually reported.
+
+Fires of sharded agents are not status-checked: each shard builds its own
+prompt without the status request, and the merged response is an aggregate
+report, so such a fire is recorded `ok` unless a shard itself fails.
 
 ## Catch-up policy
 

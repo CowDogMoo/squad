@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -123,10 +124,18 @@ type mcpServerStatus struct {
 	Status string `json:"status"`
 }
 
+// claudeEnv is the claude child's environment: squad's own, so the CLI's
+// credential store keeps working, with MCP connections made blocking. The
+// CLI then settles every --mcp-config server before it emits the init event,
+// so the status checkMCPServers reads there is final.
+func claudeEnv() []string {
+	return append(os.Environ(), "MCP_CONNECTION_NONBLOCKING=0")
+}
+
 // checkMCPServers compares the servers the init event reports against the
-// ones squad passed. A server the CLI marks anything but connected or still
-// pending, or does not list at all, fails the run: the model would otherwise
-// work without the tools its prompt depends on and report success anyway.
+// ones squad passed. A server the CLI marks anything but connected, or does
+// not list at all, fails the run: the model would otherwise work without the
+// tools its prompt depends on and report success anyway.
 func checkMCPServers(required []string, reported []mcpServerStatus) error {
 	if len(required) == 0 {
 		return nil
@@ -141,7 +150,7 @@ func checkMCPServers(required []string, reported []mcpServerStatus) error {
 		switch {
 		case !ok:
 			bad = append(bad, name+" (not started)")
-		case st == "connected", st == "pending":
+		case st == "connected":
 		default:
 			bad = append(bad, fmt.Sprintf("%s (%s)", name, st))
 		}
@@ -326,6 +335,7 @@ func runClaudeStream(ctx context.Context, spec Spec, path string, req Request) (
 	args, stdin := buildArgs(req)
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = req.WorkDir
+	cmd.Env = claudeEnv()
 	cmd.Stdin = strings.NewReader(stdin)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
