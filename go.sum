@@ -304,8 +304,8 @@ github.com/sagikazarmark/locafero v0.12.0 h1:/NQhBAkUb4+fH1jivKHWusDYFjMOOKU88ee
 github.com/sagikazarmark/locafero v0.12.0/go.mod h1:sZh36u/YSZ918v0Io+U9ogLYQJ9tLLBmM4eneO6WwsI=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 h1:1EYB5IzjZawrrnELUi78f9fPu57HuXjmddZPjrls/28=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.3/go.mod h1:JXeL+ps8p7/KNMjDQk3TCwPpBy0wYklyWTfbkIzdIFU=
-github.com/sergi/go-diff v1.4.4 h1:hJ31M2v+KXD+fDxKjUpr9qXthRE35QsPNono0FjSTCg=
-github.com/sergi/go-diff v1.4.4/go.mod h1:A0bzQcvG0E7Rwjx0REVgAGH58e96+X0MeOfepqsbeW4=
+github.com/sergi/go-diff v1.4.5 h1:3LvhZn2aCAWagLwIhga3BZiEZ82j5+oQ0vKDwkhjHCI=
+github.com/sergi/go-diff v1.4.5/go.mod h1:A0bzQcvG0E7Rwjx0REVgAGH58e96+X0MeOfepqsbeW4=
 github.com/sirupsen/logrus v1.7.0/go.mod h1:yWOB1SBYBC5VeMP7gHvWumXLIWorT60ONWic61uBYv0=
 github.com/skeema/knownhosts v1.3.3 h1:tiFvsjIW+xqP5cqVsod7atn/xm57OY6v9KwxB1xWUyA=
 github.com/skeema/knownhosts v1.3.3/go.mod h1:2y0ntYxeqSNxOw5pfqSVDcRyBt2FqfxhzNDPoKz/ifQ=
