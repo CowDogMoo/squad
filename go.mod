@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.33.19
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.83.0
 	github.com/bmatcuk/doublestar/v4 v4.10.4
-	github.com/charmbracelet/x/ansi v0.11.9
+	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/chromedp/cdproto v0.160.1
 	github.com/chromedp/chromedp v0.24.0
 	github.com/fatih/color v1.19.0
