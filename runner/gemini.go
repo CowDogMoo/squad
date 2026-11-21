@@ -68,12 +68,9 @@ func (g *geminiLLM) GenerateContent(ctx context.Context, messages []llms.Message
 				ch.GenerationInfo = make(map[string]any)
 			}
 			gi := ch.GenerationInfo
-			gi["PromptTokens"], gi["input_tokens"] = u.Prompt, u.Prompt
-			gi["CompletionTokens"], gi["output_tokens"] = output, output
-			gi["TotalTokens"], gi["total_tokens"] = u.Total, u.Total
-			gi["CachedTokens"], gi["CacheReadInputTokens"] = u.Cached, u.Cached
-			gi["NonCachedInputTokens"] = max(0, u.Prompt-u.Cached)
-			gi["ThinkingTokens"] = max(0, output-u.Candidates)
+			gi["PromptTokens"] = u.Prompt
+			gi["CompletionTokens"] = output
+			gi["CachedTokens"] = u.Cached
 		}
 	}
 	return resp, nil

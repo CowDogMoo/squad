@@ -144,13 +144,13 @@ func TestGeminiUsageAcrossCallModesAndTurns(t *testing.T) {
 			if strings.Contains(mode, "stream") {
 				opts = append(opts, llms.WithStreamingFunc(func(context.Context, []byte) error { return nil }))
 			}
-			for i, want := range []struct{ prompt, output, cached, thinking int64 }{{1000, 550, 800, 500}, {100, 20, 0, 0}} {
+			for i, want := range []struct{ prompt, output, cached int64 }{{1000, 550, 800}, {100, 20, 0}} {
 				resp, err := model.GenerateContent(context.Background(), messages, opts...)
 				if err != nil {
 					t.Fatal(err)
 				}
 				gi := resp.Choices[0].GenerationInfo
-				if gi["PromptTokens"] != want.prompt || gi["CompletionTokens"] != want.output || gi["CachedTokens"] != want.cached || gi["ThinkingTokens"] != want.thinking {
+				if gi["PromptTokens"] != want.prompt || gi["CompletionTokens"] != want.output || gi["CachedTokens"] != want.cached {
 					t.Fatalf("turn %d usage = %v, want %+v", i, gi, want)
 				}
 			}
