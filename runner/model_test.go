@@ -344,7 +344,7 @@ func TestBuildLLMVariants(t *testing.T) {
 		{"ollama", "ollama", "mistral", &RunOptions{}, "*ollama.LLM", false},
 		{"openai", "openai", "gpt-4o", &RunOptions{APIKey: "token"}, "*openai.LLM", false},
 		{"anthropic", "anthropic", "claude-3", &RunOptions{APIKey: "token"}, "*anthropic.LLM", false},
-		{"gemini", "gemini", "gemini-2.0-flash", &RunOptions{APIKey: "token"}, "*googleai.GoogleAI", false},
+		{"gemini", "gemini", "gemini-2.0-flash", &RunOptions{APIKey: "token"}, "*runner.geminiLLM", false},
 		{"unknown provider", "unknown", "model", &RunOptions{}, "", true},
 		{
 			"openai-compat/deepinfra",

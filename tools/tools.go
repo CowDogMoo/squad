@@ -1063,9 +1063,8 @@ func extractToolResults(messages []llms.MessageContent) map[string]string {
 //     are priced at the five-minute rate, which is the lifetime squad asks for.
 //   - OpenAI reports "PromptTokens" as the whole prompt, with the cached
 //     share ("PromptCachedTokens") already inside it.
-//   - Gemini does the same, naming the cached share "CachedTokens". Its
-//     client reads usage from the first stream chunk only and never counts
-//     thinking tokens, so Gemini output tokens and cost are under-recorded.
+//   - Gemini does the same, naming the cached share "CachedTokens". The
+//     runner's wrapper supplies final usage including billed thinking output.
 //
 // A provider that reports no cache counts yields plain input and output.
 func usageFromGenerationInfo(gi map[string]any) metrics.Usage {

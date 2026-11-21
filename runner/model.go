@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -685,10 +686,23 @@ func buildGeminiLLM(ctx context.Context, opts *RunOptions, model string) (llms.M
 	if model != "" {
 		gOpts = append(gOpts, googleai.WithDefaultModel(model))
 	}
-	if opts.APIKey != "" {
-		gOpts = append(gOpts, googleai.WithAPIKey(opts.APIKey))
+	key := opts.APIKey
+	if key == "" {
+		key = os.Getenv("GOOGLE_API_KEY")
 	}
-	return googleai.New(ctx, gOpts...)
+	if key == "" {
+		// Preserve googleai's missing-credential error. An HTTP client alone
+		// would otherwise count as an authentication option in its SDK.
+		return googleai.New(ctx, gOpts...)
+	}
+	gOpts = append(gOpts, googleai.WithAPIKey(key), googleai.WithHTTPClient(&http.Client{
+		Transport: geminiUsageTransport{base: http.DefaultTransport},
+	}))
+	client, err := googleai.New(ctx, gOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return &geminiLLM{GoogleAI: client}, nil
 }
 
 func normalizeProvider(provider string) string {
