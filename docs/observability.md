@@ -368,7 +368,7 @@ Cache prices come from the same LiteLLM entry as the input and output prices. Wh
 
 The `claude-code`, `anthropic`, `openai`, `openai-responses`, and `gemini` providers report cache counts, as does an `openai-compat` endpoint that returns them. When a run used the cache, the metrics summary and the run logs name each component, and `meta.json` records `cache_read_tokens` and `cache_write_tokens` next to `input_tokens`, which stays the count of every prompt token.
 
-The `gemini` provider's token usage and cost are recorded and count toward `--max-cost`, but its output tokens are under-recorded. The Gemini client reads usage from the first chunk of a streamed response and does not count thinking tokens, so a Gemini run's recorded output and cost are lower than what it is billed, and `--max-cost` stops it later than the real spend.
+For the `gemini` provider, squad records the usage from the end of each response, so output tokens include the thinking tokens Gemini bills as output, and its cached prompt share is recorded as cache reads.
 
 ### Cost hints in agent.yaml
 
