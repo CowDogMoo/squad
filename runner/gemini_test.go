@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -28,6 +29,9 @@ type geminiTestBody struct {
 }
 
 func (b *geminiTestBody) Read(p []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read on closed response body")
+	}
 	return b.Reader.Read(p[:min(len(p), 1)])
 }
 
@@ -183,5 +187,47 @@ func TestGeminiPreservesToolCalls(t *testing.T) {
 	}
 	if ch.GenerationInfo["CompletionTokens"] != int64(220) {
 		t.Fatalf("tool response billed output = %v, want 220", ch.GenerationInfo["CompletionTokens"])
+	}
+}
+
+func TestGeminiUsageOverHTTP2(t *testing.T) {
+	reply := "[" + geminiChunk(t, "", &geminiUsage{Prompt: 1000, Total: 1000}) + "," +
+		geminiChunk(t, "answer", &geminiUsage{Prompt: 1000, Candidates: 50, Total: 1550, Cached: 800}) + "]"
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, reply)
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	base := srv.Client().Transport
+	target := srv.Listener.Addr().String()
+	transport := geminiTestTransport(func(req *http.Request) (*http.Response, error) {
+		req = req.Clone(req.Context())
+		req.URL.Scheme, req.URL.Host, req.Host = "https", target, ""
+		resp, err := base.RoundTrip(req)
+		if err == nil && resp.ProtoMajor != 2 {
+			t.Errorf("test server spoke %s, want HTTP/2", resp.Proto)
+		}
+		return resp, err
+	})
+	client, err := googleai.New(context.Background(), googleai.WithAPIKey("test-key"),
+		googleai.WithHTTPClient(&http.Client{Transport: geminiUsageTransport{base: transport}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	model := &geminiLLM{GoogleAI: client}
+	messages := []llms.MessageContent{
+		llms.TextParts(llms.ChatMessageTypeSystem, "system"),
+		llms.TextParts(llms.ChatMessageTypeHuman, "user"),
+	}
+	resp, err := model.GenerateContent(context.Background(), messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gi := resp.Choices[0].GenerationInfo
+	if resp.Choices[0].Content != "answer" || gi["PromptTokens"] != int64(1000) || gi["CompletionTokens"] != int64(550) || gi["CachedTokens"] != int64(800) {
+		t.Fatalf("response = %q, usage = %v", resp.Choices[0].Content, gi)
 	}
 }

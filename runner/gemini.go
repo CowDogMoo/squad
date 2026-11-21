@@ -53,7 +53,7 @@ func (g *geminiLLM) GenerateContent(ctx context.Context, messages []llms.Message
 	}
 	// googleai can stop at a candidate with no content. Consume any trailing
 	// usage-only chunks too, without sending them to the text callback.
-	if capture.body != nil && !capture.body.eof {
+	if capture.body != nil && !capture.body.eof && !capture.body.closed {
 		if _, err := io.Copy(io.Discard, capture.body); err != nil {
 			return nil, fmt.Errorf("read Gemini final usage: %w", err)
 		}
@@ -107,6 +107,12 @@ type geminiUsageBody struct {
 	quoted  bool
 	escaped bool
 	eof     bool
+	closed  bool
+}
+
+func (b *geminiUsageBody) Close() error {
+	b.closed = true
+	return b.ReadCloser.Close()
 }
 
 func (b *geminiUsageBody) Read(p []byte) (int, error) {
