@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -85,5 +86,34 @@ func TestRecordContentErrorNil(t *testing.T) {
 	s := recordOne(t, nil)
 	if s.Status().Code != codes.Unset || len(s.Events()) != 0 {
 		t.Errorf("nil error recorded: status %+v, events %+v", s.Status(), s.Events())
+	}
+}
+
+func TestRecordRunError(t *testing.T) {
+	text := "private failure " + strings.Repeat("x", 300) + " token=" + fakeSecret
+	for _, capture := range []string{"", "true", "1"} {
+		t.Run("capture="+capture, func(t *testing.T) {
+			t.Setenv(ExportCommandsEnv, capture)
+			rec := tracetest.NewSpanRecorder()
+			tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+			defer func() { _ = tp.Shutdown(context.Background()) }()
+			_, span := tp.Tracer("test").Start(context.Background(), "run")
+			err := fmt.Errorf("wrapped: %w", errors.New(text))
+			RecordRunError(span, nil, "run failed")
+			RecordRunError(span, err, "run failed")
+			span.End()
+			s := rec.Ended()[0]
+			typ, msg := exceptionAttrs(t, s)
+			want := "run failed"
+			if capture == "1" {
+				want = "wrapped: " + strings.ReplaceAll(text, fakeSecret, RedactedMarker)
+			}
+			if typ != "*fmt.wrapError" || msg != want {
+				t.Errorf("exception = (%q, %q), want (*fmt.wrapError, %q)", typ, msg, want)
+			}
+			if s.Status().Code != codes.Error || s.Status().Description != truncate(want, maxExportedErrorBytes) {
+				t.Errorf("status = %+v", s.Status())
+			}
+		})
 	}
 }

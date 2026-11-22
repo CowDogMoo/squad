@@ -11,7 +11,6 @@ import (
 	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/tmc/langchaingo/llms"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -175,8 +174,7 @@ func retryGenerateContent(ctx context.Context, llm llms.Model, messages []llms.M
 
 		if !isRetryable(err) {
 			classified := classifyError(err)
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+			telemetry.RecordRunError(span, err, "model generation failed")
 			span.SetAttributes(
 				attribute.Int("llm.retry.attempts", attempt+1),
 				attribute.String("llm.error.code", string(classified.Code)),
@@ -207,8 +205,7 @@ func retryGenerateContent(ctx context.Context, llm llms.Model, messages []llms.M
 	}
 
 	classified := classifyError(lastErr)
-	span.RecordError(lastErr)
-	span.SetStatus(codes.Error, lastErr.Error())
+	telemetry.RecordRunError(span, lastErr, "model generation failed")
 	span.SetAttributes(
 		attribute.Int("llm.retry.attempts", attempts),
 		attribute.String("llm.error.code", string(classified.Code)),

@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"errors"
 	"fmt"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -35,9 +36,40 @@ func RecordContentError(span trace.Span, err error, fixed string) {
 		return
 	}
 	desc := contentErrorStatus(err.Error(), fixed)
+	recordError(span, err, desc, desc)
+}
+
+// RecordRunError records a run or provider failure. Free-form error text,
+// including HTTP response bodies, is content: by default only the Go error
+// type, a fixed message and any structured provider/status metadata are
+// exported. SQUAD_OTEL_EXPORT_COMMANDS=1 includes the full error in the
+// exception event after RedactCommand; the status is capped at 200 bytes.
+// The original error returned to callers and local logs is unchanged.
+func RecordRunError(span trace.Span, err error, fixed string) {
+	if err == nil {
+		return
+	}
+	var httpErr interface {
+		HTTPStatusCode() int
+		ProviderName() string
+	}
+	if errors.As(err, &httpErr) {
+		span.SetAttributes(
+			attribute.Int("http.response.status_code", httpErr.HTTPStatusCode()),
+			attribute.String("gen_ai.provider.name", httpErr.ProviderName()),
+		)
+	}
+	message := fixed
+	if exportFullCommands() {
+		message = RedactCommand(err.Error())
+	}
+	recordError(span, err, message, truncate(message, maxExportedErrorBytes))
+}
+
+func recordError(span trace.Span, err error, message, status string) {
 	span.AddEvent("exception", trace.WithAttributes(
 		attribute.String("exception.type", fmt.Sprintf("%T", err)),
-		attribute.String("exception.message", desc),
+		attribute.String("exception.message", message),
 	))
-	span.SetStatus(codes.Error, desc)
+	span.SetStatus(codes.Error, status)
 }

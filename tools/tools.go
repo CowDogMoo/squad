@@ -25,7 +25,6 @@ import (
 	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/tmc/langchaingo/llms"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -430,8 +429,7 @@ func RunWithTools(ctx context.Context, llm llms.Model, systemPrompt, userPrompt,
 		!errors.Is(loopErr, ErrIterationLimitReached) &&
 		!errors.Is(loopErr, ErrLoopDetected) &&
 		!errors.Is(loopErr, ErrEditDeadlineReached) {
-		span.RecordError(loopErr)
-		span.SetStatus(codes.Error, loopErr.Error())
+		telemetry.RecordRunError(span, loopErr, "tool loop failed")
 		return lastContent, loopErr
 	}
 

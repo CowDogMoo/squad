@@ -322,7 +322,7 @@ func (o *LLM) chat(ctx context.Context, reqBody chatRequest, streamFn func(ctx c
 
 	if httpResp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(httpResp.Body)
-		return chatResponse{}, fmt.Errorf("ollama returned %d: %s", httpResp.StatusCode, strings.TrimSpace(string(errBody)))
+		return chatResponse{}, &HTTPError{StatusCode: httpResp.StatusCode, Body: strings.TrimSpace(string(errBody))}
 	}
 
 	if reqBody.Stream {

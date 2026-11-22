@@ -245,8 +245,7 @@ func (t *Turn) Fail(phase string, err error) {
 		"iteration": t.index,
 		"error":     truncate(err.Error(), maxEventErrorBytes),
 	})
-	t.span.RecordError(err)
-	t.span.SetStatus(codes.Error, truncate(err.Error(), 200))
+	telemetry.RecordRunError(t.span, err, "model turn failed")
 }
 
 // End closes the turn span now.
