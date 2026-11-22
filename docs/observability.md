@@ -286,7 +286,7 @@ killed while writing it.
 
 Run errors, including provider HTTP response bodies, are also content. On
 `llm.call`, `agent.invoke`, `tool.loop`, `llm.generate`, `chat <model>`,
-`pipeline.agent` and `routine.fire`, the default error status and exception
+`pipeline.agent`, `routine.fire` and `task.background`, the default error status and exception
 message are fixed summaries. Exception events retain the Go error type;
 structured HTTP errors also retain `http.response.status_code` when available,
 without parsing the body. With
