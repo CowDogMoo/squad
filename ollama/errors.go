@@ -15,6 +15,3 @@ func (e *HTTPError) Error() string {
 
 // HTTPStatusCode returns the response status without inspecting error text.
 func (e *HTTPError) HTTPStatusCode() int { return e.StatusCode }
-
-// ProviderName identifies the provider that returned the error.
-func (e *HTTPError) ProviderName() string { return "ollama" }

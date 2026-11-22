@@ -104,7 +104,7 @@ func checkRunErrorSpans(t *testing.T, rec *tracetest.SpanRecorder, capture, secr
 		for _, attr := range span.Attributes() {
 			attrs[string(attr.Key)] = attr.Value.String()
 		}
-		if attrs["http.response.status_code"] != "400" || attrs["gen_ai.provider.name"] != "ollama" {
+		if attrs["http.response.status_code"] != "400" {
 			t.Errorf("%s missing safe HTTP metadata: %v", span.Name(), attrs)
 		}
 		if capture == "1" && !strings.Contains(text, secret) {

@@ -41,7 +41,7 @@ func RecordContentError(span trace.Span, err error, fixed string) {
 
 // RecordRunError records a run or provider failure. Free-form error text,
 // including HTTP response bodies, is content: by default only the Go error
-// type, a fixed message and any structured provider/status metadata are
+// type, a fixed message and any structured HTTP status code are
 // exported. SQUAD_OTEL_EXPORT_COMMANDS=1 includes the full error in the
 // exception event after RedactCommand; the status is capped at 200 bytes.
 // The original error returned to callers and local logs is unchanged.
@@ -49,15 +49,9 @@ func RecordRunError(span trace.Span, err error, fixed string) {
 	if err == nil {
 		return
 	}
-	var httpErr interface {
-		HTTPStatusCode() int
-		ProviderName() string
-	}
+	var httpErr interface{ HTTPStatusCode() int }
 	if errors.As(err, &httpErr) {
-		span.SetAttributes(
-			attribute.Int("http.response.status_code", httpErr.HTTPStatusCode()),
-			attribute.String("gen_ai.provider.name", httpErr.ProviderName()),
-		)
+		span.SetAttributes(attribute.Int("http.response.status_code", httpErr.HTTPStatusCode()))
 	}
 	message := fixed
 	if exportFullCommands() {

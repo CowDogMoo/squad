@@ -288,8 +288,8 @@ Run errors, including provider HTTP response bodies, are also content. On
 `llm.call`, `agent.invoke`, `tool.loop`, `llm.generate`, `chat <model>`,
 `pipeline.agent` and `routine.fire`, the default error status and exception
 message are fixed summaries. Exception events retain the Go error type;
-structured HTTP errors also retain `http.response.status_code` and
-`gen_ai.provider.name` when available, without parsing the body. With
+structured HTTP errors also retain `http.response.status_code` when available,
+without parsing the body. With
 `SQUAD_OTEL_EXPORT_COMMANDS=1`, exception events include the full error text
 after the same best-effort redaction used for commands, and status descriptions
 include its first 200 bytes. Local errors and terminal output are unchanged.
