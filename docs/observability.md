@@ -327,8 +327,8 @@ no tool-specific rules and will miss credentials in other forms, such as
 `-p <password>` flags, so only turn it on when the trace backend is trusted
 with the commands your agents run. The exported text is truncated to 1000
 bytes. The same opt-in puts the redacted text of a failed tool call's own
-error, but never the tool's output, on its span status, as described under
-span attributes above.
+error, but never the tool's output, and of a failed run's error on its span,
+as described under span attributes above.
 
 ### TLS and plaintext
 
