@@ -28,8 +28,8 @@ func TestRetryExhaustionErrorContent(t *testing.T) {
 				_ = tp.Shutdown(context.Background())
 			}()
 			failure := &ollama.HTTPError{StatusCode: 503, Body: body}
-			model := &mockLLM{responses: []*llms.ContentResponse{nil}, errors: []error{failure}}
-			if _, err := retryGenerateContent(context.Background(), model, nil, nil, 0); err != failure {
+			model := &mockLLM{responses: []*llms.ContentResponse{nil, nil}, errors: []error{failure, failure}}
+			if _, err := retryGenerateContent(context.Background(), model, nil, nil, 1); err != failure {
 				t.Fatalf("error = %v, want original provider error", err)
 			}
 			spans := rec.Ended()
