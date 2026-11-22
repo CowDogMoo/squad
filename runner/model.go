@@ -31,7 +31,6 @@ import (
 	"github.com/tmc/langchaingo/llms/googleai"
 	"github.com/tmc/langchaingo/llms/openai"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -362,8 +361,7 @@ func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPro
 	}
 
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordRunError(span, err, "model call failed")
 	}
 	span.SetAttributes(usageAttributes(m)...)
 	return response, m, err
@@ -374,8 +372,7 @@ func callModel(ctx context.Context, opts *RunOptions, provider, model, systemPro
 func recordInvokeOutcome(span trace.Span, m *metrics.Metrics, err error) {
 	span.SetAttributes(usageAttributes(m)...)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		telemetry.RecordRunError(span, err, "model call failed")
 	}
 }
 

@@ -11,8 +11,8 @@ import (
 )
 
 // ExportCommandsEnv opts in, when set to "1", to exporting full command text
-// and the text of errors that may carry tool arguments (see
-// RecordContentError) on spans. Otherwise command attributes carry only the
+// and content-bearing tool and run errors (see RecordContentError and
+// RecordRunError) on spans. Otherwise command attributes carry only the
 // executable name and those errors a fixed status.
 const ExportCommandsEnv = "SQUAD_OTEL_EXPORT_COMMANDS"
 
@@ -99,7 +99,8 @@ var (
 // password/token/secret/api_key style keys written as key=value or
 // key: value. It has no tool-specific rules and will miss credentials in
 // other forms; it is used only under the SQUAD_OTEL_EXPORT_COMMANDS=1
-// opt-in, on command text and on error text (see RecordContentError).
+// opt-in, on command text and on error text (see RecordContentError and
+// RecordRunError).
 func RedactCommand(s string) string {
 	s = bearerRe.ReplaceAllString(s, "$1 "+RedactedMarker)
 	s = jwtRe.ReplaceAllString(s, RedactedMarker)

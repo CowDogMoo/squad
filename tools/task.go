@@ -13,7 +13,6 @@ import (
 	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/tmc/langchaingo/llms"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -103,8 +102,7 @@ func (r *BackgroundTaskRegistry) SpawnTask(ctx context.Context, cfg TaskConfig, 
 		childCtx, taskSpan = telemetry.Tracer().Start(childCtx, "task.background", linkOpts...)
 		defer func() {
 			if result.Err != nil {
-				taskSpan.RecordError(result.Err)
-				taskSpan.SetStatus(codes.Error, result.Err.Error())
+				telemetry.RecordRunError(taskSpan, result.Err, "background task failed")
 			}
 			taskSpan.End()
 		}()

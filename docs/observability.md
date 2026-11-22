@@ -251,8 +251,8 @@ Errors are recorded on the relevant span so you can filter to failed spans in Ja
 ### Span attributes
 
 Spans carry names, timing, sizes, token counts and errors, but no assistant
-text and no tool output, and by default no tool arguments and no text from a
-failed tool call's error (the one opt-in is described under shell command
+text and no tool output, and by default no tool arguments and no free-form
+tool, run or provider error text (the one opt-in is described under shell command
 attributes below). `events.jsonl` keeps all of them in full locally:
 
 | Span | Attributes |
@@ -270,6 +270,7 @@ A tool call that failed has an error status that reads
 the span. When it is the call's own error, such as squad's message refusing a
 path outside the working directory, it can name the path or command the model
 asked for, so it reaches the span only under `SQUAD_OTEL_EXPORT_COMMANDS=1`.
+
 The spans beneath a tool call treat their errors the same way: a failed
 `mcp.call_tool` reads `mcp tool call failed`, and a Docker, kubectl or SSM
 executor span whose backend call failed reads `executor command failed`. A
@@ -277,10 +278,21 @@ span failed by such an error keeps an `exception` event with the error's
 `exception.type` and the fixed text as its message. Under the opt-in the
 status and the event message carry the error text instead, redacted as
 described below and truncated to 200 bytes. A
-failed `claude-code` run puts the CLI's error result on `agent.invoke`, or,
+failed `claude-code` run records its error through the run-error policy below.
+The error comes from the CLI's error result, or,
 when there is none, its stderr and any stdout lines that are not JSON. No
 stream-json event reaches the error, not even one cut off because the CLI was
 killed while writing it.
+
+Run errors, including provider HTTP response bodies, are also content. On
+`llm.call`, `agent.invoke`, `tool.loop`, `llm.generate`, `chat <model>`,
+`pipeline.agent`, `routine.fire` and `task.background`, the default error status and exception
+message are fixed summaries. Exception events retain the Go error type;
+structured HTTP errors also retain `http.response.status_code` when available,
+without parsing the body. With
+`SQUAD_OTEL_EXPORT_COMMANDS=1`, exception events include the full error text
+after the same best-effort redaction used for commands, and status descriptions
+include its first 200 bytes. Local errors and terminal output are unchanged.
 
 `gen_ai.provider.name` and `gen_ai.system` both hold squad's provider name
 (`ollama`, `claude-code`, ...). `gen_ai.system` is kept for backends that still
@@ -315,8 +327,8 @@ no tool-specific rules and will miss credentials in other forms, such as
 `-p <password>` flags, so only turn it on when the trace backend is trusted
 with the commands your agents run. The exported text is truncated to 1000
 bytes. The same opt-in puts the redacted text of a failed tool call's own
-error, but never the tool's output, on its span status, as described under
-span attributes above.
+error, but never the tool's output, and of a failed run's error on its span,
+as described under span attributes above.
 
 ### TLS and plaintext
 

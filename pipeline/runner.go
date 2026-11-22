@@ -16,7 +16,6 @@ import (
 	"github.com/cowdogmoo/squad/telemetry"
 	"github.com/cowdogmoo/squad/tools"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -448,8 +447,7 @@ func (r *Runner) runAgent(ctx context.Context, agentName string, stage Stage, pr
 	if err != nil {
 		result.Status = StatusFailed
 		result.Output = output // preserve partial output
-		agentSpan.RecordError(err)
-		agentSpan.SetStatus(codes.Error, err.Error())
+		telemetry.RecordRunError(agentSpan, err, "pipeline agent failed")
 		logging.InfoContext(ctx, "pipeline: agent %q failed: %v", agentName, err)
 	} else {
 		logging.InfoContext(ctx, "pipeline: agent %q completed (%d bytes)", agentName, len(output))

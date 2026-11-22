@@ -596,7 +596,7 @@ All config keys are available as `SQUAD_*` env vars (replace `.` with `_`, upper
 
 | Variable                     | Description                                                                                                   |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `SQUAD_OTEL_EXPORT_COMMANDS` | Set to `1` to export full shell commands, and the text of a failed tool call's own error (never tool output), on spans, with best-effort redaction (default: executable name only and a fixed error status) |
+| `SQUAD_OTEL_EXPORT_COMMANDS` | Set to `1` to export full shell commands, and the text of failed tool calls' own errors (never tool output) and of run errors, on spans, with best-effort redaction (default: executable name only and a fixed error status) |
 
 ### OpenAI-Compatible Endpoints
 

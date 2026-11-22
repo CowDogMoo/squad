@@ -229,8 +229,7 @@ func (s *Scheduler) runFire(ctx context.Context, entry Entry) error {
 	if runErr != nil {
 		st.LastStatus = StatusFailed
 		st.LastError = runErr.Error()
-		span.RecordError(runErr)
-		span.SetStatus(codes.Error, runErr.Error())
+		telemetry.RecordRunError(span, runErr, "routine fire failed")
 	} else {
 		st.LastStatus = StatusOK
 		span.SetStatus(codes.Ok, "")
