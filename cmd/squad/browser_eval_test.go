@@ -78,7 +78,6 @@ func TestBrowserEvalLiveSuccess(t *testing.T) {
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	scrubProfileDir(t, profileDir)
 
 	opts := chromeExecOpts(
 		chromedp.UserDataDir(profileDir),
@@ -97,6 +96,16 @@ func TestBrowserEvalLiveSuccess(t *testing.T) {
 	if err := chromedp.Do(browserCtx, chromedp.Navigate("data:text/html,<body>HELLO-EVAL-PROBE</body>")); err != nil {
 		t.Skipf("skipping live browser test: %v", err)
 	}
+	// Close Chrome gracefully before t.TempDir removes the profile. The
+	// profile is ours, not a chromedp temp dir, so cancelAlloc only kills
+	// the main process and waits for it; its helpers (network service,
+	// GPU, renderers) can outlive it and keep writing into the profile
+	// while the cleanup runs. A graceful close stops them before Chrome exits.
+	defer func() {
+		if err := chromedp.Cancel(browserCtx); err != nil {
+			t.Errorf("closing browser: %v", err)
+		}
+	}()
 
 	// DevToolsActivePort should now be present in profileDir
 	cmd := newBrowserEvalCmd()
